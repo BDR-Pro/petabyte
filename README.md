@@ -6,6 +6,10 @@ This repository documents the relationship between the two core components of th
 - [`lumaris_agent`](https://github.com/BDR-Pro/lumaris_agent)
 - [`lumaris_api`](https://github.com/BDR-Pro/lumaris_api)
 
+## 🌐 Website 
+
+[Visit the Landing Page](https://52101422ef55413ca04c4499cc498285-main.projects.builder.my/)
+
 ## 🔧 What is Lumaris?
 
 **Lumaris** is a decentralized marketplace for computing power. It allows resource providers (sellers) to share CPU, GPU, and storage with buyers who need scalable and affordable computing — similar to AWS EC2, but in a peer-to-peer model.
