@@ -8,7 +8,7 @@ This repository documents the relationship between the two core components of th
 
 ## 🌐 Website 
 
-[Visit the Landing Page](https://52101422ef55413ca04c4499cc498285-main.projects.builder.my/)
+http://petabyte.market
 
 ## 🔧 What is Lumaris?
 
