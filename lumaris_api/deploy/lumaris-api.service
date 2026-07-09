@@ -13,6 +13,10 @@ ExecStart=/opt/lumaris/.venv/bin/gunicorn -c /opt/lumaris/deploy/gunicorn_conf.p
 ExecReload=/bin/kill -s HUP $MAINPID
 Restart=always
 RestartSec=3
+# gunicorn 26's control server writes under $HOME; give it a writable runtime dir
+# so ProtectHome=true below can't block it (/home is hidden from the service)
+RuntimeDirectory=lumaris
+Environment=HOME=/run/lumaris
 # hardening
 NoNewPrivileges=true
 PrivateTmp=true

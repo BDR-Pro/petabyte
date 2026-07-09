@@ -19,6 +19,18 @@ echo "==> Creating service user and dirs"
 id -u "$APP_USER" &>/dev/null || useradd --system --create-home --shell /usr/sbin/nologin "$APP_USER"
 mkdir -p "$APP_DIR" "$ENV_DIR"
 
+# --- size workers to available RAM, and add swap on small droplets ---
+RAM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+if   [ "$RAM_MB" -lt 768  ]; then WEB_WORKERS=1
+elif [ "$RAM_MB" -lt 1536 ]; then WEB_WORKERS=2
+else WEB_WORKERS=$(( $(nproc) * 2 + 1 )); fi
+echo "==> ${RAM_MB}MB RAM detected -> WEB_CONCURRENCY=$WEB_WORKERS"
+if [ "$RAM_MB" -lt 1024 ] && [ "$(swapon --show | wc -l)" -eq 0 ]; then
+  echo "==> low RAM and no swap: creating a 2G swapfile"
+  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
 echo "==> Syncing application to $APP_DIR"
 rsync -a --delete \
   --exclude '.venv' --exclude '.git' --exclude '__pycache__' \
@@ -74,7 +86,7 @@ AWS_ACCESS_KEY_ID=__SET_ME__
 AWS_SECRET_ACCESS_KEY=__SET_ME__
 REAPER_DISABLED=true
 REAPER_INTERVAL_S=20
-WEB_CONCURRENCY=3
+WEB_CONCURRENCY=$WEB_WORKERS
 WG_PUBLIC_KEY=$WG_PUB
 WG_ENDPOINT=$PUBIP
 WG_APPLY=false
@@ -153,4 +165,4 @@ if [ -n "${S3_BUCKET:-}" ] && [ "${AWS_ACCESS_KEY_ID:-__SET_ME__}" != "__SET_ME_
 fi
 set -e
 
-echo "  3) Enable HTTPS:  certbot --nginx -d api.yourdomain.com"
+echo "  3) Enable HTTPS:  certbot --nginx -d yourdomain.com"

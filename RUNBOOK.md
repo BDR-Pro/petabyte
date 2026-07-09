@@ -5,7 +5,7 @@ Three step-by-step flows, verified against the API end to end:
 2. Onboard a seller (list a GPU)
 3. Buy a service (rent a GPU + run a job)
 
-Replace `api.yourdomain.com` with your domain and `DROPLET_IP` with your droplet's IP.
+Replace `yourdomain.com` with your domain and `DROPLET_IP` with your droplet's IP.
 
 ---
 
@@ -34,23 +34,24 @@ Replace `api.yourdomain.com` with your domain and `DROPLET_IP` with your droplet
    - `SERVER_PRIVATE_KEY=$(python3 -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())")`
    - `ADMIN_USERS=you@domain.com` (unlocks `/admin`)
    - `GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI` (Google Cloud → OAuth Web client; redirect
-     `https://api.yourdomain.com/auth/google/callback`)
+     `https://yourdomain.com/auth/google/callback`)
    - keep `PAYMENTS_MODE=sandbox` until you wire live payments
-6. **Migrate (Postgres):**
-   ```bash
-   sudo -u lumaris /opt/lumaris/.venv/bin/alembic upgrade head
-   ```
-7. **HTTPS.** Point an `A` record `api.yourdomain.com → DROPLET_IP`, set `server_name`
+6. **Tables auto-create on first start** — the app runs `create_all()` on boot, so
+   there's no migration step for a fresh DB. (Alembic migrations under `alembic/` are
+   optional, for altering existing tables later.) For a DigitalOcean **managed** DB,
+   set `DATABASE_URL=postgresql+psycopg2://doadmin:PASS@host:25060/defaultdb?sslmode=require`
+   and add the droplet to the DB's Trusted Sources.
+7. **HTTPS.** Point an `A` record `yourdomain.com → DROPLET_IP`, set `server_name`
    in `/etc/nginx/sites-available/lumaris`, then:
    ```bash
-   systemctl reload nginx && certbot --nginx -d api.yourdomain.com
+   systemctl reload nginx && certbot --nginx -d yourdomain.com
    ```
 8. **Verify:**
    ```bash
-   curl https://api.yourdomain.com/healthz     # {"status":"ok"}
+   curl https://yourdomain.com/healthz     # {"status":"ok"}
    journalctl -u lumaris-api -f
    ```
-   Open `https://api.yourdomain.com/` for the site, `/admin` for the console.
+   Open `https://yourdomain.com/` for the site, `/admin` for the console.
 9. **Auto-deploy after this (optional):** see `lumaris_api/deploy/AUTO_DEPLOY.md` — push
    to `main` and GitHub Actions runs `deploy/update.sh` for you (no SSH).
 
@@ -62,10 +63,10 @@ Run on the **GPU machine** (needs Docker + NVIDIA drivers), not the API droplet.
 
 ### The easy path — one command
 ```bash
-PETABYTE_API_URL=https://api.yourdomain.com \
+PETABYTE_API_URL=https://yourdomain.com \
 PETABYTE_USER=sofia PETABYTE_PASS=secret \
 PRICE_PER_HOUR=2.5 \
-bash <(curl -fsSL https://api.yourdomain.com/install.sh)
+bash <(curl -fsSL https://yourdomain.com/install.sh)
 ```
 The installer creates the account if needed, installs Docker + the NVIDIA toolkit,
 detects the GPU, and **automatically does everything below** (register the spec,
@@ -77,7 +78,7 @@ journalctl -u petabyte-agent -f
 The GPU appears in `/marketplace` within a minute. Auto-update is enabled by default
 (6-hourly `petabyte-agent-update.timer`).
 
-**Windows sellers:** either `irm https://api.yourdomain.com/install.ps1 | iex` (WSL2
+**Windows sellers:** either `irm https://yourdomain.com/install.ps1 | iex` (WSL2
 service) or the double-click desktop app (`desktop-app/` → `PetabyteAgent.exe`), where
 you paste your API key + Spec ID in the dashboard. Both need Docker for paid jobs.
 
@@ -98,7 +99,7 @@ you paste your API key + Spec ID in the dashboard. Both need Docker for paid job
 ## 3 — Buy a service (rent a GPU + run a job)
 
 ### Via the dashboard (what a buyer actually does)
-1. Open `https://api.yourdomain.com/app`, sign in (Google or username/password).
+1. Open `https://yourdomain.com/app`, sign in (Google or username/password).
 2. **Add funds** — in sandbox this mints test credit; live goes through your payment
    provider.
 3. **Browse** `/marketplace`, pick a GPU (model, `$/hr`, savings vs cloud, trust badges).
@@ -109,30 +110,30 @@ you paste your API key + Spec ID in the dashboard. Both need Docker for paid job
 ### Via the API (the exact verified calls)
 ```bash
 # 1. account + token
-curl -sX POST https://api.yourdomain.com/register_user -H 'Content-Type: application/json' \
+curl -sX POST https://yourdomain.com/register_user -H 'Content-Type: application/json' \
   -d '{"username":"dan","password":"secret12"}'
-TOKEN=$(curl -sX POST https://api.yourdomain.com/login \
+TOKEN=$(curl -sX POST https://yourdomain.com/login \
   -d 'username=dan&password=secret12' | jq -r .access_token)
 AUTH="Authorization: Bearer $TOKEN"
 
 # 2. add funds (sandbox) — check the wallet
-curl -sX POST https://api.yourdomain.com/deposit -H "$AUTH" -H 'Content-Type: application/json' \
+curl -sX POST https://yourdomain.com/deposit -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"amount":50}'                                   # -> {"balance":50.0}
 
 # 3. browse supply, note a spec_id
-curl -s https://api.yourdomain.com/marketplace/specs   # -> {"count":N,"specs":[{"gpu_model":"H100",...}]}
+curl -s https://yourdomain.com/marketplace/specs   # -> {"count":N,"specs":[{"gpu_model":"H100",...}]}
 
 # 4. book it -> escrows the cost, returns booking_id
-curl -sX POST https://api.yourdomain.com/request_vm -H "$AUTH" -H 'Content-Type: application/json' \
+curl -sX POST https://yourdomain.com/request_vm -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"spec_id":1,"hours":2}'                         # -> {"booking_id":1,"booking_status":"escrowed"}
 
 # 5. run a job against that booking
-curl -sX POST https://api.yourdomain.com/create_task -H "$AUTH" -H 'Content-Type: application/json' \
+curl -sX POST https://yourdomain.com/create_task -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"booking_id":1,"task_type":"notebook","code":"print(6*7)"}'   # -> {"task_id":1}
 
 # 6. monitor + settle
-curl -s https://api.yourdomain.com/tasks/1 -H "$AUTH"   # status, logs, result
-curl -s https://api.yourdomain.com/wallet   -H "$AUTH"  # balance after escrow/settlement
+curl -s https://yourdomain.com/tasks/1 -H "$AUTH"   # status, logs, result
+curl -s https://yourdomain.com/wallet   -H "$AUTH"  # balance after escrow/settlement
 ```
 
 Alternatively, let the router place the job for you:

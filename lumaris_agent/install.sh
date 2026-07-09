@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Petabyte one-line node installer (Ubuntu/Debian).
-#   PETABYTE_API_URL=https://api.petabyte.market \
+#   PETABYTE_API_URL=https://petabyte.market \
 #   PETABYTE_USER=alice PETABYTE_PASS=secret PRICE_PER_HOUR=1.5 \
-#   bash <(curl -fsSL https://get.petabyte.market/install.sh)
+#   bash <(curl -fsSL https://petabyte.market/install.sh)
 set -euo pipefail
 : "${PETABYTE_API_URL:?set PETABYTE_API_URL}"
 : "${PETABYTE_USER:?set PETABYTE_USER}"

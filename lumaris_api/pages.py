@@ -231,15 +231,15 @@ INSTALL_HTML = _page("Petabyte — become a seller", """
 <div class="wrap" style="padding:12px 22px 30px">
   <div class="cols c3">
     <div class="card"><div class="lbl">Linux · Ubuntu/Debian</div>
-      <pre>PETABYTE_API_URL=https://api.petabyte.market \\
+      <pre>PETABYTE_API_URL=https://petabyte.market \\
 PETABYTE_USER=you PETABYTE_PASS=secret \\
 PRICE_PER_HOUR=1.5 \\
-bash &lt;(curl -fsSL https://api.petabyte.market/install.sh)</pre></div>
+bash &lt;(curl -fsSL https://petabyte.market/install.sh)</pre></div>
     <div class="card"><div class="lbl">Windows · WSL2</div>
-      <pre>$env:PETABYTE_API_URL="https://api.petabyte.market"
+      <pre>$env:PETABYTE_API_URL="https://petabyte.market"
 $env:PETABYTE_USER="you"; $env:PETABYTE_PASS="secret"
 $env:PRICE_PER_HOUR="1.5"
-irm https://api.petabyte.market/install.ps1 | iex</pre>
+irm https://petabyte.market/install.ps1 | iex</pre>
       <p class="mut" style="font-size:12px;margin-top:9px">Elevated PowerShell. Installs WSL2 + the agent.</p></div>
     <div class="card"><div class="lbl">Verify</div>
       <pre>systemctl status petabyte-agent
@@ -375,7 +375,7 @@ INVESTORS_HTML = _page("Petabyte — investors", """
 <div class="wrap" style="padding:22px 22px 8px">
   <div class="card" style="text-align:center;background:linear-gradient(100deg,rgba(245,178,61,.08),rgba(79,214,201,.05));border-color:rgba(79,214,201,.3)">
     <p style="font-family:var(--disp);font-weight:600;font-size:18px">Building the Gulf's compute exchange.</p>
-    <p class="mut" style="margin-top:7px">For the deck, model, and a live demo — <a class="teal" href="mailto:founder@petabyte.market">founder@petabyte.market</a></p>
+    <p class="mut" style="margin-top:7px">For the deck, model, and a live demo — <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a></p>
   </div>
 </div>""")
 

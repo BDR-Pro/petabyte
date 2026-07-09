@@ -1,8 +1,8 @@
 # Petabyte Windows node installer — runs the (tested) Linux agent inside WSL2.
 # Run in an ELEVATED PowerShell:
-#   $env:PETABYTE_API_URL="https://api.petabyte.market"
+#   $env:PETABYTE_API_URL="https://petabyte.market"
 #   $env:PETABYTE_USER="alice"; $env:PETABYTE_PASS="secret"; $env:PRICE_PER_HOUR="1.5"
-#   irm https://get.petabyte.market/install.ps1 | iex
+#   irm https://petabyte.market/install.ps1 | iex
 #
 # What it does:
 #   1) Verifies admin + NVIDIA driver (nvidia-smi on Windows).

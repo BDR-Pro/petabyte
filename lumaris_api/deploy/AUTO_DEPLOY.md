@@ -23,7 +23,7 @@ database, or `/etc/lumaris/lumaris.env`.
 ### 3. GitHub repo secrets (Settings -> Secrets and variables -> Actions)
 | Secret           | Value                                    |
 |------------------|------------------------------------------|
-| DROPLET_HOST     | droplet IP or api.yourdomain.com         |
+| DROPLET_HOST     | droplet IP or yourdomain.com         |
 | DROPLET_USER     | root (or a limited deploy user)          |
 | DEPLOY_SSH_KEY   | contents of the PRIVATE deploy_key       |
 
@@ -37,7 +37,7 @@ Set DROPLET_USER=deploy.
 ## Trigger & verify
 Any push to main touching lumaris_api/** runs .github/workflows/deploy-server.yml (or
 run it manually from the Actions tab). Watch for the "deployed <old> -> <new>" line,
-then: curl https://api.yourdomain.com/healthz
+then: curl https://yourdomain.com/healthz
 
 ## Rollback
     ssh root@DROPLET_IP 'cd /opt/petabyte && git reset --hard HEAD~1 && /opt/lumaris/deploy/update.sh'

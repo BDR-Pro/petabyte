@@ -48,11 +48,11 @@ no separate frontend service, no build step). Pages are plain HTML strings in
 ## Going live
 1. **Deploy the API** per `deploy.md` (droplet, nginx, certbot, Postgres). The site
    ships with it — no separate frontend deploy.
-2. **DNS:** point `petabyte.market` (site) and `api.petabyte.market` at the droplet, or
+2. **DNS:** point `petabyte.market` (site) and `petabyte.market` at the droplet, or
    serve both from one domain. HTTPS via certbot (deploy.md §5).
 3. **Google sign-in:** in Google Cloud Console → APIs & Services → Credentials → create
    an **OAuth 2.0 Client ID (Web)**. Authorized redirect URI:
-   `https://api.petabyte.market/auth/google/callback`. Put the client id/secret +
+   `https://petabyte.market/auth/google/callback`. Put the client id/secret +
    redirect into the env (see `template.env`), set `GOOGLE_OAUTH_STUB=false`, restart.
 4. **Installer URLs:** `/install.sh` is served by the API. Host `install.ps1` similarly
    (add a route or drop it in nginx static) so the Windows one-liner resolves.

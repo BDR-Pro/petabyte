@@ -18,7 +18,7 @@ try:
 except Exception:  # pragma: no cover
     httpx = None
 
-DEFAULT_API_URL = "https://api.petabyte.market"
+DEFAULT_API_URL = "https://petabyte.market"
 
 def _cfg():
     return {

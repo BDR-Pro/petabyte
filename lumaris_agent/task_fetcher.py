@@ -24,7 +24,7 @@ from vm import launch_vm_task
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 
-API_URL = os.getenv("PETABYTE_API_URL")        # e.g. https://api.petabyte.market
+API_URL = os.getenv("PETABYTE_API_URL")        # e.g. https://petabyte.market
 API_KEY = os.getenv("PETABYTE_API_KEY")        # encrypted key from POST /create_api_key
 SPEC_ID = os.getenv("PETABYTE_SPEC_ID")        # the spec this node serves
 HEARTBEAT_S = int(os.getenv("HEARTBEAT_INTERVAL", "15"))

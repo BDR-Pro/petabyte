@@ -21,9 +21,12 @@ if ! git diff --quiet "$before" "$after" -- lumaris_api/requirements.txt 2>/dev/
   sudo -u lumaris "$APP/.venv/bin/pip" install -q -r "$APP/requirements.txt"
 fi
 
-# apply migrations (no-op if already at head)
-sudo -u lumaris env $(grep -v '^#' /etc/lumaris/lumaris.env | xargs) \
-  "$APP/.venv/bin/alembic" upgrade head || true
+# schema: the app runs create_all() on startup, so fresh tables appear on restart.
+# Only run Alembic if migrations are actually present (for altering existing tables).
+if [ -d "$APP/alembic/versions" ] && ls "$APP"/alembic/versions/*.py >/dev/null 2>&1; then
+  sudo -u lumaris env HOME=/run/lumaris $(grep -v '^#' /etc/lumaris/lumaris.env | xargs) \
+    "$APP/.venv/bin/alembic" upgrade head || true
+fi
 
 chown -R lumaris:lumaris "$APP"
 systemctl restart lumaris-api lumaris-reaper

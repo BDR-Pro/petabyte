@@ -37,10 +37,10 @@ journalctl -u lumaris-api -f         # live logs
 
 ## HTTPS
 ```bash
-# point an A record (e.g. api.yourdomain.com) at the droplet, then:
-sed -i 's/server_name _;/server_name api.yourdomain.com;/' /etc/nginx/sites-available/lumaris
+# point an A record (e.g. yourdomain.com) at the droplet, then:
+sed -i 's/server_name _;/server_name yourdomain.com;/' /etc/nginx/sites-available/lumaris
 systemctl reload nginx
-certbot --nginx -d api.yourdomain.com
+certbot --nginx -d yourdomain.com
 ```
 
 ## Updating after a code change

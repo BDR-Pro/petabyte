@@ -24,7 +24,7 @@ except Exception:
     pass
 
 # Sensible default so an un-configured launch still points at the right API.
-os.environ.setdefault("PETABYTE_API_URL", "https://api.petabyte.market")
+os.environ.setdefault("PETABYTE_API_URL", "https://petabyte.market")
 
 logging.basicConfig(
     level=logging.INFO,

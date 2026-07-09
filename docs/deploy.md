@@ -152,10 +152,10 @@ sudo -u lumaris .venv/bin/alembic upgrade head
 ## 6. HTTPS
 
 ```bash
-# point an A record (e.g. api.yourdomain.com) at the droplet, then:
-sed -i 's/server_name _;/server_name api.yourdomain.com;/' /etc/nginx/sites-available/lumaris
+# point an A record (e.g. yourdomain.com) at the droplet, then:
+sed -i 's/server_name _;/server_name yourdomain.com;/' /etc/nginx/sites-available/lumaris
 systemctl reload nginx
-certbot --nginx -d api.yourdomain.com
+certbot --nginx -d yourdomain.com
 ```
 
 ---
@@ -164,9 +164,9 @@ certbot --nginx -d api.yourdomain.com
 
 ```bash
 systemctl status lumaris-api lumaris-reaper
-curl -s https://api.yourdomain.com/healthz      # {"status":"ok"}
-curl -s https://api.yourdomain.com/readyz       # {"status":"ready"}  (DB reachable)
-# open https://api.yourdomain.com/  -> the buyer dashboard
+curl -s https://yourdomain.com/healthz      # {"status":"ok"}
+curl -s https://yourdomain.com/readyz       # {"status":"ready"}  (DB reachable)
+# open https://yourdomain.com/  -> the buyer dashboard
 journalctl -u lumaris-api -f                     # live logs
 ```
 
@@ -246,7 +246,7 @@ until a customer needs SSH into a live VM.
 On each GPU machine (not the API droplet):
 
 ```bash
-PETABYTE_API_URL=https://api.yourdomain.com \
+PETABYTE_API_URL=https://yourdomain.com \
 PETABYTE_USER=alice PETABYTE_PASS=secret PRICE_PER_HOUR=1.5 \
 bash <(curl -fsSL https://YOUR_HOST/install.sh)
 ```

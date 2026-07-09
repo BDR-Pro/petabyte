@@ -3,10 +3,10 @@
 Turn any Ubuntu/Debian machine with a GPU into a Petabyte seller node:
 
 ```bash
-PETABYTE_API_URL=https://api.petabyte.market \
+PETABYTE_API_URL=https://petabyte.market \
 PETABYTE_USER=alice PETABYTE_PASS=secret \
 PRICE_PER_HOUR=1.5 \
-bash <(curl -fsSL https://get.petabyte.market/install.sh)
+bash <(curl -fsSL https://petabyte.market/install.sh)
 ```
 
 What it does (≈30s after deps):
