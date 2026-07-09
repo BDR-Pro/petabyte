@@ -1,0 +1,21 @@
+name: Deploy server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lumaris_api/**"
+      - ".github/workflows/deploy-server.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: sudo /opt/lumaris/deploy/update.sh

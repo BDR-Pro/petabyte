@@ -1,0 +1,19 @@
+[Unit]
+Description=Lumaris heartbeat reaper
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+User=lumaris
+Group=lumaris
+WorkingDirectory=/opt/lumaris
+EnvironmentFile=/etc/lumaris/lumaris.env
+ExecStart=/opt/lumaris/.venv/bin/python tools/reaper.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
