@@ -1,0 +1,19 @@
+[project]
+name = "api"
+version = "0.1.0"
+description = "API for the application using FastAPI"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.16.2",
+    "dotenv>=0.9.9",
+    "fastapi>=0.115.14",
+    "itsdangerous>=2.2.0",
+    "passlib[bcrypt]>=1.7.4",
+    "psycopg2>=2.9.10",
+    "pydantic>=2.11.7",
+    "python-jose[cryptography]>=3.5.0",
+    "python-multipart>=0.0.20",
+    "sqlalchemy>=2.0.41",
+    "uvicorn>=0.35.0",
+]
