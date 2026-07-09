@@ -1,57 +1,43 @@
 # Push-to-deploy (server)
 
-Push to `main` → GitHub Actions SSHes into the droplet and runs
-`deploy/update.sh` (pull + migrate-if-needed + restart). No manual SSH.
+Push to `main` → GitHub Actions SSHes into the droplet and runs `deploy/update.sh`,
+which pulls the monorepo and syncs `lumaris_api/` into the running app dir, migrates,
+and restarts. No manual SSH.
+
+Layout: the monorepo is checked out at **`/opt/petabyte`** (the pull source); the API
+runs from **`/opt/lumaris`** (created by the first `deploy.sh`). `update.sh` rsyncs
+`lumaris_api/` from the checkout into `/opt/lumaris`, so it never touches your venv,
+database, or `/etc/lumaris/lumaris.env`.
 
 ## One-time setup
 
-### 1. Make `/opt/lumaris` a git checkout
-The first `deploy.sh` rsyncs code into `/opt/lumaris` (no `.git`). Convert it once
-so `git pull` works there:
-```bash
-ssh root@DROPLET_IP
-systemctl stop lumaris-api lumaris-reaper
-mv /opt/lumaris /opt/lumaris.bak
-git clone https://github.com/BDR-Pro/lumaris_api.git /opt/lumaris   # your API repo
-cd /opt/lumaris
-python3 -m venv .venv && .venv/bin/pip install -U pip -r requirements.txt
-cp -n /opt/lumaris.bak/.venv/../*.db . 2>/dev/null || true          # (sqlite only; skip on Postgres)
-chown -R lumaris:lumaris /opt/lumaris
-systemctl start lumaris-api lumaris-reaper
-```
-`/etc/lumaris/lumaris.env` is untouched — secrets and DB stay put.
+### 1. Clone the monorepo on the droplet
+    ssh root@DROPLET_IP
+    git clone https://github.com/BDR-Pro/petabyte.git /opt/petabyte
+    # /opt/lumaris already exists from the first deploy.sh run
 
 ### 2. A deploy SSH key
-```bash
-ssh-keygen -t ed25519 -f deploy_key -N ""      # on your machine
-# add the PUBLIC key to the droplet:
-ssh-copy-id -i deploy_key.pub root@DROPLET_IP   # or append to ~/.ssh/authorized_keys
-```
+    ssh-keygen -t ed25519 -f deploy_key -N ""       # on your machine
+    ssh-copy-id -i deploy_key.pub root@DROPLET_IP    # add PUBLIC key to the droplet
 
-### 3. GitHub repo secrets (Settings → Secrets and variables → Actions)
-| Secret           | Value                                  |
-|------------------|----------------------------------------|
-| `DROPLET_HOST`   | droplet IP or `api.yourdomain.com`     |
-| `DROPLET_USER`   | `root` (or a deploy user, see below)   |
-| `DEPLOY_SSH_KEY` | contents of the **private** `deploy_key` |
+### 3. GitHub repo secrets (Settings -> Secrets and variables -> Actions)
+| Secret           | Value                                    |
+|------------------|------------------------------------------|
+| DROPLET_HOST     | droplet IP or api.yourdomain.com         |
+| DROPLET_USER     | root (or a limited deploy user)          |
+| DEPLOY_SSH_KEY   | contents of the PRIVATE deploy_key       |
 
 ### 4. (Recommended) non-root deploy user
-Instead of `root`, use a `deploy` user limited to just the update command:
-```bash
-useradd -m -s /bin/bash deploy
-mkdir -p /home/deploy/.ssh && cp ~/.ssh/authorized_keys /home/deploy/.ssh/ && chown -R deploy:deploy /home/deploy/.ssh
-# allow only the update script via sudo, no password:
-echo 'deploy ALL=(root) NOPASSWD: /opt/lumaris/deploy/update.sh' > /etc/sudoers.d/deploy-lumaris
-chmod 440 /etc/sudoers.d/deploy-lumaris
-```
-Set `DROPLET_USER=deploy`.
+    useradd -m -s /bin/bash deploy
+    mkdir -p /home/deploy/.ssh && cp ~/.ssh/authorized_keys /home/deploy/.ssh/ && chown -R deploy:deploy /home/deploy/.ssh
+    echo 'deploy ALL=(root) NOPASSWD: /opt/lumaris/deploy/update.sh' > /etc/sudoers.d/deploy-lumaris
+    chmod 440 /etc/sudoers.d/deploy-lumaris
+Set DROPLET_USER=deploy.
 
-## How it triggers
-Any push to `main` that touches `lumaris_api/**` runs the workflow. You can also run
-it manually from the Actions tab ("Run workflow"). Watch the run log for the
-`deployed <old> -> <new>` line; verify with `curl https://api.yourdomain.com/healthz`.
+## Trigger & verify
+Any push to main touching lumaris_api/** runs .github/workflows/deploy-server.yml (or
+run it manually from the Actions tab). Watch for the "deployed <old> -> <new>" line,
+then: curl https://api.yourdomain.com/healthz
 
 ## Rollback
-```bash
-ssh root@DROPLET_IP 'cd /opt/lumaris && git reset --hard HEAD~1 && systemctl restart lumaris-api lumaris-reaper'
-```
+    ssh root@DROPLET_IP 'cd /opt/petabyte && git reset --hard HEAD~1 && /opt/lumaris/deploy/update.sh'

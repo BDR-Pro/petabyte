@@ -13,7 +13,7 @@ echo "==> Installing system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y python3 python3-venv python3-pip postgresql nginx \
-    certbot python3-certbot-nginx ufw git curl wireguard-tools
+    certbot python3-certbot-nginx ufw git curl wireguard-tools rsync
 
 echo "==> Creating service user and dirs"
 id -u "$APP_USER" &>/dev/null || useradd --system --create-home --shell /usr/sbin/nologin "$APP_USER"

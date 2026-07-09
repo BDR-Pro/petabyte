@@ -1,30 +1,27 @@
 #!/usr/bin/env bash
-# Pull the latest API code and restart the services. Called by the GitHub Actions
-# deploy workflow over SSH (or run by hand). Requires /opt/lumaris to be a git
-# checkout (see AUTO_DEPLOY.md for the one-time setup).
+# Pull the latest code from the monorepo checkout and redeploy the API. Called by
+# the GitHub Actions deploy workflow over SSH (or run by hand). See AUTO_DEPLOY.md.
 set -euo pipefail
-APP=/opt/lumaris
-cd "$APP"
+SRC="${PETABYTE_SRC:-/opt/petabyte}"     # monorepo git checkout (repo root)
+APP=/opt/lumaris                          # running app dir (services point here)
 
-if [ ! -d .git ]; then
-  echo "ERROR: $APP is not a git checkout. See deploy/AUTO_DEPLOY.md (one-time setup)."; exit 1
-fi
-
+[ -d "$SRC/.git" ] || { echo "ERROR: $SRC is not a git checkout. See deploy/AUTO_DEPLOY.md."; exit 1; }
+cd "$SRC"
 before=$(git rev-parse HEAD 2>/dev/null || echo none)
 git pull --ff-only
 after=$(git rev-parse HEAD 2>/dev/null || echo none)
 
-if [ "$before" = "$after" ]; then
-  echo "no change ($after) — restarting anyway to pick up env edits"
-fi
+# sync only the API into the app dir (never touch venv, db, or env)
+rsync -rc --exclude .venv --exclude '*.db' --exclude '*.db-*' --exclude '.env' \
+      --exclude __pycache__ --exclude .git "$SRC/lumaris_api/" "$APP/"
 
 # reinstall deps only if requirements changed
-if ! git diff --quiet "$before" "$after" -- requirements.txt 2>/dev/null; then
+if ! git diff --quiet "$before" "$after" -- lumaris_api/requirements.txt 2>/dev/null; then
   echo "==> requirements changed — reinstalling"
   sudo -u lumaris "$APP/.venv/bin/pip" install -q -r "$APP/requirements.txt"
 fi
 
-# apply DB migrations (no-op if already at head)
+# apply migrations (no-op if already at head)
 sudo -u lumaris env $(grep -v '^#' /etc/lumaris/lumaris.env | xargs) \
   "$APP/.venv/bin/alembic" upgrade head || true
 

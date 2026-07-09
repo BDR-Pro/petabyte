@@ -78,7 +78,7 @@ The GPU appears in `/marketplace` within a minute. Auto-update is enabled by def
 (6-hourly `petabyte-agent-update.timer`).
 
 **Windows sellers:** either `irm https://api.yourdomain.com/install.ps1 | iex` (WSL2
-service) or the double-click desktop app (`desktop app/` → `PetabyteAgent.exe`), where
+service) or the double-click desktop app (`desktop-app/` → `PetabyteAgent.exe`), where
 you paste your API key + Spec ID in the dashboard. Both need Docker for paid jobs.
 
 ### What the installer does under the hood (the manual equivalent)

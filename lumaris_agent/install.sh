@@ -7,7 +7,8 @@ set -euo pipefail
 : "${PETABYTE_API_URL:?set PETABYTE_API_URL}"
 : "${PETABYTE_USER:?set PETABYTE_USER}"
 : "${PETABYTE_PASS:?set PETABYTE_PASS}"
-REPO="${PETABYTE_AGENT_REPO:-https://github.com/BDR-Pro/lumaris_agent.git}"
+REPO="${PETABYTE_REPO:-https://github.com/BDR-Pro/petabyte.git}"
+SUBDIR="${PETABYTE_AGENT_SUBDIR:-lumaris_agent}"
 APP=/opt/petabyte-agent
 ENVF=/etc/petabyte/agent.env
 KEYF=/etc/petabyte/agent_ed25519.key
@@ -15,7 +16,7 @@ KEYF=/etc/petabyte/agent_ed25519.key
 echo "==> installing packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y python3 python3-venv git curl ca-certificates
+apt-get install -y python3 python3-venv git curl ca-certificates rsync
 
 echo "==> installing Docker (sandbox runtime)"
 command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh
@@ -33,7 +34,14 @@ fi
 
 echo "==> fetching agent"
 mkdir -p "$APP" /etc/petabyte
-if [ -f "./task_fetcher.py" ]; then cp -r ./* "$APP"/; else git clone --depth 1 "$REPO" "$APP"; fi
+if [ -f "./task_fetcher.py" ]; then
+  cp -r ./* "$APP"/                          # running from inside lumaris_agent/ locally
+else
+  TMP=$(mktemp -d)
+  git clone --depth 1 "$REPO" "$TMP"         # monorepo; take only the agent subfolder
+  cp -r "$TMP/$SUBDIR/." "$APP"/
+  rm -rf "$TMP"
+fi
 cd "$APP"
 python3 -m venv .venv
 .venv/bin/pip install -q -U pip
