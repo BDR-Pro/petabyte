@@ -29,5 +29,17 @@ if [ -d "$APP/alembic/versions" ] && ls "$APP"/alembic/versions/*.py >/dev/null 
 fi
 
 chown -R lumaris:lumaris "$APP"
+
+# refresh the systemd unit if it changed in this pull, then reload
+if ! cmp -s "$APP/deploy/lumaris-api.service" /etc/systemd/system/lumaris-api.service 2>/dev/null; then
+  echo "==> service unit changed — updating"
+  cp "$APP/deploy/lumaris-api.service" /etc/systemd/system/lumaris-api.service
+  systemctl daemon-reload
+fi
+
+# NOTE: nginx conf is intentionally NOT auto-copied — certbot rewrites that file when
+# you enable HTTPS, so overwriting it would wipe the SSL block. If you change
+# deploy/nginx-lumaris.conf, apply it by hand: sudo cp ... && sudo nginx -t && reload.
+
 systemctl restart lumaris-api lumaris-reaper
 echo "deployed ${before:0:7} -> ${after:0:7}"
