@@ -431,8 +431,35 @@ class IdempotencyRecord(Base):
 
 # ------------------ Session plumbing ------------------
 
+def _ensure_columns():
+    """Forward-migrate columns added to a model AFTER its table already exists.
+    create_all() only creates missing TABLES, never columns — so on an older DB a
+    newly-added column (e.g. bookings.test) is absent and every query on that table
+    500s. This idempotently adds known-missing columns. Safe on SQLite and Postgres."""
+    from sqlalchemy import inspect as _inspect, text as _text
+    wanted = {
+        "bookings": [("test", "BOOLEAN NOT NULL DEFAULT true")],
+    }
+    try:
+        insp = _inspect(engine)
+    except Exception:
+        return
+    for table, cols in wanted.items():
+        try:
+            if not insp.has_table(table):
+                continue
+            existing = {c["name"] for c in insp.get_columns(table)}
+            for name, ddl in cols:
+                if name not in existing:
+                    with engine.begin() as conn:
+                        conn.execute(_text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+        except Exception:
+            pass  # never block startup on a best-effort migration
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+    _ensure_columns()
 
 
 def get_db():

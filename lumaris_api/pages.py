@@ -549,7 +549,7 @@ LOGIN_HTML = _page("Petabyte — sign in", """
     <label class="mini" style="display:block;margin-bottom:6px">Username</label>
     <input id="u" placeholder="username" style="width:100%" autocomplete="username"/>
     <label class="mini" style="display:block;margin:14px 0 6px">Password</label>
-    <input id="p" type="password" placeholder="password" style="width:100%" autocomplete="current-password"
+    <input id="p" type="password" placeholder="password (8+ characters)" style="width:100%" autocomplete="current-password"
            onkeydown="if(event.key==='Enter')go()"/>
     <button class="btn-amber" style="width:100%;justify-content:center;margin-top:18px" onclick="go()">
       <span id="btn">Sign in</span>
@@ -594,18 +594,26 @@ async function login(u,p){
 async function go(){
   var u=document.getElementById('u').value.trim(), p=document.getElementById('p').value;
   if(!u||!p){fail("Enter a username and password."); return;}
+  if(mode==="register"){
+    if(u.length<3||u.length>64){fail("Username must be 3–64 characters."); return;}
+    if(p.length<8){fail("Password must be at least 8 characters."); return;}
+  }
   document.getElementById('err').style.display='none';
   try{
     if(mode==="register"){
       var rr=await fetch('/register_user',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({username:u,password:p})});
-      if(!rr.ok){var b={};try{b=await rr.json()}catch(e){} fail(b.detail||"Could not create account (username may be taken)."); return;}
+      if(!rr.ok){var b={};try{b=await rr.json()}catch(e){}
+        if(rr.status===422){fail("Username must be 3–64 characters and password at least 8.");}
+        else if(rr.status===429||rr.status===503){fail("Too many attempts — wait a moment and try again.");}
+        else{fail((typeof b.detail==='string'?b.detail:null)||"That username is taken — try another."); }
+        return;}
     }
     var t=await login(u,p);
     if(!t){fail(mode==="register"?"Account created — but sign-in failed. Try signing in.":"Wrong username or password."); return;}
     localStorage.setItem('pb_token', t);
     location.href='/app';
-  }catch(e){fail("Network error. Try again.");}
+  }catch(e){fail("Network error — check your connection and try again.");}
 }
 </script>""")
 
