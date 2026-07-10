@@ -18,4 +18,4 @@ jobs:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: sudo /opt/lumaris/deploy/update.sh
+          script: sudo PETABYTE_SRC=/root/petabyte /opt/lumaris/deploy/update.sh
