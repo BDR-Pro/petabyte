@@ -55,7 +55,8 @@ from db import (
 from auth import create_access_token, verify_token
 from static_dashboard import DASHBOARD_HTML
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
-                   KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML)
+                   KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
+                   GAMERS_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -95,6 +96,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Lumaris API", lifespan=lifespan)
+
+# Optional error tracking — only active when SENTRY_DSN is set (see HARDENING.md).
+_SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
+if _SENTRY_DSN:
+    try:
+        import sentry_sdk
+        sentry_sdk.init(dsn=_SENTRY_DSN, traces_sample_rate=0.1,
+                        environment=os.getenv("PAYMENTS_MODE", "sandbox"))
+    except Exception as _e:  # noqa: BLE001
+        import logging as _lg
+        _lg.getLogger(__name__).warning(f"Sentry init skipped: {_e}")
 
 # CORS: explicit allow-list only (never "*" with credentials). Set ALLOWED_ORIGINS
 # to a comma-separated list, e.g. "https://petabyte.market,https://app.petabyte.market".
@@ -476,6 +488,10 @@ def login_page():
 def account_page():
     return ACCOUNT_HTML
 
+@app.get("/gamers", response_class=HTMLResponse)
+def gamers_page():
+    return GAMERS_HTML
+
 def _find_installer(name: str):
     """Locate a bundled installer script across dev + deployed layouts."""
     here = os.path.dirname(__file__)
@@ -536,8 +552,11 @@ def favicon():
         raise HTTPException(status_code=404, detail="not found")
 
 @app.get("/marketplace/specs")
-def public_specs(db: Session = Depends(get_db)):
-    """Public, read-only inventory for the marketplace page (no auth, limited fields)."""
+def public_specs(db: Session = Depends(get_db),
+                 gpu: Optional[str] = None, region: Optional[str] = None,
+                 min_vram: int = 0, max_price: Optional[float] = None,
+                 confidential: Optional[bool] = None, sort: str = "price"):
+    """Public, read-only inventory with search/filter (no auth, limited fields)."""
     from db import SellerSpec
     out = []
     for spec in db.query(SellerSpec).filter(SellerSpec.attested == True).all():  # noqa: E712
@@ -546,12 +565,32 @@ def public_specs(db: Session = Depends(get_db)):
         owner = get_user_by_id(db, spec.user_id)
         if not owner or not owner.can_accept_paid_jobs:
             continue
-        out.append({"gpu_model": spec.gpu_model or "CPU", "price_per_hour": spec.price_per_hour,
+        if gpu and gpu.lower() not in (spec.gpu_model or "").lower():
+            continue
+        if region and region.lower() != (spec.region or "").lower():
+            continue
+        if (spec.vram_gb or 0) < min_vram:
+            continue
+        if max_price is not None and spec.price_per_hour > max_price:
+            continue
+        if confidential is not None and bool(spec.confidential) != confidential:
+            continue
+        total = (spec.jobs_completed or 0) + (spec.jobs_failed or 0)
+        _rep = compute_reputation(db, spec)
+        _score = _rep["score"] if isinstance(_rep, dict) else _rep
+        out.append({"gpu_model": spec.gpu_model or "CPU",
+                    "gpu_count": spec.gpu_count or 0, "vram_gb": spec.vram_gb or 0,
+                    "price_per_hour": spec.price_per_hour,
                     "region": spec.region, "region_verified": bool(spec.region_verified),
                     "confidential": bool(spec.confidential),
-                    "reputation_score": compute_reputation(db, spec),
-                    "available_units": spec.available_units})
-    out.sort(key=lambda x: x["price_per_hour"])
+                    "reputation_score": _score,
+                    "available_units": spec.available_units,
+                    "jobs_completed": spec.jobs_completed, "jobs_failed": spec.jobs_failed,
+                    "success_rate": round(100.0 * spec.jobs_completed / total, 1) if total else None})
+    keyfn = {"price": lambda x: x["price_per_hour"],
+             "rep": lambda x: -x["reputation_score"],
+             "vram": lambda x: -x["vram_gb"]}.get(sort, lambda x: x["price_per_hour"])
+    out.sort(key=keyfn)
     return {"specs": out, "count": len(out), "aws_reference": float(AWS_REFERENCE_PRICE)}
 
 

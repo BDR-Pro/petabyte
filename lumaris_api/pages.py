@@ -116,7 +116,7 @@ _NAV = """<nav><div class="wrap">
 <a class="brand" href="/"><img src="/static/petabyte-logo.png" alt="Petabyte"/><span><b>Petabyte</b><span class="p">.</span></span></a>
 <div class="navlinks">
   <a href="/marketplace">Marketplace</a><a href="/install">Become a seller</a>
-  <a href="/developers">Developers</a><a href="/investors">Investors</a>
+  <a href="/developers">Developers</a><a href="/gamers">Gamers</a>
 </div>
 <div class="navcta">
   <a class="signin" id="adminlink" href="/admin" style="display:none">Admin</a>
@@ -202,28 +202,47 @@ MARKETPLACE_HTML = _page("Petabyte — marketplace", """
   <p class="mut" id="mnote">Loading verified nodes…</p>
 </div>
 <div class="wrap" style="padding:12px 22px 30px">
-  <div class="panel" style="overflow:hidden">
-    <table class="tbl"><thead><tr><th>GPU</th><th>$/hr</th><th>vs cloud</th><th>trust</th><th>region</th><th>rep</th></tr></thead>
-    <tbody id="mrows"><tr><td colspan="6" style="padding:24px;text-align:center" class="mut mono">loading…</td></tr></tbody></table>
+  <div class="panel" style="padding:14px 16px;margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+    <input id="fgpu" placeholder="GPU · H100" size="10" onkeydown="if(event.key==='Enter')load()"/>
+    <input id="fprice" type="number" placeholder="max $/hr" size="7" step="0.1" onkeydown="if(event.key==='Enter')load()"/>
+    <input id="fvram" type="number" placeholder="min VRAM GB" size="9" onkeydown="if(event.key==='Enter')load()"/>
+    <input id="fregion" placeholder="region" size="9" onkeydown="if(event.key==='Enter')load()"/>
+    <label class="mini" style="display:flex;align-items:center;gap:5px"><input id="fconf" type="checkbox"/> confidential</label>
+    <select id="fsort" onchange="load()"><option value="price">cheapest</option><option value="rep">most trusted</option><option value="vram">most VRAM</option></select>
+    <button class="btn btn-teal" onclick="load()">Filter</button>
+    <button class="btn-ghost" onclick="clearf()">Clear</button>
+  </div>
+  <div class="panel" style="overflow:auto">
+    <table class="tbl"><thead><tr><th>GPU</th><th>VRAM</th><th>$/hr</th><th>vs cloud</th><th>trust</th><th>region</th><th>rep</th><th>free</th></tr></thead>
+    <tbody id="mrows"><tr><td colspan="8" style="padding:24px;text-align:center" class="mut mono">loading…</td></tr></tbody></table>
   </div>
   <div style="margin-top:18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
     <a class="btn btn-amber" href="/app">Sign in to book →</a>
-    <span class="mut">Browsing is open. Booking needs an account.</span>
+    <span class="mut">Browsing is open. Booking needs an account. Availability updates live.</span>
   </div>
 </div>
 <script>
-async function load(){var r=await fetch('/marketplace/specs');var b=await r.json();var aws=b.aws_reference||12.29;
- document.getElementById('mnote').textContent=b.count?b.count+' GPUs bookable now · reference cloud $'+aws+'/hr':'No GPUs online right now — check back soon.';
- var tb=document.getElementById('mrows');if(!b.count){tb.innerHTML='<tr><td colspan=6 style="padding:24px;text-align:center" class="mut mono">No bookable GPUs online.</td></tr>';return;}
+function qs(){var p=new URLSearchParams();var g=v('fgpu');if(g)p.set('gpu',g);var pr=v('fprice');if(pr)p.set('max_price',pr);
+ var vr=v('fvram');if(vr)p.set('min_vram',vr);var rg=v('fregion');if(rg)p.set('region',rg);
+ if(document.getElementById('fconf').checked)p.set('confidential','true');p.set('sort',document.getElementById('fsort').value);return p.toString();}
+function v(id){return (document.getElementById(id).value||'').trim();}
+function clearf(){['fgpu','fprice','fvram','fregion'].forEach(function(i){document.getElementById(i).value='';});document.getElementById('fconf').checked=false;load();}
+async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await r.json();var aws=b.aws_reference||12.29;
+ document.getElementById('mnote').textContent=b.count?b.count+' GPUs match · reference cloud $'+aws+'/hr':'No GPUs match these filters.';
+ var tb=document.getElementById('mrows');if(!b.count){tb.innerHTML='<tr><td colspan=8 style="padding:24px;text-align:center" class="mut mono">No bookable GPUs match — widen your filters.</td></tr>';return;}
  tb.innerHTML=b.specs.map(function(s){var save=Math.round((1-s.price_per_hour/aws)*100);
-  var t=[];if(s.confidential)t.push('<span class="badge cc">confidential</span>');if(s.region_verified)t.push('<span class="badge ok">region ✓</span>');
+  var t=[];if(s.confidential)t.push('<span class="badge cc">conf</span>');if(s.region_verified)t.push('<span class="badge ok">region ✓</span>');
   var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
+  var rep=(s.reputation_score!=null?s.reputation_score:'—')+(s.success_rate!=null?' <span class="mut" style="font-size:10px">('+s.success_rate+'%)</span>':'');
+  var vram=s.vram_gb?((s.gpu_count>1?s.gpu_count+'× ':'')+s.vram_gb+'GB'):'—';
   return '<tr><td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
+   '<td class="mono mut" style="font-size:12px">'+vram+'</td>'+
    '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+'</td>'+
    '<td class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
    '<td>'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
    '<td class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td>'+
-   '<td class="mono" style="color:'+rc+'">'+(s.reputation_score!=null?s.reputation_score:'—')+'</td></tr>';}).join('');}
+   '<td class="mono" style="color:'+rc+'">'+rep+'</td>'+
+   '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
 load();setInterval(load,8000);
 </script>""")
 
@@ -706,10 +725,12 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
 <script>
 function money(n){return '$'+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
 function wmsg(m){var e=document.getElementById('wmsg');e.textContent=m;e.style.display='';}
+function showGuest(msg){var g=document.getElementById('guest');g.style.display='';var p=g.querySelector('p');if(p&&msg)p.textContent=msg;}
 async function boot(){
-  if(!authed()){document.getElementById('guest').style.display='';return;}
+  if(!authed()){showGuest('Sign in to see your nodes, jobs, keys, and wallet in one place.');return;}
   var me=await api('/me');
-  if(!me.ok){document.getElementById('guest').style.display='';return;}
+  if(me.status===401||me.status===403){showGuest('Your session expired — please sign in again.');return;}
+  if(!me.ok){showGuest('You\\'re signed in, but your profile couldn\\'t load (error '+me.status+'). Refresh, or the server may need a redeploy.');return;}
   document.getElementById('hub').style.display='';
   var u=me.body;
   document.getElementById('uname').textContent=u.username;
@@ -761,4 +782,72 @@ async function loadTemplates(){var r=await api('/templates');var el=document.get
   var ts=(r.ok&&(r.body.templates||r.body))||[];if(!ts.length){el.innerHTML='<span class="mut">vLLM · Ollama · ComfyUI · Jupyter — pick one in the dashboard.</span>';return;}
   el.innerHTML=ts.slice(0,8).map(function(t){var name=t.name||t.id||t;return '<div class="card" style="padding:14px"><b class="teal" style="font-family:var(--disp);font-size:13px">'+name+'</b></div>';}).join('');}
 boot();
+</script>""")
+
+
+GAMERS_HTML = _page("Petabyte — game servers", """
+<div class="wrap" style="padding:48px 22px 8px">
+  <div class="eyebrow"><span class="dot"></span> game servers</div>
+  <h1 style="font-size:clamp(30px,5vw,42px);margin:16px 0 8px">Spin up a <span class="grad-teal">game server</span>.<br/>Or rent out your <span class="grad">rig</span>.</h1>
+  <p class="mut" style="max-width:60ch">Low-latency, dedicated game servers on community hardware — priced below the big hosts. Launch a server in a container, or turn your idle gaming PC into income when you're not playing.</p>
+</div>
+
+<!-- pick a game -->
+<div class="wrap" style="padding:22px 22px 4px">
+  <div class="lbl" style="margin-bottom:12px">Host a game</div>
+  <div id="games" class="cols c4"></div>
+</div>
+
+<!-- two paths -->
+<div class="wrap" style="padding:26px 22px 4px">
+  <div class="cols c2">
+    <div class="card">
+      <div class="lbl">Rent a server</div>
+      <p class="mut">Pick a game and a nearby node, and we launch a dedicated container with the ports you need. Escrowed by the hour — stop anytime.</p>
+      <ul class="mut" style="margin:12px 0 0 18px;font-size:13px;line-height:1.9">
+        <li>Dedicated CPU/RAM, low-latency regions</li>
+        <li>One-click popular games, or bring your own image</li>
+        <li>Pay by the hour, refunded if the node drops</li>
+      </ul>
+      <div style="margin-top:16px"><a class="btn btn-amber" href="/marketplace">Browse nodes →</a></div>
+    </div>
+    <div class="card">
+      <div class="lbl am">Host on your PC</div>
+      <p class="mut">Turn your gaming PC into a paid game-server host when you're not using it. Same one-command install as a compute node — jobs run sandboxed in Docker.</p>
+      <ul class="mut" style="margin:12px 0 0 18px;font-size:13px;line-height:1.9">
+        <li>Runs in Docker — your machine stays yours</li>
+        <li>Set your price, pause anytime</li>
+        <li>Weekly payouts · bank, USDC, or gift card</li>
+      </ul>
+      <div style="margin-top:16px"><a class="btn btn-teal" href="/install">List your PC →</a></div>
+    </div>
+  </div>
+</div>
+
+<!-- live hosts -->
+<div class="wrap" style="padding:26px 22px 4px">
+  <div class="lbl" style="margin-bottom:12px">Nodes that can host</div>
+  <div class="panel" style="overflow:auto"><table class="tbl">
+    <thead><tr><th>Host</th><th>vCPU / RAM proxy</th><th>$/hr</th><th>Region</th><th>Rep</th><th>Free</th></tr></thead>
+    <tbody id="hostrows"><tr><td colspan=6 class="mut mono" style="padding:22px;text-align:center">loading…</td></tr></tbody>
+  </table></div>
+</div>
+
+<div class="wrap" style="padding:22px 22px 34px">
+  <p class="mini">Popular game images powered by open-source stacks (LinuxGSM · CM2Network · Pterodactyl-compatible). Anti-cheat and licensed titles remain the operator's responsibility.</p>
+</div>
+
+<script>
+var GAMES=[["Minecraft","🟩"],["Counter-Strike 2","🔫"],["Valheim","🪓"],["Palworld","🐾"],["Rust","🔧"],["ARK","🦖"],["Terraria","🌳"],["Project Zomboid","🧟"]];
+document.getElementById('games').innerHTML=GAMES.map(function(g){
+  return '<a class="card" href="/marketplace" style="text-decoration:none;display:flex;align-items:center;gap:10px"><span style="font-size:22px">'+g[1]+'</span><b class="teal" style="font-family:var(--disp);font-size:13px">'+g[0]+'</b></a>';}).join('');
+async function hosts(){var r=await fetch('/marketplace/specs?sort=price');var b=await r.json();var tb=document.getElementById('hostrows');
+  if(!b.count){tb.innerHTML='<tr><td colspan=6 class="mut mono" style="padding:22px;text-align:center">No hosts online — <a class="teal" href="/install">be the first</a>.</td></tr>';return;}
+  tb.innerHTML=b.specs.map(function(s){var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
+   return '<tr><td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU host')+'</td>'+
+    '<td class="mono mut" style="font-size:12px">'+(s.vram_gb?s.vram_gb+'GB class':'standard')+'</td>'+
+    '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+'</td><td class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td>'+
+    '<td class="mono" style="color:'+rc+'">'+(s.reputation_score!=null?s.reputation_score:'—')+'</td>'+
+    '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
+hosts();setInterval(hosts,8000);
 </script>""")

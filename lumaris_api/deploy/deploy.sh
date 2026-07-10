@@ -86,6 +86,7 @@ SERVER_PRIVATE_KEY=$FERNET
 BIND=127.0.0.1:8000
 WEB_CONCURRENCY=$WEB_WORKERS
 LOG_LEVEL=info
+SENTRY_DSN=
 
 # --- Marketplace economics ---
 PLATFORM_TAKE_RATE=0.10
@@ -183,6 +184,7 @@ systemctl enable --now lumaris-api lumaris-reaper
 
 echo "==> Configuring nginx"
 cp "$APP_DIR/deploy/nginx-lumaris.conf" /etc/nginx/sites-available/lumaris
+[ -f /etc/nginx/proxy_params ] || cp "$APP_DIR/deploy/proxy_params" /etc/nginx/proxy_params
 ln -sf /etc/nginx/sites-available/lumaris /etc/nginx/sites-enabled/lumaris
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx

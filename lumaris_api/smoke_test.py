@@ -840,8 +840,11 @@ ok("idle credited_total + worker_id exposed", round(_idle["credited_total_usd"],
 # ==== WEBSITE PAGES + GOOGLE OAUTH + KEYS UI + PUBLIC SPECS ====
 os.environ["GOOGLE_OAUTH_STUB"]="true"
 import importlib, main as _m; importlib.reload(_m)  # not needed; env read at call time
-for path in ["/","/app","/investors","/developers","/install","/keys","/marketplace","/admin"]:
+for path in ["/","/app","/investors","/developers","/install","/keys","/marketplace","/admin","/gamers"]:
     r=c.get(path); ok(f"page {path} serves", r.status_code==200 and "Petabyte" in r.text)
+ok("gamers page has game catalog", "Minecraft" in c.get("/gamers").text)
+ok("nav swapped Investors->Gamers", "Gamers" in c.get("/").text and 'href="/investors"' not in c.get("/").text)
+_mf=c.get("/marketplace/specs?gpu=H100&max_price=5&min_vram=1&sort=rep"); ok("marketplace filter+depth", _mf.status_code==200 and "count" in _mf.json())
 _lt0=c.get("/").text
 ok("landing has theme bootstrap + toggle", "pb_theme" in _lt0 and "data-theme" in _lt0 and "themetoggle" in _lt0)
 ok("light-theme CSS present", "html[data-theme=light]" in _lt0)
@@ -878,7 +881,7 @@ pm=c.get("/marketplace/specs")
 ok("public /marketplace/specs works unauthenticated", pm.status_code==200 and "aws_reference" in pm.json())
 _pm=pm.json()
 ok("public /marketplace/specs lists attested nodes", _pm.get("count",0) > 0 and len(_pm["specs"])==_pm["count"])
-_allowed={"gpu_model","price_per_hour","region","region_verified","confidential","reputation_score","available_units"}
+_allowed={"gpu_model","price_per_hour","region","region_verified","confidential","reputation_score","available_units","gpu_count","vram_gb","jobs_completed","jobs_failed","success_rate"}
 _forbidden={"id","spec_id","user_id","owner","owner_id","username","email","host","ip","address","jti","seller_id"}
 ok("public /marketplace/specs leaks no identifiers",
    all(set(s).issubset(_allowed) and not (set(s) & _forbidden) for s in _pm["specs"]))
