@@ -37,6 +37,11 @@ rsync -a --delete \
   --exclude '*.db' --exclude '*.db-wal' --exclude '*.db-shm' \
   "$SRC_DIR"/ "$APP_DIR"/
 
+# bundle the node installers so /install.sh and /install.ps1 can serve them
+mkdir -p "$APP_DIR/installers"
+cp "$SRC_DIR"/../lumaris_agent/install.sh "$SRC_DIR"/../lumaris_agent/install.ps1 "$APP_DIR/installers/" 2>/dev/null \
+  && echo "==> bundled node installers" || echo "!! agent installers not found next to $SRC_DIR (skipped)"
+
 echo "==> Python venv + dependencies"
 python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install -q -U pip

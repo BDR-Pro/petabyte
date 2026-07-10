@@ -55,7 +55,7 @@ from db import (
 from auth import create_access_token, verify_token
 from static_dashboard import DASHBOARD_HTML
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
-                   KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML)
+                   KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -385,6 +385,33 @@ def _require_seller(db: Session, user: dict):
     return owner
 
 
+def seller_actor(request: Request, db: Session = Depends(get_db)):
+    """Resolve the acting seller from EITHER a JWT (Authorization: Bearer) or an
+    X-API-KEY. Lets a node bootstrap itself (register spec + attest) with just its
+    API key — no username/password on the machine."""
+    owner = None
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        try:
+            owner = get_user_by_username(db, _username(verify_token(auth[7:])))
+        except Exception:
+            owner = None
+    if owner is None:
+        key = request.headers.get("X-API-KEY")
+        if key:
+            try:
+                data = decode_api_key(key)
+                if not is_jti_revoked(db, data["jti"]):
+                    owner = get_user_by_username(db, data["u"])
+            except Exception:
+                owner = None
+    if owner is None:
+        raise HTTPException(status_code=401, detail="Sign in or provide a valid X-API-KEY")
+    if owner.role != "seller":
+        raise HTTPException(status_code=403, detail="Only sellers allowed")
+    return owner
+
+
 def api_key_user(x_api_key: str = Header(..., alias="X-API-KEY"),
                  db: Session = Depends(get_db)):
     """Authenticate an unattended agent via X-API-KEY (honors revocation)."""
@@ -441,14 +468,38 @@ def marketplace_page():
 def admin_page():
     return ADMIN_HTML
 
+@app.get("/login", response_class=HTMLResponse)
+def login_page():
+    return LOGIN_HTML
+
+def _find_installer(name: str):
+    """Locate a bundled installer script across dev + deployed layouts."""
+    here = os.path.dirname(__file__)
+    for cand in (
+        os.path.join(here, "installers", name),        # copied here by deploy.sh/update.sh
+        os.path.join(here, "..", "lumaris_agent", name),  # dev / monorepo checkout
+    ):
+        if os.path.exists(cand):
+            return cand
+    return None
+
 @app.get("/install.sh")
 def install_script():
-    """Serve the node installer so the one-liner needs no extra hosting."""
-    try:
-        with open(os.path.join(os.path.dirname(__file__), "..", "lumaris_agent", "install.sh")) as f:
-            return Response(content=f.read(), media_type="text/x-shellscript")
-    except OSError:
+    """Serve the Linux node installer so the one-liner needs no extra hosting."""
+    path = _find_installer("install.sh")
+    if not path:
         raise HTTPException(status_code=404, detail="installer not bundled")
+    with open(path) as f:
+        return Response(content=f.read(), media_type="text/x-shellscript")
+
+@app.get("/install.ps1")
+def install_script_ps1():
+    """Serve the Windows (WSL2) installer for the PowerShell one-liner."""
+    path = _find_installer("install.ps1")
+    if not path:
+        raise HTTPException(status_code=404, detail="installer not bundled")
+    with open(path) as f:
+        return Response(content=f.read(), media_type="text/plain")
 
 
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -587,18 +638,16 @@ def change_role(data: RoleModel, user: dict = Depends(get_current_user),
 # ------------------- SELLER -------------------
 
 @app.post("/register_specs")
-def register_specs(spec: SpecModel, user: dict = Depends(get_current_user),
+def register_specs(spec: SpecModel, owner=Depends(seller_actor),
                    db: Session = Depends(get_db)):
-    owner = _require_seller(db, user)
     db_spec = save_specs(db, owner, spec.model_dump())
     return {"status": "ok", "spec_id": db_spec.id,
             "attested": db_spec.attested, "available_units": db_spec.available_units}
 
 
 @app.post("/prove")
-def submit_proof(data: AttestationModel, user: dict = Depends(get_current_user),
+def submit_proof(data: AttestationModel, owner=Depends(seller_actor),
                  db: Session = Depends(get_db)):
-    owner = _require_seller(db, user)
     spec = get_spec_by_id(db, data.spec_id)
     if not spec or spec.user_id != owner.id:
         raise HTTPException(status_code=404, detail="Spec not found")

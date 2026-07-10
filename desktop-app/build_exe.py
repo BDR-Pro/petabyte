@@ -11,13 +11,21 @@ import os
 import sys
 import PyInstaller.__main__
 
+# Windows CI consoles default to cp1252, which can't encode characters like the
+# arrow below; force UTF-8 so a print can never crash the build script.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SEP = ";" if os.name == "nt" else ":"        # --add-data separator is OS-specific
 ICON = os.path.join(HERE, "petabyte.ico")
 
 
 def build_exe():
-    print("Building Petabyte Desktop Agent…")
+    print("Building Petabyte Desktop Agent...")
     args = [
         "petabyte_desktop.py",
         "--name=PetabyteAgent",
@@ -50,12 +58,12 @@ def build_exe():
 
     try:
         PyInstaller.__main__.run(args)
-        exe = "dist/PetabyteAgent.exe" if os.name == "nt" else "dist/PetabyteAgent"
-        print(f"\n[ok] Build complete → {exe}")
     except Exception as e:                    # noqa: BLE001
         print(f"\n[fail] Build failed: {e}")
         print("Install the build deps first:  pip install -r requirements.txt pyinstaller")
         sys.exit(1)
+    exe = "dist/PetabyteAgent.exe" if os.name == "nt" else "dist/PetabyteAgent"
+    print(f"\n[ok] Build complete -> {exe}")
 
 
 if __name__ == "__main__":

@@ -124,7 +124,8 @@ _NAV = """<nav><div class="wrap">
     <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M19 5l-1.4 1.4M6.4 17.6 5 19"/></svg>
     <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
   </button>
-  <a class="signin" href="/auth/google/login">Sign in</a>
+  <a class="signin" id="signinlink" href="/login">Sign in</a>
+  <a class="signin" id="signoutlink" href="#" onclick="signout();return false" style="display:none">Sign out</a>
   <a class="btn btn-amber" href="/app">Open app</a>
 </div></div></nav>"""
 
@@ -141,12 +142,15 @@ function authed(){return !!tok();}
 async function api(p,o){o=o||{};o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
  if(tok())o.headers['Authorization']='Bearer '+tok();var r=await fetch(p,o);var b={};try{b=await r.json()}catch(e){}return {ok:r.ok,status:r.status,body:b};}
 function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-theme')==='light'?'dark':'light';h.setAttribute('data-theme',t);try{localStorage.setItem('pb_theme',t);}catch(e){}}
+function signout(){try{localStorage.removeItem('pb_token');}catch(e){}location.href='/';}
+(function(){var si=document.getElementById('signinlink'),so=document.getElementById('signoutlink');
+ if(authed()){if(si)si.style.display='none';if(so)so.style.display='';}else{if(si)si.style.display='';if(so)so.style.display='none';}})();
 (async function(){try{if(authed()){var r=await api('/admin/whoami');if(r.ok){var a=document.getElementById('adminlink');if(a)a.style.display='';}}}catch(e){}})();
 </script>"""
 
 
 def _page(title, body):
-    return _HEAD.replace("%%TITLE%%", title) + _NAV + body + _FOOT + _AUTHJS + "</body></html>"
+    return _HEAD.replace("%%TITLE%%", title) + _NAV + _AUTHJS + body + _FOOT + "</body></html>"
 
 
 LANDING_HTML = _page("Petabyte — the compute exchange", """
@@ -228,16 +232,28 @@ INSTALL_HTML = _page("Petabyte — become a seller", """
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px">List your GPU in <span class="grad-teal">one command</span></h1>
   <p class="mut" style="max-width:56ch">Any NVIDIA machine can become a node. The installer verifies your hardware, sandboxes jobs in Docker, and brings you online in ~30 seconds. No exclusivity.</p>
 </div>
+<div class="wrap" style="padding:6px 22px 0">
+  <div class="card" style="border-color:rgba(79,214,201,.3);background:linear-gradient(180deg,rgba(79,214,201,.05),transparent)">
+    <div class="lbl">Step 1 · your node key</div>
+    <p class="mut" id="ikhint">Nodes connect with an API key — no password ever lives on the machine. <a class="teal" href="/login">Sign in</a> to generate one.</p>
+    <div id="ikauthed" style="display:none">
+      <p class="mut" style="margin-bottom:12px">Generate a node key, then paste it into the command below as <code class="teal">PETABYTE_API_KEY</code>. The node registers &amp; attests itself with this key.</p>
+      <button class="btn-amber" onclick="mkkey()">Create node key</button>
+      <pre id="ikkey" style="display:none;margin-top:14px"></pre>
+    </div>
+  </div>
+</div>
 <div class="wrap" style="padding:12px 22px 30px">
+  <div class="mini" style="margin:6px 0 12px">Step 2 · run the installer</div>
   <div class="cols c3">
     <div class="card"><div class="lbl">Linux · Ubuntu/Debian</div>
       <pre>PETABYTE_API_URL=https://petabyte.market \\
-PETABYTE_USER=you PETABYTE_PASS=secret \\
+PETABYTE_API_KEY=pk_your_node_key \\
 PRICE_PER_HOUR=1.5 \\
 bash &lt;(curl -fsSL https://petabyte.market/install.sh)</pre></div>
     <div class="card"><div class="lbl">Windows · WSL2</div>
       <pre>$env:PETABYTE_API_URL="https://petabyte.market"
-$env:PETABYTE_USER="you"; $env:PETABYTE_PASS="secret"
+$env:PETABYTE_API_KEY="pk_your_node_key"
 $env:PRICE_PER_HOUR="1.5"
 irm https://petabyte.market/install.ps1 | iex</pre>
       <p class="mut" style="font-size:12px;margin-top:9px">Elevated PowerShell. Installs WSL2 + the agent.</p></div>
@@ -249,7 +265,17 @@ journalctl -u petabyte-agent -f</pre>
   <div class="card" style="margin-top:16px"><div class="lbl am">Get paid</div>
     <p class="mut">One balance. Withdraw anytime or on a weekly schedule — bank, USDC, or gift card. Opt in to idle-fallback and earn a background trickle whenever the node isn't rented. <a class="teal" href="/app">Open the app →</a></p>
   </div>
-</div>""")
+</div>
+<script>
+(function(){ if(authed()){var a=document.getElementById('ikauthed'),h=document.getElementById('ikhint');if(a)a.style.display='';if(h)h.style.display='none';} })();
+async function mkkey(){
+  await api('/change_role',{method:'POST',body:JSON.stringify({role:'seller'})});   // idempotent
+  var r=await api('/create_api_key?days=90&label=node&scopes=node,jobs',{method:'POST'});
+  var el=document.getElementById('ikkey'); el.style.display='';
+  el.textContent = r.ok ? ('Copy now — shown once:\\n\\nPETABYTE_API_KEY='+r.body.api_key)
+                        : 'Could not create a key — make sure you are signed in.';
+}
+</script>""")
 
 
 DEVELOPERS_HTML = _page("Petabyte — developers", """
@@ -489,4 +515,75 @@ async function loadPayouts(){var r=await api('/admin/payouts');var tb=document.g
     '<td class="mono amber">'+money(p.amount_usd)+'</td><td class="mono mut">'+p.kind+'</td>'+
     '<td class="mono mut" style="font-size:12px">'+(p.created_at?p.created_at.slice(0,10):'—')+'</td></tr>';}).join('');}
 boot();
+</script>""")
+
+
+LOGIN_HTML = _page("Petabyte — sign in", """
+<div class="wrap" style="max-width:440px;padding:60px 22px 40px">
+  <div class="eyebrow"><span class="dot"></span> <span id="eyebrow">account</span></div>
+  <h1 style="font-size:clamp(28px,5vw,36px);margin:16px 0 6px"><span id="title">Sign in</span></h1>
+  <p class="mut" id="subtitle">Welcome back. Sign in to book compute or manage your nodes.</p>
+
+  <div class="card" style="margin-top:20px">
+    <label class="mini" style="display:block;margin-bottom:6px">Username</label>
+    <input id="u" placeholder="username" style="width:100%" autocomplete="username"/>
+    <label class="mini" style="display:block;margin:14px 0 6px">Password</label>
+    <input id="p" type="password" placeholder="password" style="width:100%" autocomplete="current-password"
+           onkeydown="if(event.key==='Enter')go()"/>
+    <button class="btn-amber" style="width:100%;justify-content:center;margin-top:18px" onclick="go()">
+      <span id="btn">Sign in</span>
+    </button>
+    <p id="err" class="mut" style="display:none;color:var(--bad);margin-top:12px;font-size:13px"></p>
+
+    <div style="display:flex;align-items:center;gap:10px;margin:18px 0">
+      <div style="flex:1;height:1px;background:var(--line)"></div>
+      <span class="mini">or</span>
+      <div style="flex:1;height:1px;background:var(--line)"></div>
+    </div>
+    <a class="btn btn-ghost" style="width:100%;justify-content:center" href="/auth/google/login">Continue with Google</a>
+  </div>
+
+  <p class="mut" style="text-align:center;margin-top:18px;font-size:13px">
+    <span id="toggletext">New here?</span>
+    <a class="teal" href="#" onclick="toggleMode();return false" id="togglelink">Create an account</a>
+  </p>
+</div>
+<script>
+var mode="signin";
+function toggleMode(){
+  mode = mode==="signin" ? "register" : "signin";
+  var reg = mode==="register";
+  document.getElementById('title').textContent = reg ? "Create account" : "Sign in";
+  document.getElementById('btn').textContent   = reg ? "Create account" : "Sign in";
+  document.getElementById('eyebrow').textContent = reg ? "new account" : "account";
+  document.getElementById('subtitle').textContent = reg
+    ? "Create an account to buy compute or list your GPUs." : "Welcome back. Sign in to book compute or manage your nodes.";
+  document.getElementById('toggletext').textContent = reg ? "Already have an account?" : "New here?";
+  document.getElementById('togglelink').textContent = reg ? "Sign in" : "Create an account";
+  document.getElementById('p').setAttribute('autocomplete', reg ? 'new-password' : 'current-password');
+  document.getElementById('err').style.display='none';
+}
+function fail(m){var e=document.getElementById('err');e.textContent=m;e.style.display='';}
+async function login(u,p){
+  var r = await fetch('/login', {method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:'username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p)});
+  return r.ok ? (await r.json()).access_token : null;
+}
+async function go(){
+  var u=document.getElementById('u').value.trim(), p=document.getElementById('p').value;
+  if(!u||!p){fail("Enter a username and password."); return;}
+  document.getElementById('err').style.display='none';
+  try{
+    if(mode==="register"){
+      var rr=await fetch('/register_user',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({username:u,password:p})});
+      if(!rr.ok){var b={};try{b=await rr.json()}catch(e){} fail(b.detail||"Could not create account (username may be taken)."); return;}
+    }
+    var t=await login(u,p);
+    if(!t){fail(mode==="register"?"Account created — but sign-in failed. Try signing in.":"Wrong username or password."); return;}
+    localStorage.setItem('pb_token', t);
+    location.href='/app';
+  }catch(e){fail("Network error. Try again.");}
+}
 </script>""")

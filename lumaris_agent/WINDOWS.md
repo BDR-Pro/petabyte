@@ -19,7 +19,7 @@ bootstrap around it.
 ## Install (one line, elevated PowerShell)
 ```powershell
 $env:PETABYTE_API_URL="https://petabyte.market"
-$env:PETABYTE_USER="alice"; $env:PETABYTE_PASS="secret"; $env:PRICE_PER_HOUR="1.5"
+$env:PETABYTE_API_KEY="pk_your_node_key"; $env:PRICE_PER_HOUR="1.5"
 irm https://petabyte.market/install.ps1 | iex
 ```
 If Windows installs WSL for the first time it may ask to **reboot — rerun the same

@@ -15,6 +15,10 @@ after=$(git rev-parse HEAD 2>/dev/null || echo none)
 rsync -rc --exclude .venv --exclude '*.db' --exclude '*.db-*' --exclude '.env' \
       --exclude __pycache__ --exclude .git "$SRC/lumaris_api/" "$APP/"
 
+# bundle the node installers so /install.sh and /install.ps1 serve on the deployed host
+mkdir -p "$APP/installers"
+cp "$SRC/lumaris_agent/install.sh" "$SRC/lumaris_agent/install.ps1" "$APP/installers/" 2>/dev/null || true
+
 # reinstall deps only if requirements changed
 if ! git diff --quiet "$before" "$after" -- lumaris_api/requirements.txt 2>/dev/null; then
   echo "==> requirements changed — reinstalling"

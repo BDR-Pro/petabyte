@@ -845,8 +845,22 @@ for path in ["/","/app","/investors","/developers","/install","/keys","/marketpl
 _lt0=c.get("/").text
 ok("landing has theme bootstrap + toggle", "pb_theme" in _lt0 and "data-theme" in _lt0 and "themetoggle" in _lt0)
 ok("light-theme CSS present", "html[data-theme=light]" in _lt0)
-ok("landing has Google sign-in", "auth/google/login" in c.get("/").text)
+# sign-in page + nav sign-in/out toggle
+ok("login page serves", c.get("/login").status_code==200 and "Create an account" in c.get("/login").text)
+ok("nav has sign-in and sign-out", 'id="signinlink"' in _lt0 and 'id="signoutlink"' in _lt0)
+# node bootstrap with API key only (no creds): seller mints key, node registers+attests with it
+_nk=c.post("/create_api_key?days=90&label=node&scopes=node,jobs", headers=s5h).json()["api_key"]
+_kh={"X-API-KEY": _nk}
+_rs=c.post("/register_specs", headers=_kh, json={"cpu":8,"ram":32,"gpu_model":"L4","duration":24,"price_per_hour":1.0,"provider":"keynode","units":1})
+ok("register_specs with API key only", _rs.status_code==200 and "spec_id" in _rs.json())
+_ksid=_rs.json()["spec_id"]
+_katt={"cpu":8,"ram":32,"gpu_model":"L4","nonce":"kn","ts":int(time.time())}
+ok("prove/attest with API key only", c.post("/prove", headers=_kh, json={"spec_id":_ksid,"attestation":_katt,"signature":sign_proof(_VENDOR_SK,_katt),"pubkey":base64.b64encode(_VENDOR_SK.public_key().public_bytes_raw()).decode()}).status_code==200)
+ok("register_specs blocks no-auth", c.post("/register_specs", json={"cpu":1,"ram":1,"duration":1,"price_per_hour":1,"provider":"x","units":1}).status_code==401)
+ok("login page offers Google sign-in", "auth/google/login" in c.get("/login").text)
 ok("install.sh served by API", c.get("/install.sh").status_code==200 and "petabyte-agent" in c.get("/install.sh").text)
+ok("install.ps1 served by API", c.get("/install.ps1").status_code==200)
+ok("installers are key-based (no creds)", "PETABYTE_API_KEY" in c.get("/install.sh").text and "PETABYTE_PASS" not in c.get("/install.sh").text)
 _lg=c.get("/static/petabyte-logo.png"); ok("brand logo served", _lg.status_code==200 and _lg.headers.get("content-type")=="image/png")
 ok("favicon served", c.get("/favicon.ico").status_code==200)
 ok("static route rejects non-whitelisted name", c.get("/static/../main.py").status_code==404 and c.get("/static/secret.txt").status_code==404)

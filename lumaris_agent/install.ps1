@@ -1,7 +1,7 @@
 # Petabyte Windows node installer — runs the (tested) Linux agent inside WSL2.
 # Run in an ELEVATED PowerShell:
 #   $env:PETABYTE_API_URL="https://petabyte.market"
-#   $env:PETABYTE_USER="alice"; $env:PETABYTE_PASS="secret"; $env:PRICE_PER_HOUR="1.5"
+#   $env:PETABYTE_API_KEY="pk_your_node_key"; $env:PRICE_PER_HOUR="1.5"
 #   irm https://petabyte.market/install.ps1 | iex
 #
 # What it does:
@@ -26,7 +26,7 @@ $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
          ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) { Fail "run this in an elevated (Administrator) PowerShell." }
 
-foreach ($v in "PETABYTE_API_URL","PETABYTE_USER","PETABYTE_PASS") {
+foreach ($v in "PETABYTE_API_URL","PETABYTE_API_KEY") {
     if (-not (Get-Item "env:$v" -ErrorAction SilentlyContinue)) { Fail "set `$env:$v first." }
 }
 if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) {
@@ -60,8 +60,7 @@ Start-Sleep -Seconds 3
 Write-Host "==> installing the Petabyte agent inside $Distro"
 $sh = @(
     "export PETABYTE_API_URL='$($env:PETABYTE_API_URL)'",
-    "export PETABYTE_USER='$($env:PETABYTE_USER)'",
-    "export PETABYTE_PASS='$($env:PETABYTE_PASS)'",
+    "export PETABYTE_API_KEY='$($env:PETABYTE_API_KEY)'",
     "export PRICE_PER_HOUR='$(if ($env:PRICE_PER_HOUR) { $env:PRICE_PER_HOUR } else { '1.0' })'",
     "export UNITS='$(if ($env:UNITS) { $env:UNITS } else { '1' })'",
     "export GPU_MODEL='$($env:GPU_MODEL)'",
