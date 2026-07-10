@@ -840,10 +840,12 @@ ok("idle credited_total + worker_id exposed", round(_idle["credited_total_usd"],
 # ==== WEBSITE PAGES + GOOGLE OAUTH + KEYS UI + PUBLIC SPECS ====
 os.environ["GOOGLE_OAUTH_STUB"]="true"
 import importlib, main as _m; importlib.reload(_m)  # not needed; env read at call time
-for path in ["/","/app","/investors","/developers","/install","/keys","/marketplace","/admin","/gamers"]:
+for path in ["/","/app","/investors","/developers","/install","/keys","/marketplace","/admin","/gamers","/artists"]:
     r=c.get(path); ok(f"page {path} serves", r.status_code==200 and "Petabyte" in r.text)
-ok("gamers page has game catalog", "Minecraft" in c.get("/gamers").text)
-ok("nav swapped Investors->Gamers", "Gamers" in c.get("/").text and 'href="/investors"' not in c.get("/").text)
+ok("gamers page has rent flow", "request_vm" in c.get("/gamers").text and "create_task" in c.get("/gamers").text)
+ok("artists page has render flow", "request_vm" in c.get("/artists").text and "create_task" in c.get("/artists").text)
+ok("nav has Artists+Gamers, devs unlinked from nav", ">Artists</a>" in c.get("/").text and '<a href="/developers">Developers</a>' not in c.get("/").text)
+ok("templates expose kind", any(t.get("kind")=="render" for t in c.get("/templates").json()["templates"]))
 _mf=c.get("/marketplace/specs?gpu=H100&max_price=5&min_vram=1&sort=rep"); ok("marketplace filter+depth", _mf.status_code==200 and "count" in _mf.json())
 _lt0=c.get("/").text
 ok("landing has theme bootstrap + toggle", "pb_theme" in _lt0 and "data-theme" in _lt0 and "themetoggle" in _lt0)

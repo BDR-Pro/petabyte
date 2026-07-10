@@ -56,7 +56,7 @@ from auth import create_access_token, verify_token
 from static_dashboard import DASHBOARD_HTML
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
-                   GAMERS_HTML)
+                   GAMERS_HTML, ARTISTS_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -491,6 +491,10 @@ def account_page():
 @app.get("/gamers", response_class=HTMLResponse)
 def gamers_page():
     return GAMERS_HTML
+
+@app.get("/artists", response_class=HTMLResponse)
+def artists_page():
+    return ARTISTS_HTML
 
 def _find_installer(name: str):
     """Locate a bundled installer script across dev + deployed layouts."""

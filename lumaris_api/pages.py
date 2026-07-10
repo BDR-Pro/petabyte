@@ -116,7 +116,7 @@ _NAV = """<nav><div class="wrap">
 <a class="brand" href="/"><img src="/static/petabyte-logo.png" alt="Petabyte"/><span><b>Petabyte</b><span class="p">.</span></span></a>
 <div class="navlinks">
   <a href="/marketplace">Marketplace</a><a href="/install">Become a seller</a>
-  <a href="/developers">Developers</a><a href="/gamers">Gamers</a>
+  <a href="/artists">Artists</a><a href="/gamers">Gamers</a>
 </div>
 <div class="navcta">
   <a class="signin" id="adminlink" href="/admin" style="display:none">Admin</a>
@@ -723,9 +723,15 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
   <div class="wrap" style="padding:26px 22px 34px">
     <div class="lbl" style="margin-bottom:12px">Launch on a GPU</div>
     <div class="card">
-      <p class="mut" style="margin-bottom:12px">One-click AI templates you can run on rented compute — the Petabyte equivalent of a live Space. Pick one in the dashboard to book a GPU and start it.</p>
-      <div id="templates" class="cols c4"></div>
-      <div style="margin-top:14px"><a class="btn btn-teal" href="/app">Go to run console →</a></div>
+      <p class="mut" style="margin-bottom:10px">One-click stacks you run on rented compute — the Petabyte equivalent of a live Space. Book a GPU, launch a template, connect on its port.</p>
+      <pre style="font-size:11.5px;white-space:pre-wrap;line-height:1.7">TOKEN=$(from the console: <span class="teal">localStorage.pb_token</span>)   # or your login token
+# 1) book a GPU — SPEC is a spec id you picked on /marketplace
+BOOKING=$(curl -sX POST https://petabyte.market/request_vm -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" -d '{"spec_id":SPEC,"hours":2}' | jq -r .booking_id)
+# 2) launch a template (pick one below) — then get its address:
+curl -s https://petabyte.market/tasks/TASK_ID -H "Authorization: Bearer $TOKEN"   # -> host:port</pre>
+      <div id="templates" class="cols c2" style="margin-top:14px"></div>
+      <div style="margin-top:14px"><a class="btn btn-teal" href="/app">Or use the run console →</a></div>
     </div>
   </div>
 </div>
@@ -787,8 +793,14 @@ async function loadMethods(){var r=await api('/wallet/methods');var el=document.
   if(r.ok&&r.body.methods&&r.body.methods.length){el.innerHTML='Payout methods: '+r.body.methods.map(function(m){return '<span class="badge ok">'+(m.kind||m.type||'method')+'</span>';}).join(' ');}
   else{el.innerHTML='No payout method yet — add bank / USDC / gift card in the <a class="teal" href="/app">dashboard</a> to withdraw.';}}
 async function loadTemplates(){var r=await api('/templates');var el=document.getElementById('templates');
-  var ts=(r.ok&&(r.body.templates||r.body))||[];if(!ts.length){el.innerHTML='<span class="mut">vLLM · Ollama · ComfyUI · Jupyter — pick one in the dashboard.</span>';return;}
-  el.innerHTML=ts.slice(0,8).map(function(t){var name=t.name||t.id||t;return '<div class="card" style="padding:14px"><b class="teal" style="font-family:var(--disp);font-size:13px">'+name+'</b></div>';}).join('');}
+  var ts=(r.ok&&(r.body.templates||r.body))||[];if(!ts.length){el.innerHTML='<span class="mut">Templates unavailable.</span>';return;}
+  el.innerHTML=ts.map(function(t){var name=t.name||t;var port=t.port;var desc=t.desc||'';
+    var connect=port?('connect on <b class="teal">:'+port+'</b>'):'batch job — result via /tasks';
+    var cmd='curl -sX POST https://petabyte.market/create_task -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d \\'{"booking_id":$BOOKING,"task_type":"template","template":"'+name+'"}\\'';
+    return '<div class="card" style="padding:14px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">'+
+      '<b class="teal" style="font-family:var(--disp)">'+name+'</b><span class="mini">'+connect+'</span></div>'+
+      '<p class="mut" style="font-size:11.5px;margin:4px 0 8px">'+desc+'</p>'+
+      '<pre style="font-size:10.5px;white-space:pre-wrap;line-height:1.6">'+cmd+'</pre></div>';}).join('');}
 boot();
 </script>""")
 
@@ -800,10 +812,17 @@ GAMERS_HTML = _page("Petabyte — game servers", """
   <p class="mut" style="max-width:60ch">Low-latency, dedicated game servers on community hardware — priced below the big hosts. Launch a server in a container, or turn your idle gaming PC into income when you're not playing.</p>
 </div>
 
-<!-- pick a game -->
-<div class="wrap" style="padding:22px 22px 4px">
-  <div class="lbl" style="margin-bottom:12px">Host a game</div>
-  <div id="games" class="cols c4"></div>
+<!-- rent a game by command -->
+<div class="wrap" style="padding:22px 22px 6px">
+  <div class="lbl" style="margin-bottom:10px">Rent a game server</div>
+  <div class="card">
+    <p class="mut" style="margin-bottom:10px">Book a node, launch the game, and connect on its port. Get <span class="teal">$TOKEN</span> from the console (<span class="mono">localStorage.pb_token</span>) and a <span class="teal">SPEC</span> id from the <a class="teal" href="/marketplace">marketplace</a>.</p>
+    <pre style="font-size:11.5px;white-space:pre-wrap;line-height:1.7"># book a node for 2 hours -> BOOKING id
+BOOKING=$(curl -sX POST https://petabyte.market/request_vm -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" -d '{"spec_id":SPEC,"hours":2}' | jq -r .booking_id)</pre>
+    <div id="games" class="cols c2" style="margin-top:12px"></div>
+    <p class="mini" style="margin-top:12px">Other titles (CS2, Rust, ARK, Palworld…) run via a custom Docker image — <a class="teal" href="/developers">see the API</a>.</p>
+  </div>
 </div>
 
 <!-- two paths -->
@@ -846,9 +865,14 @@ GAMERS_HTML = _page("Petabyte — game servers", """
 </div>
 
 <script>
-var GAMES=[["Minecraft","🟩"],["Counter-Strike 2","🔫"],["Valheim","🪓"],["Palworld","🐾"],["Rust","🔧"],["ARK","🦖"],["Terraria","🌳"],["Project Zomboid","🧟"]];
-document.getElementById('games').innerHTML=GAMES.map(function(g){
-  return '<a class="card" href="/marketplace" style="text-decoration:none;display:flex;align-items:center;gap:10px"><span style="font-size:22px">'+g[1]+'</span><b class="teal" style="font-family:var(--disp);font-size:13px">'+g[0]+'</b></a>';}).join('');
+async function games(){var r=await fetch('/templates');var b=await r.json();
+  var ts=(b.templates||[]).filter(function(t){return t.stateful;});
+  var el=document.getElementById('games');if(!ts.length){el.innerHTML='<span class="mut">No one-click games yet — use a custom image.</span>';return;}
+  el.innerHTML=ts.map(function(t){
+   var cmd='curl -sX POST https://petabyte.market/create_task -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d \\'{"booking_id":$BOOKING,"task_type":"template","template":"'+t.name+'"}\\'';
+   return '<div class="card" style="padding:14px"><div style="display:flex;justify-content:space-between;align-items:baseline"><b class="teal" style="font-family:var(--disp);text-transform:capitalize">'+t.name+'</b><span class="mini">join on <b class="teal">:'+t.port+'</b></span></div>'+
+    '<pre style="font-size:10.5px;white-space:pre-wrap;line-height:1.6;margin-top:8px">'+cmd+'</pre></div>';}).join('');}
+games();
 async function hosts(){var r=await fetch('/marketplace/specs?sort=price');var b=await r.json();var tb=document.getElementById('hostrows');
   if(!b.count){tb.innerHTML='<tr><td colspan=6 class="mut mono" style="padding:22px;text-align:center">No hosts online — <a class="teal" href="/install">be the first</a>.</td></tr>';return;}
   tb.innerHTML=b.specs.map(function(s){var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
@@ -858,4 +882,85 @@ async function hosts(){var r=await fetch('/marketplace/specs?sort=price');var b=
     '<td class="mono" style="color:'+rc+'">'+(s.reputation_score!=null?s.reputation_score:'—')+'</td>'+
     '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
 hosts();setInterval(hosts,8000);
+</script>""")
+
+
+ARTISTS_HTML = _page("Petabyte — for artists", """
+<div class="wrap" style="padding:48px 22px 8px">
+  <div class="eyebrow"><span class="dot"></span> render on demand</div>
+  <h1 style="font-size:clamp(30px,5vw,42px);margin:16px 0 8px">Render <span class="grad-teal">3D &amp; video</span>.<br/>Or rent out your <span class="grad">workstation</span>.</h1>
+  <p class="mut" style="max-width:60ch">GPU render farms and video transcode on community hardware — below the big farms' prices. Fire off a Blender frame job, a ComfyUI batch, or an H.264/AV1 transcode, or turn your idle workstation into income between projects.</p>
+</div>
+
+<!-- render a project -->
+<div class="wrap" style="padding:22px 22px 6px">
+  <div class="lbl" style="margin-bottom:10px">Render a project</div>
+  <div class="card">
+    <p class="mut" style="margin-bottom:10px">Book a GPU, launch a render/creative stack, connect on its port. Get <span class="teal">$TOKEN</span> from the console (<span class="mono">localStorage.pb_token</span>) and a <span class="teal">SPEC</span> id from the <a class="teal" href="/marketplace">marketplace</a>.</p>
+    <pre style="font-size:11.5px;white-space:pre-wrap;line-height:1.7"># book a GPU for 2 hours -> BOOKING id
+BOOKING=$(curl -sX POST https://petabyte.market/request_vm -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" -d '{"spec_id":SPEC,"hours":2}' | jq -r .booking_id)</pre>
+    <div id="rtemplates" class="cols c2" style="margin-top:12px"></div>
+    <p class="mini" style="margin-top:12px">For big batch jobs, fan out frames with <span class="mono">/render</span> (Blender) or segments with <span class="mono">/transcode</span> (FFmpeg) instead of a single container — <a class="teal" href="/developers">see the API</a>.</p>
+  </div>
+</div>
+
+<!-- two paths -->
+<div class="wrap" style="padding:26px 22px 4px">
+  <div class="cols c2">
+    <div class="card">
+      <div class="lbl">Rent a render node</div>
+      <p class="mut">Pick a GPU and launch Blender, ComfyUI, Stable Diffusion, or an FFmpeg transcode. Escrowed by the hour — stop anytime, refunded if the node drops.</p>
+      <ul class="mut" style="margin:12px 0 0 18px;font-size:13px;line-height:1.9">
+        <li>3D (Blender/Cycles/OptiX), 2D/AI (ComfyUI, SD)</li>
+        <li>NVENC/NVDEC video transcode</li>
+        <li>Frame &amp; segment fan-out for big jobs</li>
+      </ul>
+      <div style="margin-top:16px"><a class="btn btn-amber" href="/marketplace">Browse GPUs →</a></div>
+    </div>
+    <div class="card">
+      <div class="lbl am">Host your workstation</div>
+      <p class="mut">Rent out your creative rig when you're not rendering. Same one-command install — jobs run sandboxed in Docker, your files stay yours.</p>
+      <ul class="mut" style="margin:12px 0 0 18px;font-size:13px;line-height:1.9">
+        <li>Runs in Docker — isolated from your work</li>
+        <li>Set your price, pause anytime</li>
+        <li>Weekly payouts · bank, USDC, or gift card</li>
+      </ul>
+      <div style="margin-top:16px"><a class="btn btn-teal" href="/install">List your rig →</a></div>
+    </div>
+  </div>
+</div>
+
+<!-- live hosts -->
+<div class="wrap" style="padding:26px 22px 4px">
+  <div class="lbl" style="margin-bottom:12px">GPUs available to render</div>
+  <div class="panel" style="overflow:auto"><table class="tbl">
+    <thead><tr><th>GPU</th><th>VRAM</th><th>$/hr</th><th>Region</th><th>Rep</th><th>Free</th></tr></thead>
+    <tbody id="rhostrows"><tr><td colspan=6 class="mut mono" style="padding:22px;text-align:center">loading…</td></tr></tbody>
+  </table></div>
+</div>
+
+<div class="wrap" style="padding:22px 22px 34px">
+  <p class="mini">Stacks powered by open-source images (Blender · ComfyUI · AUTOMATIC1111 · FFmpeg NVENC). You own your outputs; licensing of assets and plugins is the artist's responsibility.</p>
+</div>
+
+<script>
+async function rtemplates(){var r=await fetch('/templates');var b=await r.json();
+  var ts=(b.templates||[]).filter(function(t){return t.kind==='render'||t.kind==='art';});
+  var el=document.getElementById('rtemplates');if(!ts.length){el.innerHTML='<span class="mut">No render templates yet — use a custom image.</span>';return;}
+  el.innerHTML=ts.map(function(t){var port=t.port?('open <b class="teal">:'+t.port+'</b>'):'batch — output via /tasks';
+   var cmd='curl -sX POST https://petabyte.market/create_task -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d \\'{"booking_id":$BOOKING,"task_type":"template","template":"'+t.name+'"}\\'';
+   return '<div class="card" style="padding:14px"><div style="display:flex;justify-content:space-between;align-items:baseline"><b class="teal" style="font-family:var(--disp)">'+t.name+'</b><span class="mini">'+port+'</span></div>'+
+    '<p class="mut" style="font-size:11.5px;margin:4px 0 8px">'+(t.desc||'')+'</p>'+
+    '<pre style="font-size:10.5px;white-space:pre-wrap;line-height:1.6">'+cmd+'</pre></div>';}).join('');}
+rtemplates();
+async function rhosts(){var r=await fetch('/marketplace/specs?sort=price');var b=await r.json();var tb=document.getElementById('rhostrows');
+  if(!b.count){tb.innerHTML='<tr><td colspan=6 class="mut mono" style="padding:22px;text-align:center">No GPUs online — <a class="teal" href="/install">be the first</a>.</td></tr>';return;}
+  tb.innerHTML=b.specs.map(function(s){var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
+   return '<tr><td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
+    '<td class="mono mut" style="font-size:12px">'+(s.vram_gb?s.vram_gb+'GB':'—')+'</td>'+
+    '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+'</td><td class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td>'+
+    '<td class="mono" style="color:'+rc+'">'+(s.reputation_score!=null?s.reputation_score:'—')+'</td>'+
+    '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
+rhosts();setInterval(rhosts,8000);
 </script>""")

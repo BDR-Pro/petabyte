@@ -57,7 +57,11 @@ TEMPLATES = {
 }
 
 
+_KIND = {"blender": "render", "ffmpeg": "render", "comfyui": "art", "sd-webui": "art",
+         "minecraft": "game", "valheim": "game", "factorio": "game"}
+
+
 def public_catalog():
     return [{"name": k, "desc": v["desc"], "port": v["port"], "gpu": v["gpu"],
-             "stateful": v.get("stateful", False)}
+             "stateful": v.get("stateful", False), "kind": _KIND.get(k, "ai")}
             for k, v in TEMPLATES.items()]
