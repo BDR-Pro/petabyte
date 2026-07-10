@@ -847,6 +847,13 @@ ok("landing has theme bootstrap + toggle", "pb_theme" in _lt0 and "data-theme" i
 ok("light-theme CSS present", "html[data-theme=light]" in _lt0)
 # sign-in page + nav sign-in/out toggle
 ok("login page serves", c.get("/login").status_code==200 and "Create an account" in c.get("/login").text)
+ok("account hub serves (guest + hub states)", c.get("/account").status_code==200 and 'id="guest"' in c.get("/account").text and 'id="hub"' in c.get("/account").text)
+ok("nav links username to /account", 'id="mename"' in _lt0 and 'href="/account"' in _lt0)
+_meh={"Authorization":f"Bearer {login('buyer1')}"}
+_me=c.get("/me", headers=_meh); ok("/me returns profile", _me.status_code==200 and {"username","role","balance","nodes","bookings"} <= set(_me.json()))
+ok("/account/specs lists my nodes", c.get("/account/specs", headers=_meh).status_code==200)
+ok("/account/bookings lists my jobs", c.get("/account/bookings", headers=_meh).status_code==200)
+ok("/me requires auth", c.get("/me").status_code in (401,403))
 ok("nav has sign-in and sign-out", 'id="signinlink"' in _lt0 and 'id="signoutlink"' in _lt0)
 # node bootstrap with API key only (no creds): seller mints key, node registers+attests with it
 _nk=c.post("/create_api_key?days=90&label=node&scopes=node,jobs", headers=s5h).json()["api_key"]

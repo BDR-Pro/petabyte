@@ -143,6 +143,10 @@ class Booking(Base):
     seller_payout = Column(Float, nullable=False)
     status = Column(String, default="escrowed", nullable=False)  # escrowed|active|released|refunded|cancelled
     vpn = Column(Boolean, default=False)
+    # True for demo/sandbox bookings; excluded from GMV so test money never inflates
+    # the marketplace/investor numbers. Set automatically from PAYMENTS_MODE at insert.
+    test = Column(Boolean, nullable=False,
+                  default=lambda: os.getenv("PAYMENTS_MODE", "sandbox").lower() != "live")
     created_at = Column(DateTime, default=_utcnow)
     released_at = Column(DateTime, nullable=True)
     refunded_at = Column(DateTime, nullable=True)

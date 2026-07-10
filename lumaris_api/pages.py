@@ -120,6 +120,7 @@ _NAV = """<nav><div class="wrap">
 </div>
 <div class="navcta">
   <a class="signin" id="adminlink" href="/admin" style="display:none">Admin</a>
+  <a class="signin" id="mename" href="/account" style="display:none;color:var(--teal)"></a>
   <button class="themetoggle" onclick="toggleTheme()" aria-label="Toggle light or dark theme" title="Toggle light / dark">
     <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M19 5l-1.4 1.4M6.4 17.6 5 19"/></svg>
     <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
@@ -145,7 +146,8 @@ function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-the
 function signout(){try{localStorage.removeItem('pb_token');}catch(e){}location.href='/';}
 (function(){var si=document.getElementById('signinlink'),so=document.getElementById('signoutlink');
  if(authed()){if(si)si.style.display='none';if(so)so.style.display='';}else{if(si)si.style.display='';if(so)so.style.display='none';}})();
-(async function(){try{if(authed()){var r=await api('/admin/whoami');if(r.ok){var a=document.getElementById('adminlink');if(a)a.style.display='';}}}catch(e){}})();
+(async function(){try{if(authed()){var r=await api('/me');if(r.ok){var m=document.getElementById('mename');if(m){m.textContent='● '+r.body.username;m.style.display='';}
+ if(r.body.is_admin){var a=document.getElementById('adminlink');if(a)a.style.display='';}}}}catch(e){}})();
 </script>"""
 
 
@@ -586,4 +588,177 @@ async function go(){
     location.href='/app';
   }catch(e){fail("Network error. Try again.");}
 }
+</script>""")
+
+
+ACCOUNT_HTML = _page("Petabyte — your account", """
+<div id="guest" class="wrap" style="max-width:460px;padding:70px 22px;display:none;text-align:center">
+  <img src="/static/petabyte-logo.png" style="width:56px;opacity:.8"/>
+  <h1 style="font-size:28px;margin:18px 0 8px">Your account</h1>
+  <p class="mut">Sign in to see your nodes, jobs, keys, and wallet in one place.</p>
+  <div style="margin-top:18px"><a class="btn btn-amber" href="/login">Sign in</a></div>
+</div>
+
+<div id="hub" style="display:none">
+  <!-- profile header -->
+  <div class="hero"><div class="wrap" style="padding:44px 22px 10px">
+    <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
+      <div id="avatar" style="width:74px;height:74px;border-radius:18px;background:linear-gradient(135deg,var(--teal),var(--deep));display:flex;align-items:center;justify-content:center;font-family:var(--disp);font-weight:700;font-size:30px;color:#04201e"></div>
+      <div style="flex:1;min-width:200px">
+        <h1 id="uname" style="font-size:clamp(26px,4vw,34px);margin:0"></h1>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
+          <span id="role" class="badge"></span>
+          <span id="adminbadge" class="badge cc" style="display:none">admin</span>
+          <span class="mini">reputation <b id="rep" class="teal"></b></span>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <a class="btn btn-teal" href="/app">Open dashboard</a>
+        <button class="btn-ghost" onclick="signout()">Sign out</button>
+      </div>
+    </div>
+    <div class="stats" style="margin-top:22px">
+      <div class="stat"><div class="l">Balance</div><div class="n teal" id="bal">—</div></div>
+      <div class="stat"><div class="l">Earnings</div><div class="n amber" id="earn">—</div></div>
+      <div class="stat"><div class="l">My nodes</div><div class="n" id="nnodes">—</div></div>
+      <div class="stat"><div class="l">My jobs</div><div class="n" id="njobs">—</div></div>
+    </div>
+  </div></div>
+
+  <!-- quick access: every endpoint that matters to you -->
+  <div class="wrap" style="padding:26px 22px 6px">
+    <div class="mini" style="margin-bottom:12px">Quick access</div>
+    <div class="cols c4">
+      <a class="card" href="/marketplace" style="text-decoration:none"><b class="teal" style="font-family:var(--disp)">Rent a GPU</b><p class="mut" style="font-size:12.5px;margin-top:5px">Browse live inventory &amp; book</p></a>
+      <a class="card" href="/app" style="text-decoration:none"><b class="teal" style="font-family:var(--disp)">Run a job</b><p class="mut" style="font-size:12.5px;margin-top:5px">Notebook, model, render, transcode</p></a>
+      <a class="card" href="/install" style="text-decoration:none"><b class="amber" style="font-family:var(--disp)">List your GPU</b><p class="mut" style="font-size:12.5px;margin-top:5px">Become a seller · node key</p></a>
+      <a class="card" href="/developers" style="text-decoration:none"><b class="amber" style="font-family:var(--disp)">API &amp; docs</b><p class="mut" style="font-size:12.5px;margin-top:5px">Build on the exchange</p></a>
+    </div>
+  </div>
+
+  <!-- my nodes -->
+  <div class="wrap" style="padding:26px 22px 4px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+      <div class="lbl" style="margin:0">My nodes</div><a class="mini teal" href="/install">+ list a node</a>
+    </div>
+    <div class="panel" style="overflow:auto"><table class="tbl">
+      <thead><tr><th>#</th><th>GPU</th><th>$/hr</th><th>Status</th><th>Trust</th><th>Region</th><th>Jobs</th></tr></thead>
+      <tbody id="noderows"><tr><td colspan=7 class="mut mono" style="padding:20px;text-align:center">loading…</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <!-- my jobs -->
+  <div class="wrap" style="padding:26px 22px 4px">
+    <div class="lbl" style="margin-bottom:12px">My jobs</div>
+    <div class="panel" style="overflow:auto"><table class="tbl">
+      <thead><tr><th>#</th><th>As</th><th>GPU</th><th>Hours</th><th>Amount</th><th>Status</th><th>When</th></tr></thead>
+      <tbody id="jobrows"><tr><td colspan=7 class="mut mono" style="padding:20px;text-align:center">loading…</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <!-- wallet -->
+  <div class="wrap" style="padding:26px 22px 4px">
+    <div class="lbl" style="margin-bottom:12px">Wallet</div>
+    <div class="card">
+      <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:center">
+        <div><span class="mini">Balance</span><div class="mono teal" style="font-size:20px;font-weight:600" id="wbal">—</div></div>
+        <div><span class="mini">Earnings</span><div class="mono amber" style="font-size:20px;font-weight:600" id="wearn">—</div></div>
+        <div style="flex:1"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="amt" type="number" value="50" min="1" size="5" style="width:90px"/>
+          <button class="btn-amber" onclick="deposit()">Add funds</button>
+          <button class="btn-ghost" onclick="withdraw()">Withdraw</button>
+        </div>
+      </div>
+      <p id="wmsg" class="mut" style="font-size:12.5px;margin-top:12px;display:none"></p>
+      <div id="methods" class="mini" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- api keys -->
+  <div class="wrap" style="padding:26px 22px 4px">
+    <div class="lbl" style="margin-bottom:12px">API keys</div>
+    <div class="card">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <input id="klabel" placeholder="label · my-node" size="16"/>
+        <button class="btn-amber" onclick="mkkey()">Create key</button>
+        <span class="mut" style="font-size:12px">Shown once — copy immediately.</span>
+      </div>
+      <pre id="knew" style="display:none;margin-top:12px"></pre>
+    </div>
+    <div class="panel" style="margin-top:12px;overflow:auto"><table class="tbl">
+      <thead><tr><th>Label</th><th>Scopes</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+      <tbody id="keyrows"><tr><td colspan=5 class="mut mono" style="padding:18px;text-align:center">loading…</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <!-- launch templates -->
+  <div class="wrap" style="padding:26px 22px 34px">
+    <div class="lbl" style="margin-bottom:12px">Launch on a GPU</div>
+    <div class="card">
+      <p class="mut" style="margin-bottom:12px">One-click AI templates you can run on rented compute — the Petabyte equivalent of a live Space. Pick one in the dashboard to book a GPU and start it.</p>
+      <div id="templates" class="cols c4"></div>
+      <div style="margin-top:14px"><a class="btn btn-teal" href="/app">Go to run console →</a></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function money(n){return '$'+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function wmsg(m){var e=document.getElementById('wmsg');e.textContent=m;e.style.display='';}
+async function boot(){
+  if(!authed()){document.getElementById('guest').style.display='';return;}
+  var me=await api('/me');
+  if(!me.ok){document.getElementById('guest').style.display='';return;}
+  document.getElementById('hub').style.display='';
+  var u=me.body;
+  document.getElementById('uname').textContent=u.username;
+  document.getElementById('avatar').textContent=(u.username||'?').slice(0,1).toUpperCase();
+  document.getElementById('role').textContent=u.role;
+  document.getElementById('role').className='badge '+(u.role==='seller'?'ok':'');
+  if(u.is_admin)document.getElementById('adminbadge').style.display='';
+  document.getElementById('rep').textContent=u.reputation;
+  document.getElementById('bal').textContent=money(u.balance);
+  document.getElementById('earn').textContent=money(u.earnings);
+  document.getElementById('nnodes').textContent=u.nodes;
+  document.getElementById('njobs').textContent=u.bookings;
+  document.getElementById('wbal').textContent=money(u.balance);
+  document.getElementById('wearn').textContent=money(u.earnings);
+  loadNodes();loadJobs();loadKeys();loadMethods();loadTemplates();
+}
+async function loadNodes(){var r=await api('/account/specs');var tb=document.getElementById('noderows');
+  if(!r.ok||!r.body.specs.length){tb.innerHTML='<tr><td colspan=7 class="mut mono" style="padding:20px;text-align:center">No nodes yet — <a class="teal" href="/install">list one</a>.</td></tr>';return;}
+  tb.innerHTML=r.body.specs.map(function(s){var t=[];if(s.attested)t.push('<span class="badge ok">attested</span>');if(s.confidential)t.push('<span class="badge cc">conf</span>');
+   return '<tr><td class="mono mut">'+s.id+'</td><td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
+   '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+'</td><td>'+(s.status==='online'?'<span class="badge ok">online</span>':'<span class="badge">'+s.status+'</span>')+'</td>'+
+   '<td>'+(t.join(' ')||'—')+'</td><td class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td><td class="mono">'+s.jobs_completed+'/'+s.jobs_failed+'</td></tr>';}).join('');}
+async function loadJobs(){var r=await api('/account/bookings');var tb=document.getElementById('jobrows');
+  if(!r.ok||!r.body.bookings.length){tb.innerHTML='<tr><td colspan=7 class="mut mono" style="padding:20px;text-align:center">No jobs yet — <a class="teal" href="/marketplace">rent a GPU</a>.</td></tr>';return;}
+  tb.innerHTML=r.body.bookings.map(function(b){return '<tr><td class="mono mut">'+b.id+'</td><td>'+(b.role==='buyer'?'<span class="badge">bought</span>':'<span class="badge ok">sold</span>')+'</td>'+
+   '<td style="font-family:var(--disp);font-weight:600">'+b.gpu_model+'</td><td class="mono">'+b.hours+'h</td><td class="mono amber">'+money(b.gross_amount)+'</td>'+
+   '<td><span class="badge">'+b.status+'</span></td><td class="mut mono" style="font-size:12px">'+(b.created_at?b.created_at.slice(0,10):'—')+'</td></tr>';}).join('');}
+async function loadKeys(){var r=await api('/account/keys');var tb=document.getElementById('keyrows');
+  if(!r.ok||!r.body.keys||!r.body.keys.length){tb.innerHTML='<tr><td colspan=5 class="mut mono" style="padding:18px;text-align:center">No keys yet.</td></tr>';return;}
+  tb.innerHTML=r.body.keys.map(function(k){return '<tr><td>'+(k.label||'—')+'</td><td class="mono mut">'+(k.scopes||'—')+'</td>'+
+   '<td class="mono mut" style="font-size:11px">'+k.expires_at.slice(0,10)+'</td>'+
+   '<td>'+(k.revoked?'<span class="badge">revoked</span>':'<span class="badge ok">active</span>')+'</td>'+
+   '<td>'+(k.revoked?'':'<button class="btn-ghost" onclick="rvkey(\\''+k.jti+'\\')">revoke</button>')+'</td></tr>';}).join('');}
+async function mkkey(){var lb=document.getElementById('klabel').value;var q=new URLSearchParams({days:'90'});if(lb)q.set('label',lb);
+  var r=await api('/create_api_key?'+q.toString(),{method:'POST'});var el=document.getElementById('knew');el.style.display='';
+  el.textContent=r.ok?('Copy now — shown once:\\n\\n'+r.body.api_key):'Could not create key.';loadKeys();}
+async function rvkey(j){await api('/keys/'+j+'/revoke',{method:'POST'});loadKeys();}
+async function deposit(){var a=parseFloat(document.getElementById('amt').value||'0');
+  var r=await api('/deposit',{method:'POST',body:JSON.stringify({amount:a})});
+  if(r.ok){document.getElementById('bal').textContent=money(r.body.balance);document.getElementById('wbal').textContent=money(r.body.balance);wmsg('Added '+money(a)+' (sandbox credit).');}
+  else if(r.status===403){wmsg('Live mode: deposits go through checkout, not here.');}else{wmsg('Could not add funds.');}}
+async function withdraw(){var a=parseFloat(document.getElementById('amt').value||'0');
+  var r=await api('/wallet/withdraw',{method:'POST',body:JSON.stringify({amount:a})});
+  wmsg(r.ok?('Withdrawal of '+money(a)+' requested.'):(r.body&&r.body.detail?r.body.detail:'Add a payout method first.'));loadMethods();}
+async function loadMethods(){var r=await api('/wallet/methods');var el=document.getElementById('methods');
+  if(r.ok&&r.body.methods&&r.body.methods.length){el.innerHTML='Payout methods: '+r.body.methods.map(function(m){return '<span class="badge ok">'+(m.kind||m.type||'method')+'</span>';}).join(' ');}
+  else{el.innerHTML='No payout method yet — add bank / USDC / gift card in the <a class="teal" href="/app">dashboard</a> to withdraw.';}}
+async function loadTemplates(){var r=await api('/templates');var el=document.getElementById('templates');
+  var ts=(r.ok&&(r.body.templates||r.body))||[];if(!ts.length){el.innerHTML='<span class="mut">vLLM · Ollama · ComfyUI · Jupyter — pick one in the dashboard.</span>';return;}
+  el.innerHTML=ts.slice(0,8).map(function(t){var name=t.name||t.id||t;return '<div class="card" style="padding:14px"><b class="teal" style="font-family:var(--disp);font-size:13px">'+name+'</b></div>';}).join('');}
+boot();
 </script>""")

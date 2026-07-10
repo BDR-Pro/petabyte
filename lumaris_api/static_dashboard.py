@@ -2,6 +2,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Petabyte — the compute exchange</title>
+<script>(function(){try{var t=localStorage.getItem('pb_theme');if(t!=='light'&&t!=='dark')t=(window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -11,6 +12,18 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   --pos:#57D9A3; --warn:#F0A44B; --bad:#E5788B;
   --disp:'Space Grotesk',system-ui,sans-serif; --body:'Inter',system-ui,sans-serif; --mono:'JetBrains Mono',ui-monospace,monospace;
 }
+html[data-theme=light]{--bg:#EDF3F8;--panel:#FFFFFF;--panel2:#F5F9FC;--line:#DBE5EE;--line2:#C2D2DF;--ink:#0F1B2D;--mut:#4B5C72;--amber:#B87814;--cyan:#0E9C93;--grid:#E6EDF3;}
+html[data-theme=light] body{background:radial-gradient(1200px 500px at 80% -10%,rgba(245,178,61,.10),transparent 60%),radial-gradient(900px 500px at 0% 0%,rgba(20,179,168,.10),transparent 55%),var(--bg)}
+html[data-theme=light] .bar{background:rgba(237,243,248,.82)}
+html[data-theme=light] input{background:#FFFFFF}
+html[data-theme=light] .tbl tbody tr:hover{background:#EFF5F9}
+html[data-theme=light] .btn{color:#2a1c02}
+html[data-theme=light] h1 .grad{background:linear-gradient(100deg,#B87814,#0E9C93);-webkit-background-clip:text;background-clip:text;color:transparent}
+.tt{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;border:1px solid var(--line2);background:transparent;color:var(--mut);cursor:pointer;padding:0}
+.tt:hover{color:var(--cyan);border-color:var(--cyan)}
+.tt svg{width:16px;height:16px}.tt .moon{display:none}
+html[data-theme=light] .tt .sun{display:none}html[data-theme=light] .tt .moon{display:inline-flex}
+body{transition:background-color .3s,color .3s}
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{margin:0;background:
@@ -108,11 +121,18 @@ textarea:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(245,178,61,.1
   </div>
   <span class="tagline">the compute exchange</span>
   <div class="auth">
-    <input id="u" placeholder="username" size="10" autocomplete="username"/>
-    <input id="p" type="password" placeholder="password" size="10" autocomplete="current-password"/>
-    <button class="btn-ghost" onclick="reg()">Create account</button>
-    <button class="btn" onclick="login()">Sign in</button>
+    <button class="tt" onclick="toggleTheme()" title="Toggle light / dark" aria-label="Toggle theme">
+      <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M19 5l-1.4 1.4M6.4 17.6 5 19"/></svg>
+      <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
+    </button>
+    <span id="loginbox" style="display:flex;gap:8px;align-items:center">
+      <input id="u" placeholder="username" size="10" autocomplete="username"/>
+      <input id="p" type="password" placeholder="password" size="10" autocomplete="current-password"/>
+      <button class="btn-ghost" onclick="reg()">Create account</button>
+      <button class="btn" onclick="login()">Sign in</button>
+    </span>
     <span id="who" class="who" style="display:none"></span>
+    <button id="signout" class="btn-ghost" style="display:none" onclick="signout()">Sign out</button>
   </div>
 </div></div>
 
@@ -197,8 +217,7 @@ async function reg(){if(!$('u').value||!$('p').value)return toast('enter a usern
 async function login(){const f=new URLSearchParams({username:$('u').value,password:$('p').value});
   const r=await fetch(API+'/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:f});
   const b=await r.json().catch(()=>({}));if(!r.ok){return toast('sign in failed');}
-  TOKEN=b.access_token;localStorage.setItem('pb_token',TOKEN);$('who').style.display='';$('who').textContent='● '+$('u').value;
-  $('u').style.display='none';$('p').style.display='none';
+  TOKEN=b.access_token;localStorage.setItem('pb_token',TOKEN);$('who').textContent='● '+$('u').value;applyAuthUI();
   wallet();specs();conReset('signed in — ready to run.','sys');}
 async function deposit(){const r=await api('/deposit',{method:'POST',body:JSON.stringify({amount:parseFloat($('dep').value)})});
   if(r.ok){animate($('bal'),r.body.balance,money);}else if(r.status===403){toast('deposits are handled at checkout')}else{toast('could not add funds')}}
@@ -247,6 +266,12 @@ let tT;function toast(m){clearTimeout(tT);let el=$('toast');
    'color:var(--ink);font-family:var(--mono);font-size:12.5px;padding:10px 16px;border-radius:10px;z-index:99;box-shadow:0 8px 30px rgba(0,0,0,.4)';document.body.appendChild(el);}
   el.textContent=m;el.style.opacity='1';tT=setTimeout(()=>el.style.opacity='0',2600);}
 
-if(TOKEN){$('who').style.display='';$('who').textContent='● signed in';$('u').style.display='none';$('p').style.display='none';wallet();specs();conReset('signed in — ready to run.','sys');}
+function applyAuthUI(){var a=!!localStorage.getItem('pb_token');var lb=$('loginbox'),so=$('signout'),who=$('who');
+ if(lb)lb.style.display=a?'none':'flex';if(so)so.style.display=a?'':'none';
+ if(who){who.style.display=a?'':'none';if(a&&!who.textContent)who.textContent='● signed in';}}
+function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-theme')==='light'?'dark':'light';h.setAttribute('data-theme',t);try{localStorage.setItem('pb_theme',t);}catch(e){}}
+function signout(){try{localStorage.removeItem('pb_token');}catch(e){}location.href='/';}
+applyAuthUI();
+if(TOKEN){wallet();specs();conReset('signed in — ready to run.','sys');}
 stats();setInterval(stats,5000);
 </script></body></html>"""

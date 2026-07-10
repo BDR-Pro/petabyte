@@ -1,4 +1,5 @@
 name: Deploy server
+
 on:
   push:
     branches: [main]
@@ -6,6 +7,7 @@ on:
       - "lumaris_api/**"
       - ".github/workflows/deploy-server.yml"
   workflow_dispatch:
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -16,4 +18,4 @@ jobs:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: sudo PETABYTE_SRC=/root/petabyte /opt/lumaris/deploy/update.sh
+          script: sudo /opt/lumaris/deploy/update.sh

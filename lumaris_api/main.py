@@ -55,7 +55,7 @@ from db import (
 from auth import create_access_token, verify_token
 from static_dashboard import DASHBOARD_HTML
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
-                   KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML)
+                   KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -471,6 +471,10 @@ def admin_page():
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
     return LOGIN_HTML
+
+@app.get("/account", response_class=HTMLResponse)
+def account_page():
+    return ACCOUNT_HTML
 
 def _find_installer(name: str):
     """Locate a bundled installer script across dev + deployed layouts."""
@@ -1094,7 +1098,7 @@ def marketplace_stats(db: Session = Depends(get_db)):
     nodes_online = db.query(SellerSpec).filter(SellerSpec.status == "online").count()
     specs_listed = db.query(SellerSpec).filter(SellerSpec.attested == True).count()  # noqa: E712
     jobs_completed = db.query(Task).filter(Task.status == "completed").count()
-    gmv = db.query(func.coalesce(func.sum(Booking.gross_amount), 0.0)).scalar() or 0.0
+    gmv = db.query(func.coalesce(func.sum(Booking.gross_amount), 0.0)).filter(Booking.test == False).scalar() or 0.0  # noqa: E712 exclude sandbox
     plat = db.query(Platform).first()
     return {"nodes_online": nodes_online, "specs_listed": specs_listed,
             "jobs_completed": jobs_completed, "gmv": round(float(gmv), 2),
@@ -1144,7 +1148,7 @@ def admin_overview(me=Depends(require_admin), db: Session = Depends(get_db)):
     confidential = db.query(SellerSpec).filter(SellerSpec.confidential == True).count()  # noqa: E712
     jobs = {s: db.query(Task).filter(Task.status == s).count()
             for s in ("completed", "running", "pending", "failed")}
-    gmv = db.query(func.coalesce(func.sum(Booking.gross_amount), 0.0)).scalar() or 0.0
+    gmv = db.query(func.coalesce(func.sum(Booking.gross_amount), 0.0)).filter(Booking.test == False).scalar() or 0.0  # noqa: E712 exclude sandbox
     plat = db.query(Platform).first()
     pend = db.query(Payout).filter(Payout.status == "requested")
     pend_n = pend.count()
@@ -1499,6 +1503,57 @@ async def payment_webhook(request: Request, db: Session = Depends(get_db)):
 def wallet(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
     return {"balance": round(me.balance, 4), "earnings": round(me.earnings, 4)}
+
+
+@app.get("/me")
+def whoami_profile(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Everything the profile hub needs about the signed-in user."""
+    from db import SellerSpec, Booking
+    u = get_user_by_username(db, _username(user))
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+    nodes = db.query(SellerSpec).filter(SellerSpec.user_id == u.id).count()
+    bookings = db.query(Booking).filter(
+        (Booking.buyer_id == u.id) | (Booking.seller_id == u.id)).count()
+    return {
+        "username": u.username, "email": u.email, "role": u.role,
+        "reputation": u.reputation, "balance": round(u.balance, 2),
+        "earnings": round(u.earnings, 2), "can_accept_paid_jobs": u.can_accept_paid_jobs,
+        "is_admin": _is_admin(u), "nodes": nodes, "bookings": bookings,
+    }
+
+
+@app.get("/account/specs")
+def account_specs(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The signed-in user's own listed nodes (as a seller)."""
+    from db import SellerSpec
+    u = get_user_by_username(db, _username(user))
+    rows = db.query(SellerSpec).filter(SellerSpec.user_id == u.id).order_by(
+        SellerSpec.id.desc()).all()
+    return {"specs": [{
+        "id": s.id, "gpu_model": s.gpu_model, "price_per_hour": s.price_per_hour,
+        "status": s.status, "attested": s.attested, "confidential": s.confidential,
+        "region": s.region, "available_units": s.available_units,
+        "jobs_completed": s.jobs_completed, "jobs_failed": s.jobs_failed,
+    } for s in rows], "count": len(rows)}
+
+
+@app.get("/account/bookings")
+def account_bookings(user: dict = Depends(get_current_user), db: Session = Depends(get_db),
+                     limit: int = Query(50, le=200)):
+    """The signed-in user's bookings, whether they bought or sold."""
+    from db import Booking, SellerSpec
+    u = get_user_by_username(db, _username(user))
+    rows = db.query(Booking).filter(
+        (Booking.buyer_id == u.id) | (Booking.seller_id == u.id)).order_by(
+        Booking.id.desc()).limit(limit).all()
+    specs = {s.id: s.gpu_model for s in db.query(SellerSpec).all()}
+    return {"bookings": [{
+        "id": b.id, "role": "buyer" if b.buyer_id == u.id else "seller",
+        "gpu_model": specs.get(b.spec_id, "?"), "hours": b.hours,
+        "gross_amount": round(b.gross_amount, 2), "status": b.status,
+        "created_at": b.created_at.isoformat() if b.created_at else None,
+    } for b in rows], "count": len(rows)}
 
 
 @app.get("/bookings/{booking_id}")
