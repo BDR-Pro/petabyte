@@ -204,6 +204,25 @@ def _start_backup_thread(task):
     return stop
 
 
+def _isolation_flags(task):
+    """Phase-1 workload isolation (see docs/isolation-roadmap.md). Uses gVisor
+    (runsc) when installed for a user-space kernel boundary, plus conservative
+    limits that don't break managed templates. Phase 2 = Kata/Firecracker."""
+    import subprocess
+    flags = ["--security-opt", "no-new-privileges", "--pids-limit", "1024"]
+    mem = task.get("memory")
+    if mem:
+        flags += ["--memory", str(mem)]
+    try:
+        info = subprocess.check_output(["docker", "info", "--format", "{{.Runtimes}}"],
+                                       text=True, timeout=5)
+        if "runsc" in info:
+            flags = ["--runtime", "runsc"] + flags   # gVisor
+    except Exception:
+        pass
+    return flags
+
+
 def _run_template(task):
     """Launch a one-click stack (Ollama/vLLM/ComfyUI/game server/...) and report it."""
     tid = task["task_id"]
@@ -220,6 +239,7 @@ def _run_template(task):
         return
     name = f"pb-{task.get('template')}-{_uuid.uuid4().hex[:8]}"
     cmd = ["docker", "run", "-d", "--name", name, "-p", f"{port}:{port}"]
+    cmd += _isolation_flags(task)              # Phase-1 sandbox (gVisor if present)
     if task.get("gpu"):
         cmd += ["--gpus", "all"]
     if task.get("cache"):

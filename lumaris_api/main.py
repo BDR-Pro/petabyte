@@ -23,6 +23,9 @@ from db import (
     get_db, SessionLocal, PLATFORM_TAKE_RATE, HEARTBEAT_TIMEOUT_S,
     create_user, login_user, get_user_by_username, set_role,
     save_specs, get_spec_by_id, spec_is_live, touch_spec, reap_stale_specs,
+    create_vm_route, get_vm_route, vm_routes_for_buyer, register_vm_tunnel,
+    stop_vm_route, failover_vm, reap_and_failover,
+    stop_vm_metered, extend_vm, meter_and_expire, reprice_specs,
     try_reserve_unit, release_unit, create_booking, get_booking_by_id,
     revoke_jti, is_jti_revoked, add_wg_peer,
     record_issued_key, list_issued_keys, get_or_create_oauth_user,
@@ -70,7 +73,10 @@ from utils import (
 
 REAPER_INTERVAL_S = int(os.getenv("REAPER_INTERVAL_S", "20"))
 REAPER_DISABLED = os.getenv("REAPER_DISABLED", "false").lower() == "true"
+# TODO(stub): PAYMENTS_MODE=sandbox mints test credit on /deposit — go live via Stripe (stub.md #1)
 PAYMENTS_MODE = os.getenv("PAYMENTS_MODE", "sandbox").lower()      # sandbox|live
+BASE_DOMAIN = os.getenv("BASE_DOMAIN", "petabyte.market")          # for stable VM URLs
+GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "")                     # gateway -> /vm/{id}/route auth
 PAYMENT_WEBHOOK_SECRET = os.getenv("PAYMENT_WEBHOOK_SECRET", "")
 AWS_REFERENCE_PRICE = os.getenv("AWS_REFERENCE_PRICE", "12.29")
 
@@ -80,8 +86,10 @@ async def _reaper_loop():
         await asyncio.sleep(REAPER_INTERVAL_S)
         try:
             db = SessionLocal()
-            reap_stale_specs(db, HEARTBEAT_TIMEOUT_S)
+            reap_and_failover(db, HEARTBEAT_TIMEOUT_S)   # reap + migrate live VMs off dead nodes
             settle_dead_specs(db)   # refund in-flight bookings on dead nodes
+            meter_and_expire(db)    # auto-stop VMs whose prepaid window ended
+            reprice_specs(db)       # demand-based auto-pricing for opted-in nodes
             db.close()
         except Exception:
             pass  # never let the reaper crash the loop
@@ -137,6 +145,9 @@ class SpecModel(BaseModel):
     units: int = Field(default=1, ge=1, description="Identical rentable units")
     region: Optional[str] = None
     country: Optional[str] = None
+    min_price: Optional[float] = Field(default=None, gt=0, description="Auto-price floor")
+    max_price: Optional[float] = Field(default=None, gt=0, description="Auto-price ceiling")
+    auto_price: bool = Field(default=False, description="Opt in to demand pricing")
 
 
 class RequestVMModel(BaseModel):
@@ -269,6 +280,14 @@ class SolveModel(BaseModel):
     hours: int = 1
     max_price_per_hour: Optional[float] = None
     min_reputation: Optional[float] = None
+
+
+class QuickLaunchModel(BaseModel):
+    template: str                               # e.g. blender, comfyui, minecraft
+    hours: int = Field(default=1, gt=0)
+    max_price_per_hour: Optional[float] = None
+    region: Optional[str] = None
+    template_params: Optional[dict] = None
 
 
 class UploadUrlModel(BaseModel):
@@ -526,6 +545,26 @@ def install_script_ps1():
         return Response(content=f.read(), media_type="text/plain")
 
 
+@app.get("/manage.ps1")
+def manage_script_ps1():
+    """Serve the Windows pause/resume/uninstall manager."""
+    path = _find_installer("manage.ps1")
+    if not path:
+        raise HTTPException(status_code=404, detail="not bundled")
+    with open(path) as f:
+        return Response(content=f.read(), media_type="text/plain")
+
+
+@app.get("/uninstall.sh")
+def uninstall_script_sh():
+    """Serve the Linux node uninstaller."""
+    path = _find_installer("uninstall.sh")
+    if not path:
+        raise HTTPException(status_code=404, detail="not bundled")
+    with open(path) as f:
+        return Response(content=f.read(), media_type="text/plain")
+
+
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 _STATIC_ALLOW = {
     "petabyte-logo.png": "image/png",
@@ -585,6 +624,7 @@ def public_specs(db: Session = Depends(get_db),
         out.append({"gpu_model": spec.gpu_model or "CPU",
                     "gpu_count": spec.gpu_count or 0, "vram_gb": spec.vram_gb or 0,
                     "price_per_hour": spec.price_per_hour,
+                    "auto_price": bool(spec.auto_price),
                     "region": spec.region, "region_verified": bool(spec.region_verified),
                     "confidential": bool(spec.confidential),
                     "reputation_score": _score,
@@ -628,6 +668,7 @@ def register_user(data: UserRegisterModel, db: Session = Depends(get_db)):
 @app.get("/auth/google/login")
 def google_login(db: Session = Depends(get_db)):
     """Redirect to Google's consent screen. Stub short-circuits to the callback."""
+    # TODO(stub): Google OAuth stub login — NEVER enable in production (stub.md #5)
     if os.getenv("GOOGLE_OAUTH_STUB", "").lower() == "true":
         return RedirectResponse(url="/auth/google/callback?code=stub&email=demo@petabyte.market")
     cid = os.environ.get("GOOGLE_CLIENT_ID")
@@ -645,6 +686,7 @@ def google_login(db: Session = Depends(get_db)):
 def google_callback(code: str = Query(...), email: Optional[str] = Query(None),
                     db: Session = Depends(get_db)):
     """Exchange the code for the user's email, create-or-login, issue our JWT."""
+    # TODO(stub): Google OAuth stub login — NEVER enable in production (stub.md #5)
     if os.getenv("GOOGLE_OAUTH_STUB", "").lower() == "true":
         user_email = email or "demo@petabyte.market"
     else:
@@ -1599,6 +1641,46 @@ def account_bookings(user: dict = Depends(get_current_user), db: Session = Depen
     } for b in rows], "count": len(rows)}
 
 
+@app.get("/seller/earnings")
+def seller_earnings(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Seller dashboard: utilization, earnings, active rentals, per-node breakdown.
+    Sellers churn without visibility — this is that visibility."""
+    from db import SellerSpec, Booking
+    me = get_user_by_username(db, _username(user))
+    specs = db.query(SellerSpec).filter(SellerSpec.user_id == me.id).all()
+    total_units = sum((s.total_units or 1) for s in specs)
+    busy_units = sum(max(0, (s.total_units or 1) - (s.available_units or 0)) for s in specs)
+    online = sum(1 for s in specs if spec_is_live(s))
+    active = db.query(Booking).filter(
+        Booking.seller_id == me.id, Booking.status.in_(["escrowed", "active"])).count()
+    released = db.query(Booking).filter(
+        Booking.seller_id == me.id, Booking.status == "released").count()
+    per_spec = [{
+        "gpu_model": s.gpu_model or "CPU", "units": s.total_units or 1,
+        "busy": max(0, (s.total_units or 1) - (s.available_units or 0)),
+        "price_per_hour": s.price_per_hour, "auto_price": bool(s.auto_price),
+        "min_price": s.min_price, "max_price": s.max_price,
+        "online": spec_is_live(s), "reputation": compute_reputation(db, s)["score"],
+        "jobs_completed": s.jobs_completed, "jobs_failed": s.jobs_failed,
+    } for s in specs]
+    return {"earnings_total": round(me.earnings or 0, 2), "nodes": len(specs),
+            "nodes_online": online, "total_units": total_units, "busy_units": busy_units,
+            "utilization": round(100.0 * busy_units / total_units, 1) if total_units else 0.0,
+            "active_rentals": active, "completed_rentals": released, "specs": per_spec,
+            "recent_price_changes": _recent_price_changes(db, [s.id for s in specs])}
+
+
+def _recent_price_changes(db, spec_ids, limit=10):
+    from db import PriceChange
+    if not spec_ids:
+        return []
+    rows = db.query(PriceChange).filter(PriceChange.spec_id.in_(spec_ids)).order_by(
+        PriceChange.id.desc()).limit(limit).all()
+    return [{"spec_id": p.spec_id, "old": p.old_price, "new": p.new_price,
+             "utilization": p.utilization, "reason": p.reason,
+             "at": p.created_at.isoformat() if p.created_at else None} for p in rows]
+
+
 @app.get("/bookings/{booking_id}")
 def booking_status(booking_id: int, user: dict = Depends(get_current_user),
                    db: Session = Depends(get_db)):
@@ -1820,6 +1902,223 @@ def solve_compute(intent: SolveModel, user: dict = Depends(get_current_user),
 def list_templates():
     """One-click deployable stacks (Ollama, vLLM, ComfyUI, SD WebUI, TensorRT-LLM)."""
     return {"templates": public_catalog()}
+
+
+@app.get("/pricing/suggest")
+def suggest_price(gpu_model: Optional[str] = None, db: Session = Depends(get_db)):
+    """Suggest an hourly price for a seller listing this GPU. Anchors to what
+    similar live nodes charge, else to a discount off the cloud reference. This is
+    a *suggestion* — the seller sets their own price. (Full demand-based auto-pricing
+    is a documented next step; see the min/max/auto_price fields.)"""
+    from db import SellerSpec
+    prices = []
+    for spec in db.query(SellerSpec).filter(SellerSpec.attested == True).all():  # noqa: E712
+        if not spec_is_live(spec):
+            continue
+        if gpu_model and gpu_model.lower() not in (spec.gpu_model or "").lower():
+            continue
+        prices.append(spec.price_per_hour)
+    ref = float(AWS_REFERENCE_PRICE)
+    if prices:
+        prices.sort()
+        median = prices[len(prices) // 2]
+        suggested, low, high = round(median, 2), round(prices[0], 2), round(prices[-1], 2)
+        basis = f"median of {len(prices)} similar live node(s)"
+    else:
+        suggested = round(ref * 0.45, 2)      # ~55% under cloud when no market yet
+        low, high = round(ref * 0.30, 2), round(ref * 0.70, 2)
+        basis = "no similar nodes online — anchored to ~55% below the cloud reference"
+    return {"gpu_model": gpu_model or "any", "suggested_price": suggested,
+            "range_low": low, "range_high": high, "market_samples": len(prices),
+            "cloud_reference": ref, "basis": basis,
+            "note": "Suggestion only — you set your price. Stay below the cloud reference to win bookings."}
+
+
+@app.post("/launch")
+def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
+                 db: Session = Depends(get_db)):
+    """One-shot: auto-pick the cheapest verified node that can run this template,
+    book it (escrow), and start the template. The buyer never picks a node.
+    Reuses request_vm (escrow/idempotency/capacity) and create_task unchanged."""
+    if data.template not in TEMPLATES:
+        raise HTTPException(status_code=400,
+                            detail=f"unknown template; choose from {list(TEMPLATES)}")
+    buyer = get_user_by_username(db, _username(user))
+    if not buyer:
+        raise HTTPException(status_code=401, detail="Unknown user")
+
+    from db import SellerSpec
+    needs_gpu = TEMPLATES[data.template].get("gpu", False)
+    candidates = []
+    for spec in db.query(SellerSpec).filter(SellerSpec.attested == True).all():  # noqa: E712
+        if not spec_is_live(spec) or spec.available_units < 1:
+            continue
+        if spec.user_id == buyer.id:
+            continue
+        owner = get_user_by_id(db, spec.user_id)
+        if not owner or not owner.can_accept_paid_jobs or owner.reputation < MIN_REPUTATION:
+            continue
+        if needs_gpu and not spec.gpu_model:
+            continue
+        if data.region and ((spec.region or "") != data.region):
+            continue
+        if data.max_price_per_hour and spec.price_per_hour > data.max_price_per_hour:
+            continue
+        if data.hours > spec.duration:
+            continue
+        candidates.append(spec)
+    if not candidates:
+        raise HTTPException(status_code=409,
+                            detail="No verified node can run this template right now")
+    spec = min(candidates, key=lambda s: s.price_per_hour)
+
+    # Book + launch through the existing, tested handlers (escrow, capacity, task).
+    booking = request_vm(RequestVMModel(spec_id=spec.id, hours=data.hours),
+                         user=user, db=db, idempotency_key=None)
+    task = create_task_endpoint(
+        TaskCreateModel(booking_id=booking["booking_id"], task_type="template",
+                        template=data.template, template_params=data.template_params),
+        user=user, db=db)
+    port = TEMPLATES[data.template].get("port", 0)
+    vm = create_vm_route(db, buyer_id=buyer.id, booking_id=booking["booking_id"],
+                         template=data.template, spec_id=spec.id, app_port=port,
+                         hourly_rate=spec.price_per_hour, hours=data.hours)
+    return {
+        "vm_id": vm.id, "url": _vm_url(vm),
+        "booking_id": booking["booking_id"], "task_id": task["task_id"],
+        "template": data.template, "port": port,
+        "gpu_model": spec.gpu_model, "region": spec.region,
+        "price_per_hour": spec.price_per_hour, "hours": data.hours,
+        "gross_amount": booking.get("gross_amount"), "status": vm.status,
+        "connect": f"once running, connect on port {port}" if port else "batch job — result via /tasks/{task_id}",
+    }
+
+
+def _vm_url(vm):
+    """The stable, node-independent address for a VM. Failover keeps this constant."""
+    return {"ssh": f"ssh vm-{vm.id}@{BASE_DOMAIN}",
+            "http": f"https://{vm.id}.{BASE_DOMAIN}" if vm.app_port else None,
+            "id": vm.id}
+
+
+def _hours_left(vm):
+    """Hours remaining in the prepaid window (drives the meter + auto-stop)."""
+    if not vm.paid_until or vm.status in ("stopped", "failed"):
+        return 0
+    pu = vm.paid_until
+    if pu.tzinfo is None:
+        from datetime import timezone as _tz
+        pu = pu.replace(tzinfo=_tz.utc)
+    from datetime import datetime as _dt, timezone as _tz
+    return round(max(0.0, (pu - _dt.now(_tz.utc)).total_seconds() / 3600.0), 2)
+
+
+class VMTunnelModel(BaseModel):
+    vm_id: str
+    tunnel_port: int = Field(gt=0)
+    ip_address: Optional[str] = None
+
+
+@app.post("/vm/register_tunnel")
+def vm_register_tunnel(data: VMTunnelModel, owner=Depends(seller_actor),
+                       db: Session = Depends(get_db)):
+    """The node currently hosting a VM reports its outbound tunnel port, making the
+    VM reachable through the gateway. Only the seller who owns the hosting node."""
+    vm = get_vm_route(db, data.vm_id)
+    if not vm:
+        raise HTTPException(status_code=404, detail="VM not found")
+    spec = get_spec_by_id(db, vm.current_spec_id)
+    if not spec or spec.user_id != owner.id:
+        raise HTTPException(status_code=403, detail="This VM is not hosted on your node")
+    reg = register_vm_tunnel(db, data.vm_id, vm.current_spec_id, data.tunnel_port,
+                             data.ip_address)
+    if not reg:
+        raise HTTPException(status_code=409, detail="VM not in a registrable state")
+    return {"status": "ok", "vm_id": vm.id, "vm_status": reg.status}
+
+
+@app.get("/vm")
+def list_my_vms(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    out = []
+    for vm in vm_routes_for_buyer(db, me.id):
+        out.append({"vm_id": vm.id, "template": vm.template, "status": vm.status,
+                    "url": _vm_url(vm), "port": vm.app_port,
+                    "migrations": vm.migrations, "booking_id": vm.booking_id,
+                    "hourly_rate": vm.hourly_rate, "hours_left": _hours_left(vm)})
+    return {"vms": out, "count": len(out)}
+
+
+@app.get("/vm/{vm_id}")
+def get_my_vm(vm_id: str, user: dict = Depends(get_current_user),
+              db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    vm = get_vm_route(db, vm_id)
+    if not vm or vm.buyer_id != me.id:
+        raise HTTPException(status_code=404, detail="VM not found")
+    return {"vm_id": vm.id, "template": vm.template, "status": vm.status,
+            "url": _vm_url(vm), "port": vm.app_port, "migrations": vm.migrations,
+            "booking_id": vm.booking_id, "hourly_rate": vm.hourly_rate,
+            "hours_left": _hours_left(vm),
+            "note": "address is stable across node failover; auto-stops when the paid window ends"}
+
+
+class ExtendModel(BaseModel):
+    hours: int = Field(gt=0, le=720)
+
+
+@app.post("/vm/{vm_id}/extend")
+def extend_my_vm(vm_id: str, data: ExtendModel, user: dict = Depends(get_current_user),
+                 db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    vm = get_vm_route(db, vm_id)
+    if not vm or vm.buyer_id != me.id:
+        raise HTTPException(status_code=404, detail="VM not found")
+    if vm.status in ("stopped", "failed"):
+        raise HTTPException(status_code=409, detail="VM is not running")
+    if not extend_vm(db, vm, data.hours):
+        raise HTTPException(status_code=402, detail="Insufficient funds to extend")
+    return {"status": "extended", "vm_id": vm.id, "hours_left": _hours_left(vm)}
+
+
+@app.post("/vm/{vm_id}/stop")
+def stop_my_vm(vm_id: str, user: dict = Depends(get_current_user),
+               db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    vm = get_vm_route(db, vm_id)
+    if not vm or vm.buyer_id != me.id:
+        raise HTTPException(status_code=404, detail="VM not found")
+    stop_vm_metered(db, vm)   # bill actual hours held, refund the unused prepay
+    return {"status": "stopped", "vm_id": vm.id}
+
+
+@app.get("/vm/{vm_id}/events")
+def vm_events(vm_id: str, user: dict = Depends(get_current_user),
+              db: Session = Depends(get_db)):
+    """The VM's timeline — makes failover visible ('moved nodes at 14:32')."""
+    from db import VMEvent
+    me = get_user_by_username(db, _username(user))
+    vm = get_vm_route(db, vm_id)
+    if not vm or vm.buyer_id != me.id:
+        raise HTTPException(status_code=404, detail="VM not found")
+    rows = db.query(VMEvent).filter(VMEvent.vm_id == vm_id).order_by(VMEvent.id.asc()).all()
+    return {"vm_id": vm_id, "events": [
+        {"event": e.event, "detail": e.detail,
+         "at": e.created_at.isoformat() if e.created_at else None} for e in rows]}
+
+
+@app.get("/vm/{vm_id}/route")
+def resolve_vm_route(vm_id: str, request: Request, db: Session = Depends(get_db)):
+    """Gateway-only: resolve a stable vm_id to the node currently hosting it.
+    Protected by GATEWAY_TOKEN so buyers can't enumerate node placement."""
+    if not GATEWAY_TOKEN or request.headers.get("X-Gateway-Token") != GATEWAY_TOKEN:
+        raise HTTPException(status_code=403, detail="gateway token required")
+    vm = get_vm_route(db, vm_id)
+    if not vm or vm.status in ("stopped", "failed"):
+        raise HTTPException(status_code=404, detail="No active route")
+    return {"vm_id": vm.id, "current_spec_id": vm.current_spec_id,
+            "tunnel_port": vm.tunnel_port, "node_ip": vm.node_ip,
+            "app_port": vm.app_port, "status": vm.status}
 
 
 # ------------------- BENCHMARKS -------------------

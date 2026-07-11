@@ -28,6 +28,7 @@ class PayoutProvider:
         raise NotImplementedError
 
 
+# TODO(stub): simulated payouts — wire Tremendous/Circle/Stripe + real AML screen (stub.md #2)
 class StubProvider(PayoutProvider):
     """Deterministic, no external calls. Confirms immediately."""
     def send(self, payout: dict) -> dict:

@@ -1,6 +1,6 @@
 # RLtest.md — Real-life test plan
 
-The automated suite (`lumaris_api/smoke_test.py`, 134 assertions) drives the real
+The automated suite (`lumaris_api/smoke_test.py`, 231 assertions) drives the real
 FastAPI app + DB in-process and proves the **logic**: money movement, state
 machines, auth, ownership boundaries, signature verification, reschedule/grace,
 routing, frame-splitting. It uses **stubs** where hardware isn't available:
@@ -373,5 +373,76 @@ resume.
 4. §16 render across 2 nodes (parallelism + the container model).
 5. §15 /solve (the "solve compute, don't rent GPUs" story) + §14 reputation.
 
-Everything above rests on logic already proven by the 134 smoke assertions; these
+Everything above rests on logic already proven by the 231 smoke assertions; these
 real-life tests validate the hardware-facing edges the smoke suite deliberately stubs.
+
+---
+
+## 23. One-click launch (`/launch`) end-to-end 🔌 — needs a real node
+**Covered ✅:** `/launch` auto-picks the cheapest eligible node, books (escrow via
+`request_vm`), starts a template task, returns `booking_id/task_id/port`; rejects
+unknown template (400), no auth (401), no funds (402), no node (409). All in the
+smoke suite.
+**Not covered — needs a real node:** that the container actually starts on the node
+and that the launch panel's poll of `/tasks/{id}` eventually shows a **real
+`connection_string`** the buyer can use.
+**Steps:** with seller node A online, sign in as a funded buyer, click **Launch**
+on a template card (`/account`, `/gamers`, `/artists`). Confirm the node runs the
+image and reports `vm_details`; the panel flips from "Preparing your VM…" to a real
+address.
+**Pass:** one click → reserved → connectable, no curl.
+
+## 24. Reachable VM / SSH gateway / NAT traversal 🔌🔌 — NOT BUILT (needs 2-3 real VMs)
+**Status:** **unbuilt** (see `docs/vm-rental.md`, `docs/isolation-roadmap.md`).
+The agent can *report* `ip/port/connection_string`, but there is no gateway that
+proxies a **stable `petabyte.market` address** to a live node, and no reverse
+tunnel for nodes behind NAT. This is the single most important thing to build and
+it **cannot be tested in the sandbox** — it needs real machines behind real routers.
+**Real test (the proof):** node behind (simulated) NAT dials out via frp/WireGuard
+to a public gateway; buyer runs `ssh vm-<id>@petabyte.market` (or opens
+`https://<id>.petabyte.market`) and lands in the container. No raw seller IP is ever
+exposed.
+**Pass:** buyer connects through a stable Petabyte URL to a NAT'd node.
+
+## 25. Failover: same URL, new node 🔌🔌 — NOT BUILT (needs 2 nodes + S3)
+**Status:** **designed, unbuilt.** The `Buyer1/VM1 → new IP, same URL` model needs:
+durable routing table (`vm_id → current_node`), periodic checkpoint → S3, and an
+orchestrator that on node death picks a new seller, restores the snapshot, restarts
+the container, and **re-points the routing row** — connect string unchanged.
+**Real test:** launch a VM on node A, write a file, kill node A. Within the recovery
+window the same address resolves to node B with the last snapshot's state.
+**Pass:** address constant across failover; data restored to the last checkpoint
+(crash-consistent, not zero-loss — set that expectation with users).
+
+## 26. Isolation runtime (gVisor now, Firecracker later) 🔌🔌 — needs real nodes + adversarial testing
+**Status:** hardening from `docs/isolation-roadmap.md` is **not yet in the agent**.
+Today jobs run under stock Docker on the node.
+**Phase 1 real test (gVisor):** run the agent with `--runtime=runsc` + the hardening
+flags; run adversarial buyer payloads (container-escape attempts, host FS probes,
+resource bombs) and confirm containment; confirm GPU still works under gVisor.
+**Phase 2 real test (Kata/Firecracker):** a tenant gets a **separate kernel**; verify
+GPU passthrough into the microVM on a known GPU/driver combo before promising it.
+**Pass:** buyer code cannot touch the host or other tenants; seller cannot read the
+workload; GPU performance is acceptable.
+
+## 27. Adversarial money-path concurrency ✅ — covered in software (lumaris_api/adversarial_test.py)
+**Covered ✅:** a dedicated stress test (`python adversarial_test.py`, 11 assertions,
+run repeatedly for race stability) hammers the money paths concurrently and proves:
+- 6 buyers racing `/launch` for 3 units → no oversell, every success holds exactly one unit;
+- 8 racing stops of the same VM → booking settles exactly once;
+- stop-vs-extend races → extend's debit is atomic and refunded if it loses to a settle;
+- failover-vs-stop-vs-refund races → booking terminal at most once, no orphaned capacity;
+- **conservation invariant:** deposits == wallets + escrow + seller earnings + platform
+  revenue, to the cent, after every storm. No negative balances anywhere.
+
+**Bugs this test caught and fixed (kept here for honesty):** booking not following the
+VM on failover (paid the wrong seller / leaked the new node's unit); extend debiting
+into an already-settled booking (money vanished); ORM read-modify-write wallet updates
+erasing concurrent atomic debits; double-migration of one VM by racing reapers
+(double-reserve); unguarded booking re-point after settle (orphaned unit). All settle,
+extend, stop, and migrate transitions are now guarded/atomic (CAS or conditional
+UPDATE) — the same discipline Postgres will enforce in production.
+
+**Still needs real machines:** the same storms under true multi-process Postgres load
+(sqlite serializes writers, so some interleavings are milder here). Re-run
+`adversarial_test.py` against the managed Postgres before going live with real money.

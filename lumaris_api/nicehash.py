@@ -38,6 +38,7 @@ def get_worker_earnings(period: str) -> dict:
     Stub returns {} (tests inject the map directly into reconcile). Real path pulls
     per-rig/worker stats from the NiceHash API and maps rig name -> earnings.
     """
+    # TODO(stub): NiceHash pricing pull stubbed — set NICEHASH_STUB=false + API creds (stub.md #8)
     if os.getenv("NICEHASH_STUB", "").lower() == "true":
         return {}
     path = "/main/api/v2/mining/rigs2"

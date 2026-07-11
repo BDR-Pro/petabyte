@@ -110,6 +110,18 @@ html[data-theme=light] .btn-amber{color:#2a1c02}
 .card,.panel,.stat,nav{transition:background-color .3s,border-color .3s}
 @media(max-width:760px){.navlinks{display:none}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+.lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.lcard{display:flex;align-items:center;gap:13px;padding:13px 14px;border:1px solid var(--line2);border-radius:14px;background:var(--panel2);transition:border-color .15s,transform .1s}
+.lcard:hover{border-color:var(--teal);transform:translateY(-1px)}
+.licon{width:44px;height:44px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--teal);background:var(--panel);border:1px solid var(--line);border-radius:11px}
+.licon svg{width:26px;height:26px}
+.lmeta{flex:1;min-width:0}
+.lname{font-family:var(--disp);font-weight:600;text-transform:capitalize;font-size:14px}
+.ldesc{font-size:11.5px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lbtn{flex:none;padding:7px 14px;font-size:12.5px}
+.lres{margin-top:16px;padding:15px 17px;border:1px solid var(--line2);border-radius:13px;background:var(--panel2)}
+.lresok{color:var(--pos);font-family:var(--disp);font-weight:600;margin-bottom:6px}
+.lres pre{margin-top:10px;font-size:12px;white-space:pre-wrap}
 </style></head><body>"""
 
 _NAV = """<nav><div class="wrap">
@@ -148,6 +160,49 @@ function signout(){try{localStorage.removeItem('pb_token');}catch(e){}location.h
  if(authed()){if(si)si.style.display='none';if(so)so.style.display='';}else{if(si)si.style.display='';if(so)so.style.display='none';}})();
 (async function(){try{if(authed()){var r=await api('/me');if(r.ok){var m=document.getElementById('mename');if(m){m.textContent='● '+r.body.username;m.style.display='';}
  if(r.body.is_admin){var a=document.getElementById('adminlink');if(a)a.style.display='';}}}}catch(e){}})();
+window.PBICONS={
+ blender:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>',
+ comfyui:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="5" cy="6" r="2.2"/><circle cx="19" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/><path d="M7 7l3.5 9M17 7l-3.5 9"/></svg>',
+ "sd-webui":'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.6"/><path d="m3 17 5-4 4 3 3-3 6 5"/></svg>',
+ "tensorrt-llm":'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>',
+ ollama:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 5h16v10H8l-4 4z"/></svg>',
+ vllm:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',
+ ffmpeg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg>',
+ minecraft:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20 13 11M3 8c3-3 7-4 10-3M22 11c1-4-1-8-4-9"/><path d="m11 9 4 4"/></svg>',
+ valheim:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 21 13 13M13 3c5 0 8 3 8 8-4 0-6-1-8-4-2 3-4 4-8 4 0-5 3-8 8-8z"/></svg>',
+ factorio:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2.1 2.1M16.9 16.9 19 19M19 5l-2.1 2.1M7.1 16.9 5 19"/></svg>',
+ _default:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/></svg>'};
+function pbIcon(n){return PBICONS[n]||PBICONS._default;}
+async function renderLaunch(elId,kinds,hours){var el=document.getElementById(elId);if(!el)return;
+ var r=await fetch('/templates');var b=await r.json();var ts=(b.templates||[]).filter(function(t){return kinds.indexOf(t.kind)>=0;});
+ if(!ts.length){el.innerHTML='<span class="mut">Nothing available right now.</span>';return;}
+ el.className='lgrid';
+ el.innerHTML=ts.map(function(t){return '<div class="lcard"><div class="licon">'+pbIcon(t.name)+'</div>'+
+  '<div class="lmeta"><div class="lname">'+t.name+'</div><div class="ldesc">'+(t.desc||'')+'</div></div>'+
+  '<button class="btn btn-amber lbtn" onclick="pbLaunch(\''+t.name+'\','+(hours||2)+')">Launch</button></div>';}).join('');}
+function _lres(){var e=document.getElementById('launchresult');if(e){e.style.display='';}return e;}
+async function pbLaunch(name,hours){var out=_lres();if(!out)return;
+ if(typeof authed==='function'&&!authed()){out.innerHTML='<div class="lres">Please <a class="teal" href="/login">sign in</a> to launch.</div>';return;}
+ out.innerHTML='<div class="lres">Reserving a GPU for <b style="text-transform:capitalize">'+name+'</b>…</div>';
+ var r=await api('/launch',{method:'POST',body:JSON.stringify({template:name,hours:hours||2})});
+ if(r.status===401){out.innerHTML='<div class="lres">Please <a class="teal" href="/login">sign in</a> first.</div>';return;}
+ if(r.status===402){out.innerHTML='<div class="lres">Add funds first — <a class="teal" href="/account">open your wallet</a>.</div>';return;}
+ if(r.status===409){out.innerHTML='<div class="lres">No matching GPU is online right now. Try again shortly.</div>';return;}
+ if(!r.ok){out.innerHTML='<div class="lres">Could not launch (error '+r.status+').</div>';return;}
+ var b=r.body;
+ out.innerHTML='<div class="lres"><div class="lresok">✓ Reserved '+name+' on '+(b.gpu_model||'a node')+' · booking #'+b.booking_id+' · $'+(b.gross_amount!=null?b.gross_amount:'?')+' / '+b.hours+'h</div>'+
+  '<div class="mut" style="margin-bottom:4px">Your stable address — it stays the same even if the node changes:</div>'+
+  '<pre>'+((b.url&&b.url.ssh)?b.url.ssh:'')+((b.url&&b.url.http)?'\\n'+b.url.http:'')+'</pre>'+
+  '<div class="mut" id="lprep" style="margin-top:8px">Preparing your VM…</div></div>';
+ pbPollVM(b.vm_id,b.port);}
+function pbPollVM(vmid,port){var prep=document.getElementById('lprep'),t0=Date.now();
+ var iv=setInterval(async function(){var r=await api('/vm/'+vmid);if(!r.ok)return;var st=r.body.status;
+  if(st==='running'){clearInterval(iv);prep.innerHTML='<b class="teal">Ready</b> — connect with the address above'+(port?(' (port '+port+')'):'')+'.';}
+  else if(st==='failed'){clearInterval(iv);prep.textContent='No node could host it — you were refunded.';}
+  else if(st==='migrating'){prep.textContent='Node changed — reconnecting to a new host (same address)…';}
+  else if(st==='stopped'){clearInterval(iv);prep.textContent='Stopped.';}
+  else if(Date.now()-t0>90000){clearInterval(iv);prep.innerHTML='Still starting — track it under <a class="teal" href="/account">your VMs</a>.';}
+  else{prep.textContent='Preparing your VM… ('+st+')';}},2500);}
 </script>"""
 
 
@@ -237,7 +292,7 @@ async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await 
   var vram=s.vram_gb?((s.gpu_count>1?s.gpu_count+'× ':'')+s.vram_gb+'GB'):'—';
   return '<tr><td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
    '<td class="mono mut" style="font-size:12px">'+vram+'</td>'+
-   '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+'</td>'+
+   '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+(s.auto_price?' <span class="badge cc" title="demand-priced within seller bounds">auto</span>':'')+'</td>'+
    '<td class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
    '<td>'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
    '<td class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td>'+
@@ -283,11 +338,28 @@ irm https://petabyte.market/install.ps1 | iex</pre>
 journalctl -u petabyte-agent -f</pre>
       <p class="mut" style="font-size:12px;margin-top:9px">Your GPU appears in the <a class="teal" href="/marketplace">marketplace</a> within a minute.</p></div>
   </div>
+  <div class="card" style="margin-top:16px">
+    <div class="lbl">What should I charge?</div>
+    <p class="mut" style="margin-bottom:10px">Type your GPU — we suggest a price from what similar live nodes charge and the cloud reference. You always set the final number.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <input id="pgpu" placeholder="e.g. RTX 4090" size="14" onkeydown="if(event.key==='Enter')suggest()"/>
+      <button class="btn btn-teal" onclick="suggest()">Suggest a price</button>
+      <span id="psug" class="mono" style="font-size:13px"></span>
+    </div>
+  </div>
+  <div class="card" style="margin-top:16px"><div class="lbl">Try it risk-free</div>
+    <p class="mut">The agent runs in an isolated Linux sandbox — it never touches your games or files, and only works when your PC is idle. <b class="teal">Pause</b> anytime, or <b class="teal">remove it completely</b> in one command. If Petabyte turned on WSL for you, uninstalling turns it back off.</p>
+    <pre style="margin-top:10px">$env:PETABYTE_ACTION="pause";     irm https://petabyte.market/manage.ps1 | iex
+$env:PETABYTE_ACTION="uninstall"; irm https://petabyte.market/manage.ps1 | iex</pre>
+  </div>
   <div class="card" style="margin-top:16px"><div class="lbl am">Get paid</div>
     <p class="mut">One balance. Withdraw anytime or on a weekly schedule — bank, USDC, or gift card. Opt in to idle-fallback and earn a background trickle whenever the node isn't rented. <a class="teal" href="/app">Open the app →</a></p>
   </div>
 </div>
 <script>
+async function suggest(){var g=(document.getElementById('pgpu').value||'').trim();
+  var r=await fetch('/pricing/suggest?gpu_model='+encodeURIComponent(g));var b=await r.json();
+  document.getElementById('psug').innerHTML='Suggested <b class="amber">$'+b.suggested_price+'/hr</b> <span class="mut">· '+b.basis+' · cloud ≈ $'+b.cloud_reference+'</span>';}
 (function(){ if(authed()){var a=document.getElementById('ikauthed'),h=document.getElementById('ikhint');if(a)a.style.display='';if(h)h.style.display='none';} })();
 async function mkkey(){
   await api('/change_role',{method:'POST',body:JSON.stringify({role:'seller'})});   // idempotent
@@ -719,19 +791,39 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
     </table></div>
   </div>
 
+  <!-- my VMs -->
+  <div class="wrap" style="padding:8px 22px 0" id="vmsection" style="display:none">
+    <div class="lbl" style="margin-bottom:12px">My VMs</div>
+    <div class="panel" style="overflow:auto"><table class="tbl">
+      <thead><tr><th>VM</th><th>Template</th><th>Status</th><th>$/hr</th><th>Hrs left</th><th></th></tr></thead>
+      <tbody id="vmrows"><tr><td colspan=6 class="mut mono" style="padding:16px;text-align:center">loading…</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <!-- seller earnings -->
+  <div class="wrap" style="padding:20px 22px 0" id="earnsection" style="display:none">
+    <div class="lbl" style="margin-bottom:12px">Node earnings</div>
+    <div class="card">
+      <div class="cols c4" style="margin-bottom:14px">
+        <div><div class="mini">Earnings</div><div id="se_earn" style="font-family:var(--disp);font-size:20px" class="teal">—</div></div>
+        <div><div class="mini">Utilization</div><div id="se_util" style="font-family:var(--disp);font-size:20px">—</div></div>
+        <div><div class="mini">Nodes online</div><div id="se_online" style="font-family:var(--disp);font-size:20px">—</div></div>
+        <div><div class="mini">Active rentals</div><div id="se_active" style="font-family:var(--disp);font-size:20px">—</div></div>
+      </div>
+      <div class="panel" style="overflow:auto"><table class="tbl">
+        <thead><tr><th>GPU</th><th>Busy/Units</th><th>$/hr</th><th>Pricing</th><th>Rep</th><th>Jobs</th></tr></thead>
+        <tbody id="se_rows"></tbody>
+      </table></div>
+    </div>
+  </div>
+
   <!-- launch templates -->
   <div class="wrap" style="padding:26px 22px 34px">
     <div class="lbl" style="margin-bottom:12px">Launch on a GPU</div>
     <div class="card">
-      <p class="mut" style="margin-bottom:10px">One-click stacks you run on rented compute — the Petabyte equivalent of a live Space. Book a GPU, launch a template, connect on its port.</p>
-      <pre style="font-size:11.5px;white-space:pre-wrap;line-height:1.7">TOKEN=$(from the console: <span class="teal">localStorage.pb_token</span>)   # or your login token
-# 1) book a GPU — SPEC is a spec id you picked on /marketplace
-BOOKING=$(curl -sX POST https://petabyte.market/request_vm -H "Authorization: Bearer $TOKEN" \\
-  -H "Content-Type: application/json" -d '{"spec_id":SPEC,"hours":2}' | jq -r .booking_id)
-# 2) launch a template (pick one below) — then get its address:
-curl -s https://petabyte.market/tasks/TASK_ID -H "Authorization: Bearer $TOKEN"   # -> host:port</pre>
-      <div id="templates" class="cols c2" style="margin-top:14px"></div>
-      <div style="margin-top:14px"><a class="btn btn-teal" href="/app">Or use the run console →</a></div>
+      <p class="mut" style="margin-bottom:14px">Pick a stack — one click reserves the cheapest matching GPU and starts it, then hands you a connection to run your work on.</p>
+      <div id="launchgrid"></div>
+      <div id="launchresult" style="display:none"></div>
     </div>
   </div>
 </div>
@@ -759,8 +851,30 @@ async function boot(){
   document.getElementById('njobs').textContent=u.bookings;
   document.getElementById('wbal').textContent=money(u.balance);
   document.getElementById('wearn').textContent=money(u.earnings);
-  loadNodes();loadJobs();loadKeys();loadMethods();loadTemplates();
+  loadNodes();loadJobs();loadKeys();loadMethods();loadTemplates();loadVMs();loadEarnings();
 }
+async function loadVMs(){var r=await api('/vm');if(!r.ok)return;var vms=r.body.vms||[];
+  if(!vms.length)return; document.getElementById('vmsection').style.display='';
+  document.getElementById('vmrows').innerHTML=vms.map(function(v){
+    var live=(v.status==='running'||v.status==='starting'||v.status==='migrating');
+    var act=live?('<button class="btn-ghost" style="padding:4px 10px;font-size:11px" onclick="vmExtend(\\''+v.vm_id+'\\')">+1h</button> <button class="btn-ghost" style="padding:4px 10px;font-size:11px" onclick="vmStop(\\''+v.vm_id+'\\')">Stop</button>'):'';
+    return '<tr><td class="mono" style="font-size:11px">vm-'+v.vm_id+'</td><td style="text-transform:capitalize">'+(v.template||'')+'</td>'+
+      '<td><span class="badge '+(v.status==='running'?'ok':'')+'">'+v.status+'</span></td>'+
+      '<td class="mono amber">$'+Number(v.hourly_rate||0).toFixed(2)+'</td>'+
+      '<td class="mono">'+(v.hours_left||0)+'h</td><td>'+act+'</td></tr>';}).join('');}
+async function vmStop(id){await api('/vm/'+id+'/stop',{method:'POST'});loadVMs();}
+async function vmExtend(id){var r=await api('/vm/'+id+'/extend',{method:'POST',body:JSON.stringify({hours:1})});if(r.status===402)wmsg('Add funds to extend.');loadVMs();}
+async function loadEarnings(){var r=await api('/seller/earnings');if(!r.ok)return;var e=r.body;
+  if(!e.nodes)return; document.getElementById('earnsection').style.display='';
+  document.getElementById('se_earn').textContent=money(e.earnings_total);
+  document.getElementById('se_util').textContent=e.utilization+'%';
+  document.getElementById('se_online').textContent=e.nodes_online+'/'+e.nodes;
+  document.getElementById('se_active').textContent=e.active_rentals;
+  document.getElementById('se_rows').innerHTML=(e.specs||[]).map(function(s){
+    var pr=s.auto_price?('<span class="badge cc">auto $'+Number(s.min_price||0).toFixed(2)+'–'+Number(s.max_price||0).toFixed(2)+'</span>'):'fixed';
+    return '<tr><td style="font-family:var(--disp);font-weight:600">'+s.gpu_model+'</td>'+
+      '<td class="mono">'+s.busy+'/'+s.units+'</td><td class="mono amber">$'+Number(s.price_per_hour||0).toFixed(2)+'</td>'+
+      '<td>'+pr+'</td><td class="mono">'+s.reputation+'</td><td class="mono mut">'+s.jobs_completed+'✓ '+s.jobs_failed+'✗</td></tr>';}).join('');}
 async function loadNodes(){var r=await api('/account/specs');var tb=document.getElementById('noderows');
   if(!r.ok||!r.body.specs.length){tb.innerHTML='<tr><td colspan=7 class="mut mono" style="padding:20px;text-align:center">No nodes yet — <a class="teal" href="/install">list one</a>.</td></tr>';return;}
   tb.innerHTML=r.body.specs.map(function(s){var t=[];if(s.attested)t.push('<span class="badge ok">attested</span>');if(s.confidential)t.push('<span class="badge cc">conf</span>');
@@ -792,15 +906,7 @@ async function withdraw(){var a=parseFloat(document.getElementById('amt').value|
 async function loadMethods(){var r=await api('/wallet/methods');var el=document.getElementById('methods');
   if(r.ok&&r.body.methods&&r.body.methods.length){el.innerHTML='Payout methods: '+r.body.methods.map(function(m){return '<span class="badge ok">'+(m.kind||m.type||'method')+'</span>';}).join(' ');}
   else{el.innerHTML='No payout method yet — add bank / USDC / gift card in the <a class="teal" href="/app">dashboard</a> to withdraw.';}}
-async function loadTemplates(){var r=await api('/templates');var el=document.getElementById('templates');
-  var ts=(r.ok&&(r.body.templates||r.body))||[];if(!ts.length){el.innerHTML='<span class="mut">Templates unavailable.</span>';return;}
-  el.innerHTML=ts.map(function(t){var name=t.name||t;var port=t.port;var desc=t.desc||'';
-    var connect=port?('connect on <b class="teal">:'+port+'</b>'):'batch job — result via /tasks';
-    var cmd='curl -sX POST https://petabyte.market/create_task -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d \\'{"booking_id":$BOOKING,"task_type":"template","template":"'+name+'"}\\'';
-    return '<div class="card" style="padding:14px"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">'+
-      '<b class="teal" style="font-family:var(--disp)">'+name+'</b><span class="mini">'+connect+'</span></div>'+
-      '<p class="mut" style="font-size:11.5px;margin:4px 0 8px">'+desc+'</p>'+
-      '<pre style="font-size:10.5px;white-space:pre-wrap;line-height:1.6">'+cmd+'</pre></div>';}).join('');}
+async function loadTemplates(){renderLaunch('launchgrid',['ai','render','art','game'],2);}
 boot();
 </script>""")
 
@@ -816,11 +922,9 @@ GAMERS_HTML = _page("Petabyte — game servers", """
 <div class="wrap" style="padding:22px 22px 6px">
   <div class="lbl" style="margin-bottom:10px">Rent a game server</div>
   <div class="card">
-    <p class="mut" style="margin-bottom:10px">Book a node, launch the game, and connect on its port. Get <span class="teal">$TOKEN</span> from the console (<span class="mono">localStorage.pb_token</span>) and a <span class="teal">SPEC</span> id from the <a class="teal" href="/marketplace">marketplace</a>.</p>
-    <pre style="font-size:11.5px;white-space:pre-wrap;line-height:1.7"># book a node for 2 hours -> BOOKING id
-BOOKING=$(curl -sX POST https://petabyte.market/request_vm -H "Authorization: Bearer $TOKEN" \\
-  -H "Content-Type: application/json" -d '{"spec_id":SPEC,"hours":2}' | jq -r .booking_id)</pre>
-    <div id="games" class="cols c2" style="margin-top:12px"></div>
+    <p class="mut" style="margin-bottom:14px">One click reserves the cheapest suitable node and launches the server — you never pick a host. You'll get the address to connect on.</p>
+    <div id="launchgrid"></div>
+    <div id="launchresult" style="display:none"></div>
     <p class="mini" style="margin-top:12px">Other titles (CS2, Rust, ARK, Palworld…) run via a custom Docker image — <a class="teal" href="/developers">see the API</a>.</p>
   </div>
 </div>
@@ -865,14 +969,7 @@ BOOKING=$(curl -sX POST https://petabyte.market/request_vm -H "Authorization: Be
 </div>
 
 <script>
-async function games(){var r=await fetch('/templates');var b=await r.json();
-  var ts=(b.templates||[]).filter(function(t){return t.stateful;});
-  var el=document.getElementById('games');if(!ts.length){el.innerHTML='<span class="mut">No one-click games yet — use a custom image.</span>';return;}
-  el.innerHTML=ts.map(function(t){
-   var cmd='curl -sX POST https://petabyte.market/create_task -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d \\'{"booking_id":$BOOKING,"task_type":"template","template":"'+t.name+'"}\\'';
-   return '<div class="card" style="padding:14px"><div style="display:flex;justify-content:space-between;align-items:baseline"><b class="teal" style="font-family:var(--disp);text-transform:capitalize">'+t.name+'</b><span class="mini">join on <b class="teal">:'+t.port+'</b></span></div>'+
-    '<pre style="font-size:10.5px;white-space:pre-wrap;line-height:1.6;margin-top:8px">'+cmd+'</pre></div>';}).join('');}
-games();
+renderLaunch('launchgrid',['game'],2);
 async function hosts(){var r=await fetch('/marketplace/specs?sort=price');var b=await r.json();var tb=document.getElementById('hostrows');
   if(!b.count){tb.innerHTML='<tr><td colspan=6 class="mut mono" style="padding:22px;text-align:center">No hosts online — <a class="teal" href="/install">be the first</a>.</td></tr>';return;}
   tb.innerHTML=b.specs.map(function(s){var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
@@ -896,11 +993,9 @@ ARTISTS_HTML = _page("Petabyte — for artists", """
 <div class="wrap" style="padding:22px 22px 6px">
   <div class="lbl" style="margin-bottom:10px">Render a project</div>
   <div class="card">
-    <p class="mut" style="margin-bottom:10px">Book a GPU, launch a render/creative stack, connect on its port. Get <span class="teal">$TOKEN</span> from the console (<span class="mono">localStorage.pb_token</span>) and a <span class="teal">SPEC</span> id from the <a class="teal" href="/marketplace">marketplace</a>.</p>
-    <pre style="font-size:11.5px;white-space:pre-wrap;line-height:1.7"># book a GPU for 2 hours -> BOOKING id
-BOOKING=$(curl -sX POST https://petabyte.market/request_vm -H "Authorization: Bearer $TOKEN" \\
-  -H "Content-Type: application/json" -d '{"spec_id":SPEC,"hours":2}' | jq -r .booking_id)</pre>
-    <div id="rtemplates" class="cols c2" style="margin-top:12px"></div>
+    <p class="mut" style="margin-bottom:14px">Pick a stack — one click reserves the cheapest matching GPU and starts it, then hands you the address to connect and render.</p>
+    <div id="launchgrid"></div>
+    <div id="launchresult" style="display:none"></div>
     <p class="mini" style="margin-top:12px">For big batch jobs, fan out frames with <span class="mono">/render</span> (Blender) or segments with <span class="mono">/transcode</span> (FFmpeg) instead of a single container — <a class="teal" href="/developers">see the API</a>.</p>
   </div>
 </div>
@@ -945,15 +1040,7 @@ BOOKING=$(curl -sX POST https://petabyte.market/request_vm -H "Authorization: Be
 </div>
 
 <script>
-async function rtemplates(){var r=await fetch('/templates');var b=await r.json();
-  var ts=(b.templates||[]).filter(function(t){return t.kind==='render'||t.kind==='art';});
-  var el=document.getElementById('rtemplates');if(!ts.length){el.innerHTML='<span class="mut">No render templates yet — use a custom image.</span>';return;}
-  el.innerHTML=ts.map(function(t){var port=t.port?('open <b class="teal">:'+t.port+'</b>'):'batch — output via /tasks';
-   var cmd='curl -sX POST https://petabyte.market/create_task -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d \\'{"booking_id":$BOOKING,"task_type":"template","template":"'+t.name+'"}\\'';
-   return '<div class="card" style="padding:14px"><div style="display:flex;justify-content:space-between;align-items:baseline"><b class="teal" style="font-family:var(--disp)">'+t.name+'</b><span class="mini">'+port+'</span></div>'+
-    '<p class="mut" style="font-size:11.5px;margin:4px 0 8px">'+(t.desc||'')+'</p>'+
-    '<pre style="font-size:10.5px;white-space:pre-wrap;line-height:1.6">'+cmd+'</pre></div>';}).join('');}
-rtemplates();
+renderLaunch('launchgrid',['render','art'],2);
 async function rhosts(){var r=await fetch('/marketplace/specs?sort=price');var b=await r.json();var tb=document.getElementById('rhostrows');
   if(!b.count){tb.innerHTML='<tr><td colspan=6 class="mut mono" style="padding:22px;text-align:center">No GPUs online — <a class="teal" href="/install">be the first</a>.</td></tr>';return;}
   tb.innerHTML=b.specs.map(function(s){var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';

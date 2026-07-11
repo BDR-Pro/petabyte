@@ -68,6 +68,7 @@ def apply_peer_to_interface(public_key: str, address: str) -> bool:
     True only if the peer was applied. Production should run the API with the
     capability to manage the interface, or push peers via a privileged helper.
     """
+    # TODO(stub): WG_APPLY no-op unless enabled — real WireGuard apply needs wg on PATH (stub.md #10)
     if os.getenv("WG_APPLY", "false").lower() != "true" or not shutil.which("wg"):
         return False
     iface = os.getenv("WG_INTERFACE", "wg0")
@@ -226,6 +227,7 @@ def verify_tee_report(report: dict, signature_b64: str, expected_nonce: str,
     return measurement
 
 
+# TODO(stub): software (Ed25519) attestation only — replace with real TEE verification (SEV-SNP/TDX), stub.md #9
 def _verify_stub(report: dict, signature_b64: str) -> None:
     """STUB vendor-root signature check (Ed25519). Replace with the real
     vendor verifier (NVIDIA NRAS JWT / AMD VCEK chain / Intel DCAP)."""
@@ -252,6 +254,7 @@ def geolocate_country(ip: str):
     """
     if not ip:
         return None
+    # TODO(stub): GeoIP from env map — provide a MaxMind GEOIP_DB for real lookups (stub.md #7)
     stub = os.getenv("GEOIP_STUB")
     if stub:
         try:
@@ -295,19 +298,23 @@ def mint_presigned_put(key: str, expires: int = 900) -> str:
     bucket = os.getenv("S3_BUCKET")
     if not bucket:
         raise ValueError("S3_BUCKET not configured")
+    # TODO(stub): S3 stub branch — real presign runs when S3_STUB unset + creds (stub.md #6)
     if os.getenv("S3_STUB", "").lower() == "true":
         return f"https://{bucket}.s3.stub.local/{key}?op=put&exp={expires}&sig=stub"
+    params = {"Bucket": bucket, "Key": key}
+    # AES256 works on AWS S3 AND DigitalOcean Spaces; "aws:kms" is AWS-only; "" disables.
+    sse = os.getenv("S3_SSE", "AES256")
+    if sse:
+        params["ServerSideEncryption"] = sse
     return _s3_client().generate_presigned_url(
-        "put_object",
-        Params={"Bucket": bucket, "Key": key,
-                "ServerSideEncryption": "aws:kms"},   # encrypt at rest
-        ExpiresIn=expires)
+        "put_object", Params=params, ExpiresIn=expires)
 
 
 def mint_presigned_get(key: str, expires: int = 900) -> str:
     bucket = os.getenv("S3_BUCKET")
     if not bucket:
         raise ValueError("S3_BUCKET not configured")
+    # TODO(stub): S3 stub branch — real presign runs when S3_STUB unset + creds (stub.md #6)
     if os.getenv("S3_STUB", "").lower() == "true":
         return f"https://{bucket}.s3.stub.local/{key}?op=get&exp={expires}&sig=stub"
     return _s3_client().generate_presigned_url(

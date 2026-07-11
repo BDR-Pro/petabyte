@@ -17,7 +17,7 @@ rsync -rc --exclude .venv --exclude '*.db' --exclude '*.db-*' --exclude '.env' \
 
 # bundle the node installers so /install.sh and /install.ps1 serve on the deployed host
 mkdir -p "$APP/installers"
-cp "$SRC/lumaris_agent/install.sh" "$SRC/lumaris_agent/install.ps1" "$APP/installers/" 2>/dev/null || true
+cp "$SRC/lumaris_agent/install.sh" "$SRC/lumaris_agent/install.ps1" "$SRC/lumaris_agent/manage.ps1" "$SRC/lumaris_agent/uninstall.sh" "$APP/installers/" 2>/dev/null || true
 
 # reinstall deps only if requirements changed
 if ! git diff --quiet "$before" "$after" -- lumaris_api/requirements.txt 2>/dev/null; then

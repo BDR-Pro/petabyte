@@ -9,7 +9,10 @@ from dotenv import load_dotenv
 import bcrypt
 import hashlib
 import json
+import math
 import os
+import secrets
+import string
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./dev.db")
@@ -20,6 +23,15 @@ MIN_REPUTATION = int(os.getenv("MIN_REPUTATION", "50"))
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _rand_vm_id() -> str:
+    """Opaque, non-enumerable VM handle: first char a letter, then 11 alphanumeric
+    (lowercase). ~12 chars over base36 -> collision-negligible and unguessable, so
+    ids never leak volume or let anyone probe vm-2, vm-3, ..."""
+    first = secrets.choice(string.ascii_lowercase)
+    rest = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(11))
+    return first + rest
 
 
 # ------------------ Engine with pooling / resilience ------------------
@@ -93,6 +105,9 @@ class SellerSpec(Base):
     gpu_count = Column(Integer, default=0)
     vram_gb = Column(Integer, default=0)
     price_per_hour = Column(Float, nullable=False)   # USD/hr
+    min_price = Column(Float, nullable=True)         # auto-price floor (seller's cost)
+    max_price = Column(Float, nullable=True)         # auto-price ceiling
+    auto_price = Column(Boolean, default=False)      # opt-in demand pricing (engine TBD)
     duration = Column(Integer, nullable=False)       # max rentable hours
     provider = Column(String, index=True)
     region = Column(String, index=True, nullable=True)   # declared region, e.g. eu-west
@@ -185,6 +200,63 @@ class Task(Base):
     created_at = Column(DateTime, default=_utcnow)
     assigned_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
+
+
+class VMRoute(Base):
+    """A rentable VM instance with a STABLE id. The gateway proxies
+    vm-<id>@petabyte.market to current_spec_id's node; on failover we re-point
+    current_spec_id and the address stays the same. See docs/vm-rental.md.
+    The id is a random alphanumeric handle (opaque, non-enumerable), NOT a
+    sequential integer — so it never leaks volume or lets anyone guess vm-2, vm-3."""
+    __tablename__ = "vm_routes"
+    id = Column(String, primary_key=True, default=lambda: _rand_vm_id())  # e.g. q7bk2mrelpza
+    buyer_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), index=True, nullable=False)
+    template = Column(String, nullable=True)
+    current_spec_id = Column(Integer, ForeignKey("specs.id"), index=True, nullable=False)
+    app_port = Column(Integer, default=0)                  # template's service port
+    tunnel_port = Column(Integer, nullable=True)           # reported by node's frpc
+    node_ip = Column(String, nullable=True)                # optional, for reachable nodes
+    ssh_pubkey = Column(String, nullable=True)             # buyer key injected into VM
+    snapshot_url = Column(String, nullable=True)           # latest S3 checkpoint
+    status = Column(String, default="starting")            # starting|running|migrating|stopped|failed
+    migrations = Column(Integer, default=0)
+    hourly_rate = Column(Float, default=0)                 # $/hr charged for this VM
+    started_at = Column(DateTime, nullable=True)           # when metering began
+    paid_until = Column(DateTime, nullable=True)           # prepaid window end -> auto-stop
+    stopped_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class PriceChange(Base):
+    """Audit log for auto-pricing: every price move, with the why. Transparency is
+    what separates trusted dynamic pricing from surge-pricing suspicion."""
+    __tablename__ = "price_changes"
+    id = Column(Integer, primary_key=True, index=True)
+    spec_id = Column(Integer, ForeignKey("specs.id"), index=True, nullable=False)
+    old_price = Column(Float, nullable=False)
+    new_price = Column(Float, nullable=False)
+    utilization = Column(Float, default=0)          # 0..1 class utilization at the time
+    reason = Column(String, default="auto")         # auto|manual
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class VMEvent(Base):
+    """Timeline of a VM's life: created, tunnel-registered, migrated, extended,
+    expired, stopped. Makes failover visible ('your VM moved nodes at 14:32')
+    and is the support/debugging lifeline."""
+    __tablename__ = "vm_events"
+    id = Column(Integer, primary_key=True, index=True)
+    vm_id = Column(String, ForeignKey("vm_routes.id"), index=True, nullable=False)
+    event = Column(String, nullable=False)   # created|tunnel_registered|migrated|extended|expired|stopped|failed
+    detail = Column(String, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+def vm_event(db: Session, vm_id: str, event: str, detail: str = None):
+    db.add(VMEvent(vm_id=vm_id, event=event, detail=detail))
+    db.commit()
 
 
 class TestWorkload(Base):
@@ -439,6 +511,10 @@ def _ensure_columns():
     from sqlalchemy import inspect as _inspect, text as _text
     wanted = {
         "bookings": [("test", "BOOLEAN NOT NULL DEFAULT true")],
+        "specs": [("min_price", "FLOAT"), ("max_price", "FLOAT"),
+                  ("auto_price", "BOOLEAN DEFAULT false")],
+        "vm_routes": [("hourly_rate", "FLOAT DEFAULT 0"), ("started_at", "TIMESTAMP"),
+                      ("paid_until", "TIMESTAMP"), ("stopped_at", "TIMESTAMP")],
     }
     try:
         insp = _inspect(engine)
@@ -460,6 +536,33 @@ def _ensure_columns():
 def init_db():
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
+    _ensure_indexes()
+
+
+def _ensure_indexes():
+    """Create indexes on hot query columns (idempotent; new + existing DBs).
+    These back the marketplace scan, failover, metering, and pricing loops."""
+    from sqlalchemy import inspect as _inspect, text as _text
+    idx = [
+        ("ix_specs_status", "specs", "status"),
+        ("ix_specs_attested", "specs", "attested"),
+        ("ix_specs_auto_price", "specs", "auto_price"),
+        ("ix_vm_routes_status", "vm_routes", "status"),
+        ("ix_vm_routes_spec", "vm_routes", "current_spec_id"),
+        ("ix_bookings_status", "bookings", "status"),
+    ]
+    try:
+        insp = _inspect(engine)
+    except Exception:
+        return
+    for name, table, col in idx:
+        try:
+            if not insp.has_table(table):
+                continue
+            with engine.begin() as conn:
+                conn.execute(_text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({col})"))
+        except Exception:
+            pass
 
 
 def get_db():
@@ -513,6 +616,9 @@ def save_specs(db: Session, owner: User, spec_data: dict) -> SellerSpec:
         gpu_count=spec_data.get("gpu_count", 0),
         vram_gb=spec_data.get("vram_gb", 0),
         price_per_hour=spec_data["price_per_hour"],
+        min_price=spec_data.get("min_price"),
+        max_price=spec_data.get("max_price"),
+        auto_price=bool(spec_data.get("auto_price", False)),
         duration=spec_data["duration"],
         provider=spec_data.get("provider"),
         region=spec_data.get("region"),
@@ -556,6 +662,351 @@ def reap_stale_specs(db: Session, timeout_s: int = HEARTBEAT_TIMEOUT_S) -> int:
     )
     db.commit()
     return res.rowcount
+
+
+# ------------------ VM routing + failover ------------------
+# A VMRoute is a rentable VM instance with a STABLE id (the vm_id in the URL).
+# The platform proxies vm-<id>@petabyte.market to whatever node currently hosts
+# it; on node death we re-point current_spec_id to a new node and the address is
+# unchanged. (Gateway/tunnel + S3 restore need real machines — see vm-rental.md.)
+
+def create_vm_route(db: Session, buyer_id: int, booking_id: int, template: str,
+                    spec_id: int, app_port: int = 0, ssh_pubkey: str = None,
+                    hourly_rate: float = 0, hours: int = 0) -> "VMRoute":
+    now = _utcnow()
+    vm = VMRoute(buyer_id=buyer_id, booking_id=booking_id, template=template,
+                 current_spec_id=spec_id, app_port=app_port, status="starting",
+                 ssh_pubkey=ssh_pubkey, hourly_rate=hourly_rate, started_at=now,
+                 paid_until=now + timedelta(hours=hours) if hours else None)
+    db.add(vm); db.commit(); db.refresh(vm)
+    vm_event(db, vm.id, "created", f"template={template} spec={spec_id} rate=${hourly_rate}/hr hours={hours}")
+    return vm
+
+
+def get_vm_route(db: Session, vm_id: int) -> "VMRoute | None":
+    return db.query(VMRoute).filter(VMRoute.id == vm_id).first()
+
+
+def vm_routes_for_buyer(db: Session, buyer_id: int):
+    return db.query(VMRoute).filter(VMRoute.buyer_id == buyer_id).order_by(
+        VMRoute.id.desc()).all()
+
+
+def register_vm_tunnel(db: Session, vm_id: int, spec_id: int, tunnel_port: int,
+                       ip_address: str = None):
+    """The hosting node reports its outbound tunnel port; VM becomes reachable."""
+    vm = get_vm_route(db, vm_id)
+    if not vm or vm.current_spec_id != spec_id or vm.status == "stopped":
+        return None
+    vm.tunnel_port = tunnel_port
+    if ip_address:
+        vm.node_ip = ip_address
+    vm.status = "running"
+    db.add(vm); db.commit(); db.refresh(vm)
+    vm_event(db, vm.id, "tunnel_registered", f"spec={spec_id} tunnel_port={tunnel_port}")
+    return vm
+
+
+def stop_vm_route(db: Session, vm_id: int):
+    vm = get_vm_route(db, vm_id)
+    if not vm:
+        return None
+    vm.status = "stopped"; vm.tunnel_port = None
+    db.add(vm); db.commit()
+    return vm
+
+
+def _pick_failover_spec(db: Session, vm: "VMRoute"):
+    """Cheapest online, attested node (not the dead/current one, not the buyer's
+    own) with free capacity — same eligibility a fresh launch would use."""
+    cands = []
+    for spec in db.query(SellerSpec).filter(
+            SellerSpec.attested == True).all():  # noqa: E712
+        if spec.id == vm.current_spec_id:
+            continue
+        if not spec_is_live(spec):
+            continue
+        if (spec.available_units or 0) < 1:
+            continue
+        if spec.user_id == vm.buyer_id:
+            continue
+        cands.append(spec)
+    return min(cands, key=lambda s: s.price_per_hour) if cands else None
+
+
+def failover_vm(db: Session, vm: "VMRoute"):
+    """Re-point a VM to a new node, KEEPING vm.id (so the address is unchanged).
+    The new node restores from snapshot_url (S3, stubbed) and re-registers its
+    tunnel. Returns the new spec, or None if nothing eligible (VM -> 'failed')."""
+    bk = db.query(Booking).filter(Booking.id == vm.booking_id).first()
+    if not bk or bk.status not in ("escrowed", "active"):
+        # Booking already settled (e.g. refunded by settle_dead_specs racing us):
+        # there is nothing to migrate FOR — stop the VM instead of holding a unit.
+        vm.status = "stopped"; vm.tunnel_port = None; vm.stopped_at = _utcnow()
+        db.add(vm); db.commit()
+        vm_event(db, vm.id, "stopped", "booking already settled; not migrating")
+        return None
+    new = _pick_failover_spec(db, vm)
+    if not new or not try_reserve_unit(db, new.id):
+        vm.status = "failed"; db.add(vm); db.commit()
+        vm_event(db, vm.id, "failed", "no eligible node for failover")
+        return None
+    _old_spec = vm.current_spec_id
+    # CAS on the spec pointer: exactly ONE concurrent failover may move this VM.
+    res = db.execute(update(VMRoute)
+                     .where(VMRoute.id == vm.id,
+                            VMRoute.current_spec_id == _old_spec,
+                            VMRoute.status.in_(["running", "starting", "migrating"]))
+                     .values(current_spec_id=new.id, tunnel_port=None, node_ip=None,
+                             status="migrating", migrations=VMRoute.migrations + 1))
+    db.commit()
+    if res.rowcount != 1:
+        release_unit(db, new.id)      # lost the race — give back the unit we reserved
+        db.refresh(vm)
+        return None
+    db.refresh(vm)
+    # The booking must follow the VM: settlement releases capacity on Booking.spec_id
+    # and pays Booking.seller_id — leave them on the dead node and you leak the new
+    # node's unit and pay the wrong seller. GUARDED: if a racing stop settled the
+    # booking between our CAS and here, the unit we reserved on the new node is
+    # orphaned — release it and stop the VM instead of migrating a dead rental.
+    res = db.execute(update(Booking)
+                     .where(Booking.id == vm.booking_id,
+                            Booking.status.in_(["escrowed", "active"]))
+                     .values(spec_id=new.id, seller_id=new.user_id))
+    db.commit()
+    if res.rowcount != 1:
+        release_unit(db, new.id)
+        db.execute(update(VMRoute).where(VMRoute.id == vm.id)
+                   .values(status="stopped", tunnel_port=None, stopped_at=_utcnow()))
+        db.commit(); db.refresh(vm)
+        vm_event(db, vm.id, "stopped", "booking settled during migration; not migrating")
+        return None
+    db.refresh(vm)
+    # The VM left the old node — return that node's unit so its capacity
+    # bookkeeping is correct when it comes back online.
+    release_unit(db, _old_spec)
+    vm_event(db, vm.id, "migrated", f"spec {_old_spec} -> {new.id} (node died); address unchanged")
+    return new
+
+
+def failover_vms_on_spec(db: Session, spec_id: int) -> int:
+    """Migrate every live VM off a (now-dead) node. Returns count migrated."""
+    n = 0
+    for vm in db.query(VMRoute).filter(
+            VMRoute.current_spec_id == spec_id,
+            VMRoute.status.in_(["running", "starting", "migrating"])).all():
+        if failover_vm(db, vm):
+            n += 1
+    return n
+
+
+def reap_and_failover(db: Session, timeout_s: int = HEARTBEAT_TIMEOUT_S):
+    """Reap stale specs, then migrate any live VMs off the newly-dead nodes.
+    Returns (specs_reaped, vms_migrated). This is what the reaper service calls."""
+    cutoff = _utcnow() - timedelta(seconds=timeout_s)
+    dead = [s.id for s in db.query(SellerSpec).filter(
+        SellerSpec.status == "online", SellerSpec.last_seen < cutoff).all()]
+    reaped = reap_stale_specs(db, timeout_s)
+    migrated = 0
+    for sid in dead:
+        migrated += failover_vms_on_spec(db, sid)
+    return reaped, migrated
+
+
+# ------------------ VM metering + lifecycle ------------------
+
+def settle_metered(db: Session, booking_id: int, hours_used: float) -> bool:
+    """Settle a rental by ACTUAL hours held: pay seller + platform for
+    ceil(hours_used) (min 1h, capped at booked hours), refund the buyer the rest.
+    Guarded so it fires at most once."""
+    res = db.execute(update(Booking)
+                     .where(Booking.id == booking_id,
+                            Booking.status.in_(["escrowed", "active"]))
+                     .values(status="released", released_at=_utcnow()))
+    db.commit()
+    if res.rowcount != 1:
+        return False
+    b = db.query(Booking).filter(Booking.id == booking_id).first()
+    used = max(1, min(math.ceil(hours_used), b.hours)) if b.hours else 1
+    frac = (used / b.hours) if b.hours else 1.0
+    seller_earned = round(b.seller_payout * frac, 4)
+    plat_earned = round(b.platform_fee * frac, 4)
+    refund = round(b.gross_amount - seller_earned - plat_earned, 4)
+    plat = get_or_create_platform(db)
+    # atomic expression updates — never read-modify-write wallet fields, or a
+    # concurrent atomic debit (e.g. a racing extend) gets erased by a stale read.
+    db.execute(update(User).where(User.id == b.seller_id)
+               .values(earnings=User.earnings + seller_earned))
+    db.execute(update(Platform).where(Platform.id == plat.id)
+               .values(revenue=Platform.revenue + plat_earned))
+    if refund > 0:
+        if b.org_id:
+            org_refund(db, b.org_id, refund)
+        else:
+            db.execute(update(User).where(User.id == b.buyer_id)
+                       .values(balance=User.balance + refund))
+    db.add(LedgerEntry(booking_id=b.id, user_id=b.seller_id, account="seller",
+                       entry_type="release_seller", amount=seller_earned))
+    db.add(LedgerEntry(booking_id=b.id, account="platform",
+                       entry_type="release_platform", amount=plat_earned))
+    if refund > 0:
+        db.add(LedgerEntry(booking_id=b.id, user_id=b.buyer_id, account="buyer",
+                           entry_type="refund_partial", amount=refund))
+    db.commit()
+    release_unit(db, b.spec_id)
+    return True
+
+
+def extend_booking(db: Session, booking_id: int, extra_hours: int,
+                   take_rate: float = PLATFORM_TAKE_RATE) -> bool:
+    """Add hours to a live rental: debit the buyer (personal wallet or org wallet,
+    respecting the org budget cap), grow the escrow. Atomic against a racing
+    stop/refund: the escrow grow is a guarded UPDATE; if the booking went terminal
+    between our debit and the grow, the debit is refunded. False if terminal or
+    insufficient funds/budget."""
+    b = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not b or b.status not in ("escrowed", "active"):
+        return False
+    extra_gross = round(b.price_per_hour * extra_hours, 4)
+    if b.org_id:
+        if not try_org_debit(db, b.org_id, extra_gross):   # atomic, budget-capped
+            return False
+    else:
+        # atomic conditional debit — no read-modify-write race on the wallet
+        res = db.execute(update(User)
+                         .where(User.id == b.buyer_id, User.balance >= extra_gross)
+                         .values(balance=User.balance - extra_gross))
+        db.commit()
+        if res.rowcount != 1:
+            return False
+    extra_fee = round(extra_gross * take_rate, 4)
+    # guarded escrow grow: only lands if the booking is still live
+    res = db.execute(update(Booking)
+                     .where(Booking.id == booking_id,
+                            Booking.status.in_(["escrowed", "active"]))
+                     .values(hours=Booking.hours + extra_hours,
+                             gross_amount=Booking.gross_amount + extra_gross,
+                             platform_fee=Booking.platform_fee + extra_fee,
+                             seller_payout=Booking.seller_payout + (extra_gross - extra_fee)))
+    db.commit()
+    if res.rowcount != 1:
+        # lost the race to a stop/refund — give the debit back
+        if b.org_id:
+            org_refund(db, b.org_id, extra_gross)
+        else:
+            db.execute(update(User).where(User.id == b.buyer_id)
+                       .values(balance=User.balance + extra_gross))
+            db.commit()
+        return False
+    db.add(LedgerEntry(booking_id=b.id, user_id=b.buyer_id,
+                       account="org" if b.org_id else "buyer",
+                       entry_type="extend_escrow", amount=extra_gross))
+    db.commit()
+    return True
+
+
+def stop_vm_metered(db: Session, vm: "VMRoute") -> "VMRoute":
+    """Stop a VM early: bill actual hours held, refund the unused prepay.
+    Guarded so exactly ONE racing stop performs settlement + capacity release."""
+    res = db.execute(update(VMRoute)
+                     .where(VMRoute.id == vm.id,
+                            VMRoute.status.in_(["starting", "running", "migrating"]))
+                     .values(status="stopped", tunnel_port=None, stopped_at=_utcnow()))
+    db.commit()
+    db.refresh(vm)
+    if res.rowcount != 1:
+        return vm       # someone else won the stop race; they settle
+    now = _utcnow()
+    started = vm.started_at or vm.created_at or now
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    hours_used = max(0.0, (now - started).total_seconds() / 3600.0)
+    settled = settle_metered(db, vm.booking_id, hours_used)
+    if not settled:
+        # Booking already terminal (refund/expiry/racing settle). That settle path
+        # released capacity on the booking's spec_id — if the VM currently occupies
+        # a DIFFERENT node (failover moved it after the booking was re-pointed or
+        # before it), that node's unit is orphaned; release it. Comparing spec ids
+        # (instead of just migrations>0) prevents double-release when the settle
+        # already freed the same node the VM sits on.
+        bk = db.query(Booking).filter(Booking.id == vm.booking_id).first()
+        if bk and bk.spec_id != vm.current_spec_id:
+            release_unit(db, vm.current_spec_id)
+    vm_event(db, vm.id, "stopped", f"metered: {round(hours_used,2)}h held")
+    return vm
+
+
+def extend_vm(db: Session, vm: "VMRoute", extra_hours: int) -> bool:
+    """Extend a VM's paid window if the buyer can afford it."""
+    if not extend_booking(db, vm.booking_id, extra_hours):
+        return False
+    base = vm.paid_until or _utcnow()
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=timezone.utc)
+    vm.paid_until = max(base, _utcnow()) + timedelta(hours=extra_hours)
+    db.add(vm); db.commit()
+    vm_event(db, vm.id, "extended", f"+{extra_hours}h")
+    return True
+
+
+def meter_and_expire(db: Session) -> int:
+    """Auto-stop VMs whose prepaid window elapsed (funds exhausted) and pay the
+    seller for the full window held. Returns count stopped."""
+    now = _utcnow()
+    n = 0
+    for vm in db.query(VMRoute).filter(
+            VMRoute.status.in_(["running", "starting", "migrating"])).all():
+        if vm.paid_until is None:
+            continue
+        pu = vm.paid_until
+        if pu.tzinfo is None:
+            pu = pu.replace(tzinfo=timezone.utc)
+        if now >= pu:
+            release_booking(db, vm.booking_id)     # full window used -> seller paid in full
+            vm.status = "stopped"; vm.tunnel_port = None; vm.stopped_at = now
+            db.add(vm); db.commit()
+            vm_event(db, vm.id, "expired", "prepaid window ended; auto-stopped")
+            n += 1
+    return n
+
+
+# ------------------ Demand-based auto-pricing ------------------
+
+def reprice_specs(db: Session, reference_price: float = None) -> int:
+    """Move each opted-in spec's price with demand for its GPU class, clamped to
+    [min_price, max_price] and always kept below the cloud reference. Opt-in only,
+    always within the seller's own bounds. Returns count repriced."""
+    ref = reference_price if reference_price is not None else \
+        float(os.getenv("AWS_REFERENCE_PRICE", "12.29"))
+    busy_by, total_by = {}, {}
+    for s in db.query(SellerSpec).filter(SellerSpec.attested == True).all():  # noqa: E712
+        if not spec_is_live(s):
+            continue
+        key = (s.gpu_model or "cpu").lower()
+        total = s.total_units or 1
+        busy = max(0, total - (s.available_units or 0))
+        busy_by[key] = busy_by.get(key, 0) + busy
+        total_by[key] = total_by.get(key, 0) + total
+    n = 0
+    for s in db.query(SellerSpec).filter(SellerSpec.auto_price == True).all():  # noqa: E712
+        if s.min_price is None or s.max_price is None or s.max_price < s.min_price:
+            continue
+        key = (s.gpu_model or "cpu").lower()
+        total = total_by.get(key, 1)
+        util = (busy_by.get(key, 0) / total) if total else 0.0     # 0..1
+        mult = 0.85 + 0.40 * util                                  # idle 0.85x -> full 1.25x
+        base = (s.min_price + s.max_price) / 2.0
+        price = max(s.min_price, min(s.max_price, base * mult))
+        price = round(min(price, ref * 0.95), 2)                   # never >= cloud
+        if abs(price - (s.price_per_hour or 0)) >= 0.01:
+            db.add(PriceChange(spec_id=s.id, old_price=s.price_per_hour or 0,
+                               new_price=price, utilization=round(util, 3),
+                               reason="auto"))
+            s.price_per_hour = price
+            db.add(s); n += 1
+    db.commit()
+    return n
 
 
 # ------------------ Atomic capacity reservation ------------------

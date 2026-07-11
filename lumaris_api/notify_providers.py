@@ -8,6 +8,7 @@ class EmailProvider:
         raise NotImplementedError
 
 
+# TODO(stub): emails recorded, not sent — set NOTIFY_STUB=false + provider creds (stub.md #4)
 class StubEmailProvider(EmailProvider):
     def send(self, to: str, subject: str, body: str) -> bool:
         return True                     # no external call; caller records it

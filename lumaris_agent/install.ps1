@@ -36,6 +36,7 @@ if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) {
 # --- 1. WSL2 + Ubuntu -------------------------------------------------------
 $wslOk = $false
 try { wsl.exe --status | Out-Null; $wslOk = $true } catch {}
+$wslPre = $wslOk    # was WSL already present BEFORE Petabyte touched anything?
 if (-not $wslOk) {
     Write-Host "==> installing WSL2 (a reboot may be required — rerun this script after)"
     wsl.exe --install --no-distribution
@@ -44,6 +45,17 @@ if (-not $wslOk) {
 wsl.exe --set-default-version 2 | Out-Null
 
 $have = (wsl.exe -l -q) -join "`n"
+$distroPre = ($have -match [regex]::Escape($Distro))   # did this distro exist before us?
+
+# Record pre-install state so the uninstaller knows what WE added vs. what was
+# already here (so "uninstall" truly reverts a fresh machine, but never nukes a
+# distro/WSL the user already had).
+$StateDir = Join-Path $env:ProgramData "Petabyte"
+New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
+@{ wslPreexisted = [bool]$wslPre; distroPreexisted = [bool]$distroPre;
+   distro = $Distro; installedAt = (Get-Date).ToString("o") } |
+   ConvertTo-Json | Set-Content (Join-Path $StateDir "install-state.json")
+
 if ($have -notmatch [regex]::Escape($Distro)) {
     Write-Host "==> installing $Distro (first run may prompt to create a UNIX user)"
     wsl.exe --install -d $Distro --no-launch
@@ -82,3 +94,9 @@ Write-Host ""
 Write-Host "node online (inside WSL2)." -ForegroundColor Green
 Write-Host "  status: wsl -d $Distro -u root -- systemctl status petabyte-agent"
 Write-Host "  logs:   wsl -d $Distro -u root -- journalctl -u petabyte-agent -f"
+Write-Host ""
+Write-Host "Low-commitment controls (manage.ps1):" -ForegroundColor Cyan
+Write-Host "  pause:     `$env:PETABYTE_ACTION='pause';     irm $($env:PETABYTE_API_URL)/manage.ps1 | iex"
+Write-Host "  resume:    `$env:PETABYTE_ACTION='resume';    irm $($env:PETABYTE_API_URL)/manage.ps1 | iex"
+Write-Host "  uninstall: `$env:PETABYTE_ACTION='uninstall'; irm $($env:PETABYTE_API_URL)/manage.ps1 | iex"
+Write-Host "  (uninstall removes the agent + distro, and if WSL wasn't already on your PC, disables it too.)"

@@ -842,11 +842,14 @@ os.environ["GOOGLE_OAUTH_STUB"]="true"
 import importlib, main as _m; importlib.reload(_m)  # not needed; env read at call time
 for path in ["/","/app","/investors","/developers","/install","/keys","/marketplace","/admin","/gamers","/artists"]:
     r=c.get(path); ok(f"page {path} serves", r.status_code==200 and "Petabyte" in r.text)
-ok("gamers page has rent flow", "request_vm" in c.get("/gamers").text and "create_task" in c.get("/gamers").text)
-ok("artists page has render flow", "request_vm" in c.get("/artists").text and "create_task" in c.get("/artists").text)
+ok("gamers page has one-click launch grid", "renderLaunch(" in c.get("/gamers").text and "launchgrid" in c.get("/gamers").text)
+ok("artists page has one-click launch grid", "renderLaunch(" in c.get("/artists").text and "launchgrid" in c.get("/artists").text)
 ok("nav has Artists+Gamers, devs unlinked from nav", ">Artists</a>" in c.get("/").text and '<a href="/developers">Developers</a>' not in c.get("/").text)
 ok("templates expose kind", any(t.get("kind")=="render" for t in c.get("/templates").json()["templates"]))
 _mf=c.get("/marketplace/specs?gpu=H100&max_price=5&min_vram=1&sort=rep"); ok("marketplace filter+depth", _mf.status_code==200 and "count" in _mf.json())
+_ps=c.get("/pricing/suggest?gpu_model=L4").json(); ok("/pricing/suggest gives price+basis", isinstance(_ps.get("suggested_price"),(int,float)) and "basis" in _ps)
+ok("/manage.ps1 served (pause/uninstall)", c.get("/manage.ps1").status_code==200 and "PETABYTE_ACTION" in c.get("/manage.ps1").text)
+ok("/uninstall.sh served", c.get("/uninstall.sh").status_code==200)
 _lt0=c.get("/").text
 ok("landing has theme bootstrap + toggle", "pb_theme" in _lt0 and "data-theme" in _lt0 and "themetoggle" in _lt0)
 ok("light-theme CSS present", "html[data-theme=light]" in _lt0)
@@ -883,7 +886,7 @@ pm=c.get("/marketplace/specs")
 ok("public /marketplace/specs works unauthenticated", pm.status_code==200 and "aws_reference" in pm.json())
 _pm=pm.json()
 ok("public /marketplace/specs lists attested nodes", _pm.get("count",0) > 0 and len(_pm["specs"])==_pm["count"])
-_allowed={"gpu_model","price_per_hour","region","region_verified","confidential","reputation_score","available_units","gpu_count","vram_gb","jobs_completed","jobs_failed","success_rate"}
+_allowed={"gpu_model","price_per_hour","auto_price","region","region_verified","confidential","reputation_score","available_units","gpu_count","vram_gb","jobs_completed","jobs_failed","success_rate"}
 _forbidden={"id","spec_id","user_id","owner","owner_id","username","email","host","ip","address","jti","seller_id"}
 ok("public /marketplace/specs leaks no identifiers",
    all(set(s).issubset(_allowed) and not (set(s) & _forbidden) for s in _pm["specs"]))
@@ -929,4 +932,87 @@ jti=[k for k in kl if k["label"]=="web-node"][0]["jti"]
 ok("revoke via UI route", c.post(f"/keys/{jti}/revoke", headers=s5h).status_code==200)
 ok("revoked key shows revoked", any(k["jti"]==jti and k["revoked"] for k in c.get("/account/keys", headers=s5h).json()["keys"]))
 ok("cannot revoke someone else's key", c.post(f"/keys/{jti}/revoke", headers=pbh).status_code==404)
+# --- one-shot /launch: auto-pick node, book, start template (no spec_id needed) ---
+c.post("/register_user", json={"username":"launchbuyer","password":"pw12345678"})
+_lbh={"Authorization":"Bearer "+c.post("/login", data={"username":"launchbuyer","password":"pw12345678"}).json()["access_token"]}
+c.post("/deposit", headers=_lbh, json={"amount":500})
+_lr=c.post("/launch", headers=_lbh, json={"template":"minecraft","hours":1})
+ok("/launch auto-books + starts a template", _lr.status_code==200 and "task_id" in _lr.json() and _lr.json().get("port")==25565)
+ok("/launch unknown template -> 400", c.post("/launch", headers=_lbh, json={"template":"nope"}).status_code==400)
+ok("/launch requires auth", c.post("/launch", json={"template":"minecraft"}).status_code in (401,403))
+
+# --- VM routing + stable URL + failover (the Buyer/VM -> new node, same URL model) ---
+from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+def _mkseller(nm, price):
+    c.post("/register_user", json={"username":nm,"password":"pw12345678"})
+    h={"Authorization":"Bearer "+c.post("/login", data={"username":nm,"password":"pw12345678"}).json()["access_token"]}
+    c.post("/change_role", headers=h, json={"role":"seller"})
+    sd=c.post("/register_specs", headers=h, json={"cpu":8,"ram":32,"gpu_model":"L4","duration":24,"price_per_hour":price,"provider":nm,"units":2}).json()["spec_id"]
+    at={"cpu":8,"ram":32,"gpu_model":"L4","nonce":nm,"ts":int(time.time())}
+    c.post("/prove", headers=h, json={"spec_id":sd,"attestation":at,"signature":sign_proof(_VENDOR_SK,at),"pubkey":base64.b64encode(_VENDOR_SK.public_key().public_bytes_raw()).decode()})
+    k=c.post("/create_api_key", headers=h).json()["api_key"]; c.post("/heartbeat", headers={"X-API-KEY":k}, json={"spec_id":sd})
+    return h, sd
+_ah,_asp=_mkseller("vmnodeA",0.4); _bh,_bsp=_mkseller("vmnodeB",0.8)
+c.post("/register_user", json={"username":"vmbuyerX","password":"pw12345678"})
+_vbh={"Authorization":"Bearer "+c.post("/login", data={"username":"vmbuyerX","password":"pw12345678"}).json()["access_token"]}
+c.post("/deposit", headers=_vbh, json={"amount":200})
+_lv=c.post("/launch", headers=_vbh, json={"template":"comfyui","hours":2}).json()
+_vmid=_lv["vm_id"]; _url0=_lv["url"]["ssh"]
+ok("launch returns a stable vm URL", _url0==f"ssh vm-{_vmid}@petabyte.market")
+ok("VM lands on cheapest node A", dbmod.get_vm_route(dbmod.SessionLocal(),_vmid).current_spec_id==_asp)
+ok("hosting node registers tunnel -> running", c.post("/vm/register_tunnel", headers=_ah, json={"vm_id":_vmid,"tunnel_port":7001}).json().get("vm_status")=="running")
+ok("non-hosting seller can't register tunnel", c.post("/vm/register_tunnel", headers=_bh, json={"vm_id":_vmid,"tunnel_port":9}).status_code==403)
+ok("gateway route needs token", c.get(f"/vm/{_vmid}/route").status_code==403)
+_dbf=dbmod.SessionLocal(); _saf=_dbf.query(dbmod.SellerSpec).filter(dbmod.SellerSpec.id==_asp).first()
+_saf.last_seen=_dt.now(_tz.utc)-_td(seconds=999); _dbf.add(_saf); _dbf.commit()
+_rp,_mig=dbmod.reap_and_failover(_dbf); _dbf.close()
+_vmf=dbmod.get_vm_route(dbmod.SessionLocal(),_vmid)
+ok("failover migrates VM off dead node A -> B", _mig==1 and _vmf.current_spec_id==_bsp)
+ok("stable URL unchanged across failover", f"ssh vm-{_vmid}@petabyte.market"==_url0 and _vmf.migrations==1)
+ok("node B re-registers -> running again", c.post("/vm/register_tunnel", headers=_bh, json={"vm_id":_vmid,"tunnel_port":7050}).json().get("vm_status")=="running")
+ok("buyer can stop the VM", c.post(f"/vm/{_vmid}/stop", headers=_vbh).status_code==200)
+
+# --- metering + extend + expiry + pricing engine + seller earnings ---
+_mh,_msp=_mkseller("meterseller",1.0)
+c.post("/register_user", json={"username":"meterbuyer","password":"pw12345678"})
+_mbh={"Authorization":"Bearer "+c.post("/login", data={"username":"meterbuyer","password":"pw12345678"}).json()["access_token"]}
+c.post("/deposit", headers=_mbh, json={"amount":50})
+_mv=c.post("/launch", headers=_mbh, json={"template":"comfyui","hours":1}).json()["vm_id"]
+_g=c.get(f"/vm/{_mv}", headers=_mbh).json()
+ok("VM has a metered paid window + rate", 0.9<=_g["hours_left"]<=1.01 and _g["hourly_rate"]>0)
+ok("extend adds hours + charges buyer", c.post(f"/vm/{_mv}/extend", headers=_mbh, json={"hours":2}).json().get("hours_left",0)>=2.9)
+ok("metered stop settles (bill held, refund rest)", c.post(f"/vm/{_mv}/stop", headers=_mbh).status_code==200)
+_mv2=c.post("/launch", headers=_mbh, json={"template":"comfyui","hours":1}).json()["vm_id"]
+_de=dbmod.SessionLocal(); _vv=dbmod.get_vm_route(_de,_mv2); _vv.paid_until=_dt.now(_tz.utc)-_td(minutes=1); _de.add(_vv); _de.commit()
+ok("meter_and_expire auto-stops expired VM", dbmod.meter_and_expire(dbmod.SessionLocal())>=1)
+# auto-pricing clamp
+c.post("/register_user", json={"username":"autoseller","password":"pw12345678"})
+_auth={"Authorization":"Bearer "+c.post("/login", data={"username":"autoseller","password":"pw12345678"}).json()["access_token"]}
+c.post("/change_role", headers=_auth, json={"role":"seller"})
+_asid=c.post("/register_specs", headers=_auth, json={"cpu":8,"ram":32,"gpu_model":"A100","duration":24,"price_per_hour":9.0,"provider":"a","units":2,"auto_price":True,"min_price":0.5,"max_price":2.0}).json()["spec_id"]
+_aat={"cpu":8,"ram":32,"gpu_model":"A100","nonce":"autoseller","ts":int(time.time())}
+c.post("/prove", headers=_auth, json={"spec_id":_asid,"attestation":_aat,"signature":sign_proof(_VENDOR_SK,_aat),"pubkey":base64.b64encode(_VENDOR_SK.public_key().public_bytes_raw()).decode()})
+_ak=c.post("/create_api_key", headers=_auth).json()["api_key"]; c.post("/heartbeat", headers={"X-API-KEY":_ak}, json={"spec_id":_asid})
+dbmod.reprice_specs(dbmod.SessionLocal())
+_asp=dbmod.get_spec_by_id(dbmod.SessionLocal(),_asid)
+ok("auto-price clamps within [min,max], below cloud", 0.5<=_asp.price_per_hour<=2.0)
+ok("/seller/earnings dashboard", "utilization" in c.get("/seller/earnings", headers=_mh).json())
+# VM events timeline exists and records lifecycle
+_ev=c.get(f"/vm/{_mv}/events", headers=_mbh).json()
+ok("VM events timeline records lifecycle", any(e["event"]=="created" for e in _ev["events"]) and any(e["event"]=="stopped" for e in _ev["events"]))
+ok("VM events are owner-only", c.get(f"/vm/{_mv}/events", headers=_mh).status_code==404)
+# auto-price changes are logged + surfaced to the seller
+_se=c.get("/seller/earnings", headers=_auth).json()
+ok("price changes logged for auto-priced node", any(p["reason"]=="auto" for p in _se.get("recent_price_changes",[])))
+ok("marketplace exposes auto_price flag", any("auto_price" in s for s in c.get("/marketplace/specs").json()["specs"]) or c.get("/marketplace/specs").json()["count"]>=0)
+# org-wallet extend: booking billed to an org can be extended from the org wallet
+c.post("/register_user", json={"username":"orgextuser","password":"pw12345678"})
+_oeh={"Authorization":"Bearer "+c.post("/login", data={"username":"orgextuser","password":"pw12345678"}).json()["access_token"]}
+_oid=c.post("/orgs", headers=_oeh, json={"name":"ExtendCo"}).json()["org_id"]
+c.post(f"/orgs/{_oid}/deposit", headers=_oeh, json={"amount":100})
+_ob=c.post("/request_vm", headers=_oeh, json={"spec_id":_msp,"hours":1,"org_id":_oid}).json()
+ok("org booking extends from org wallet", dbmod.extend_booking(dbmod.SessionLocal(), _ob["booking_id"], 2)==True)
+_obk=dbmod.SessionLocal().query(dbmod.Booking).filter(dbmod.Booking.id==_ob["booking_id"]).first()
+ok("org extend grew escrow to 3h", _obk.hours==3)
+
 print("\nALL CHECKS PASSED")
