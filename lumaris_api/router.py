@@ -41,9 +41,12 @@ def gather_candidates(db, intent: dict):
 
 
 def _norm(vals):
+    # Scoring is a ranking heuristic, not accounting — floats are fine and correct
+    # here. Money itself stays Decimal; we only coerce for the 0..1 normalisation.
+    vals = [float(v) for v in vals]
     lo, hi = min(vals), max(vals)
     span = (hi - lo) or 1.0
-    return lambda v: (v - lo) / span
+    return lambda v: (float(v) - lo) / span
 
 
 def score_candidates(cands):
@@ -82,7 +85,8 @@ def select_plan(db, intent: dict):
                 "reason": ("highest blended score (reputation/price/throughput) "
                            "meeting all constraints") if chosen else "qualified alternative"}
 
-    est = round(sum(c["spec"].price_per_hour for c in selected) * hours, 4)
+    from db import D, q
+    est = q(sum((D(c["spec"].price_per_hour) for c in selected), D(0)) * D(hours))
     return {
         "fulfilled": len(selected) >= redundancy,
         "requested_redundancy": redundancy,

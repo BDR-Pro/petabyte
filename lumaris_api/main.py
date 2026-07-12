@@ -13,13 +13,19 @@ from datetime import datetime, timezone
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
+import logging
 import os
+import secrets
+import time
+
+logger = logging.getLogger("petabyte")
 
 from utils import (
     gen_wg_keypair, build_client_wg_config, apply_peer_to_interface,
     gen_secure_api_key, decode_api_key, verify_attestation, verify_signed_proof,
 )
 from db import (
+    D, q, qc, Money,
     get_db, SessionLocal, PLATFORM_TAKE_RATE, HEARTBEAT_TIMEOUT_S,
     create_user, login_user, get_user_by_username, set_role,
     save_specs, get_spec_by_id, spec_is_live, touch_spec, reap_stale_specs,
@@ -59,7 +65,8 @@ from auth import create_access_token, verify_token
 from static_dashboard import DASHBOARD_HTML
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
-                   GAMERS_HTML, ARTISTS_HTML)
+                   GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
+                   PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -80,30 +87,165 @@ GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "")                     # gateway -> 
 PAYMENT_WEBHOOK_SECRET = os.getenv("PAYMENT_WEBHOOK_SECRET", "")
 AWS_REFERENCE_PRICE = os.getenv("AWS_REFERENCE_PRICE", "12.29")
 
+# Per-GPU-class on-demand cloud reference rates (USD/hr, approximate, single-GPU).
+# A savings claim is only honest if it compares LIKE FOR LIKE — quoting an H100-class
+# rate against an RTX 4090 listing would manufacture a fake ~97% "discount". Where we
+# don't recognise the GPU, we show NO savings figure rather than an invented one.
+CLOUD_REFERENCE = {
+    "h100": 12.29, "h200": 14.00, "a100": 4.10, "l40": 1.80, "l4": 0.90,
+    "a10": 1.30, "v100": 3.06, "t4": 0.53, "rtx 4090": 0.80, "4090": 0.80,
+    "rtx 4080": 0.60, "rtx 3090": 0.55, "3090": 0.55, "rtx a6000": 1.60, "a6000": 1.60,
+}
+
+
+def cloud_reference_for(gpu_model: str):
+    """The on-demand cloud rate for THIS GPU class, or None if we can't compare fairly."""
+    if not gpu_model:
+        return None
+    g = gpu_model.lower()
+    for key in sorted(CLOUD_REFERENCE, key=len, reverse=True):
+        if key in g:
+            return CLOUD_REFERENCE[key]
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Periodic maintenance.
+#
+# TWO failure modes this guards against:
+#  1. Gunicorn runs 4 workers. Without a lock, all 4 run the reaper every 20s --
+#     four processes racing to fail over the same node, settle the same booking,
+#     reprice the same listing. The operations are individually idempotent, but the
+#     contention and duplicate notifications are real. So exactly ONE process holds
+#     a Postgres advisory lock and does the work; the others no-op.
+#  2. `except Exception: pass` meant maintenance could be dead for weeks while the
+#     API cheerfully reported healthy. Now every failure is logged and the last
+#     success timestamp is exposed on /health/ready so it can be alerted on.
+#
+# Long term this belongs in a separate `petabyte-scheduler` process (see
+# deploy/lumaris-reaper.service). The lock makes it correct either way.
+# ---------------------------------------------------------------------------
+_MAINTENANCE_LOCK_ID = 918273645          # arbitrary, but must be stable
+_maintenance = {"last_success": None, "failures": 0, "holder": False}
+
+
+def _try_acquire_maintenance_lock(db) -> bool:
+    """Session-scoped advisory lock. Only one process wins. SQLite has no advisory
+    locks and no concurrent writers to protect against, so it always wins there."""
+    if not db.bind.dialect.name.startswith("postgres"):
+        return True
+    try:
+        return bool(db.execute(text("SELECT pg_try_advisory_lock(:i)"),
+                               {"i": _MAINTENANCE_LOCK_ID}).scalar())
+    except Exception:
+        logger.exception("maintenance: advisory lock check failed")
+        return False
+
+
+def _maintenance_cycle() -> None:
+    db = SessionLocal()
+    try:
+        if not _try_acquire_maintenance_lock(db):
+            _maintenance["holder"] = False
+            return                       # another worker owns maintenance
+        _maintenance["holder"] = True
+        reap_and_failover(db, HEARTBEAT_TIMEOUT_S)  # migrate live VMs off dead nodes
+        settle_dead_specs(db)            # refund in-flight bookings on dead nodes
+        meter_and_expire(db)             # auto-stop VMs whose prepaid window ended
+        reprice_specs(db)                # demand-based auto-pricing for opted-in nodes
+        _maintenance["last_success"] = time.time()
+    finally:
+        db.close()
+
 
 async def _reaper_loop():
     while True:
         await asyncio.sleep(REAPER_INTERVAL_S)
         try:
-            db = SessionLocal()
-            reap_and_failover(db, HEARTBEAT_TIMEOUT_S)   # reap + migrate live VMs off dead nodes
-            settle_dead_specs(db)   # refund in-flight bookings on dead nodes
-            meter_and_expire(db)    # auto-stop VMs whose prepaid window ended
-            reprice_specs(db)       # demand-based auto-pricing for opted-in nodes
-            db.close()
+            _maintenance_cycle()
+        except asyncio.CancelledError:
+            raise
         except Exception:
-            pass  # never let the reaper crash the loop
+            # NEVER silently. A dead maintenance loop is a silent money bug:
+            # nodes stay listed, VMs never expire, bookings never settle.
+            _maintenance["failures"] += 1
+            logger.exception("maintenance cycle failed (failures=%s)",
+                             _maintenance["failures"])
+
+
+# ---------------------------------------------------------------------------
+# Production safety gate.
+#
+# Every stub here exists so the thing is testable. Every one of them, left on in
+# production, silently converts a security property into a demo:
+#   GOOGLE_OAUTH_STUB -> anyone can log in as anyone
+#   PAYOUT_STUB       -> withdrawals "succeed" and pay nobody
+#   PAYMENTS_MODE     -> sandbox mints free credit
+#   S3_STUB           -> snapshots aren't stored; failover restores nothing
+#   LEGACY_KEYS_...   -> a scopeless API key is root
+# Fail loudly at boot rather than quietly at the first customer.
+# ---------------------------------------------------------------------------
+def _assert_production_is_safe() -> None:
+    if os.getenv("ENVIRONMENT", "development").lower() != "production":
+        return
+    unsafe = {
+        "GOOGLE_OAUTH_STUB": os.getenv("GOOGLE_OAUTH_STUB", "").lower() == "true",
+        "PAYOUT_STUB": os.getenv("PAYOUT_STUB", "").lower() == "true",
+        "S3_STUB": os.getenv("S3_STUB", "").lower() == "true",
+        "LEGACY_KEYS_FULL_ACCESS": LEGACY_KEYS_ARE_FULL_ACCESS,
+        "PAYMENTS_MODE=sandbox": PAYMENTS_MODE != "live",
+        "SECRET_KEY is a default/dev value": os.getenv("SECRET_KEY", "") in
+            ("", "t", "dev", "change-me", "secret"),
+    }
+    enabled = [k for k, v in unsafe.items() if v]
+    if enabled:
+        raise RuntimeError(
+            "Refusing to start in production with unsafe settings: "
+            + ", ".join(enabled)
+            + ". Fix these or unset ENVIRONMENT=production.")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _assert_production_is_safe()
     task = None if REAPER_DISABLED else asyncio.create_task(_reaper_loop())
     yield
     if task:
         task.cancel()
 
 
-app = FastAPI(title="Lumaris API", lifespan=lifespan)
+API_DESCRIPTION = """
+Rent verified GPU compute by the hour, or earn from hardware you already own.
+
+**Authentication.** Every request needs an API key: `X-API-KEY: pk_...` (create one at
+/keys), or a bearer token from `/login` for browser sessions.
+
+**Typical buyer flow.** Fund your wallet -> `POST /launch` a template on the cheapest
+verified node -> connect at the address returned -> `POST /vm/{id}/stop` when done.
+You are billed for the hours you actually hold the machine; the unused prepay is refunded.
+
+**Typical seller flow.** Install the agent -> it attests your hardware and heartbeats ->
+your GPU appears in the marketplace -> earnings accrue per completed rental.
+
+Money is held in escrow for the duration of a rental and released on completion. If a node
+dies mid-rental, the VM fails over to another node at the same address, or you are refunded.
+"""
+
+app = FastAPI(
+    title="Petabyte API",
+    version="1.0.0",
+    description=API_DESCRIPTION,
+    lifespan=lifespan,
+    docs_url=None,      # replaced by Scalar at /docs
+    redoc_url=None,
+    openapi_tags=[
+        {"name": "compute", "description": "Launch, extend, and stop GPU machines."},
+        {"name": "marketplace", "description": "Browse live verified inventory. No auth required."},
+        {"name": "wallet", "description": "Deposits, balance, withdrawals, payout methods."},
+        {"name": "seller", "description": "List hardware, prove it, track earnings."},
+        {"name": "account", "description": "Registration, login, API keys."},
+    ],
+)
 
 # Optional error tracking — only active when SENTRY_DSN is set (see HARDENING.md).
 _SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
@@ -129,6 +271,108 @@ if _origins:
     )
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+
+# ---------------------------------------------------------------------------
+# Request IDs + security headers.
+# Every response carries an X-Request-ID that also appears in our logs, so a user
+# can quote it and we can find the exact request. Headers are set here (not nginx)
+# so they hold no matter what fronts the app.
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def _request_context(request: Request, call_next):
+    rid = request.headers.get("X-Request-ID") or secrets.token_hex(8)
+    request.state.request_id = rid
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("unhandled error request_id=%s path=%s", rid, request.url.path)
+        raise
+    response.headers["X-Request-ID"] = rid
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    # CSP: our pages use inline <script>/<style>, so 'unsafe-inline' is required for
+    # now. TODO(security): move page JS/CSS to static files with a nonce and drop it.
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+    )
+    # Never let a browser or proxy cache an authenticated response.
+    if request.headers.get("Authorization") or request.headers.get("X-API-KEY"):
+        response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting. Credential endpoints are the ones that actually get attacked;
+# an unlimited /login is a free brute-force oracle. In-process fixed window —
+# fine for a single instance; move to Redis when we run more than one.
+# ---------------------------------------------------------------------------
+_RL_BUCKETS: dict = {}
+_RL_RULES = {           # path -> (max_FAILED_hits, window_seconds)
+    "/register_user": (10, 3600),  # signup spam
+    "/withdraw": (10, 3600),       # money-out probing
+}
+LOGIN_MAX_FAILS, LOGIN_WINDOW_S = 10, 900
+
+
+def _rl_blocked(key: str, limit: int, window: int):
+    """True (+retry secs) if this key has burned its failure budget."""
+    now = time.time()
+    hits = [t for t in _RL_BUCKETS.get(key, []) if now - t < window]
+    _RL_BUCKETS[key] = hits
+    if len(hits) >= limit:
+        return int(window - (now - hits[0])) + 1
+    return None
+
+
+def _rl_record_failure(key: str):
+    _RL_BUCKETS.setdefault(key, []).append(time.time())
+
+
+def _rate_limit_key(request: Request) -> str:
+    # must use the trusted-proxy-aware IP: a raw X-Forwarded-For read would let an
+    # attacker rotate the header and bypass the limit entirely.
+    return f"{_client_ip(request) or '?'}:{request.url.path}"
+
+
+@app.middleware("http")
+async def _rate_limit(request: Request, call_next):
+    rule = _RL_RULES.get(request.url.path)
+    if not rule or request.method != "POST":
+        return await call_next(request)
+    limit, window = rule
+    now = time.time()
+    key = _rate_limit_key(request)
+    hits = [t for t in _RL_BUCKETS.get(key, []) if now - t < window]
+    if len(hits) >= limit:
+        retry = int(window - (now - hits[0])) + 1
+        return JSONResponse(
+            status_code=429,
+            headers={"Retry-After": str(retry)},
+            content={"error": {"code": "RATE_LIMIT_EXCEEDED",
+                               "message": f"Too many attempts. Try again in {retry} seconds.",
+                               "retry_after_seconds": retry}},
+        )
+    response = await call_next(request)
+    # Only FAILED attempts consume budget. Counting successes would lock out a whole
+    # office behind one NAT'd IP — the limiter exists to stop guessing, not usage.
+    if response.status_code >= 400:
+        hits.append(now)
+        _RL_BUCKETS[key] = hits
+        if len(_RL_BUCKETS) > 10000:      # crude bound; prevents unbounded growth
+            for k in [k for k, v in _RL_BUCKETS.items() if not v or now - v[-1] > 3600]:
+                _RL_BUCKETS.pop(k, None)
+    return response
 
 
 # ------------------- MODELS -------------------
@@ -402,11 +646,21 @@ def _username(user: dict) -> str:
     return sub
 
 
+# Only these peers may set X-Forwarded-For. If the socket peer isn't a trusted
+# proxy, the header is attacker-controlled: anyone could send
+# `X-Forwarded-For: 1.1.1.1` to dodge rate limits or fake their country.
+TRUSTED_PROXIES = {p.strip() for p in os.getenv(
+    "TRUSTED_PROXIES", "127.0.0.1,::1").split(",") if p.strip()}
+
+
 def _client_ip(request: Request):
-    xff = request.headers.get("X-Forwarded-For")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else None
+    peer = request.client.host if request.client else None
+    if peer in TRUSTED_PROXIES:
+        xff = request.headers.get("X-Forwarded-For")
+        if xff:
+            # left-most entry is the original client, as appended by our own proxy
+            return xff.split(",")[0].strip()
+    return peer
 
 
 def _require_seller(db: Session, user: dict):
@@ -455,14 +709,48 @@ def api_key_user(x_api_key: str = Header(..., alias="X-API-KEY"),
     user = get_user_by_username(db, data["u"])
     if not user:
         raise HTTPException(status_code=401, detail="Unknown user")
-    user._scopes = data.get("scopes", [])     # [] == full access (back-compat)
+    user._scopes = data.get("scopes", []) or []
+    user._is_api_key = True          # scopes are an API-KEY concept, not a session one
     return user
 
 
+# Keys minted before scopes existed carry none. Treating "no scopes" as FULL ACCESS
+# means a parsing bug, a bad migration, or a truncated field silently becomes root.
+# So: default deny, with one explicit escape hatch that must be written down.
+FULL_ACCESS = "*"
+# What a key can do when the caller doesn't ask for anything narrower. This is what a
+# seller's node agent needs: prove itself, heartbeat, claim work, report results.
+# Deliberately does NOT include payouts, org admin, or key minting — a machine sitting
+# in someone's living room should not be able to move money.
+DEFAULT_KEY_SCOPES = ("node", "jobs")
+LEGACY_KEYS_ARE_FULL_ACCESS = os.getenv("LEGACY_KEYS_FULL_ACCESS", "false").lower() == "true"
+
+
 def require_scope(user, scope: str):
-    scopes = getattr(user, "_scopes", [])
-    if scopes and scope not in scopes:
-        raise HTTPException(status_code=403, detail=f"API key lacks '{scope}' scope")
+    # A JWT session is an interactive human who already authenticated with a password.
+    # Scopes exist to LIMIT machine keys, not to gate logged-in users; role and
+    # ownership checks still apply to them separately.
+    if not getattr(user, "_is_api_key", False):
+        return
+    scopes = getattr(user, "_scopes", None) or []
+    if FULL_ACCESS in scopes:
+        return                                  # deliberately privileged key
+    if not scopes:
+        # A scopeless key. Only honoured if the operator explicitly opted in to the
+        # legacy behaviour during a migration window — never by accident.
+        if LEGACY_KEYS_ARE_FULL_ACCESS:
+            logger.warning("legacy scopeless API key used for '%s' — re-mint it", scope)
+            return
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "API_KEY_MISSING_SCOPES",
+                    "message": "This API key has no scopes. Create a new key with the "
+                               f"'{scope}' scope."})
+    if scope not in scopes:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "API_KEY_SCOPE_MISSING",
+                    "message": f"This API key lacks the '{scope}' scope."})
 
 
 # ------------------- HEALTH -------------------
@@ -506,6 +794,35 @@ def login_page():
 @app.get("/account", response_class=HTMLResponse)
 def account_page():
     return ACCOUNT_HTML
+
+@app.get("/status", response_class=HTMLResponse)
+def status_page():
+    """Plain service status — honest, generated from live heartbeats."""
+    return HTMLResponse(STATUS_HTML)
+
+@app.get("/pricing", response_class=HTMLResponse)
+def pricing_page():
+    return PRICING_HTML
+
+@app.get("/security", response_class=HTMLResponse)
+def security_page():
+    return SECURITY_HTML
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_page():
+    return PRIVACY_HTML
+
+@app.get("/terms", response_class=HTMLResponse)
+def terms_page():
+    return TERMS_HTML
+
+@app.get("/acceptable-use", response_class=HTMLResponse)
+def aup_page():
+    return AUP_HTML
+
+@app.get("/gpu/{public_id}", response_class=HTMLResponse)
+def gpu_detail_page(public_id: str):
+    return GPU_DETAIL_HTML
 
 @app.get("/gamers", response_class=HTMLResponse)
 def gamers_page():
@@ -594,7 +911,50 @@ def favicon():
     except OSError:
         raise HTTPException(status_code=404, detail="not found")
 
-@app.get("/marketplace/specs")
+@app.get("/marketplace/specs/{public_id}", tags=["marketplace"])
+def public_spec_detail(public_id: str, db: Session = Depends(get_db)):
+    """Everything a buyer needs to judge one node before booking it.
+    Addressed by an opaque handle — the internal id is never public, so listings
+    can't be enumerated and our volume isn't leaked."""
+    from db import get_spec_by_public_id
+    spec = get_spec_by_public_id(db, public_id)
+    if not spec or not spec.attested:
+        raise HTTPException(status_code=404, detail="GPU not found")
+    owner = get_user_by_id(db, spec.user_id)
+    total = (spec.jobs_completed or 0) + (spec.jobs_failed or 0)
+    _rep = compute_reputation(db, spec)
+    ref = cloud_reference_for(spec.gpu_model)
+    return {
+        "id": spec.public_id, "gpu_model": spec.gpu_model or "CPU",
+        "gpu_count": spec.gpu_count or 0, "vram_gb": spec.vram_gb or 0,
+        "cpu": spec.cpu, "ram_gb": spec.ram,
+        "price_per_hour": spec.price_per_hour, "cloud_reference": ref,
+        "savings_pct": (round((1 - spec.price_per_hour / ref) * 100)
+                        if ref and spec.price_per_hour < ref else None),
+        "auto_price": bool(spec.auto_price),
+        "region": spec.region, "region_verified": bool(spec.region_verified),
+        "confidential": bool(spec.confidential),
+        "online": spec_is_live(spec),
+        "available_units": spec.available_units, "total_units": spec.total_units,
+        "reputation_score": _rep["score"] if isinstance(_rep, dict) else _rep,
+        "jobs_completed": spec.jobs_completed, "jobs_failed": spec.jobs_failed,
+        "success_rate": round(100.0 * spec.jobs_completed / total, 1) if total else None,
+        "can_accept_paid_jobs": bool(owner and owner.can_accept_paid_jobs),
+        "verification": {
+            "hardware_attested": bool(spec.attested),
+            "method": "Ed25519-signed hardware report from the Petabyte agent",
+            "region_verified": bool(spec.region_verified),
+            "confidential_computing": bool(spec.confidential),
+        },
+        "protection": {
+            "escrow": "Funds are held in escrow for the rental and released on completion.",
+            "node_failure": "If the node stops responding, your machine fails over to another node at the same address, or you are refunded.",
+            "billing": "Billed for the hours you hold the machine; unused prepay is refunded when you stop.",
+        },
+    }
+
+
+@app.get("/marketplace/specs", tags=["marketplace"])
 def public_specs(db: Session = Depends(get_db),
                  gpu: Optional[str] = None, region: Optional[str] = None,
                  min_vram: int = 0, max_price: Optional[float] = None,
@@ -621,14 +981,19 @@ def public_specs(db: Session = Depends(get_db),
         total = (spec.jobs_completed or 0) + (spec.jobs_failed or 0)
         _rep = compute_reputation(db, spec)
         _score = _rep["score"] if isinstance(_rep, dict) else _rep
-        out.append({"gpu_model": spec.gpu_model or "CPU",
+        out.append({"id": spec.public_id,
+                    "gpu_model": spec.gpu_model or "CPU",
                     "gpu_count": spec.gpu_count or 0, "vram_gb": spec.vram_gb or 0,
+                    "cpu": spec.cpu, "ram_gb": spec.ram,
                     "price_per_hour": spec.price_per_hour,
+                    "cloud_reference": cloud_reference_for(spec.gpu_model),
                     "auto_price": bool(spec.auto_price),
                     "region": spec.region, "region_verified": bool(spec.region_verified),
                     "confidential": bool(spec.confidential),
                     "reputation_score": _score,
                     "available_units": spec.available_units,
+                    "total_units": spec.total_units,
+                    "attested": bool(spec.attested),
                     "jobs_completed": spec.jobs_completed, "jobs_failed": spec.jobs_failed,
                     "success_rate": round(100.0 * spec.jobs_completed / total, 1) if total else None})
     keyfn = {"price": lambda x: x["price_per_hour"],
@@ -636,6 +1001,99 @@ def public_specs(db: Session = Depends(get_db),
              "vram": lambda x: -x["vram_gb"]}.get(sort, lambda x: x["price_per_hour"])
     out.sort(key=keyfn)
     return {"specs": out, "count": len(out), "aws_reference": float(AWS_REFERENCE_PRICE)}
+
+
+@app.get("/docs", include_in_schema=False)
+def api_reference():
+    """Interactive API portal (Scalar) generated from our OpenAPI schema — endpoint
+    navigation, request/response examples, and a live 'Test Request' console.
+    Falls back to the Scalar CDN if the package isn't installed, so a missing
+    dependency can never take the docs down."""
+    try:
+        from scalar_fastapi import get_scalar_api_reference
+        return get_scalar_api_reference(
+            openapi_url=app.openapi_url,
+            title="Petabyte API",
+            scalar_theme="deepSpace",
+        )
+    except Exception:
+        return HTMLResponse("""<!doctype html><html><head><meta charset="utf-8">
+<title>Petabyte API</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/static/petabyte-logo.png"></head><body style="margin:0">
+<script id="api-reference" data-url="/openapi.json" data-configuration='{"theme":"deepSpace"}'></script>
+<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</body></html>""")
+
+
+@app.exception_handler(HTTPException)
+async def _structured_http_error(request: Request, exc: HTTPException):
+    """Every error is machine-readable: a stable code, a human message, and the
+    request id to quote at support. Raw Python exception text never reaches a user."""
+    rid = getattr(request.state, "request_id", None)
+    detail = exc.detail
+    code = None
+    if isinstance(detail, dict):
+        code = detail.get("code")
+        message = detail.get("message", "Request failed.")
+    else:
+        message = str(detail)
+    if not code:
+        code = {
+            400: "INVALID_REQUEST", 401: "NOT_AUTHENTICATED", 402: "INSUFFICIENT_BALANCE",
+            403: "NOT_PERMITTED", 404: "NOT_FOUND", 409: "CONFLICT",
+            422: "VALIDATION_FAILED", 429: "RATE_LIMIT_EXCEEDED",
+        }.get(exc.status_code, "REQUEST_FAILED")
+    return JSONResponse(
+        status_code=exc.status_code,
+        headers=getattr(exc, "headers", None) or {},
+        content={"error": {"code": code, "message": message, "request_id": rid},
+                 "detail": message},   # keep `detail` so existing clients don't break
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_error(request: Request, exc: Exception):
+    """Never leak a stack trace or internal exception text to a caller."""
+    rid = getattr(request.state, "request_id", None)
+    logger.exception("unhandled request_id=%s path=%s", rid, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"code": "INTERNAL_ERROR",
+                           "message": "Something went wrong on our side.",
+                           "request_id": rid},
+                 "detail": "Internal server error"},
+    )
+
+
+@app.get("/health/live", include_in_schema=False)
+def health_live():
+    """Liveness: is the process up? Deliberately touches nothing else."""
+    return {"status": "alive"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+def health_ready(db: Session = Depends(get_db)):
+    """Readiness: can this instance serve traffic? Checks the DB, and reports
+    maintenance freshness — a reaper that died silently is a money bug (VMs never
+    expire, dead nodes stay listed, bookings never settle). Alert on
+    `maintenance.stale == true`."""
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception:
+        logger.exception("readiness: database unreachable")
+        return JSONResponse(status_code=503,
+                            content={"status": "not_ready", "database": "unreachable"})
+    last = _maintenance["last_success"]
+    age = (time.time() - last) if last else None
+    # stale = no successful cycle in 10x the interval. Only meaningful on the
+    # process that actually holds the maintenance lock.
+    stale = bool(_maintenance["holder"] and (last is None or age > REAPER_INTERVAL_S * 10))
+    return {"status": "ready", "database": "ok",
+            "maintenance": {"enabled": not REAPER_DISABLED,
+                            "is_leader": _maintenance["holder"],
+                            "last_success_age_s": round(age, 1) if age else None,
+                            "failures": _maintenance["failures"],
+                            "stale": stale}}
 
 
 @app.get("/healthz")
@@ -654,7 +1112,7 @@ def readyz(db: Session = Depends(get_db)):
 
 # ------------------- AUTH -------------------
 
-@app.post("/register_user")
+@app.post("/register_user", tags=["account"])
 def register_user(data: UserRegisterModel, db: Session = Depends(get_db)):
     user = create_user(db, data.username, data.password)
     if not user:
@@ -705,11 +1163,26 @@ def google_callback(code: str = Query(...), email: Optional[str] = Query(None),
     token = create_access_token({"sub": u.username, "role": u.role})
     return RedirectResponse(url="/app#t=" + token)
 
-@app.post("/login")
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+@app.post("/login", tags=["account"])
+def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(),
+          db: Session = Depends(get_db)):
+    # Throttle by (IP, username): guessing one account can't lock out a colleague
+    # behind the same office NAT, and a valid password is never refused because
+    # someone else was guessing. Only FAILED attempts burn the budget.
+    ip = _client_ip(request) or "?"
+    key = f"login:{ip}:{form_data.username.lower()}"
+    retry = _rl_blocked(key, LOGIN_MAX_FAILS, LOGIN_WINDOW_S)
+    if retry:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "RATE_LIMIT_EXCEEDED",
+                    "message": f"Too many failed sign-in attempts. Try again in {retry} seconds."},
+            headers={"Retry-After": str(retry)})
     user = login_user(db, form_data.username, form_data.password)
     if not user:
+        _rl_record_failure(key)
         raise HTTPException(status_code=400, detail="Invalid credentials")
+    _RL_BUCKETS.pop(key, None)      # a success clears the slate for this account
     token = create_access_token({"sub": user.username, "role": user.role})
     return {"access_token": token, "token_type": "bearer"}
 
@@ -726,7 +1199,7 @@ def change_role(data: RoleModel, user: dict = Depends(get_current_user),
 
 # ------------------- SELLER -------------------
 
-@app.post("/register_specs")
+@app.post("/register_specs", tags=["seller"])
 def register_specs(spec: SpecModel, owner=Depends(seller_actor),
                    db: Session = Depends(get_db)):
     db_spec = save_specs(db, owner, spec.model_dump())
@@ -734,7 +1207,7 @@ def register_specs(spec: SpecModel, owner=Depends(seller_actor),
             "attested": db_spec.attested, "available_units": db_spec.available_units}
 
 
-@app.post("/prove")
+@app.post("/prove", tags=["seller"])
 def submit_proof(data: AttestationModel, owner=Depends(seller_actor),
                  db: Session = Depends(get_db)):
     spec = get_spec_by_id(db, data.spec_id)
@@ -791,7 +1264,7 @@ def prove_tee(data: TEEProveModel, user: dict = Depends(get_current_user),
             "measurement": measurement, "spec_id": spec.id}
 
 
-@app.post("/heartbeat")
+@app.post("/heartbeat", tags=["seller"])
 def heartbeat(data: HeartbeatModel, request: Request, owner=Depends(api_key_user),
               db: Session = Depends(get_db)):
     """Seller node agent pings here (~every 15s). We also GeoIP-verify the node's
@@ -1176,7 +1649,7 @@ def spec_reputation(spec_id: int, user: dict = Depends(get_current_user),
     return {"spec_id": spec_id, "reputation": rep, "recent_events": events}
 
 
-@app.get("/marketplace/stats")
+@app.get("/marketplace/stats", tags=["marketplace"])
 def marketplace_stats(db: Session = Depends(get_db)):
     """Public hero numbers for the dashboard."""
     from db import SellerSpec, Task, Booking, Platform
@@ -1543,7 +2016,7 @@ def org_usage_endpoint(org_id: int, user: dict = Depends(get_current_user),
 
 # ------------------- SETTLEMENT / WALLET -------------------
 
-@app.post("/deposit")
+@app.post("/deposit", tags=["wallet"])
 def deposit_funds(data: DepositModel, user: dict = Depends(get_current_user),
                   db: Session = Depends(get_db)):
     """Top-up. In live mode this is disabled — funds come only via the payment
@@ -1584,13 +2057,13 @@ async def payment_webhook(request: Request, db: Session = Depends(get_db)):
     return {"status": "ok", "credited": amount, "user": username}
 
 
-@app.get("/wallet")
+@app.get("/wallet", tags=["wallet"])
 def wallet(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
     return {"balance": round(me.balance, 4), "earnings": round(me.earnings, 4)}
 
 
-@app.get("/me")
+@app.get("/me", tags=["account"])
 def whoami_profile(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Everything the profile hub needs about the signed-in user."""
     from db import SellerSpec, Booking
@@ -1641,7 +2114,7 @@ def account_bookings(user: dict = Depends(get_current_user), db: Session = Depen
     } for b in rows], "count": len(rows)}
 
 
-@app.get("/seller/earnings")
+@app.get("/seller/earnings", tags=["seller"])
 def seller_earnings(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Seller dashboard: utilization, earnings, active rentals, per-node breakdown.
     Sellers churn without visibility — this is that visibility."""
@@ -1883,7 +2356,7 @@ def render_job(data: RenderModel, user: dict = Depends(get_current_user),
     return {"status": "ok", "job_id": job.id, "blend_ref": data.blend_ref, "nodes": len(tasks),
             "frame_range": [data.frame_start, data.frame_end], "tasks": tasks,
             "manifest_url": f"/jobs/manifest/{job.id}",
-            "estimated_cost": round(sum(t["price_per_hour"] for t in tasks) * data.hours, 4)}
+            "estimated_cost": q(sum((D(t["price_per_hour"]) for t in tasks), D(0)) * D(data.hours))}
 
 
 @app.post("/solve")
@@ -1898,13 +2371,13 @@ def solve_compute(intent: SolveModel, user: dict = Depends(get_current_user),
     return plan
 
 
-@app.get("/templates")
+@app.get("/templates", tags=["compute"])
 def list_templates():
     """One-click deployable stacks (Ollama, vLLM, ComfyUI, SD WebUI, TensorRT-LLM)."""
     return {"templates": public_catalog()}
 
 
-@app.get("/pricing/suggest")
+@app.get("/pricing/suggest", tags=["marketplace"])
 def suggest_price(gpu_model: Optional[str] = None, db: Session = Depends(get_db)):
     """Suggest an hourly price for a seller listing this GPU. Anchors to what
     similar live nodes charge, else to a discount off the cloud reference. This is
@@ -1922,11 +2395,11 @@ def suggest_price(gpu_model: Optional[str] = None, db: Session = Depends(get_db)
     if prices:
         prices.sort()
         median = prices[len(prices) // 2]
-        suggested, low, high = round(median, 2), round(prices[0], 2), round(prices[-1], 2)
+        suggested, low, high = qc(median), qc(prices[0]), qc(prices[-1])
         basis = f"median of {len(prices)} similar live node(s)"
     else:
-        suggested = round(ref * 0.45, 2)      # ~55% under cloud when no market yet
-        low, high = round(ref * 0.30, 2), round(ref * 0.70, 2)
+        suggested = qc(D(ref) * D("0.45"))    # ~55% under cloud when no market yet
+        low, high = qc(D(ref) * D("0.30")), qc(D(ref) * D("0.70"))
         basis = "no similar nodes online — anchored to ~55% below the cloud reference"
     return {"gpu_model": gpu_model or "any", "suggested_price": suggested,
             "range_low": low, "range_high": high, "market_samples": len(prices),
@@ -1934,7 +2407,7 @@ def suggest_price(gpu_model: Optional[str] = None, db: Session = Depends(get_db)
             "note": "Suggestion only — you set your price. Stay below the cloud reference to win bookings."}
 
 
-@app.post("/launch")
+@app.post("/launch", tags=["compute"])
 def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
                  db: Session = Depends(get_db)):
     """One-shot: auto-pick the cheapest verified node that can run this template,
@@ -2037,7 +2510,7 @@ def vm_register_tunnel(data: VMTunnelModel, owner=Depends(seller_actor),
     return {"status": "ok", "vm_id": vm.id, "vm_status": reg.status}
 
 
-@app.get("/vm")
+@app.get("/vm", tags=["compute"])
 def list_my_vms(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
     out = []
@@ -2049,7 +2522,7 @@ def list_my_vms(user: dict = Depends(get_current_user), db: Session = Depends(ge
     return {"vms": out, "count": len(out)}
 
 
-@app.get("/vm/{vm_id}")
+@app.get("/vm/{vm_id}", tags=["compute"])
 def get_my_vm(vm_id: str, user: dict = Depends(get_current_user),
               db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
@@ -2067,7 +2540,7 @@ class ExtendModel(BaseModel):
     hours: int = Field(gt=0, le=720)
 
 
-@app.post("/vm/{vm_id}/extend")
+@app.post("/vm/{vm_id}/extend", tags=["compute"])
 def extend_my_vm(vm_id: str, data: ExtendModel, user: dict = Depends(get_current_user),
                  db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
@@ -2081,7 +2554,7 @@ def extend_my_vm(vm_id: str, data: ExtendModel, user: dict = Depends(get_current
     return {"status": "extended", "vm_id": vm.id, "hours_left": _hours_left(vm)}
 
 
-@app.post("/vm/{vm_id}/stop")
+@app.post("/vm/{vm_id}/stop", tags=["compute"])
 def stop_my_vm(vm_id: str, user: dict = Depends(get_current_user),
                db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
@@ -2092,7 +2565,7 @@ def stop_my_vm(vm_id: str, user: dict = Depends(get_current_user),
     return {"status": "stopped", "vm_id": vm.id}
 
 
-@app.get("/vm/{vm_id}/events")
+@app.get("/vm/{vm_id}/events", tags=["compute"])
 def vm_events(vm_id: str, user: dict = Depends(get_current_user),
               db: Session = Depends(get_db)):
     """The VM's timeline — makes failover visible ('moved nodes at 14:32')."""
@@ -2353,13 +2826,13 @@ def org_analytics_endpoint(org_id: int, user: dict = Depends(get_current_user),
 
 # ------------------- API KEYS -------------------
 
-@app.post("/create_api_key")
+@app.post("/create_api_key", tags=["account"])
 def create_api_key(days: int = Query(7, ge=1, le=90),
                    scopes: Optional[str] = Query(None, description="comma-separated, e.g. node,jobs"),
                    label: Optional[str] = Query(None),
                    user: dict = Security(get_current_user),
                    db: Session = Depends(get_db)):
-    scope_list = [x.strip() for x in scopes.split(",")] if scopes else []
+    scope_list = [x.strip() for x in scopes.split(",") if x.strip()] if scopes else list(DEFAULT_KEY_SCOPES)
     api_key, jti = gen_secure_api_key(_username(user), days, scope_list)
     me = get_user_by_username(db, _username(user))
     record_issued_key(db, me.id, jti, label, scope_list, days)
@@ -2416,3 +2889,47 @@ def revoke_api_key(x_api_key: str = Header(..., alias="X-API-KEY"),
 async def unhandled_exc(request: Request, exc: Exception):
     # Don't leak stack traces to clients; log server-side in real deployment.
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+# ---------------------------------------------------------------------------
+# /api/v1 — the versioned, resource-shaped public API.
+#
+# The legacy verb routes (/launch, /request_vm, /register_specs, ...) keep working
+# so nothing that exists today breaks. New integrations should use these. They are
+# thin aliases onto the SAME handlers — one implementation, one set of guarantees,
+# no drift. This is what the generated TypeScript/OpenAPI client should target.
+# ---------------------------------------------------------------------------
+from fastapi import APIRouter
+
+v1 = APIRouter(prefix="/api/v1")
+
+# --- marketplace ---
+v1.add_api_route("/marketplace/nodes", public_specs, methods=["GET"], tags=["marketplace"])
+v1.add_api_route("/marketplace/nodes/{public_id}", public_spec_detail, methods=["GET"], tags=["marketplace"])
+v1.add_api_route("/marketplace/stats", marketplace_stats, methods=["GET"], tags=["marketplace"])
+v1.add_api_route("/marketplace/pricing-suggestion", suggest_price, methods=["GET"], tags=["marketplace"])
+v1.add_api_route("/templates", list_templates, methods=["GET"], tags=["compute"])
+
+# --- deployments (VMs) ---
+v1.add_api_route("/deployments", list_my_vms, methods=["GET"], tags=["compute"])
+v1.add_api_route("/deployments", quick_launch, methods=["POST"], tags=["compute"])
+v1.add_api_route("/deployments/{vm_id}", get_my_vm, methods=["GET"], tags=["compute"])
+v1.add_api_route("/deployments/{vm_id}/stop", stop_my_vm, methods=["POST"], tags=["compute"])
+v1.add_api_route("/deployments/{vm_id}/extend", extend_my_vm, methods=["POST"], tags=["compute"])
+v1.add_api_route("/deployments/{vm_id}/events", vm_events, methods=["GET"], tags=["compute"])
+
+# --- wallet ---
+v1.add_api_route("/wallet", wallet, methods=["GET"], tags=["wallet"])
+v1.add_api_route("/wallet/deposits", deposit_funds, methods=["POST"], tags=["wallet"])
+v1.add_api_route("/wallet/withdrawals", withdraw, methods=["POST"], tags=["wallet"])
+
+# --- seller ---
+v1.add_api_route("/seller/nodes", register_specs, methods=["POST"], tags=["seller"])
+v1.add_api_route("/seller/earnings", seller_earnings, methods=["GET"], tags=["seller"])
+
+# --- account ---
+v1.add_api_route("/accounts", register_user, methods=["POST"], tags=["account"])
+v1.add_api_route("/api-keys", create_api_key, methods=["POST"], tags=["account"])
+v1.add_api_route("/me", whoami_profile, methods=["GET"], tags=["account"])
+
+app.include_router(v1)

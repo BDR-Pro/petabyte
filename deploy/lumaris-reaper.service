@@ -1,0 +1,59 @@
+[Unit]
+Description=Petabyte maintenance scheduler (reaper, settlement, expiry, repricing)
+After=network.target
+PartOf=lumaris-api.service
+
+# WHY THIS EXISTS
+#   The API runs under gunicorn with multiple workers. If the reaper lives inside the
+#   API process, EVERY worker runs it — four processes racing to fail over the same
+#   node, settle the same booking, and reprice the same listing every 20 seconds.
+#
+#   So: the API workers set REAPER_DISABLED=true, and this ONE process does the
+#   maintenance. Belt and braces, the code also takes a Postgres advisory lock
+#   (pg_try_advisory_lock), so even if two schedulers are somehow running, only one
+#   does the work.
+#
+# INSTALL
+#   1. In /etc/lumaris/lumaris.env set:  REAPER_DISABLED=true
+#      (this is read by the API workers — it is CORRECT for them to skip the reaper)
+#   2. sudo cp deploy/lumaris-reaper.service /etc/systemd/system/
+#   3. sudo systemctl daemon-reload && sudo systemctl enable --now lumaris-reaper
+#
+# VERIFY
+#   systemctl status lumaris-reaper
+#   curl -s localhost:8000/health/ready | jq .maintenance
+#     -> the API should report is_leader:false (it isn't doing maintenance)
+#     -> and `stale` must never be true on the process that IS the leader
+#
+# ALERT ON
+#   maintenance.stale == true, or maintenance.failures climbing. A dead reaper is a
+#   silent money bug: VMs never expire, dead nodes stay listed, bookings never settle,
+#   and the API keeps reporting perfectly healthy the entire time.
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/lumaris/lumaris_api
+EnvironmentFile=/etc/lumaris/lumaris.env
+
+# This process is the ONLY one that should run maintenance.
+Environment=REAPER_DISABLED=false
+
+ExecStart=/opt/lumaris/venv/bin/python -c "\
+import asyncio, main; \
+print('petabyte maintenance scheduler starting', flush=True); \
+asyncio.run(main._reaper_loop())"
+
+Restart=always
+RestartSec=5
+
+# If it dies repeatedly, let it be loud rather than flap forever.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lumaris-reaper
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,78 @@
+name: tests
+
+# Runs the full suite against BOTH engines.
+#
+# The Postgres job is the one that counts. SQLite has no decimal type and serialises
+# writers, so it structurally cannot see the two bug classes that matter most here:
+# money precision and concurrent races. A green SQLite run is a smoke signal, not
+# confidence.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  sqlite:
+    name: sqlite (fast signal)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r lumaris_api/requirements.txt
+      - name: smoke
+        working-directory: lumaris_api
+        run: python smoke_test.py
+      - name: adversarial (money + races)
+        working-directory: lumaris_api
+        run: python adversarial_test.py
+      - name: tunnel (NAT traversal + failover)
+        working-directory: lumaris_gateway
+        run: python tunnel_test.py
+
+  postgres:
+    name: postgres (the one that counts)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: petabyte_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/petabyte_test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r lumaris_api/requirements.txt
+
+      - name: smoke (postgres)
+        working-directory: lumaris_api
+        run: python smoke_test.py
+
+      - name: adversarial — money conservation under real parallel writers
+        working-directory: lumaris_api
+        run: python adversarial_test.py
+
+      - name: postgres-only — exact NUMERIC, advisory lock, true races
+        working-directory: lumaris_api
+        # These assertions are meaningless on SQLite and are the reason this job exists:
+        #   * NUMERIC(20,8) really is exact in the database (not float round-tripped)
+        #   * pg_try_advisory_lock elects exactly ONE maintenance leader
+        #     (without it, every gunicorn worker runs its own reaper)
+        #   * 50 threads racing one wallet -> exactly the right number win
+        run: python postgres_test.py

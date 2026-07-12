@@ -9,126 +9,206 @@ signature. Token persists in localStorage as 'pb_token' across pages.
 _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>%%TITLE%%</title>
-<script>(function(){try{var t=localStorage.getItem('pb_theme');if(t!=='light'&&t!=='dark')t=(window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
+<script>(function(){try{var t=localStorage.getItem('pb_theme');if(t!=='light'&&t!=='dark')t=(window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';document.documentElement.setAttribute('data-theme',t);document.documentElement.setAttribute('data-bs-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');document.documentElement.setAttribute('data-bs-theme','dark');}})();</script>
 <link rel="icon" type="image/png" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/static/petabyte-mark-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 <style>
-:root{--bg:#080D1C;--panel:#0F1730;--panel2:#0B1122;--line:#1C2742;--line2:#2A3A5E;
---ink:#EAF0FB;--mut:#93A0BE;--dim:#5D6B8A;
---teal:#4FD6C9;--teal-br:#74ECDD;--deep:#2C9E9B;--amber:#F5B23D;--amber-br:#FFC768;
---pos:#57D9A3;--warn:#F0A44B;--bad:#E5788B;
---gA:rgba(245,178,61,.055);--gB:rgba(79,214,201,.12);--gC:rgba(44,158,155,.12);
---navbg:rgba(8,13,28,.74);--hair:#141C33;
---disp:'Space Grotesk',sans-serif;--body:'Inter',sans-serif;--mono:'JetBrains Mono',monospace;}
+/* ---- Bootstrap 5.3 themed to Deep Ocean (our layer loads after and wins) ---- */
+[data-bs-theme]{--bs-body-bg:transparent;--bs-body-color:var(--ink);--bs-border-color:var(--line);
+ --bs-primary:#35E0D0;--bs-primary-rgb:53,224,208;--bs-warning:#FFB224;--bs-warning-rgb:255,178,36;
+ --bs-link-color:var(--teal);--bs-link-hover-color:var(--teal-br);
+ --bs-font-sans-serif:'Figtree',system-ui,sans-serif;--bs-body-font-size:14.5px;--bs-body-line-height:1.65;
+ --bs-border-radius:14px;--bs-border-radius-lg:18px;--bs-secondary-color:var(--mut)}
+.navbar{--bs-navbar-padding-y:0;--bs-navbar-padding-x:0}
+.navbar-toggler{border:1px solid var(--line2);border-radius:999px;padding:7px 11px;color:var(--mut)}
+.navbar-toggler:focus{box-shadow:0 0 0 4px rgba(53,224,208,.15)}
+.navbar-toggler svg{width:18px;height:18px;display:block}
+@media(max-width:991.98px){
+ .navbar-collapse{flex-basis:100%;padding:10px 4px 12px}
+ .navlinks{flex-direction:column;gap:2px;margin-left:0}
+ .navlinks a{padding:9px 13px}
+ .navcta{margin-left:0;margin-top:8px;flex-wrap:wrap}}
+:root{--abyss:#030711;--depth:#0A1226;--depth2:#0D1832;--line:#16223F;--line2:#243456;
+--ink:#F2F6FF;--mut:#9BA9C9;--dim:#5C6C8F;
+--teal:#35E0D0;--teal-br:#8FF5E8;--deep:#149A90;--amber:#FFB224;--amber-br:#FFD076;
+--pos:#4ADE9C;--warn:#F0A44B;--bad:#F0718A;
+--gA:rgba(255,178,36,.05);--gB:rgba(53,224,208,.10);--gV:rgba(124,58,237,.09);
+--navbg:rgba(10,18,38,.66);--hair:#101A32;
+--panel:var(--depth);--panel2:#081020;
+--disp:'Sora',sans-serif;--body:'Figtree',sans-serif;--mono:'JetBrains Mono',monospace;
+--r:18px;--r-sm:12px}
 html[data-theme=light]{
- --bg:#EDF3F8;--panel:#FFFFFF;--panel2:#F5F9FC;--line:#DBE5EE;--line2:#C2D2DF;
- --ink:#0F1B2D;--mut:#4B5C72;--dim:#7F90A5;
- --teal:#0E9C93;--teal-br:#12B3A8;--deep:#0B7E77;--amber:#B87814;--amber-br:#D69A2E;
- --gA:rgba(245,178,61,.10);--gB:rgba(20,179,168,.13);--gC:rgba(44,158,155,.10);
- --navbg:rgba(237,243,248,.82);--hair:#E6EDF3;}
+ --abyss:#EEF3F9;--depth:#FFFFFF;--depth2:#F6FAFD;--line:#DCE6F0;--line2:#C0D1E1;
+ --ink:#0E1A2E;--mut:#4B5D75;--dim:#7E90A7;
+ --teal:#0B9D92;--teal-br:#0FBCAE;--deep:#0A7E76;--amber:#B37410;--amber-br:#D6952A;
+ --gA:rgba(255,178,36,.10);--gB:rgba(15,188,174,.12);--gV:rgba(124,58,237,.06);
+ --navbg:rgba(255,255,255,.72);--hair:#E7EEF5;--panel:#FFFFFF;--panel2:#F4F8FC}
 *{box-sizing:border-box;margin:0;padding:0}
+::selection{background:rgba(53,224,208,.28)}
 body{background:
- radial-gradient(1100px 620px at 80% -10%,var(--gA),transparent 60%),
- radial-gradient(1000px 720px at -5% -8%,var(--gB),transparent 55%),
- radial-gradient(1300px 900px at 50% 118%,var(--gC),transparent 60%),
- var(--bg);
- color:var(--ink);font-family:var(--body);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased;
+ radial-gradient(1200px 700px at 85% -12%,var(--gA),transparent 58%),
+ radial-gradient(1100px 780px at -8% -6%,var(--gB),transparent 52%),
+ radial-gradient(900px 700px at 70% 40%,var(--gV),transparent 60%),
+ radial-gradient(1400px 900px at 50% 120%,rgba(20,154,144,.10),transparent 60%),
+ var(--abyss);
+ color:var(--ink);font-family:var(--body);font-size:14.5px;line-height:1.65;-webkit-font-smoothing:antialiased;
  transition:background-color .3s,color .3s}
 a{color:inherit;text-decoration:none}
 .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
-.wrap{max-width:1060px;margin:0 auto;padding:0 22px}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
 .teal{color:var(--teal)}.amber{color:var(--amber)}.mut{color:var(--mut)}
-nav{position:sticky;top:0;z-index:20;backdrop-filter:blur(12px);background:var(--navbg);border-bottom:1px solid var(--line)}
-nav .wrap{display:flex;align-items:center;gap:22px;height:62px}
-.brand{display:flex;align-items:center;gap:10px;font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:-.02em}
-.brand img{width:26px;height:26px;display:block}
-.brand b{font-weight:700}.brand .p{color:var(--teal)}
-.navlinks{display:flex;gap:20px;margin-left:10px}
-.navlinks a{font-size:13px;color:var(--mut);transition:color .15s}
-.navlinks a:hover{color:var(--ink)}
-.navcta{margin-left:auto;display:flex;align-items:center;gap:14px}
-.signin{font-size:13px;color:var(--mut);transition:color .15s}.signin:hover{color:var(--teal)}
-button,.btn{font-family:var(--disp);font-weight:600;border:0;border-radius:10px;padding:9px 16px;font-size:13px;cursor:pointer;transition:transform .12s,filter .15s,border-color .15s,color .15s;display:inline-flex;align-items:center;gap:8px}
+h1{font-family:var(--disp);font-weight:800;letter-spacing:-.035em;line-height:1.0}
+h2{font-family:var(--disp);font-weight:700;letter-spacing:-.02em}
+.grad{background:linear-gradient(95deg,var(--teal-br) 10%,var(--amber) 90%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.grad-teal{background:linear-gradient(95deg,var(--teal-br),var(--deep));-webkit-background-clip:text;background-clip:text;color:transparent}
+/* ---------- nav: floating glass pill ---------- */
+nav{z-index:40;padding:14px 0 6px;background:linear-gradient(180deg,var(--abyss) 30%,transparent)}
+nav .wrap{display:flex;align-items:center;gap:22px;height:58px;background:var(--navbg);
+ border:1px solid var(--line);border-radius:999px;padding:0 12px 0 20px;
+ backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+ box-shadow:0 12px 40px -18px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.04)}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--disp);font-weight:700;font-size:18px;letter-spacing:-.02em}
+.brand img{width:26px;height:26px;display:block;filter:drop-shadow(0 0 8px rgba(53,224,208,.5))}
+.brand .p{color:var(--teal)}
+.navlinks{display:flex;gap:4px;margin-left:6px}
+.navlinks a{font-size:13px;font-weight:500;color:var(--mut);padding:7px 13px;border-radius:999px;transition:color .15s,background-color .15s}
+.navlinks a:hover{color:var(--ink);background:rgba(255,255,255,.05)}
+.navlinks a.active{color:var(--teal);background:rgba(53,224,208,.10)}
+.navcta{margin-left:auto;display:flex;align-items:center;gap:10px}
+.signin{font-size:13px;font-weight:500;color:var(--mut);padding:7px 12px;border-radius:999px;transition:color .15s}
+.signin:hover{color:var(--teal)}
+/* ---------- buttons ---------- */
+button,.btn{font-family:var(--disp);font-weight:600;border:0;border-radius:999px;padding:10px 20px;font-size:13.5px;cursor:pointer;
+ transition:transform .12s,filter .15s,border-color .15s,color .15s,box-shadow .15s;display:inline-flex;align-items:center;gap:8px}
 button:active,.btn:active{transform:translateY(1px)}
-.btn-amber{background:linear-gradient(180deg,var(--amber-br),var(--amber));color:#241802;box-shadow:0 4px 18px -6px rgba(245,178,61,.5)}
-.btn-amber:hover{filter:brightness(1.05)}
-.btn-teal{background:transparent;color:var(--teal);border:1px solid rgba(79,214,201,.45)}
-.btn-teal:hover{border-color:var(--teal);box-shadow:0 0 0 3px rgba(79,214,201,.12)}
+.btn-amber{background:linear-gradient(180deg,var(--amber-br),var(--amber));color:#241802;
+ box-shadow:0 6px 24px -8px rgba(255,178,36,.55),inset 0 1px 0 rgba(255,255,255,.35)}
+.btn-amber:hover{filter:brightness(1.06)}
+.btn-teal{background:rgba(53,224,208,.08);color:var(--teal);border:1px solid rgba(53,224,208,.4)}
+.btn-teal:hover{border-color:var(--teal);box-shadow:0 0 0 4px rgba(53,224,208,.12),0 0 24px -6px rgba(53,224,208,.5)}
 .btn-ghost{background:transparent;color:var(--ink);border:1px solid var(--line2)}
 .btn-ghost:hover{border-color:var(--teal);color:var(--teal)}
-h1{font-family:var(--disp);font-weight:700;letter-spacing:-.028em;line-height:1.02}
-h2{font-family:var(--disp);font-weight:600;letter-spacing:-.01em}
-.grad{background:linear-gradient(96deg,var(--teal-br),var(--amber));-webkit-background-clip:text;background-clip:text;color:transparent}
-.grad-teal{background:linear-gradient(96deg,var(--teal-br),var(--deep));-webkit-background-clip:text;background-clip:text;color:transparent}
-.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:var(--teal);display:flex;align-items:center;gap:10px}
-.dot{width:7px;height:7px;border-radius:50%;background:var(--teal);animation:pulse 2.4s infinite}
-@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(79,214,201,.5)}70%{box-shadow:0 0 0 9px rgba(79,214,201,0)}100%{box-shadow:0 0 0 0 rgba(79,214,201,0)}}
+/* ---------- labels / structure ---------- */
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:var(--teal);display:flex;align-items:center;gap:10px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--teal);box-shadow:0 0 12px var(--teal);animation:pulse 2.4s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(53,224,208,.5)}70%{box-shadow:0 0 0 10px rgba(53,224,208,0)}100%{box-shadow:0 0 0 0 rgba(53,224,208,0)}}
 .hero{position:relative;overflow:hidden}
-.hexbg{position:absolute;right:-60px;top:-30px;width:360px;opacity:.06;pointer-events:none;filter:saturate(1.2)}
-.lbl{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--teal);display:inline-flex;align-items:center;gap:8px;margin-bottom:10px}
-.lbl::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor}
+.hexbg{position:absolute;right:-70px;top:-40px;width:420px;opacity:.05;pointer-events:none}
+.lbl{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--teal);display:inline-flex;align-items:center;gap:8px;margin-bottom:10px}
+.lbl::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor}
 .lbl.am{color:var(--amber)}
-.panel{background:var(--panel2);border:1px solid var(--line);border-radius:16px}
-.card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:14px;padding:20px;transition:transform .16s,border-color .16s,box-shadow .16s}
-.card:hover{transform:translateY(-2px);border-color:var(--line2);box-shadow:0 14px 40px -22px rgba(79,214,201,.4)}
-.cols{display:flex;flex-wrap:wrap;gap:16px}
-.c2>*{flex:1 1 calc(50% - 8px);min-width:240px}
-.c4>*{flex:1 1 calc(25% - 12px);min-width:180px}
-.c3>*{flex:1 1 calc(33.333% - 11px);min-width:220px}
-code,pre{font-family:var(--mono)}
-pre{background:#060A16;border:1px solid var(--line);border-radius:12px;padding:15px 16px;overflow:auto;font-size:12.5px;line-height:1.75;color:#BFE9E2}
-pre .c{color:var(--dim)}
-.pill{font-family:var(--mono);font-size:10px;border:1px solid rgba(79,214,201,.35);color:var(--teal);padding:3px 10px;border-radius:999px;background:rgba(79,214,201,.06)}
-.tbl{width:100%;border-collapse:collapse;font-size:13px}
-.tbl th{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);text-align:left;padding:13px 15px;border-bottom:1px solid var(--line)}
-.tbl td{padding:13px 15px;border-bottom:1px solid var(--hair)}
-.tbl tr:last-child td{border-bottom:0}
-.badge{font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:6px;border:1px solid var(--line2);color:var(--mut)}
-.badge.ok{color:var(--teal);border-color:rgba(79,214,201,.4);background:rgba(79,214,201,.09)}
-.badge.cc{color:var(--amber);border-color:rgba(245,178,61,.4);background:rgba(245,178,61,.09)}
-.stats{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:16px;overflow:hidden}
-.stat{flex:1 1 22%;min-width:150px;background:linear-gradient(180deg,var(--panel),var(--panel2));padding:20px}
-.stat .n{font-family:var(--disp);font-weight:700;font-size:28px;margin-top:7px;letter-spacing:-.02em}
-.stat .l{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
 .mini{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
 .divider{height:1px;background:linear-gradient(90deg,transparent,var(--line2),transparent);margin:2px 0}
-footer{border-top:1px solid var(--line);margin-top:52px}
-footer .wrap{display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;align-items:center;padding:26px 22px 44px;font-family:var(--mono);font-size:11px;color:var(--dim)}
+.pill{font-family:var(--mono);font-size:10px;border:1px solid rgba(53,224,208,.35);color:var(--teal);padding:3px 11px;border-radius:999px;background:rgba(53,224,208,.06)}
+/* ---------- surfaces ---------- */
+.panel{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r)}
+.card{position:relative;background:linear-gradient(180deg,var(--depth2),var(--panel2));border:1px solid var(--line);border-radius:var(--r);padding:22px;
+ transition:transform .18s,border-color .18s,box-shadow .18s}
+.card::before{content:"";position:absolute;inset:0;border-radius:var(--r);padding:1px;
+ background:linear-gradient(140deg,rgba(53,224,208,.25),transparent 34%,transparent 70%,rgba(255,178,36,.14));
+ -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;
+ opacity:0;transition:opacity .2s;pointer-events:none}
+.card:hover{transform:translateY(-3px);box-shadow:0 20px 50px -26px rgba(53,224,208,.45)}
+.card:hover::before{opacity:1}
+.cols{display:flex;flex-wrap:wrap;gap:16px}
+.c2>*{flex:1 1 calc(50% - 8px);min-width:250px}
+.c3>*{flex:1 1 calc(33.333% - 11px);min-width:220px}
+.c4>*{flex:1 1 calc(25% - 12px);min-width:185px}
+/* ---------- code ---------- */
+code,pre{font-family:var(--mono)}
+pre{position:relative;background:#04070F;border:1px solid var(--line);border-radius:var(--r-sm);padding:15px 17px;overflow:auto;font-size:12.5px;line-height:1.8;color:#A9F0E6}
+html[data-theme=light] pre{background:#0E1A2E;color:#9FEDE2}
+pre .c{color:var(--dim)}
+.codeline{display:flex;align-items:center;gap:10px;background:#04070F;border:1px solid var(--line);border-radius:10px;padding:8px 8px 8px 13px;margin-top:11px}
+html[data-theme=light] .codeline{background:#0E1A2E}
+.codeline code{flex:1;font-size:11px;color:#9FEDE2;white-space:nowrap;overflow:auto;scrollbar-width:none}
+.codeline code::-webkit-scrollbar{display:none}
+.copybtn{flex:none;font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--mut);background:rgba(255,255,255,.05);border:1px solid var(--line2);border-radius:7px;padding:5px 10px;cursor:pointer;transition:color .15s,border-color .15s}
+.copybtn:hover{color:var(--teal);border-color:var(--teal)}
+/* ---------- tables ---------- */
+.tbl{width:100%;border-collapse:collapse;font-size:13px}
+.tbl th{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);text-align:left;padding:13px 16px;border-bottom:1px solid var(--line)}
+.tbl td{padding:13px 16px;border-bottom:1px solid var(--hair)}
+.tbl tr:last-child td{border-bottom:0}
+.tbl tbody tr{transition:background-color .12s}
+.tbl tbody tr:hover{background:rgba(53,224,208,.045)}
+.badge{font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:999px;border:1px solid var(--line2);color:var(--mut)}
+.badge.ok{color:var(--teal);border-color:rgba(53,224,208,.4);background:rgba(53,224,208,.09)}
+.badge.cc{color:var(--amber);border-color:rgba(255,178,36,.4);background:rgba(255,178,36,.09)}
+/* ---------- stats ---------- */
+.stats{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.stat{flex:1 1 22%;min-width:150px;background:linear-gradient(180deg,var(--depth2),var(--panel2));padding:20px 22px}
+.stat .n{font-family:var(--disp);font-weight:700;font-size:30px;margin-top:6px;letter-spacing:-.03em}
+.stat .l{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+/* ---------- forms ---------- */
+input,select,textarea{font-family:var(--body);background:var(--panel2);border:1px solid var(--line2);color:var(--ink);border-radius:11px;padding:10px 13px;font-size:13.5px;outline:none;transition:border-color .15s,box-shadow .15s}
+input:focus,select:focus,textarea:focus{border-color:var(--teal);box-shadow:0 0 0 4px rgba(53,224,208,.13)}
+select{appearance:none;-webkit-appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);background-position:calc(100% - 17px) 55%,calc(100% - 12px) 55%;background-size:5px 5px;background-repeat:no-repeat;padding-right:32px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field>span{font-family:var(--mono);font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--dim)}
+.filterbar{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+/* ---------- empty state ---------- */
+.empty{padding:42px 20px;text-align:center;color:var(--mut)}
+.empty svg{width:36px;height:36px;color:var(--dim);margin-bottom:12px}
+.empty .et{font-family:var(--disp);font-weight:600;font-size:15px;color:var(--ink);margin-bottom:4px}
+.empty .es{font-size:12.5px;margin-bottom:16px}
+.stepchip{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:7px;background:rgba(53,224,208,.12);border:1px solid rgba(53,224,208,.35);color:var(--teal);font-family:var(--mono);font-size:11px;font-weight:600;margin-right:8px;flex:none}
+/* ---------- sonar launch cards (signature) ---------- */
+.lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.lcard{position:relative;display:flex;flex-direction:column;padding:17px 17px 15px;border:1px solid var(--line);border-radius:var(--r);
+ background:linear-gradient(180deg,var(--depth2),var(--panel2));transition:border-color .18s,transform .15s,box-shadow .18s;overflow:hidden}
+.lcard:hover{border-color:rgba(53,224,208,.5);transform:translateY(-2px);box-shadow:0 18px 44px -24px rgba(53,224,208,.5)}
+.lhead{display:flex;align-items:center;gap:13px}
+.licon{position:relative;width:46px;height:46px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--teal);
+ background:radial-gradient(circle at 30% 25%,rgba(53,224,208,.18),rgba(53,224,208,.04));border:1px solid rgba(53,224,208,.3);border-radius:13px}
+.licon svg{width:25px;height:25px}
+.lcard:hover .licon::after{content:"";position:absolute;inset:-1px;border-radius:13px;border:1px solid rgba(53,224,208,.6);animation:ping 1s ease-out}
+@keyframes ping{0%{transform:scale(1);opacity:.8}100%{transform:scale(1.7);opacity:0}}
+.lmeta{flex:1;min-width:0}
+.lname{font-family:var(--disp);font-weight:600;text-transform:capitalize;font-size:15px}
+.ldesc{font-size:12px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lport{font-family:var(--mono);font-size:9.5px;color:var(--dim);border:1px solid var(--line2);border-radius:999px;padding:2px 9px;flex:none}
+.lbtn{flex:none;padding:8px 16px;font-size:12.5px}
+.lfoot{display:flex;align-items:center;gap:10px;margin-top:11px}
+.lfoot .codeline{margin-top:0;flex:1;min-width:0}
+.lres{margin-top:16px;padding:17px 19px;border:1px solid var(--line2);border-radius:var(--r-sm);background:linear-gradient(180deg,var(--depth2),var(--panel2))}
+.lresok{color:var(--pos);font-family:var(--disp);font-weight:600;margin-bottom:6px}
+.lres pre{margin-top:10px;font-size:12px;white-space:pre-wrap}
+/* ---------- footer ---------- */
+footer{border-top:1px solid var(--line);margin-top:64px;background:linear-gradient(180deg,transparent,rgba(53,224,208,.03))}
+footer .fcols{display:flex;flex-wrap:wrap;gap:38px;padding:40px 24px 10px;max-width:1120px;margin:0 auto}
+footer .fcol{min-width:150px}
+footer .fcol .fh{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin-bottom:12px}
+footer .fcol a{display:block;font-size:13px;color:var(--mut);padding:4px 0;transition:color .15s}
+footer .fcol a:hover{color:var(--teal)}
+footer .wrap{display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;align-items:center;padding:22px 24px 44px;font-family:var(--mono);font-size:11px;color:var(--dim)}
 footer .fb{display:flex;align-items:center;gap:9px;color:var(--mut)}
 footer .fb img{width:18px;height:18px;opacity:.85}
-input,select{font-family:var(--body);background:var(--panel2);border:1px solid var(--line2);color:var(--ink);border-radius:10px;padding:9px 12px;font-size:13px;outline:none}
-input:focus{border-color:var(--teal);box-shadow:0 0 0 3px rgba(79,214,201,.14)}
-.themetoggle{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:9px;border:1px solid var(--line2);background:transparent;color:var(--mut);cursor:pointer;padding:0;transition:color .15s,border-color .15s}
+/* ---------- theme toggle ---------- */
+.themetoggle{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:999px;border:1px solid var(--line2);background:transparent;color:var(--mut);cursor:pointer;padding:0;transition:color .15s,border-color .15s}
 .themetoggle:hover{color:var(--teal);border-color:var(--teal)}
 .themetoggle svg{width:16px;height:16px}
 .themetoggle .sun{display:inline-flex}.themetoggle .moon{display:none}
 html[data-theme=light] .themetoggle .sun{display:none}html[data-theme=light] .themetoggle .moon{display:inline-flex}
-html[data-theme=light] .hexbg{opacity:.11}
-html[data-theme=light] .btn-amber{color:#2a1c02}
-.card,.panel,.stat,nav{transition:background-color .3s,border-color .3s}
-@media(max-width:760px){.navlinks{display:none}}
+html[data-theme=light] .hexbg{opacity:.10}
+.card,.panel,.stat,nav .wrap{transition:background-color .3s,border-color .3s}
+@media(max-width:780px){.navlinks{display:none}nav .wrap{height:54px}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-.lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
-.lcard{display:flex;align-items:center;gap:13px;padding:13px 14px;border:1px solid var(--line2);border-radius:14px;background:var(--panel2);transition:border-color .15s,transform .1s}
-.lcard:hover{border-color:var(--teal);transform:translateY(-1px)}
-.licon{width:44px;height:44px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--teal);background:var(--panel);border:1px solid var(--line);border-radius:11px}
-.licon svg{width:26px;height:26px}
-.lmeta{flex:1;min-width:0}
-.lname{font-family:var(--disp);font-weight:600;text-transform:capitalize;font-size:14px}
-.ldesc{font-size:11.5px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lbtn{flex:none;padding:7px 14px;font-size:12.5px}
-.lres{margin-top:16px;padding:15px 17px;border:1px solid var(--line2);border-radius:13px;background:var(--panel2)}
-.lresok{color:var(--pos);font-family:var(--disp);font-weight:600;margin-bottom:6px}
-.lres pre{margin-top:10px;font-size:12px;white-space:pre-wrap}
 </style></head><body>"""
 
-_NAV = """<nav><div class="wrap">
+_NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
 <a class="brand" href="/"><img src="/static/petabyte-logo.png" alt="Petabyte"/><span><b>Petabyte</b><span class="p">.</span></span></a>
+<button class="navbar-toggler d-lg-none ms-auto" type="button" data-bs-toggle="collapse" data-bs-target="#pbnav" aria-controls="pbnav" aria-expanded="false" aria-label="Toggle navigation">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+</button>
+<div class="collapse navbar-collapse" id="pbnav">
 <div class="navlinks">
-  <a href="/marketplace">Marketplace</a><a href="/install">Become a seller</a>
-  <a href="/artists">Artists</a><a href="/gamers">Gamers</a>
+  <a href="/marketplace">Marketplace</a><a href="/pricing">Pricing</a>
+  <a href="/install">For GPU owners</a><a href="/security">Security</a><a href="/developers">Developers</a>
 </div>
 <div class="navcta">
   <a class="signin" id="adminlink" href="/admin" style="display:none">Admin</a>
@@ -140,10 +220,37 @@ _NAV = """<nav><div class="wrap">
   <a class="signin" id="signinlink" href="/login">Sign in</a>
   <a class="signin" id="signoutlink" href="#" onclick="signout();return false" style="display:none">Sign out</a>
   <a class="btn btn-amber" href="/app">Open app</a>
-</div></div></nav>"""
+</div>
+</div>
+</div></nav>"""
 
-_FOOT = """<footer><div class="wrap">
-<span class="fb"><img src="/static/petabyte-logo.png" alt=""/> Petabyte · Deep Ocean Compute · Riyadh</span>
+_FOOT = """<footer>
+<div class="fcols">
+  <div class="fcol" style="flex:1.4;min-width:200px">
+    <span class="fb"><img src="/static/petabyte-logo.png" alt=""/> <b style="font-family:var(--disp);color:var(--ink)">Petabyte</b></span>
+    <p class="mut" style="font-size:12px;margin-top:10px;max-width:30ch">Deep Ocean Compute — a verified marketplace for community GPU power. Riyadh.</p>
+  </div>
+  <div class="fcol"><div class="fh">Product</div>
+    <a href="/marketplace">Marketplace</a><a href="/pricing">Pricing</a><a href="/app">Console</a>
+  </div>
+  <div class="fcol"><div class="fh">Use cases</div>
+    <a href="/artists">Rendering &amp; art</a><a href="/gamers">Game servers</a><a href="/developers">AI &amp; inference</a>
+  </div>
+  <div class="fcol"><div class="fh">Sell compute</div>
+    <a href="/install">List your PC</a><a href="/account">Earnings</a><a href="/keys">API keys</a>
+  </div>
+  <div class="fcol"><div class="fh">Developers</div>
+    <a href="/docs">API reference</a><a href="/developers">Quickstart</a><a href="/keys">API keys</a>
+  </div>
+  <div class="fcol"><div class="fh">Company</div>
+    <a href="/security">Security &amp; trust</a><a href="/investors">About</a><a href="/status">Status</a>
+  </div>
+  <div class="fcol"><div class="fh">Legal</div>
+    <a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/acceptable-use">Acceptable use</a>
+  </div>
+</div>
+<div class="wrap">
+<span class="fb">© Petabyte · Deep Ocean Compute</span>
 <span>verified compute · escrowed settlement</span>
 </div></footer>"""
 
@@ -151,10 +258,11 @@ _FOOT = """<footer><div class="wrap">
 _AUTHJS = """<script>
 (function(){var h=location.hash.match(/t=([^&]+)/);if(h){localStorage.setItem('pb_token',decodeURIComponent(h[1]));history.replaceState(null,'',location.pathname);}})();
 function tok(){return localStorage.getItem('pb_token');}
+(function(){try{var p=location.pathname.replace(new RegExp('[/]$'),'')||'/';document.querySelectorAll('.navlinks a').forEach(function(a){if(a.getAttribute('href')===p)a.classList.add('active');});}catch(e){}})();
 function authed(){return !!tok();}
 async function api(p,o){o=o||{};o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
  if(tok())o.headers['Authorization']='Bearer '+tok();var r=await fetch(p,o);var b={};try{b=await r.json()}catch(e){}return {ok:r.ok,status:r.status,body:b};}
-function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-theme')==='light'?'dark':'light';h.setAttribute('data-theme',t);try{localStorage.setItem('pb_theme',t);}catch(e){}}
+function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-theme')==='light'?'dark':'light';h.setAttribute('data-theme',t);h.setAttribute('data-bs-theme',t);try{localStorage.setItem('pb_theme',t);}catch(e){}}
 function signout(){try{localStorage.removeItem('pb_token');}catch(e){}location.href='/';}
 (function(){var si=document.getElementById('signinlink'),so=document.getElementById('signoutlink');
  if(authed()){if(si)si.style.display='none';if(so)so.style.display='';}else{if(si)si.style.display='';if(so)so.style.display='none';}})();
@@ -173,13 +281,30 @@ window.PBICONS={
  factorio:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2.1 2.1M16.9 16.9 19 19M19 5l-2.1 2.1M7.1 16.9 5 19"/></svg>',
  _default:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/></svg>'};
 function pbIcon(n){return PBICONS[n]||PBICONS._default;}
+function pbEmpty(cols,title,sub,ctaHref,ctaText){
+ return '<tr><td colspan='+cols+'><div class="empty">'+
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M8 15h4"/></svg>'+
+  '<div class="et">'+title+'</div><div class="es">'+sub+'</div>'+
+  (ctaHref?('<a class="btn btn-teal" href="'+ctaHref+'">'+ctaText+'</a>'):'')+'</div></td></tr>';}
+window._PBCMDS={};
+function pbCmd(name,hours){return 'curl -sX POST https://petabyte.market/launch -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d \'{"template":"'+name+'","hours":'+(hours||2)+'}\'';}
+async function pbCopy(name,btn){var c=window._PBCMDS[name]||'';try{await navigator.clipboard.writeText(c);}catch(e){
+ var ta=document.createElement('textarea');ta.value=c;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');}catch(_){ }document.body.removeChild(ta);}
+ if(btn){var o=btn.textContent;btn.textContent='copied';setTimeout(function(){btn.textContent=o;},1200);}}
 async function renderLaunch(elId,kinds,hours){var el=document.getElementById(elId);if(!el)return;
  var r=await fetch('/templates');var b=await r.json();var ts=(b.templates||[]).filter(function(t){return kinds.indexOf(t.kind)>=0;});
  if(!ts.length){el.innerHTML='<span class="mut">Nothing available right now.</span>';return;}
  el.className='lgrid';
- el.innerHTML=ts.map(function(t){return '<div class="lcard"><div class="licon">'+pbIcon(t.name)+'</div>'+
-  '<div class="lmeta"><div class="lname">'+t.name+'</div><div class="ldesc">'+(t.desc||'')+'</div></div>'+
-  '<button class="btn btn-amber lbtn" onclick="pbLaunch(\''+t.name+'\','+(hours||2)+')">Launch</button></div>';}).join('');}
+ el.innerHTML=ts.map(function(t){var cmd=pbCmd(t.name,hours);window._PBCMDS[t.name]=cmd;
+  return '<div class="lcard">'+
+   '<div class="lhead"><div class="licon">'+pbIcon(t.name)+'</div>'+
+   '<div class="lmeta"><div class="lname">'+t.name+'</div><div class="ldesc">'+(t.desc||'')+'</div></div>'+
+   (t.port?('<span class="lport">:'+t.port+'</span>'):'<span class="lport">batch</span>')+'</div>'+
+   '<div class="lfoot">'+
+    '<div class="codeline"><code>'+cmd.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</code>'+
+    '<button class="copybtn" onclick="pbCopy(\''+t.name+'\',this)">copy</button></div>'+
+    '<button class="btn btn-amber lbtn" onclick="pbLaunch(\''+t.name+'\','+(hours||2)+')">Launch</button>'+
+   '</div></div>';}).join('');}
 function _lres(){var e=document.getElementById('launchresult');if(e){e.style.display='';}return e;}
 async function pbLaunch(name,hours){var out=_lres();if(!out)return;
  if(typeof authed==='function'&&!authed()){out.innerHTML='<div class="lres">Please <a class="teal" href="/login">sign in</a> to launch.</div>';return;}
@@ -211,42 +336,93 @@ def _page(title, body):
 
 
 LANDING_HTML = _page("Petabyte — the compute exchange", """
-<div class="hero"><div class="wrap" style="padding:64px 22px 22px">
+<div class="hero"><div class="wrap" style="padding:74px 24px 30px">
   <img class="hexbg" src="/static/petabyte-logo.png" alt=""/>
-  <div class="eyebrow"><span class="dot"></span> live GPU marketplace</div>
-  <h1 style="font-size:clamp(36px,6.4vw,64px);margin:18px 0 12px;max-width:16ch">Rent verified GPUs.<br><span class="grad">Settle in seconds.</span></h1>
-  <p class="mut" style="font-size:17px;max-width:56ch">A decentralized exchange for GPU compute — verified nodes, escrowed payments, prices below the hyperscalers.</p>
-  <div style="display:flex;gap:12px;margin-top:26px;flex-wrap:wrap">
-    <a class="btn btn-amber" href="/install">List your GPU →</a>
-    <a class="btn btn-teal" href="/marketplace">Browse live GPUs</a>
+  <div class="cols" style="align-items:center;gap:34px">
+    <div style="flex:1.35 1 420px;min-width:300px">
+      <div class="eyebrow"><span class="dot"></span> verified gpu marketplace</div>
+      <h1 style="font-size:clamp(40px,6.8vw,76px);margin:20px 0 16px;max-width:15ch">GPU compute <span class="grad">without cloud prices.</span></h1>
+      <p class="mut" style="font-size:17px;max-width:52ch">Rent GPUs by the hour from verified hosts, or earn from hardware you already own. Your money sits in escrow until the work is done — if a node drops, you're refunded.</p>
+      <div style="display:flex;gap:12px;margin-top:28px;flex-wrap:wrap">
+        <a class="btn btn-amber" href="/marketplace">Browse live GPUs →</a>
+        <a class="btn btn-teal" href="/install">List your GPU</a>
+      </div>
+    </div>
+    <div class="panel" style="flex:1 1 320px;min-width:290px;padding:18px 20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <span class="mini">Available now</span>
+        <a class="mini teal" href="/marketplace">See all →</a>
+      </div>
+      <div id="heropreview"><div class="mut mono" style="font-size:12px;padding:22px 0;text-align:center">Loading inventory…</div></div>
+      <div id="herostats" style="display:none;border-top:1px solid var(--hair);margin-top:12px;padding-top:12px">
+        <span class="mini"><span id="s_nodes" class="teal mono">0</span> hosts online · <span id="s_specs" class="mono">0</span> GPUs listed</span>
+      </div>
+    </div></div>
   </div>
 </div></div>
-<div class="wrap" style="padding:14px 22px 6px">
-  <div class="stats">
-    <div class="stat"><div class="l">Nodes online</div><div class="n teal" id="s_nodes">—</div></div>
-    <div class="stat"><div class="l">GPUs listed</div><div class="n" id="s_specs">—</div></div>
-    <div class="stat"><div class="l">Jobs settled</div><div class="n" id="s_jobs">—</div></div>
-    <div class="stat"><div class="l">GMV to date</div><div class="n amber" id="s_gmv">—</div></div>
-  </div>
+
+<!-- launch anything: the signature cards, on the front door -->
+<div class="wrap" style="padding:40px 24px 8px">
+  <div class="lbl" style="margin-bottom:4px">Launch anything</div>
+  <h2 style="font-size:clamp(22px,3vw,30px);margin-bottom:6px">Games, art tools, AI stacks — <span class="grad-teal">one click or one line.</span></h2>
+  <p class="mut" style="max-width:62ch;margin-bottom:18px">Every card is a real workload. Press Launch, or copy the command — either way we book the cheapest verified GPU and hand you the address.</p>
+  <div id="launchgrid"></div>
+  <div id="launchresult" style="display:none"></div>
 </div>
-<div class="wrap" style="padding:38px 22px 8px"><div class="cols c2">
-  <div class="card"><div class="lbl">For GPU owners</div>
-    <h2 style="font-size:20px;margin-bottom:8px">Turn idle silicon into income</h2>
-    <p class="mut">One command to list — Linux, Windows, or a mining rig. Weekly payouts in bank, USDC, or gift card. Idle nodes earn a background trickle.</p>
-    <div style="margin-top:16px"><a class="btn btn-ghost" href="/install">Install a node</a></div></div>
-  <div class="card"><div class="lbl am">For builders</div>
-    <h2 style="font-size:20px;margin-bottom:8px">Cheaper AI compute, verified</h2>
-    <p class="mut">H100-class GPUs below cloud on-demand. Cryptographic integrity, confidential computing, data-residency guarantees. State your intent — the router places the job.</p>
-    <div style="margin-top:16px"><a class="btn btn-ghost" href="/developers">Read the API</a></div></div>
+
+<!-- audiences -->
+<div class="wrap" style="padding:44px 24px 8px"><div class="cols c4">
+  <a class="card" href="/gamers" style="display:block">
+    <div class="lbl">Gamers</div>
+    <h2 style="font-size:17px;margin-bottom:6px">Spin up a game server</h2>
+    <p class="mut" style="font-size:13px">Minecraft, Valheim, Factorio — dedicated, hourly, refunded if the node drops.</p></a>
+  <a class="card" href="/artists" style="display:block">
+    <div class="lbl">Artists</div>
+    <h2 style="font-size:17px;margin-bottom:6px">Render 3D &amp; video</h2>
+    <p class="mut" style="font-size:13px">Blender, ComfyUI, SD — farm-grade GPUs below the big render farms.</p></a>
+  <a class="card" href="/developers" style="display:block">
+    <div class="lbl">Builders</div>
+    <h2 style="font-size:17px;margin-bottom:6px">Cheaper AI compute</h2>
+    <p class="mut" style="font-size:13px">H100-class below cloud on-demand. State intent — the router places the job.</p></a>
+  <a class="card" href="/install" style="display:block">
+    <div class="lbl am">GPU owners</div>
+    <h2 style="font-size:17px;margin-bottom:6px">Turn idle silicon into income</h2>
+    <p class="mut" style="font-size:13px">One command to list. Weekly payouts — bank, USDC, or gift card.</p></a>
 </div></div>
 <script>
-function anim(el,to,fmt){var f=parseFloat(el.dataset.v||'0');el.dataset.v=to;var t0=performance.now();
- function s(t){var k=Math.min(1,(t-t0)/650),e=1-Math.pow(1-k,3),v=f+(to-f)*e;el.textContent=fmt?fmt(v):Math.round(v).toLocaleString();if(k<1)requestAnimationFrame(s)}requestAnimationFrame(s)}
-var money=n=>'$'+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-async function stats(){try{var r=await fetch('/marketplace/stats');if(!r.ok)return;var s=await r.json();
- anim(document.getElementById('s_nodes'),s.nodes_online);anim(document.getElementById('s_specs'),s.specs_listed);
- anim(document.getElementById('s_jobs'),s.jobs_completed);anim(document.getElementById('s_gmv'),s.gmv,money);}catch(e){}}
-stats();setInterval(stats,5000);
+async function heroPreview(){
+ try{
+  var r=await fetch('/marketplace/specs?sort=price');var b=await r.json();
+  var el=document.getElementById('heropreview');
+  var rows=(b.specs||[]).slice(0,3);
+  if(!rows.length){
+    el.innerHTML='<div class="empty" style="padding:18px 6px"><div class="et" style="font-size:13px">No GPUs online yet</div>'+
+      '<div class="es" style="font-size:12px">Be the first host — one command, and you are listed.</div>'+
+      '<a class="btn btn-teal" href="/install">List your GPU</a></div>';
+  }else{
+    el.innerHTML=rows.map(function(s){
+      var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
+      return '<a href="/gpu/'+s.spec_id+'" style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--hair)">'+
+       '<div style="flex:1;min-width:0">'+
+        '<div style="font-family:var(--disp);font-weight:600;font-size:14px">'+(s.gpu_model||'CPU')+(s.vram_gb?' <span class="mut" style="font-weight:400">· '+s.vram_gb+'GB</span>':'')+'</div>'+
+        '<div class="mini" style="margin-top:2px">'+(s.region||'unknown region')+' · '+(s.available_units>0?'<span class="teal">available now</span>':'busy')+'</div>'+
+       '</div>'+
+       '<div style="text-align:right;flex:none">'+
+        '<div class="mono amber" style="font-size:15px;font-weight:600">$'+Number(s.price_per_hour).toFixed(2)+'</div>'+
+        '<div class="mini">/hour'+(save>0?' · <span style="color:var(--pos)">'+save+'% off</span>':'')+'</div>'+
+       '</div></a>';}).join('');
+  }
+  // only show counters when they are real — an empty metric reads as "this does not work"
+  var st=await (await fetch('/marketplace/stats')).json();
+  if(st.nodes_online>0||st.specs_listed>0){
+    document.getElementById('s_nodes').textContent=st.nodes_online;
+    document.getElementById('s_specs').textContent=st.specs_listed;
+    document.getElementById('herostats').style.display='';
+  }
+ }catch(e){}
+}
+heroPreview();setInterval(heroPreview,10000);
+renderLaunch('launchgrid',['game','art','render','ai'],2);
 </script>""")
 
 
@@ -257,15 +433,17 @@ MARKETPLACE_HTML = _page("Petabyte — marketplace", """
   <p class="mut" id="mnote">Loading verified nodes…</p>
 </div>
 <div class="wrap" style="padding:12px 22px 30px">
-  <div class="panel" style="padding:14px 16px;margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-    <input id="fgpu" placeholder="GPU · H100" size="10" onkeydown="if(event.key==='Enter')load()"/>
-    <input id="fprice" type="number" placeholder="max $/hr" size="7" step="0.1" onkeydown="if(event.key==='Enter')load()"/>
-    <input id="fvram" type="number" placeholder="min VRAM GB" size="9" onkeydown="if(event.key==='Enter')load()"/>
-    <input id="fregion" placeholder="region" size="9" onkeydown="if(event.key==='Enter')load()"/>
-    <label class="mini" style="display:flex;align-items:center;gap:5px"><input id="fconf" type="checkbox"/> confidential</label>
-    <select id="fsort" onchange="load()"><option value="price">cheapest</option><option value="rep">most trusted</option><option value="vram">most VRAM</option></select>
-    <button class="btn btn-teal" onclick="load()">Filter</button>
-    <button class="btn-ghost" onclick="clearf()">Clear</button>
+  <div class="panel filterbar" style="padding:16px 18px;margin-bottom:14px">
+    <div class="field"><span>GPU model</span><input id="fgpu" placeholder="H100, 4090…" size="10" onkeydown="if(event.key==='Enter')load()"/></div>
+    <div class="field"><span>Max $/hr</span><input id="fprice" type="number" placeholder="any" size="7" step="0.1" onkeydown="if(event.key==='Enter')load()"/></div>
+    <div class="field"><span>Min VRAM</span><input id="fvram" type="number" placeholder="GB" size="7" onkeydown="if(event.key==='Enter')load()"/></div>
+    <div class="field"><span>Region</span><input id="fregion" placeholder="any" size="8" onkeydown="if(event.key==='Enter')load()"/></div>
+    <div class="field"><span>Sort by</span><select id="fsort" onchange="load()"><option value="price">Cheapest</option><option value="rep">Most trusted</option><option value="vram">Most VRAM</option></select></div>
+    <label class="mini" style="display:flex;align-items:center;gap:6px;padding-bottom:9px"><input id="fconf" type="checkbox" style="width:15px;height:15px;padding:0"/> confidential</label>
+    <div style="display:flex;gap:8px;padding-bottom:1px">
+      <button class="btn btn-teal" onclick="load()">Apply</button>
+      <button class="btn-ghost btn" onclick="clearf()">Reset</button>
+    </div>
   </div>
   <div class="panel" style="overflow:auto">
     <table class="tbl"><thead><tr><th>GPU</th><th>VRAM</th><th>$/hr</th><th>vs cloud</th><th>trust</th><th>region</th><th>rep</th><th>free</th></tr></thead>
@@ -284,7 +462,7 @@ function v(id){return (document.getElementById(id).value||'').trim();}
 function clearf(){['fgpu','fprice','fvram','fregion'].forEach(function(i){document.getElementById(i).value='';});document.getElementById('fconf').checked=false;load();}
 async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await r.json();var aws=b.aws_reference||12.29;
  document.getElementById('mnote').textContent=b.count?b.count+' GPUs match · reference cloud $'+aws+'/hr':'No GPUs match these filters.';
- var tb=document.getElementById('mrows');if(!b.count){tb.innerHTML='<tr><td colspan=8 style="padding:24px;text-align:center" class="mut mono">No bookable GPUs match — widen your filters.</td></tr>';return;}
+ var tb=document.getElementById('mrows');if(!b.count){tb.innerHTML=pbEmpty(8,'No GPUs match','Widen your filters, or be the first to list one.','/install','List your GPU');return;}
  tb.innerHTML=b.specs.map(function(s){var save=Math.round((1-s.price_per_hour/aws)*100);
   var t=[];if(s.confidential)t.push('<span class="badge cc">conf</span>');if(s.region_verified)t.push('<span class="badge ok">region ✓</span>');
   var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
@@ -691,7 +869,7 @@ async function go(){
 
 
 ACCOUNT_HTML = _page("Petabyte — your account", """
-<div id="guest" class="wrap" style="max-width:460px;padding:70px 22px;display:none;text-align:center">
+<div id="guest" class="wrap" style="max-width:460px;padding:70px 22px;text-align:center">
   <img src="/static/petabyte-logo.png" style="width:56px;opacity:.8"/>
   <h1 style="font-size:28px;margin:18px 0 8px">Your account</h1>
   <p class="mut">Sign in to see your nodes, jobs, keys, and wallet in one place.</p>
@@ -792,7 +970,7 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
   </div>
 
   <!-- my VMs -->
-  <div class="wrap" style="padding:8px 22px 0" id="vmsection" style="display:none">
+  <div class="wrap" id="vmsection" style="padding:8px 22px 0;display:none">
     <div class="lbl" style="margin-bottom:12px">My VMs</div>
     <div class="panel" style="overflow:auto"><table class="tbl">
       <thead><tr><th>VM</th><th>Template</th><th>Status</th><th>$/hr</th><th>Hrs left</th><th></th></tr></thead>
@@ -801,7 +979,7 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
   </div>
 
   <!-- seller earnings -->
-  <div class="wrap" style="padding:20px 22px 0" id="earnsection" style="display:none">
+  <div class="wrap" id="earnsection" style="padding:20px 22px 0;display:none">
     <div class="lbl" style="margin-bottom:12px">Node earnings</div>
     <div class="card">
       <div class="cols c4" style="margin-bottom:14px">
@@ -837,6 +1015,7 @@ async function boot(){
   var me=await api('/me');
   if(me.status===401||me.status===403){showGuest('Your session expired — please sign in again.');return;}
   if(!me.ok){showGuest('You\\'re signed in, but your profile couldn\\'t load (error '+me.status+'). Refresh, or the server may need a redeploy.');return;}
+  document.getElementById('guest').style.display='none';
   document.getElementById('hub').style.display='';
   var u=me.body;
   document.getElementById('uname').textContent=u.username;
@@ -971,13 +1150,24 @@ GAMERS_HTML = _page("Petabyte — game servers", """
 <script>
 renderLaunch('launchgrid',['game'],2);
 async function hosts(){var r=await fetch('/marketplace/specs?sort=price');var b=await r.json();var tb=document.getElementById('hostrows');
-  if(!b.count){tb.innerHTML='<tr><td colspan=6 class="mut mono" style="padding:22px;text-align:center">No hosts online — <a class="teal" href="/install">be the first</a>.</td></tr>';return;}
-  tb.innerHTML=b.specs.map(function(s){var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
-   return '<tr><td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU host')+'</td>'+
-    '<td class="mono mut" style="font-size:12px">'+(s.vram_gb?s.vram_gb+'GB class':'standard')+'</td>'+
-    '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+'</td><td class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td>'+
-    '<td class="mono" style="color:'+rc+'">'+(s.reputation_score!=null?s.reputation_score:'—')+'</td>'+
-    '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
+  if(!b.count){tb.innerHTML=pbEmpty(6,'No hosts online yet','Turn your gaming PC into a paid host in one command.','/install','List your PC');return;}
+  tb.innerHTML=b.specs.map(function(s){
+   var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
+   var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
+   return '<tr style="cursor:pointer" onclick="location.href=\'/gpu/'+s.id+'\'">'+
+    '<td><div style="font-family:var(--disp);font-weight:600">'+(s.gpu_count>1?s.gpu_count+'× ':'')+(s.gpu_model||'CPU')+'</div>'+
+      '<div class="mini" style="margin-top:2px">'+(s.cpu?s.cpu+' vCPU':'')+(s.ram_gb?' · '+s.ram_gb+'GB RAM':'')+'</div></td>'+
+    '<td class="mono mut">'+(s.vram_gb?s.vram_gb+' GB':'—')+'</td>'+
+    '<td><div class="mono amber" style="font-weight:600">$'+s.price_per_hour.toFixed(2)+'</div>'+
+      (s.auto_price?'<span class="badge cc" style="font-size:9px">auto</span>':'')+'</td>'+
+    '<td class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
+    '<td>'+(s.attested?'<span class="badge ok">verified</span>':'<span class="badge">unverified</span>')+
+      (s.confidential?' <span class="badge cc">CC</span>':'')+'</td>'+
+    '<td class="mut mono" style="font-size:12px">'+(s.region||'—')+(s.region_verified?' <span class="teal">✓</span>':'')+'</td>'+
+    '<td class="mono" style="color:'+rc+'">'+(s.reputation_score!=null?s.reputation_score:'—')+
+      '<div class="mini">'+(s.success_rate!=null?s.success_rate+'% ok':'no history')+'</div></td>'+
+    '<td><span class="badge '+(s.available_units>0?'ok':'')+'">'+(s.available_units>0?s.available_units+' free':'busy')+'</span></td>'+
+    '</tr>';}).join('');}
 hosts();setInterval(hosts,8000);
 </script>""")
 
@@ -1042,7 +1232,7 @@ ARTISTS_HTML = _page("Petabyte — for artists", """
 <script>
 renderLaunch('launchgrid',['render','art'],2);
 async function rhosts(){var r=await fetch('/marketplace/specs?sort=price');var b=await r.json();var tb=document.getElementById('rhostrows');
-  if(!b.count){tb.innerHTML='<tr><td colspan=6 class="mut mono" style="padding:22px;text-align:center">No GPUs online — <a class="teal" href="/install">be the first</a>.</td></tr>';return;}
+  if(!b.count){tb.innerHTML=pbEmpty(6,'No GPUs online yet','Rent out your workstation between projects.','/install','List your rig');return;}
   tb.innerHTML=b.specs.map(function(s){var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
    return '<tr><td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
     '<td class="mono mut" style="font-size:12px">'+(s.vram_gb?s.vram_gb+'GB':'—')+'</td>'+
@@ -1050,4 +1240,269 @@ async function rhosts(){var r=await fetch('/marketplace/specs?sort=price');var b
     '<td class="mono" style="color:'+rc+'">'+(s.reputation_score!=null?s.reputation_score:'—')+'</td>'+
     '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
 rhosts();setInterval(rhosts,8000);
+</script>""")
+
+
+GPU_DETAIL_HTML = _page("Petabyte — GPU", """
+<div class="wrap" style="padding:34px 24px 10px">
+  <a class="mini" href="/marketplace" style="color:var(--mut)">← Back to marketplace</a>
+  <div id="gpuwrap" style="margin-top:14px">
+    <div class="mut mono" style="padding:40px 0">Loading GPU…</div>
+  </div>
+</div>
+<script>
+var SPEC_ID=location.pathname.split('/').pop();
+function row(k,v){return '<div style="display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid var(--hair)"><span class="mut" style="font-size:13px">'+k+'</span><span class="mono" style="font-size:13px;text-align:right">'+v+'</span></div>';}
+async function loadGpu(){
+ var r=await fetch('/marketplace/specs/'+SPEC_ID);
+ var w=document.getElementById('gpuwrap');
+ if(!r.ok){w.innerHTML='<div class="empty"><div class="et">GPU not found</div><div class="es">It may have gone offline or been delisted.</div><a class="btn btn-teal" href="/marketplace">Browse available GPUs</a></div>';return;}
+ var s=await r.json();
+ var bookable=s.online&&s.available_units>0&&s.can_accept_paid_jobs;
+ var status=bookable?'<span class="badge ok">Available now</span>':(s.online?'<span class="badge">Fully booked</span>':'<span class="badge">Offline</span>');
+ w.innerHTML=
+  '<div class="cols" style="gap:18px;align-items:flex-start">'+
+   '<div style="flex:1.6 1 380px;min-width:300px">'+
+    '<h1 style="font-size:clamp(28px,4vw,40px);margin-bottom:8px">'+(s.gpu_count>1?s.gpu_count+'× ':'')+s.gpu_model+'</h1>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px">'+status+
+      (s.verification.hardware_attested?'<span class="badge ok">Hardware verified</span>':'')+
+      (s.confidential?'<span class="badge cc">Confidential computing</span>':'')+
+      (s.region_verified?'<span class="badge ok">Region verified</span>':'')+'</div>'+
+    '<div class="card" style="margin-bottom:16px">'+
+     '<div class="lbl">Specifications</div>'+
+     row('GPU',(s.gpu_count>1?s.gpu_count+'× ':'')+s.gpu_model)+
+     row('VRAM',s.vram_gb?s.vram_gb+' GB':'—')+
+     row('vCPU',s.cpu||'—')+
+     row('System RAM',s.ram_gb?s.ram_gb+' GB':'—')+
+     row('Region',(s.region||'unknown')+(s.region_verified?' (verified)':' (host-reported)'))+
+     row('Capacity',s.available_units+' of '+s.total_units+' free')+
+    '</div>'+
+    '<div class="card" style="margin-bottom:16px">'+
+     '<div class="lbl">Reliability</div>'+
+     row('Reputation',(s.reputation_score!=null?s.reputation_score+' / 100':'no history yet'))+
+     row('Jobs completed',s.jobs_completed)+
+     row('Jobs failed',s.jobs_failed)+
+     row('Success rate',s.success_rate!=null?s.success_rate+'%':'no history yet')+
+     '<p class="mut" style="font-size:12.5px;margin-top:10px">New hosts start with no history. Reputation is earned from completed rentals on Petabyte.</p>'+
+    '</div>'+
+    '<div class="card">'+
+     '<div class="lbl">What is actually verified</div>'+
+     '<p class="mut" style="font-size:13px;margin-bottom:8px">'+s.verification.method+'. The agent reports CPU, RAM, and GPU model, and signs the report with a key held on the machine — so the listing cannot be silently altered in transit.</p>'+
+     '<p class="mut" style="font-size:13px">'+(s.confidential?'This host reports support for confidential computing.':'This host does not advertise confidential computing.')+' Region is '+(s.region_verified?'checked against the host network address.':'self-reported by the host and not independently checked.')+'</p>'+
+    '</div>'+
+   '</div>'+
+   '<div style="flex:1 1 280px;min-width:260px;position:sticky;top:88px">'+
+    '<div class="card">'+
+     '<div style="display:flex;align-items:baseline;gap:8px">'+
+      '<span class="mono amber" style="font-size:34px;font-weight:700">$'+Number(s.price_per_hour).toFixed(2)+'</span><span class="mut">/hour</span></div>'+
+     (s.savings_pct?'<div class="mini" style="color:var(--pos);margin-top:4px">'+s.savings_pct+'% below the on-demand cloud rate for this GPU class ($'+Number(s.cloud_reference).toFixed(2)+'/hr)</div>':'<div class="mini" style="margin-top:4px">No comparable public cloud rate for this GPU — we don\'t quote a saving we can\'t back up.</div>')+
+     (s.auto_price?'<div class="mini" style="margin-top:6px"><span class="badge cc">auto-priced</span> moves with demand, within the host\\'s limits</div>':'')+
+     '<div style="margin-top:16px">'+
+      (bookable?'<a class="btn btn-amber" style="width:100%;justify-content:center" href="/account">Launch on this GPU →</a>':'<button class="btn btn-ghost" style="width:100%;justify-content:center" disabled>Not bookable right now</button>')+
+     '</div>'+
+     '<div class="divider" style="margin:16px 0"></div>'+
+     '<div class="lbl" style="margin-bottom:8px">If something goes wrong</div>'+
+     '<p class="mut" style="font-size:12.5px;margin-bottom:7px">'+s.protection.escrow+'</p>'+
+     '<p class="mut" style="font-size:12.5px;margin-bottom:7px">'+s.protection.node_failure+'</p>'+
+     '<p class="mut" style="font-size:12.5px">'+s.protection.billing+'</p>'+
+    '</div>'+
+   '</div>'+
+  '</div>';
+}
+loadGpu();setInterval(loadGpu,15000);
+</script>""")
+
+
+PRICING_HTML = _page("Petabyte — pricing", """
+<div class="hero"><div class="wrap" style="padding:60px 24px 18px">
+  <div class="eyebrow"><span class="dot"></span> pricing</div>
+  <h1 style="font-size:clamp(34px,5vw,54px);margin:16px 0 12px">Pay for the hours <span class="grad">you actually use.</span></h1>
+  <p class="mut" style="font-size:16px;max-width:58ch">Hosts set their own prices, so rates vary by GPU and availability. You are billed for the time you hold the machine — stop early and the unused prepay is refunded.</p>
+</div></div>
+
+<div class="wrap" style="padding:26px 24px 8px">
+  <div class="lbl">Live prices</div>
+  <div class="panel" style="overflow:auto">
+    <table class="tbl">
+      <thead><tr><th>GPU</th><th>VRAM</th><th>Petabyte</th><th>Cloud reference</th><th>You save</th><th>Region</th><th></th></tr></thead>
+      <tbody id="prows"><tr><td colspan=7 class="mut mono" style="padding:22px;text-align:center">Loading live prices…</td></tr></tbody>
+    </table>
+  </div>
+  <p class="mut" style="font-size:12.5px;margin-top:10px">Prices are set by individual hosts and change with demand and availability. "Cloud reference" is an on-demand hyperscaler rate for a comparable GPU class, used as a benchmark — not a quote from any specific provider.</p>
+</div>
+
+<div class="wrap" style="padding:34px 24px 8px"><div class="cols c3">
+  <div class="card"><div class="lbl">How billing works</div>
+    <h2 style="font-size:17px;margin-bottom:8px">Hourly, with refunds</h2>
+    <p class="mut" style="font-size:13px">You prepay for a window. When you stop, we bill the hours you held (minimum one) and refund the rest to your wallet. Extend at any time.</p></div>
+  <div class="card"><div class="lbl">Platform fee</div>
+    <h2 style="font-size:17px;margin-bottom:8px">10% on completed rentals</h2>
+    <p class="mut" style="font-size:13px">Taken from the rental, not added on top. Hosts see their exact payout before they list.</p></div>
+  <div class="card"><div class="lbl am">Host payouts</div>
+    <h2 style="font-size:17px;margin-bottom:8px">Withdraw when you want</h2>
+    <p class="mut" style="font-size:13px">Earnings accrue per completed rental and can be withdrawn on demand or on a weekly schedule.</p></div>
+</div></div>
+<script>
+async function prices(){
+ var r=await fetch('/marketplace/specs?sort=price');var b=await r.json();var tb=document.getElementById('prows');
+ if(!b.count){tb.innerHTML=pbEmpty(7,'No GPUs listed yet','Prices appear here as hosts come online.','/install','List your GPU');return;}
+ tb.innerHTML=b.specs.map(function(s){
+  var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
+  return '<tr>'+
+   '<td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
+   '<td class="mono mut">'+(s.vram_gb?s.vram_gb+' GB':'—')+'</td>'+
+   '<td class="mono amber" style="font-weight:600">$'+Number(s.price_per_hour).toFixed(2)+'/hr</td>'+
+   '<td class="mono mut">'+(s.cloud_reference?'$'+Number(s.cloud_reference).toFixed(2)+'/hr':'<span class="mini">no comparable rate</span>')+'</td>'+
+   '<td class="mono" style="color:var(--pos)">'+(save>0?save+'%':'—')+'</td>'+
+   '<td class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td>'+
+   '<td><a class="btn btn-teal" style="padding:6px 14px;font-size:12px" href="/gpu/'+s.spec_id+'">View</a></td></tr>';}).join('');
+}
+prices();setInterval(prices,10000);
+</script>""")
+
+
+SECURITY_HTML = _page("Petabyte — security &amp; trust", """
+<div class="hero"><div class="wrap" style="padding:60px 24px 18px">
+  <div class="eyebrow"><span class="dot"></span> security &amp; trust</div>
+  <h1 style="font-size:clamp(34px,5vw,54px);margin:16px 0 12px">What we verify, <span class="grad">and what we don't.</span></h1>
+  <p class="mut" style="font-size:16px;max-width:62ch">Renting compute from strangers only works if both sides know exactly what is guaranteed. Here is the honest version — including the parts we are still building.</p>
+</div></div>
+
+<div class="wrap" style="padding:26px 24px 8px"><div class="cols c2">
+  <div class="card"><div class="lbl">Hardware verification</div>
+    <h2 style="font-size:18px;margin-bottom:8px">Signed hardware reports</h2>
+    <p class="mut" style="font-size:13.5px">When a host installs the agent, it generates a keypair on the machine and signs a report of its CPU, RAM, and GPU model. We verify that signature before the GPU can be listed, so a listing cannot be forged or altered in transit.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:10px"><b class="teal">What this is not:</b> it is not a hardware root of trust. A determined host could still report hardware it does not have. Reputation from completed jobs is the stronger signal, and it is shown on every listing.</p>
+  </div>
+  <div class="card"><div class="lbl">Workload isolation</div>
+    <h2 style="font-size:18px;margin-bottom:8px">Jobs run in containers</h2>
+    <p class="mut" style="font-size:13.5px">Your workload runs in a Docker container on the host, with privileges dropped, a process limit, and a memory cap. Where the host has gVisor installed, we run the container under a user-space kernel for a stronger boundary between your job and their machine.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:10px"><b class="teal">What this is not:</b> containers are not a hardware boundary. Do not put data on a node that you could not tolerate the host seeing. For sensitive work, use a host that advertises confidential computing, or don't use shared infrastructure.</p>
+  </div>
+  <div class="card"><div class="lbl">Payment protection</div>
+    <h2 style="font-size:18px;margin-bottom:8px">Escrow, held by Petabyte</h2>
+    <p class="mut" style="font-size:13.5px">When you book, the money leaves your wallet and is held by Petabyte for the rental. The host is paid on completion; the platform takes 10% of the rental. This is an internal ledger, not an on-chain escrow — Petabyte is the custodian.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:10px">Stop early and you are billed only for the hours you held the machine (minimum one). The unused prepay returns to your wallet.</p>
+  </div>
+  <div class="card"><div class="lbl">When a node disappears</div>
+    <h2 style="font-size:18px;margin-bottom:8px">Failover, or refund</h2>
+    <p class="mut" style="font-size:13.5px">Hosts send a heartbeat. If one goes quiet, we move your machine to another eligible node — the address you connect to does not change — and restore from the most recent snapshot. If no node can take it, the rental is refunded.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:10px"><b class="teal">Be aware:</b> recovery is from the last checkpoint, not a live mirror. A failover means restarting from a snapshot, not zero data loss.</p>
+  </div>
+</div></div>
+
+<div class="wrap" style="padding:22px 24px 8px">
+  <div class="card">
+    <div class="lbl am">Still building</div>
+    <h2 style="font-size:18px;margin-bottom:10px">Claims we are not making yet</h2>
+    <p class="mut" style="font-size:13.5px">We would rather be trusted than impressive. These are on the roadmap and are <b>not</b> live today:</p>
+    <ul class="mut" style="font-size:13.5px;margin:10px 0 0 20px">
+      <li style="padding:3px 0">Hardware-backed attestation (SEV-SNP / TDX). Today's attestation is software-signed by the agent.</li>
+      <li style="padding:3px 0">Independent benchmark verification of advertised performance.</li>
+      <li style="padding:3px 0">A published external security audit or SOC 2 report.</li>
+      <li style="padding:3px 0">Formal data-residency guarantees. Region is host-reported unless marked verified.</li>
+    </ul>
+    <p class="mut" style="font-size:13px;margin-top:12px">If a claim matters for your workload, ask us before you book — <a class="teal" href="mailto:security@petabyte.market">security@petabyte.market</a>.</p>
+  </div>
+</div>
+
+<div class="wrap" style="padding:22px 24px 8px"><div class="cols c3">
+  <a class="card" href="/privacy" style="display:block"><div class="lbl">Legal</div><h2 style="font-size:16px">Privacy policy</h2><p class="mut" style="font-size:13px">What we collect and why.</p></a>
+  <a class="card" href="/terms" style="display:block"><div class="lbl">Legal</div><h2 style="font-size:16px">Terms of service</h2><p class="mut" style="font-size:13px">The agreement for buyers and hosts.</p></a>
+  <a class="card" href="/acceptable-use" style="display:block"><div class="lbl">Legal</div><h2 style="font-size:16px">Acceptable use</h2><p class="mut" style="font-size:13px">What you may not run, and what hosts may not do.</p></a>
+</div></div>""")
+
+
+def _legal(title, body):
+    return _page("Petabyte — " + title, """
+<div class="wrap" style="padding:56px 24px 8px;max-width:760px">
+  <div class="eyebrow"><span class="dot"></span> legal</div>
+  <h1 style="font-size:clamp(30px,4.4vw,44px);margin:16px 0 8px">""" + title + """</h1>
+  <p class="mini" style="margin-bottom:26px">Last updated 11 July 2026 · Petabyte, Riyadh, Saudi Arabia</p>
+  <div class="card" style="line-height:1.75">""" + body + """
+  <p class="mut" style="font-size:12.5px;margin-top:20px;padding-top:14px;border-top:1px solid var(--hair)">
+    Questions: <a class="teal" href="mailto:legal@petabyte.market">legal@petabyte.market</a>.
+    This document is provided in good faith and is not a substitute for legal advice.</p>
+  </div>
+</div>""")
+
+
+_LEGAL_H = 'style="font-family:var(--disp);font-weight:600;font-size:16px;margin:20px 0 6px"'
+
+PRIVACY_HTML = _legal("Privacy policy", """
+<p class="mut">We collect the minimum needed to run a compute marketplace, and we tell you plainly what that is.</p>
+<h2 """ + _LEGAL_H + """>What we collect</h2>
+<p class="mut"><b>Account data:</b> your username, a hashed password (we never store the plaintext), and email if you provide one.
+<b>Host data:</b> hardware reported by the agent (CPU, RAM, GPU model), heartbeat times, and the network address the agent connects from — used to place jobs and to check region claims.
+<b>Usage data:</b> bookings, rentals, job status, and wallet transactions. <b>Payment data:</b> handled by our payment processor; we do not store card numbers.</p>
+<h2 """ + _LEGAL_H + """>What we do not collect</h2>
+<p class="mut">We do not read the contents of your workloads. We do not sell your data or share it with advertisers. We do not track you across other websites.</p>
+<h2 """ + _LEGAL_H + """>What hosts can see</h2>
+<p class="mut">A host runs your container on their machine. They can see that a job is running and its resource usage. Containers limit but do not eliminate what a determined host could observe — see our <a class="teal" href="/security">security page</a> for the honest boundary. Do not place data on shared infrastructure that you could not tolerate the host seeing.</p>
+<h2 """ + _LEGAL_H + """>Retention and your rights</h2>
+<p class="mut">Financial records are kept as required for accounting. Other data is kept while your account is open. You can request a copy of your data or ask us to delete your account by emailing <a class="teal" href="mailto:privacy@petabyte.market">privacy@petabyte.market</a>.</p>
+""")
+
+TERMS_HTML = _legal("Terms of service", """
+<p class="mut">Petabyte is a marketplace. Buyers rent compute; hosts supply it. We operate the platform, hold funds in escrow during a rental, and settle them on completion.</p>
+<h2 """ + _LEGAL_H + """>What we are</h2>
+<p class="mut">We are an intermediary, not the owner of the hardware. Hosts are independent parties who set their own prices and availability. We verify what we can (see <a class="teal" href="/security">Security</a>) and show reputation earned from completed jobs, but we do not warrant any host's performance.</p>
+<h2 """ + _LEGAL_H + """>Money</h2>
+<p class="mut">Funds you deposit are held by Petabyte. When you book, the amount is moved into escrow for that rental. On completion we pay the host their share and take a 10% platform fee from the rental. If you stop early, you are billed for the hours you held the machine (minimum one hour) and the remainder is returned to your wallet. If a rental cannot be delivered, you are refunded.</p>
+<h2 """ + _LEGAL_H + """>Availability</h2>
+<p class="mut">We do not guarantee uptime. Hosts are consumer and datacenter machines that can go offline. When a host fails mid-rental we attempt to move your machine to another node at the same address, restoring from the most recent snapshot; recovery is from a checkpoint, not a live mirror. If we cannot, you are refunded.</p>
+<h2 """ + _LEGAL_H + """>Your responsibilities</h2>
+<p class="mut">You are responsible for what you run and for complying with the <a class="teal" href="/acceptable-use">Acceptable use policy</a> and applicable law, including any licences for software or game servers you deploy. Hosts are responsible for the machines they list and must not tamper with buyers' workloads.</p>
+<h2 """ + _LEGAL_H + """>Liability</h2>
+<p class="mut">To the extent permitted by law, our liability for any rental is limited to the amount you paid for it. We are not liable for lost work, lost profits, or data loss — keep your own backups.</p>
+<h2 """ + _LEGAL_H + """>Termination</h2>
+<p class="mut">We may suspend accounts that breach these terms or the acceptable use policy. You can close your account at any time; hosts can uninstall the agent in one command.</p>
+""")
+
+AUP_HTML = _legal("Acceptable use policy", """
+<p class="mut">Someone else's computer is running your code. These rules exist so both sides are safe.</p>
+<h2 """ + _LEGAL_H + """>You may not use Petabyte to</h2>
+<ul class="mut" style="margin:8px 0 0 20px">
+  <li style="padding:3px 0">Attack, scan, or disrupt other systems, or run botnets, DDoS tooling, or credential-stuffing.</li>
+  <li style="padding:3px 0">Break into, tamper with, or escape the container onto a host's machine.</li>
+  <li style="padding:3px 0">Process or generate child sexual abuse material, or content that incites violence.</li>
+  <li style="padding:3px 0">Run workloads that are illegal where you are, where the host is, or where we operate.</li>
+  <li style="padding:3px 0">Infringe copyright — including running pirated software or unlicensed game servers.</li>
+  <li style="padding:3px 0">Mine cryptocurrency on a rented GPU without the host's consent (hosts may opt in to idle mining on their own hardware).</li>
+  <li style="padding:3px 0">Evade sanctions, launder money, or conceal the origin of funds.</li>
+</ul>
+<h2 """ + _LEGAL_H + """>Hosts may not</h2>
+<ul class="mut" style="margin:8px 0 0 20px">
+  <li style="padding:3px 0">Interfere with, inspect, copy, or exfiltrate a buyer's workload or data.</li>
+  <li style="padding:3px 0">Misrepresent their hardware, region, or capabilities.</li>
+  <li style="padding:3px 0">Take payment and deliberately fail to deliver compute.</li>
+</ul>
+<h2 """ + _LEGAL_H + """>Enforcement</h2>
+<p class="mut">We may suspend a rental or an account, withhold settlement, and where required report to authorities. Report abuse to <a class="teal" href="mailto:abuse@petabyte.market">abuse@petabyte.market</a> — include the VM address or node id if you have it.</p>
+""")
+
+
+STATUS_HTML = _page("Petabyte — status", """
+<div class="wrap" style="padding:56px 24px 8px;max-width:820px">
+  <div class="eyebrow"><span class="dot"></span> service status</div>
+  <h1 style="font-size:clamp(30px,4.4vw,44px);margin:16px 0 20px">System status</h1>
+  <div class="card">
+    <div id="statrows"><div class="mut mono" style="padding:16px 0">Checking…</div></div>
+  </div>
+  <p class="mut" style="font-size:12.5px;margin-top:12px">Live from our own health checks. Host machines are independent and can go offline individually — that is expected, and rentals fail over or refund.</p>
+</div>
+<script>
+function srow(name,ok,detail){return '<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--hair)">'+
+ '<span style="width:9px;height:9px;border-radius:50%;background:'+(ok?'var(--pos)':'var(--bad)')+';box-shadow:0 0 10px '+(ok?'var(--pos)':'var(--bad)')+'"></span>'+
+ '<span style="flex:1;font-family:var(--disp);font-weight:600;font-size:14px">'+name+'</span>'+
+ '<span class="mono mut" style="font-size:12px">'+detail+'</span></div>';}
+async function stat(){
+ var api_ok=false,detail='unreachable';
+ try{var r=await fetch('/healthz');api_ok=r.ok;detail=r.ok?'operational':'degraded';}catch(e){}
+ var nodes='—';
+ try{var st=await (await fetch('/marketplace/stats')).json();nodes=st.nodes_online+' hosts online';}catch(e){}
+ document.getElementById('statrows').innerHTML=
+  srow('API',api_ok,detail)+srow('Marketplace',api_ok,nodes)+srow('Settlement',api_ok,api_ok?'operational':'degraded');
+}
+stat();setInterval(stat,15000);
 </script>""")

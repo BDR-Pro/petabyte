@@ -11,6 +11,7 @@ paid to a seller, or taken as platform fee. If any race double-charges or
 double-pays, this equation breaks.
 """
 import os, json, time, base64, threading
+from decimal import Decimal as Dec
 from concurrent.futures import ThreadPoolExecutor
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///./adv.db")
@@ -31,6 +32,12 @@ for _f in ("adv.db",):
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
+import db as _dbinit
+if _dbinit.engine.dialect.name.startswith("postgres"):
+    with _dbinit.engine.begin() as _c:
+        _c.exec_driver_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    _dbinit.init_db()
+
 import main
 import db as dbmod
 from db import SessionLocal, User, Booking, SellerSpec, Platform
@@ -69,7 +76,7 @@ def mkseller(nm, price, units):
     return h, sid
 
 # ---------- setup: 2 sellers (A cheap w/ 3 units, B backup w/ 6), 6 buyers ----------
-DEPOSIT = 40.0
+DEPOSIT = Dec("40.00")
 ah, aspec = mkseller("advnodeA", 1.0, 3)
 bh, bspec = mkseller("advnodeB", 2.0, 6)
 buyers = []
@@ -77,7 +84,7 @@ for i in range(6):
     u = f"advbuyer{i}"
     c.post("/register_user", json={"username": u, "password": "pw12345678"})
     hh = tok(u)
-    c.post("/deposit", headers=hh, json={"amount": DEPOSIT})
+    c.post("/deposit", headers=hh, json={"amount": float(DEPOSIT)})
     buyers.append(hh)
 TOTAL_DEPOSITED = DEPOSIT * len(buyers)
 
@@ -147,19 +154,39 @@ for body, own in launched:
     c.post(f"/vm/{body['vm_id']}/stop", headers=own)
 
 s = SessionLocal()
-balances = sum(u.balance for u in s.query(User).filter(User.username.like("advbuyer%")).all())
-earnings = sum(u.earnings for u in s.query(User).filter(User.username.in_(["advnodeA", "advnodeB"])).all())
+def _D(x): return x if isinstance(x, Dec) else Dec(str(x or 0))
+balances = sum((_D(u.balance) for u in s.query(User).filter(User.username.like("advbuyer%")).all()), Dec(0))
+earnings = sum((_D(u.earnings) for u in s.query(User).filter(User.username.in_(["advnodeA", "advnodeB"])).all()), Dec(0))
 plat = s.query(Platform).first()
-platform_rev = plat.revenue if plat else 0.0
-escrow = sum(b.gross_amount for b in s.query(Booking).filter(
-    Booking.status.in_(["escrowed", "active"])).all())
+platform_rev = _D(plat.revenue) if plat else Dec(0)
+escrow = sum((_D(b.gross_amount) for b in s.query(Booking).filter(
+    Booking.status.in_(["escrowed", "active"])).all()), Dec(0))
 total_now = balances + earnings + platform_rev + escrow
-ok(f"MONEY CONSERVED: deposits {TOTAL_DEPOSITED} == wallets {round(balances,2)} + "
-   f"earnings {round(earnings,2)} + platform {round(platform_rev,2)} + escrow {round(escrow,2)}",
-   abs(total_now - TOTAL_DEPOSITED) < 0.01)
+# The LEDGER must also balance after all that concurrent abuse — and it must
+# independently reconstruct the same balances the cached columns claim.
+from db import ledger_is_balanced, account_balance, acct_buyer, acct_seller, PLATFORM_REVENUE
+_ok_bal, _broken = ledger_is_balanced(s)
+ok(f"ledger balances after concurrent abuse (debits == credits, {len(_broken)} broken)",
+   _ok_bal and not _broken)
+_mm = []
+for _u in s.query(User).filter(User.username.like("advbuyer%")).all():
+    if _D(_u.balance) != account_balance(s, acct_buyer(_u.id)):
+        _mm.append(_u.username)
+for _u in s.query(User).filter(User.username.in_(["advnodeA", "advnodeB"])).all():
+    if _D(_u.earnings) != account_balance(s, acct_seller(_u.id)):
+        _mm.append(_u.username)
+ok(f"ledger independently reconstructs every balance after races ({len(_mm)} mismatches)",
+   not _mm)
+ok("platform revenue matches the ledger",
+   _D(plat.revenue if plat else 0) == account_balance(s, PLATFORM_REVENUE))
+
+# With Decimal money this is EXACT — not "within a cent". No tolerance.
+ok(f"MONEY CONSERVED EXACTLY: deposits {TOTAL_DEPOSITED} == wallets {balances} + "
+   f"earnings {earnings} + platform {platform_rev} + escrow {escrow}",
+   total_now == _D(TOTAL_DEPOSITED))
 # no negative balances anywhere
-ok("no negative wallet", all(u.balance >= -1e-9 for u in s.query(User).all()))
-ok("no negative earnings", all(u.earnings >= -1e-9 for u in s.query(User).all()))
+ok("no negative wallet", all(_D(u.balance) >= 0 for u in s.query(User).all()))
+ok("no negative earnings", all(_D(u.earnings) >= 0 for u in s.query(User).all()))
 # capacity fully returned after all stops
 spa = s.query(SellerSpec).filter(SellerSpec.id == aspec).first()
 spb = s.query(SellerSpec).filter(SellerSpec.id == bspec).first()

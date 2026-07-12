@@ -1,6 +1,6 @@
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, DateTime, Text,
-    ForeignKey, UniqueConstraint, update, event,
+    ForeignKey, UniqueConstraint, update, event, Numeric,
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
 from sqlalchemy.exc import IntegrityError
@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 import bcrypt
 import hashlib
+from decimal import Decimal, ROUND_HALF_UP
 import json
 import math
 import os
@@ -16,7 +17,48 @@ import string
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./dev.db")
-PLATFORM_TAKE_RATE = float(os.getenv("PLATFORM_TAKE_RATE", "0.10"))
+# ---------------------------------------------------------------------------
+# Money.
+# Money is NEVER a float. 0.1 + 0.2 != 0.3 in binary floating point, and a
+# marketplace that holds other people's funds cannot carry that error. All monetary
+# columns are NUMERIC(20,8) and all monetary arithmetic is Decimal.
+#   - On Postgres this is a true exact NUMERIC.
+#   - On SQLite (tests) there is no decimal type; SQLAlchemy round-trips via float,
+#     so tests verify LOGIC exactly but exactness in storage is a Postgres property.
+# Use D() to lift any number into Decimal and q() to quantize to the storage scale.
+# ---------------------------------------------------------------------------
+Money = Numeric(20, 8)          # exact to 8 dp — enough for per-second billing
+_CENTS = Decimal("0.01")
+_SCALE = Decimal("0.00000001")
+
+
+def D(x) -> Decimal:
+    """Lift anything numeric into Decimal WITHOUT going through binary float."""
+    if isinstance(x, Decimal):
+        return x
+    if x is None:
+        return Decimal(0)
+    return Decimal(str(x))      # str() first: Decimal(0.1) would inherit float error
+
+
+def _json_money(o):
+    """Serialize Decimal exactly (as a JSON number via str) — never via float."""
+    if isinstance(o, Decimal):
+        return float(o)     # transport only; storage + arithmetic stay Decimal
+    raise TypeError(f"not serializable: {type(o).__name__}")
+
+
+def q(x) -> Decimal:
+    """Quantize to storage scale (8 dp), half-up like an accountant."""
+    return D(x).quantize(_SCALE, rounding=ROUND_HALF_UP)
+
+
+def qc(x) -> Decimal:
+    """Quantize to cents — for anything a human will see or be charged."""
+    return D(x).quantize(_CENTS, rounding=ROUND_HALF_UP)
+
+
+PLATFORM_TAKE_RATE = D(os.getenv("PLATFORM_TAKE_RATE", "0.10"))
 HEARTBEAT_TIMEOUT_S = int(os.getenv("HEARTBEAT_TIMEOUT_S", "60"))
 MIN_REPUTATION = int(os.getenv("MIN_REPUTATION", "50"))
 
@@ -91,8 +133,8 @@ class User(Base):
     tests_passed = Column(Integer, default=0, nullable=False)
     tests_failed = Column(Integer, default=0, nullable=False)
     can_accept_paid_jobs = Column(Boolean, default=True, nullable=False)
-    balance = Column(Float, default=0.0, nullable=False)    # buyer spendable credits
-    earnings = Column(Float, default=0.0, nullable=False)   # seller accrued payouts
+    balance = Column(Money, default=Decimal(0), nullable=False)   # buyer spendable credits
+    earnings = Column(Money, default=Decimal(0), nullable=False)  # seller accrued payouts
 
 
 class SellerSpec(Base):
@@ -104,9 +146,10 @@ class SellerSpec(Base):
     gpu_model = Column(String, nullable=True)
     gpu_count = Column(Integer, default=0)
     vram_gb = Column(Integer, default=0)
-    price_per_hour = Column(Float, nullable=False)   # USD/hr
-    min_price = Column(Float, nullable=True)         # auto-price floor (seller's cost)
-    max_price = Column(Float, nullable=True)         # auto-price ceiling
+    public_id = Column(String, unique=True, index=True, default=lambda: _rand_vm_id())  # opaque listing handle
+    price_per_hour = Column(Money, nullable=False)   # USD/hr
+    min_price = Column(Money, nullable=True)         # auto-price floor (seller's cost)
+    max_price = Column(Money, nullable=True)         # auto-price ceiling
     auto_price = Column(Boolean, default=False)      # opt-in demand pricing (engine TBD)
     duration = Column(Integer, nullable=False)       # max rentable hours
     provider = Column(String, index=True)
@@ -152,10 +195,10 @@ class Booking(Base):
     spec_id = Column(Integer, ForeignKey("specs.id"), index=True, nullable=False)
     org_id = Column(Integer, ForeignKey("orgs.id"), index=True, nullable=True)
     hours = Column(Integer, nullable=False)
-    price_per_hour = Column(Float, nullable=False)
-    gross_amount = Column(Float, nullable=False)
-    platform_fee = Column(Float, nullable=False)
-    seller_payout = Column(Float, nullable=False)
+    price_per_hour = Column(Money, nullable=False)   # SNAPSHOT: rate is locked at booking
+    gross_amount = Column(Money, nullable=False)
+    platform_fee = Column(Money, nullable=False)
+    seller_payout = Column(Money, nullable=False)
     status = Column(String, default="escrowed", nullable=False)  # escrowed|active|released|refunded|cancelled
     vpn = Column(Boolean, default=False)
     # True for demo/sandbox bookings; excluded from GMV so test money never inflates
@@ -221,7 +264,7 @@ class VMRoute(Base):
     snapshot_url = Column(String, nullable=True)           # latest S3 checkpoint
     status = Column(String, default="starting")            # starting|running|migrating|stopped|failed
     migrations = Column(Integer, default=0)
-    hourly_rate = Column(Float, default=0)                 # $/hr charged for this VM
+    hourly_rate = Column(Money, default=Decimal(0))        # $/hr charged for this VM
     started_at = Column(DateTime, nullable=True)           # when metering began
     paid_until = Column(DateTime, nullable=True)           # prepaid window end -> auto-stop
     stopped_at = Column(DateTime, nullable=True)
@@ -235,8 +278,8 @@ class PriceChange(Base):
     __tablename__ = "price_changes"
     id = Column(Integer, primary_key=True, index=True)
     spec_id = Column(Integer, ForeignKey("specs.id"), index=True, nullable=False)
-    old_price = Column(Float, nullable=False)
-    new_price = Column(Float, nullable=False)
+    old_price = Column(Money, nullable=False)
+    new_price = Column(Money, nullable=False)
     utilization = Column(Float, default=0)          # 0..1 class utilization at the time
     reason = Column(String, default="auto")         # auto|manual
     created_at = Column(DateTime, default=_utcnow)
@@ -281,9 +324,9 @@ class Organization(Base):
     __tablename__ = "orgs"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True, nullable=False)
-    balance = Column(Float, default=0.0, nullable=False)
-    budget_cap = Column(Float, default=0.0, nullable=False)   # 0 = unlimited
-    spent = Column(Float, default=0.0, nullable=False)
+    balance = Column(Money, default=Decimal(0), nullable=False)
+    budget_cap = Column(Money, default=Decimal(0), nullable=False)   # 0 = unlimited
+    spent = Column(Money, default=Decimal(0), nullable=False)
     created_at = Column(DateTime, default=_utcnow)
 
 
@@ -315,7 +358,7 @@ class Payout(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
     method_id = Column(Integer, ForeignKey("payout_methods.id"), nullable=False)
-    amount_usd = Column(Float, nullable=False)
+    amount_usd = Column(Money, nullable=False)
     kind = Column(String, nullable=False)
     status = Column(String, default="requested", nullable=False)
     provider_ref = Column(String, nullable=True)     # provider txn id / tx hash
@@ -334,28 +377,127 @@ class PayoutSchedule(Base):
     hour = Column(Integer, nullable=False)
     minute = Column(Integer, default=0)
     utc_offset_minutes = Column(Integer, default=0)  # local tz offset from UTC
-    min_amount = Column(Float, default=1.0)          # skip if balance below this
+    min_amount = Column(Money, default=Decimal(1))   # skip if balance below this
     enabled = Column(Boolean, default=True)
     next_run_at = Column(DateTime, nullable=False)
     last_run_at = Column(DateTime, nullable=True)
 
 
+class LedgerTx(Base):
+    """A single financial event. Its entries MUST balance: debits == credits.
+
+    This is the unit of truth for money. `users.balance` and `users.earnings` are
+    caches of what the ledger says; if they ever disagree, the ledger is right."""
+    __tablename__ = "ledger_tx"
+    id = Column(Integer, primary_key=True)   # PK is already indexed; naming it would
+                                             # collide with ledger.tx_id's index name
+    reference_type = Column(String, index=True, nullable=False)   # booking|deposit|payout|idle_mining|org
+    reference_id = Column(String, index=True, nullable=True)      # e.g. the booking id
+    description = Column(String, nullable=True)
+    idempotency_key = Column(String, unique=True, nullable=True)  # replay -> same tx
+    created_at = Column(DateTime, default=_utcnow, index=True)
+
+
 class LedgerEntry(Base):
-    """Append-only money movement record. Never updated/deleted -> auditable."""
+    """One leg of a transaction. Append-only: never updated, never deleted.
+
+    Convention: an account's balance = SUM(credits) - SUM(debits).
+    Money entering the system credits a user and debits an `external:` account, so the
+    books always sum to zero across every account. That is what makes it double-entry
+    rather than a list of things that happened."""
     __tablename__ = "ledger"
     id = Column(Integer, primary_key=True, index=True)
+    tx_id = Column(Integer, ForeignKey("ledger_tx.id"), index=True, nullable=True)
+    account = Column(String, index=True, nullable=False)   # e.g. buyer_available:12, escrow:99
+    direction = Column(String, nullable=True)              # debit | credit
+    amount = Column(Money, nullable=False)                 # always POSITIVE
+    # --- kept so existing readers/reports keep working ---
     booking_id = Column(Integer, ForeignKey("bookings.id"), index=True, nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
-    account = Column(String, nullable=False)      # buyer|seller|platform|external
-    entry_type = Column(String, nullable=False)   # deposit|escrow_hold|release_seller|release_platform|refund_buyer
-    amount = Column(Float, nullable=False)
+    entry_type = Column(String, nullable=False)
     created_at = Column(DateTime, default=_utcnow)
+
+
+# ---- account naming ----------------------------------------------------------
+DEBIT, CREDIT = "debit", "credit"
+
+
+def acct_buyer(uid):      return f"buyer_available:{uid}"
+def acct_escrow(bid):     return f"escrow:{bid}"
+def acct_seller(uid):     return f"seller_earnings:{uid}"
+def acct_org(oid):        return f"org_available:{oid}"
+PLATFORM_REVENUE   = "platform_revenue"
+EXTERNAL_PAYMENTS  = "external:payments"    # the card processor
+EXTERNAL_PAYOUTS   = "external:payouts"     # the bank / USDC rail
+EXTERNAL_MINING    = "external:mining"      # NiceHash
+
+
+class UnbalancedTransaction(Exception):
+    """Raised when debits != credits. This must never reach production; it means
+    money was about to be created or destroyed."""
+
+
+def post(db: Session, reference_type: str, legs: list, reference_id=None,
+         description: str = None, idempotency_key: str = None,
+         booking_id: int = None, entry_type: str = None) -> "LedgerTx":
+    """Write ONE balanced transaction. `legs` = [(account, direction, amount, user_id?)].
+
+    Refuses to write if debits != credits. There is deliberately no way to append a
+    single-sided entry: the only door into the ledger is this function, and it will
+    not let you through with unbalanced books.
+    """
+    debits  = sum((q(a) for (_, d, a, *_r) in legs if d == DEBIT),  Decimal(0))
+    credits = sum((q(a) for (_, d, a, *_r) in legs if d == CREDIT), Decimal(0))
+    if debits != credits:
+        raise UnbalancedTransaction(
+            f"{reference_type}: debits {debits} != credits {credits}")
+    if debits == 0:
+        raise UnbalancedTransaction(f"{reference_type}: zero-value transaction")
+
+    tx = LedgerTx(reference_type=reference_type,
+                  reference_id=str(reference_id) if reference_id is not None else None,
+                  description=description, idempotency_key=idempotency_key)
+    db.add(tx)
+    db.flush()                      # need tx.id for the entries
+    for leg in legs:
+        account, direction, amount = leg[0], leg[1], leg[2]
+        uid = leg[3] if len(leg) > 3 else None
+        db.add(LedgerEntry(
+            tx_id=tx.id, account=account, direction=direction, amount=q(amount),
+            user_id=uid, booking_id=booking_id,
+            entry_type=entry_type or f"{reference_type}_{direction}"))
+    return tx
+
+
+def account_balance(db: Session, account: str) -> Decimal:
+    """Reconstruct an account balance FROM THE LEDGER: credits - debits."""
+    rows = db.query(LedgerEntry).filter(LedgerEntry.account == account).all()
+    bal = Decimal(0)
+    for e in rows:
+        bal += D(e.amount) if e.direction == CREDIT else -D(e.amount)
+    return q(bal)
+
+
+def ledger_is_balanced(db: Session):
+    """Every transaction must balance, and the whole ledger must sum to zero.
+    Returns (ok, list_of_broken_tx_ids)."""
+    broken = []
+    total = Decimal(0)
+    for e in db.query(LedgerEntry).all():
+        total += D(e.amount) if e.direction == CREDIT else -D(e.amount)
+    for tx in db.query(LedgerTx).all():
+        legs = db.query(LedgerEntry).filter(LedgerEntry.tx_id == tx.id).all()
+        dr = sum((D(e.amount) for e in legs if e.direction == DEBIT), Decimal(0))
+        cr = sum((D(e.amount) for e in legs if e.direction == CREDIT), Decimal(0))
+        if dr != cr:
+            broken.append(tx.id)
+    return (not broken and q(total) == 0), broken
 
 
 class Platform(Base):
     __tablename__ = "platform"
     id = Column(Integer, primary_key=True)
-    revenue = Column(Float, default=0.0, nullable=False)
+    revenue = Column(Money, default=Decimal(0), nullable=False)
 
 
 class AttestationChallenge(Base):
@@ -447,8 +589,8 @@ class IdleSettlement(Base):
     worker_id = Column(String, index=True, nullable=False)
     period = Column(String, nullable=False)
     spec_id = Column(Integer, nullable=True)
-    gross_usd = Column(Float, default=0.0)
-    credited_usd = Column(Float, default=0.0)
+    gross_usd = Column(Money, default=Decimal(0))
+    credited_usd = Column(Money, default=Decimal(0))
     created_at = Column(DateTime, default=_utcnow)
     __table_args__ = (UniqueConstraint("worker_id", "period", name="uq_idle_settle"),)
 
@@ -512,7 +654,7 @@ def _ensure_columns():
     wanted = {
         "bookings": [("test", "BOOLEAN NOT NULL DEFAULT true")],
         "specs": [("min_price", "FLOAT"), ("max_price", "FLOAT"),
-                  ("auto_price", "BOOLEAN DEFAULT false")],
+                  ("auto_price", "BOOLEAN DEFAULT false"), ("public_id", "VARCHAR")],
         "vm_routes": [("hourly_rate", "FLOAT DEFAULT 0"), ("started_at", "TIMESTAMP"),
                       ("paid_until", "TIMESTAMP"), ("stopped_at", "TIMESTAMP")],
     }
@@ -537,6 +679,26 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
     _ensure_indexes()
+    _backfill_public_ids()
+
+
+def _backfill_public_ids():
+    """Give any pre-existing spec an opaque public handle (idempotent)."""
+    try:
+        db = SessionLocal()
+        rows = db.query(SellerSpec).filter(SellerSpec.public_id.is_(None)).all()
+        for r in rows:
+            r.public_id = _rand_vm_id()
+            db.add(r)
+        if rows:
+            db.commit()
+        db.close()
+    except Exception:
+        pass
+
+
+def get_spec_by_public_id(db: Session, public_id: str):
+    return db.query(SellerSpec).filter(SellerSpec.public_id == public_id).first()
 
 
 def _ensure_indexes():
@@ -829,10 +991,10 @@ def settle_metered(db: Session, booking_id: int, hours_used: float) -> bool:
         return False
     b = db.query(Booking).filter(Booking.id == booking_id).first()
     used = max(1, min(math.ceil(hours_used), b.hours)) if b.hours else 1
-    frac = (used / b.hours) if b.hours else 1.0
-    seller_earned = round(b.seller_payout * frac, 4)
-    plat_earned = round(b.platform_fee * frac, 4)
-    refund = round(b.gross_amount - seller_earned - plat_earned, 4)
+    frac = (D(used) / D(b.hours)) if b.hours else Decimal(1)   # exact ratio, no float
+    seller_earned = q(D(b.seller_payout) * frac)
+    plat_earned = q(D(b.platform_fee) * frac)
+    refund = q(D(b.gross_amount) - seller_earned - plat_earned)
     plat = get_or_create_platform(db)
     # atomic expression updates — never read-modify-write wallet fields, or a
     # concurrent atomic debit (e.g. a racing extend) gets erased by a stale read.
@@ -846,13 +1008,16 @@ def settle_metered(db: Session, booking_id: int, hours_used: float) -> bool:
         else:
             db.execute(update(User).where(User.id == b.buyer_id)
                        .values(balance=User.balance + refund))
-    db.add(LedgerEntry(booking_id=b.id, user_id=b.seller_id, account="seller",
-                       entry_type="release_seller", amount=seller_earned))
-    db.add(LedgerEntry(booking_id=b.id, account="platform",
-                       entry_type="release_platform", amount=plat_earned))
+    # escrow drains EXACTLY into seller + platform + refund. If these don't add up,
+    # post() raises and the settlement fails loudly rather than losing a cent.
+    _back = acct_org(b.org_id) if b.org_id else acct_buyer(b.buyer_id)
+    _legs = [(acct_escrow(b.id), DEBIT, D(b.gross_amount)),
+             (acct_seller(b.seller_id), CREDIT, seller_earned, b.seller_id),
+             (PLATFORM_REVENUE, CREDIT, plat_earned)]
     if refund > 0:
-        db.add(LedgerEntry(booking_id=b.id, user_id=b.buyer_id, account="buyer",
-                           entry_type="refund_partial", amount=refund))
+        _legs.append((_back, CREDIT, refund, b.buyer_id))
+    post(db, "booking", legs=_legs, reference_id=b.id, booking_id=b.id,
+         description="metered settlement", entry_type="release")
     db.commit()
     release_unit(db, b.spec_id)
     return True
@@ -868,7 +1033,7 @@ def extend_booking(db: Session, booking_id: int, extra_hours: int,
     b = db.query(Booking).filter(Booking.id == booking_id).first()
     if not b or b.status not in ("escrowed", "active"):
         return False
-    extra_gross = round(b.price_per_hour * extra_hours, 4)
+    extra_gross = q(D(b.price_per_hour) * D(extra_hours))
     if b.org_id:
         if not try_org_debit(db, b.org_id, extra_gross):   # atomic, budget-capped
             return False
@@ -880,7 +1045,7 @@ def extend_booking(db: Session, booking_id: int, extra_hours: int,
         db.commit()
         if res.rowcount != 1:
             return False
-    extra_fee = round(extra_gross * take_rate, 4)
+    extra_fee = q(extra_gross * D(take_rate))
     # guarded escrow grow: only lands if the booking is still live
     res = db.execute(update(Booking)
                      .where(Booking.id == booking_id,
@@ -899,9 +1064,12 @@ def extend_booking(db: Session, booking_id: int, extra_hours: int,
                        .values(balance=User.balance + extra_gross))
             db.commit()
         return False
-    db.add(LedgerEntry(booking_id=b.id, user_id=b.buyer_id,
-                       account="org" if b.org_id else "buyer",
-                       entry_type="extend_escrow", amount=extra_gross))
+    _src = acct_org(b.org_id) if b.org_id else acct_buyer(b.buyer_id)
+    post(db, "booking", legs=[
+        (_src,              DEBIT,  extra_gross, b.buyer_id),
+        (acct_escrow(b.id), CREDIT, extra_gross),
+    ], reference_id=b.id, booking_id=b.id,
+       description="rental extended", entry_type="extend_escrow")
     db.commit()
     return True
 
@@ -995,11 +1163,11 @@ def reprice_specs(db: Session, reference_price: float = None) -> int:
         key = (s.gpu_model or "cpu").lower()
         total = total_by.get(key, 1)
         util = (busy_by.get(key, 0) / total) if total else 0.0     # 0..1
-        mult = 0.85 + 0.40 * util                                  # idle 0.85x -> full 1.25x
-        base = (s.min_price + s.max_price) / 2.0
-        price = max(s.min_price, min(s.max_price, base * mult))
-        price = round(min(price, ref * 0.95), 2)                   # never >= cloud
-        if abs(price - (s.price_per_hour or 0)) >= 0.01:
+        mult = D("0.85") + D("0.40") * D(util)          # idle 0.85x -> full 1.25x
+        base = (D(s.min_price) + D(s.max_price)) / Decimal(2)
+        price = max(D(s.min_price), min(D(s.max_price), base * mult))
+        price = qc(min(price, D(ref) * D("0.95")))     # never >= cloud reference
+        if abs(price - D(s.price_per_hour)) >= D("0.01"):
             db.add(PriceChange(spec_id=s.id, old_price=s.price_per_hour or 0,
                                new_price=price, utilization=round(util, 3),
                                reason="auto"))
@@ -1038,9 +1206,9 @@ def release_unit(db: Session, spec_id: int) -> None:
 def create_booking(db: Session, buyer: User, spec: SellerSpec, hours: int,
                    vpn: bool, take_rate: float) -> Booking:
     """Insert the booking row. Caller must have already reserved a unit."""
-    gross = round(spec.price_per_hour * hours, 4)
-    fee = round(gross * take_rate, 4)
-    payout = round(gross - fee, 4)
+    gross = q(D(spec.price_per_hour) * D(hours))
+    fee = q(gross * D(take_rate))
+    payout = q(gross - fee)
     booking = Booking(
         buyer_id=buyer.id, seller_id=spec.user_id, spec_id=spec.id,
         hours=hours, price_per_hour=spec.price_per_hour,
@@ -1118,7 +1286,7 @@ def idem_finish(db: Session, key: str, username: str, endpoint: str,
            .filter_by(key=key, username=username, endpoint=endpoint).first())
     if rec:
         rec.status_code = status_code
-        rec.response = json.dumps(response)
+        rec.response = json.dumps(response, default=_json_money)
         db.add(rec); db.commit()
 
 
@@ -1289,9 +1457,13 @@ def deposit(db: Session, user: "User", amount: float) -> float:
     """Sandbox top-up. In production this is a payment-provider webhook, not an API call."""
     if amount <= 0:
         raise ValueError("amount must be positive")
-    user.balance = round(user.balance + amount, 4)
+    user.balance = q(D(user.balance) + D(amount))
     db.add(user)
-    db.add(LedgerEntry(user_id=user.id, account="buyer", entry_type="deposit", amount=amount))
+    # money enters the system: the processor owes us less, the buyer's wallet grows
+    post(db, "deposit", legs=[
+        (EXTERNAL_PAYMENTS, DEBIT,  amount),
+        (acct_buyer(user.id), CREDIT, amount, user.id),
+    ], reference_id=user.id, description="wallet deposit", entry_type="deposit")
     db.commit()
     return user.balance
 
@@ -1311,9 +1483,9 @@ def book_with_escrow(db: Session, buyer: "User", spec: "SellerSpec", hours: int,
                      vpn: bool, take_rate: float, org_id: int = None) -> "Booking":
     """Create the booking and hold funds in escrow. Caller has already debited
     the buyer and reserved a unit; this records the booking + escrow ledger entry."""
-    gross = round(spec.price_per_hour * hours, 4)
-    fee = round(gross * take_rate, 4)
-    payout = round(gross - fee, 4)
+    gross = q(D(spec.price_per_hour) * D(hours))
+    fee = q(gross * D(take_rate))
+    payout = q(gross - fee)
     booking = Booking(
         buyer_id=buyer.id, seller_id=spec.user_id, spec_id=spec.id,
         hours=hours, price_per_hour=spec.price_per_hour,
@@ -1321,8 +1493,12 @@ def book_with_escrow(db: Session, buyer: "User", spec: "SellerSpec", hours: int,
         status="escrowed", vpn=vpn, org_id=org_id,
     )
     db.add(booking); db.commit(); db.refresh(booking)
-    db.add(LedgerEntry(booking_id=booking.id, user_id=buyer.id, account="escrow",
-                       entry_type="escrow_hold", amount=gross))
+    _src = acct_org(org_id) if org_id else acct_buyer(buyer.id)
+    post(db, "booking", legs=[
+        (_src,                       DEBIT,  gross, buyer.id),
+        (acct_escrow(booking.id),    CREDIT, gross),
+    ], reference_id=booking.id, booking_id=booking.id,
+       description="funds held in escrow for rental", entry_type="escrow_hold")
     db.commit()
     return booking
 
@@ -1346,13 +1522,15 @@ def release_booking(db: Session, booking_id: int) -> bool:
     b = db.query(Booking).filter(Booking.id == booking_id).first()
     seller = db.query(User).filter(User.id == b.seller_id).first()
     plat = get_or_create_platform(db)
-    seller.earnings = round(seller.earnings + b.seller_payout, 4)
-    plat.revenue = round(plat.revenue + b.platform_fee, 4)
+    seller.earnings = q(D(seller.earnings) + D(b.seller_payout))
+    plat.revenue = q(D(plat.revenue) + D(b.platform_fee))
     db.add_all([seller, plat])
-    db.add(LedgerEntry(booking_id=b.id, user_id=seller.id, account="seller",
-                       entry_type="release_seller", amount=b.seller_payout))
-    db.add(LedgerEntry(booking_id=b.id, account="platform",
-                       entry_type="release_platform", amount=b.platform_fee))
+    post(db, "booking", legs=[
+        (acct_escrow(b.id),        DEBIT,  D(b.gross_amount)),
+        (acct_seller(seller.id),   CREDIT, D(b.seller_payout), seller.id),
+        (PLATFORM_REVENUE,         CREDIT, D(b.platform_fee)),
+    ], reference_id=b.id, booking_id=b.id,
+       description="rental completed", entry_type="release")
     db.commit()
     release_unit(db, b.spec_id)  # rental finished -> free capacity
     return True
@@ -1373,11 +1551,15 @@ def refund_booking(db: Session, booking_id: int) -> bool:
         org_refund(db, b.org_id, b.gross_amount)
     else:
         buyer = db.query(User).filter(User.id == b.buyer_id).first()
-        buyer.balance = round(buyer.balance + b.gross_amount, 4)
+        buyer.balance = q(D(buyer.balance) + D(b.gross_amount))
         db.add(buyer)
     release_unit(db, b.spec_id)  # give the reserved unit back
-    db.add(LedgerEntry(booking_id=b.id, user_id=buyer.id, account="buyer",
-                       entry_type="refund_buyer", amount=b.gross_amount))
+    _back = acct_org(b.org_id) if b.org_id else acct_buyer(buyer.id)
+    post(db, "booking", legs=[
+        (acct_escrow(b.id), DEBIT,  D(b.gross_amount)),
+        (_back,             CREDIT, D(b.gross_amount), buyer.id),
+    ], reference_id=b.id, booking_id=b.id,
+       description="rental refunded", entry_type="refund_buyer")
     db.commit()
     return True
 
@@ -1543,9 +1725,12 @@ def add_org_member(db: Session, org: "Organization", username: str, role: str) -
 def org_deposit(db: Session, org: "Organization", amount: float) -> float:
     if amount <= 0:
         raise ValueError("amount must be positive")
-    org.balance = round(org.balance + amount, 4)
+    org.balance = q(D(org.balance) + D(amount))
     db.add(org)
-    db.add(LedgerEntry(account="org", entry_type="deposit", amount=amount))
+    post(db, "org_deposit", legs=[
+        (EXTERNAL_PAYMENTS, DEBIT,  amount),
+        (acct_org(org.id),  CREDIT, amount),
+    ], reference_id=org.id, description="org wallet deposit", entry_type="deposit")
     db.commit()
     return org.balance
 
@@ -1633,12 +1818,12 @@ def org_analytics(db: Session, org_id: int):
     bks = db.query(Booking).filter(Booking.org_id == org_id).all()
     by_status = {}
     by_spec = {}
-    total = 0.0
+    total = Decimal(0)
     for b in bks:
-        by_status[b.status] = round(by_status.get(b.status, 0.0) + b.gross_amount, 4)
-        by_spec[b.spec_id] = round(by_spec.get(b.spec_id, 0.0) + b.gross_amount, 4)
-        total += b.gross_amount
-    return {"total_spend": round(total, 4), "bookings": len(bks),
+        by_status[b.status] = q(D(by_status.get(b.status, 0)) + D(b.gross_amount))
+        by_spec[b.spec_id] = q(D(by_spec.get(b.spec_id, 0)) + D(b.gross_amount))
+        total += D(b.gross_amount)
+    return {"total_spend": qc(total), "bookings": len(bks),
             "spend_by_status": by_status, "spend_by_spec": by_spec}
 
 
@@ -1754,7 +1939,8 @@ def recent_rep_events(db: Session, spec_id: int, limit: int = 20):
 
 # ------------------ Payouts (withdraw seller earnings) ------------------
 
-def try_debit_earnings(db: Session, user_id: int, amount: float) -> bool:
+def try_debit_earnings(db: Session, user_id: int, amount) -> bool:
+    amount = q(amount)
     res = db.execute(update(User).where(User.id == user_id, User.earnings >= amount)
                      .values(earnings=User.earnings - amount))
     db.commit()
@@ -1793,9 +1979,17 @@ def request_payout(db: Session, user: "User", method: "SellerPayoutMethod",
         return None
     if not try_debit_earnings(db, user.id, amount):
         return None
-    p = Payout(user_id=user.id, method_id=method.id, amount_usd=round(amount, 2),
+    p = Payout(user_id=user.id, method_id=method.id, amount_usd=qc(amount),
                kind=method.kind, status="requested")
-    db.add(p); db.commit(); db.refresh(p)
+    db.add(p); db.flush()
+    # money LEAVES the system: seller earnings drain to the external payout rail.
+    # This was previously not ledgered at all — earnings simply vanished from the books.
+    post(db, "payout", legs=[
+        (acct_seller(user.id), DEBIT,  qc(amount), user.id),
+        (EXTERNAL_PAYOUTS,     CREDIT, qc(amount)),
+    ], reference_id=p.id, description=f"payout via {method.kind}",
+       entry_type="payout")
+    db.commit(); db.refresh(p)
     return p
 
 
@@ -1863,7 +2057,7 @@ def run_due_schedules(db: Session, now_utc=None) -> int:
         user = db.query(User).filter(User.id == sch.user_id).first()
         method = db.query(SellerPayoutMethod).filter(SellerPayoutMethod.id == sch.method_id).first()
         if user and method and method.verified and (user.earnings or 0) >= sch.min_amount:
-            request_payout(db, user, method, round(user.earnings, 2))
+            request_payout(db, user, method, qc(user.earnings))
             fired += 1
         sch.last_run_at = now_utc
         sch.next_run_at = compute_next_run(now_utc, sch.day_of_week, sch.hour,
@@ -1982,12 +2176,12 @@ def reconcile_idle_earnings(db: Session, earnings: dict, take_rate: float) -> di
     payouts. Credits each seller's unified balance (amount * (1-take)); idempotent
     per (worker, period). Returns {credited_workers, seller_total, platform_total}."""
     credited = 0
-    seller_total = 0.0
-    platform_total = 0.0
+    seller_total = Decimal(0)
+    platform_total = Decimal(0)
     plat = get_or_create_platform(db)
     for worker_id, info in earnings.items():
         period = str(info.get("period"))
-        gross = round(float(info.get("amount", 0.0)), 6)
+        gross = q(info.get("amount", 0))
         if gross <= 0:
             continue
         rec = IdleSettlement(worker_id=worker_id, period=period,
@@ -2002,20 +2196,24 @@ def reconcile_idle_earnings(db: Session, earnings: dict, take_rate: float) -> di
         owner = db.query(User).filter(User.id == spec.user_id).first() if spec else None
         if not owner:
             continue
-        seller_cut = round(gross * (1.0 - take_rate), 6)
-        platform_cut = round(gross - seller_cut, 6)
-        owner.earnings = round((owner.earnings or 0.0) + seller_cut, 6)
-        plat.revenue = round((plat.revenue or 0.0) + platform_cut, 6)
+        seller_cut = q(gross * (Decimal(1) - D(take_rate)))
+        platform_cut = q(gross - seller_cut)
+        owner.earnings = q(D(owner.earnings) + seller_cut)
+        plat.revenue = q(D(plat.revenue) + platform_cut)
         rec.credited_usd = seller_cut
         db.add_all([owner, plat, rec])
-        db.add(LedgerEntry(account="idle_mining", entry_type="idle_mining",
-                           amount=seller_cut, user_id=owner.id))
+        post(db, "idle_mining", legs=[
+            (EXTERNAL_MINING,          DEBIT,  gross),
+            (acct_seller(owner.id),    CREDIT, seller_cut, owner.id),
+            (PLATFORM_REVENUE,         CREDIT, platform_cut),
+        ], reference_id=rec.id, description="idle mining settlement",
+           idempotency_key=f"idle:{worker_id}:{period}", entry_type="idle_mining")
         db.commit()
         credited += 1
         seller_total += seller_cut
         platform_total += platform_cut
-    return {"credited_workers": credited, "seller_total": round(seller_total, 6),
-            "platform_total": round(platform_total, 6)}
+    return {"credited_workers": credited, "seller_total": q(seller_total),
+            "platform_total": q(platform_total)}
 
 
 def idle_credited_total(db: Session, spec_id: int) -> float:

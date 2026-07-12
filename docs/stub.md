@@ -123,3 +123,207 @@ failover (same URL, new node), **metering + extend + auto-stop-on-expiry**,
 ## How to see it live
 `/marketplace/stats`, `/admin`, and the Trust Center reflect real (non-test) data.
 Flip stubs off one integration at a time; the surrounding logic is already tested.
+
+## Frontend honesty rules (enforced by tests)
+
+The public site must never claim more than we can back up. Locked in `smoke_test.py`:
+- **Savings are like-for-like or absent.** `cloud_reference_for()` maps a GPU to its own
+  class's on-demand rate. An unknown GPU returns `None` and we show *no* savings figure —
+  never a global H100 rate quoted against a 4090 (that manufactures a fake ~97% discount).
+- **No empty metrics.** The landing page shows real inventory; counters only appear when
+  non-zero. An empty `—` reads to a visitor as "this platform does not work".
+- **Listings are opaque handles.** Public ids are random (`jhk32mcb11tw`), never the
+  sequential int — so listings can't be enumerated and our volume isn't leaked.
+- **/security states what is NOT live** (hardware-backed attestation, benchmark
+  verification, external audit, formal data residency) alongside what is.
+
+## Hardening (added after the architecture review)
+
+**Now enforced in code + tests:**
+- **Security headers** on every response: CSP, `nosniff`, `X-Frame-Options: DENY`,
+  Referrer-Policy, Permissions-Policy, HSTS on https, `no-store` on authenticated responses.
+- **Request IDs**: every response carries `X-Request-ID`, logged server-side. Users can
+  quote it; we can find the exact request.
+- **Structured errors**: `{"error":{"code","message","request_id"}}` with stable codes
+  (`INSUFFICIENT_BALANCE`, `NOT_FOUND`, `RATE_LIMIT_EXCEEDED`...). Stack traces never
+  reach a caller. Legacy `detail` field kept so existing clients don't break.
+- **Rate limiting**: failed `/login` throttled per **(IP, username)** — guessing one
+  account cannot lock out a colleague behind the same office NAT, and only FAILED
+  attempts burn budget. Signup + withdraw throttled per IP.
+- **Health split**: `/health/live` (process) vs `/health/ready` (database).
+- **`/api/v1` resource API** (`/api/v1/deployments`, `/marketplace/nodes`, `/wallet`...)
+  aliased onto the same handlers as the legacy verb routes — one implementation, no drift.
+  This is what an OpenAPI-generated client should target.
+
+**Verified already correct (no change needed):**
+- Agent builds Docker commands as **argv lists** — no `os.system`, no `shell=True`,
+  no string concatenation. Not injectable.
+- CORS is an explicit allow-list, never `*` with credentials.
+- Ledger (`LedgerEntry`), organizations, idempotency keys, price snapshot on booking,
+  and atomic capacity reservation (conditional UPDATE) all already exist.
+
+**Top remaining architectural debt — money is stored as `Float`.**
+Balances/escrow/earnings are `Column(Float)`. Conservation is proven to the cent by
+`adversarial_test.py`, but float is the wrong type for money and the right time to fix it
+is *before* real funds. Plan: migrate to `NUMERIC(20,8)` (Postgres) + Python `Decimal`,
+expand-and-contract (add column -> dual-write -> backfill -> read new -> drop old).
+
+## Money is Decimal, not float (migration complete)
+
+All monetary columns are **`NUMERIC(20,8)`** and all monetary arithmetic is Python
+`Decimal`. Floats are gone from the money paths.
+
+- `db.Money` = `Numeric(20, 8)`; helpers `D()` (lift to Decimal via `str`, never through
+  binary float), `q()` (quantize to 8dp), `qc()` (quantize to cents). `PLATFORM_TAKE_RATE`
+  is a Decimal.
+- **Postgres**: true exact NUMERIC. **SQLite** (tests only): no decimal type, so SQLAlchemy
+  round-trips through float — tests verify the *logic* exactly; exact *storage* is a
+  Postgres property. Re-run `adversarial_test.py` against Postgres before real money.
+- Non-money floats are deliberately still `Float`: benchmark tokens/sec, latency sums,
+  utilization ratios, mining hashrate, frame ranges. Those aren't accounting.
+- Router *scoring* coerces price to float — a ranking heuristic, not accounting.
+
+**Guards in the suite (so this can't regress):**
+- every money column is `Numeric`, never `Float`
+- `PLATFORM_TAKE_RATE` is a `Decimal`
+- `fee + payout == gross` exactly
+- 10,000 micro-charges of $0.001 sum to **exactly** $10 (float drifts by ~1e-13)
+- `adversarial_test.py` now asserts **exact** conservation (`==`), not "within a cent"
+
+## The reachable-VM loop is now proven in software
+
+`lumaris_gateway/` contains a working reverse-tunnel gateway and an end-to-end test
+(`tunnel_test.py`, **12/12**, stable over repeated runs) that proves the one thing that
+had never been tested:
+
+- two nodes traverse NAT with **outbound-only** control channels (no inbound port, ever)
+- a workload bound to **127.0.0.1** on a node is reached by a buyer who knows **only the
+  opaque VM handle**
+- node A is killed -> the real reaper fails the VM over -> **the same handle** reaches
+  node B, and the buyer's connection string is byte-identical
+- the event timeline records `created -> tunnel_registered -> migrated -> tunnel_registered`
+
+This exercises the real API, the real reaper, and the real `/vm/register_tunnel` and
+`GET /vm/{id}/route` seams. No mocks in the path that matters.
+
+**Still needs real machines:** the same flow across the internet, a real home router, and
+real SSH — using **frp** + **sshpiper** rather than our reference gateway. Configs and the
+exact pass/fail criteria are in `docs/vm-runbook.md`. `gateway.py` is a reference and a CI
+harness; it is not hardened to serve production traffic (frp is).
+
+## P0 fixes from the backend architecture review
+
+**1. Maintenance no longer runs in every API worker.**
+Gunicorn runs N workers; the reaper lived inside the app, so N workers meant N reapers
+racing to fail over the same node and settle the same booking every 20s. Now exactly one
+process does the work, guarded by a Postgres advisory lock (`pg_try_advisory_lock`), and
+`deploy/lumaris-reaper.service` runs it as a dedicated scheduler with
+`REAPER_DISABLED=true` on the API workers.
+
+**2. Maintenance can no longer fail silently.**
+`except Exception: pass` meant the reaper could be dead for weeks while the API reported
+healthy — VMs never expiring, dead nodes still listed, bookings never settling. Every
+failure is now logged, and `/health/ready` exposes
+`maintenance.{is_leader,last_success_age_s,failures,stale}`. **Alert on `stale == true`.**
+
+**3. API-key scopes are default-DENY.**
+`scopes == []` used to mean *full access* (back-compat). That turns any parsing bug, bad
+migration, or truncated column into root. Now: an empty scope list is denied; `"*"` is an
+explicit, deliberate privilege; new keys are minted with real scopes (`node`, `jobs` — a
+machine in someone's living room cannot move money). Legacy keys can be honoured only via
+an explicit `LEGACY_KEYS_FULL_ACCESS=true` migration flag. Scopes gate **API keys only** —
+a JWT session is an authenticated human and is governed by role/ownership checks instead.
+
+**4. `X-Forwarded-For` is only trusted from a declared proxy.**
+The old code trusted the header unconditionally, so any client could send
+`X-Forwarded-For: 1.1.1.1` to defeat rate limiting and fake their country for the
+data-residency gate. Now only peers in `TRUSTED_PROXIES` (default `127.0.0.1,::1`) may set
+it. **Set `TRUSTED_PROXIES` to your nginx address on the droplet.**
+
+**5. Production refuses to boot with stubs on.**
+`ENVIRONMENT=production` + any of `GOOGLE_OAUTH_STUB`, `PAYOUT_STUB`, `S3_STUB`,
+`LEGACY_KEYS_FULL_ACCESS`, `PAYMENTS_MODE != live`, or a default `SECRET_KEY` → the app
+raises at startup instead of quietly serving a demo as if it were a marketplace.
+
+### Where the review was wrong about us
+- **API keys are already SHA-256 hashed**, not reversibly encrypted (the Fernet usage it
+  spotted is per-task backup encryption, which genuinely does need to be reversible).
+- Atomic reservation, idempotency, price snapshots, and organizations already existed.
+
+### Honest remaining gaps (not yet done)
+- ~~The ledger is an append-only journal, not strict double-entry.~~ **DONE** — see below.
+- **Marketplace filtering happens in Python**, not SQL — fine at 20 nodes, painful at
+  10,000. Needs SQL filtering, a reputation projection table, and cursor pagination.
+- **`main.py` / `db.py` are too large** and should be split into domain modules.
+- ~~CI runs SQLite~~ **DONE** — the whole suite now runs against Postgres too. See below.
+
+
+## The ledger is now real double-entry
+
+`LedgerTx` (a financial event) + `LedgerEntry` (its legs). **The only door into the ledger
+is `post()`, and it refuses to write when debits != credits** — there is deliberately no
+API for appending a single-sided entry. An unbalanced transaction raises
+`UnbalancedTransaction` and the operation fails loudly rather than losing a cent.
+
+**Accounts:** `buyer_available:<uid>`, `escrow:<booking_id>`, `seller_earnings:<uid>`,
+`org_available:<oid>`, `platform_revenue`, and `external:{payments,payouts,mining}`.
+Balance = `SUM(credits) - SUM(debits)`. Because money entering the system debits an
+`external:` account, **the whole ledger sums to zero.**
+
+**Every money movement is now a balanced transaction:** deposit, org deposit, escrow hold,
+extend, metered settlement (escrow -> seller + platform + refund), full settlement, full
+refund, idle-mining income, and **payouts — which previously never touched the ledger at
+all; seller earnings simply vanished from the books when withdrawn.**
+
+**`users.balance` / `users.earnings` / `platform.revenue` are now caches.** The ledger is
+the source of truth. If they ever disagree, the ledger is right — and the tests prove they
+don't:
+
+- every transaction balances; the whole ledger sums to zero
+- every wallet, every seller's earnings, and platform revenue are **reconstructible from
+  the ledger** (0 mismatches)
+- settled bookings **drain escrow to exactly zero**
+- transactions always have entries on both sides
+- `post()` **refuses** an unbalanced write
+- and all of the above still holds **after the concurrent-abuse adversarial test**
+
+Reconstruct any balance with `account_balance(db, acct_buyer(uid))`; audit the whole book
+with `ledger_is_balanced(db)`.
+
+
+## Tests now run on Postgres, not just SQLite
+
+SQLite was the wrong engine to be confident on. It has **no decimal type** (so
+`NUMERIC(20,8)` round-trips through a float — "exact money" was unproven no matter how
+green the suite looked), it **serialises writers** (so whole classes of race condition
+cannot occur), and it has **no advisory locks** (so the maintenance leader election that
+stops every gunicorn worker running its own reaper was a silent no-op).
+
+```bash
+cd lumaris_api
+./run_tests.sh              # sqlite only — fast inner loop
+./run_tests.sh --postgres   # both engines — what CI runs
+```
+
+`.github/workflows/tests.yml` runs both. **Results on real Postgres 16:**
+
+| suite | result |
+|---|---|
+| smoke | **306 passed** |
+| adversarial (money + races) | **14 passed** |
+| postgres-only invariants | **12 passed** |
+| tunnel (NAT + failover) | **12 passed** |
+
+`postgres_test.py` asserts what SQLite structurally cannot:
+- `users.balance` really is `NUMERIC(20,8)` **in the database**, precision/scale enforced
+  by Postgres itself
+- `0.1 + 0.2` stored and re-read from Postgres is **exactly** `0.3`, and comes back a
+  `Decimal`, not a float
+- 200 × `$0.001` accumulated **inside Postgres** is exactly `$0.20`
+- **`pg_try_advisory_lock` elects exactly ONE leader out of 4 simulated workers** — this
+  is the "4 gunicorn workers = 4 reapers" fix, and it had never actually been exercised
+  because it is a no-op on SQLite
+- the lock is reacquirable after the leader exits (no permanent deadlock)
+- **50 threads racing to debit $10 from a $100 wallet: exactly 10 win**, balance lands on
+  exactly `$0.00`, never negative — a genuine parallel race, not a serialised queue
+- the double-entry ledger balances and refuses unbalanced writes on the real engine too

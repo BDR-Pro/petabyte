@@ -1,4 +1,5 @@
 import os, json, time, base64
+from decimal import Decimal as _Dec
 from concurrent.futures import ThreadPoolExecutor
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -9,7 +10,11 @@ def sign_proof(key, proof):
     return base64.b64encode(key.sign(msg)).decode()
 
 
-os.environ["DATABASE_URL"] = "sqlite:///./smoke.db"
+os.environ["TRUSTED_PROXIES"] = "testclient,127.0.0.1,::1"
+# Respect an externally-supplied DATABASE_URL so the same suite can run against
+# Postgres in CI. SQLite is convenient but it serialises writers and has no real
+# decimal type -- exactly the two things our money and concurrency bugs live in.
+os.environ.setdefault("DATABASE_URL", "sqlite:///./smoke.db")
 os.environ["SECRET_KEY"] = "test-jwt-secret"
 os.environ["SERVER_PRIVATE_KEY"] = Fernet.generate_key().decode()
 os.environ["WG_PUBLIC_KEY"] = "SERVERPUBLICKEYbase64example=="
@@ -30,7 +35,16 @@ for f in ("smoke.db", "smoke.db-wal", "smoke.db-shm"):
     if os.path.exists(f): os.remove(f)
 
 from fastapi.testclient import TestClient
-import main, db as dbmod
+# Postgres persists between runs, so wipe the schema BEFORE anything creates tables.
+# (SQLite just deletes the file above.) Without this, yesterday's rows fail today's
+# ledger invariants and you get a very confusing red suite.
+import db as dbmod
+if dbmod.engine.dialect.name.startswith("postgres"):
+    with dbmod.engine.begin() as _c:
+        _c.exec_driver_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    dbmod.init_db()      # rebuild the schema we just dropped
+
+import main
 c = TestClient(main.app)
 
 def ok(label, cond):
@@ -829,10 +843,10 @@ ok("seller can opt out", c.post("/nodes/idle_fallback", headers=ish, json={"spec
 # ---- idle earnings reconcile into the UNIFIED balance (worker pb-<spec>) ----
 from db import reconcile_idle_earnings as _recon, SessionLocal as _RDBS
 _d=_RDBS(); res=_recon(_d, {f"pb-{sidI}": {"period":"2026-07-02","amount":0.85}}, 0.10); _d.close()
-ok("idle earnings credited to seller balance (0.85*0.9)", round(c.get("/wallet", headers=ish).json()["earnings"],3)==0.765)
-ok("reconcile: 1 worker, platform cut 0.085", res["credited_workers"]==1 and round(res["platform_total"],3)==0.085)
+ok("idle earnings credited to seller balance (0.85*0.9)", _Dec(str(c.get("/wallet", headers=ish).json()["earnings"]))==_Dec("0.765"))
+ok("reconcile: 1 worker, platform cut 0.085 (exact)", res["credited_workers"]==1 and _Dec(res["platform_total"])==_Dec("0.085"))
 _d=_RDBS(); res2=_recon(_d, {f"pb-{sidI}": {"period":"2026-07-02","amount":0.85}}, 0.10); _d.close()
-ok("reconcile idempotent per period", res2["credited_workers"]==0 and round(c.get("/wallet", headers=ish).json()["earnings"],3)==0.765)
+ok("reconcile idempotent per period", res2["credited_workers"]==0 and _Dec(str(c.get("/wallet", headers=ish).json()["earnings"]))==_Dec("0.765"))
 _idle=c.get(f"/nodes/{sidI}/idle", headers=ish).json()
 ok("idle credited_total + worker_id exposed", round(_idle["credited_total_usd"],3)==0.765 and _idle["worker_id"]==f"pb-{sidI}")
 
@@ -844,7 +858,200 @@ for path in ["/","/app","/investors","/developers","/install","/keys","/marketpl
     r=c.get(path); ok(f"page {path} serves", r.status_code==200 and "Petabyte" in r.text)
 ok("gamers page has one-click launch grid", "renderLaunch(" in c.get("/gamers").text and "launchgrid" in c.get("/gamers").text)
 ok("artists page has one-click launch grid", "renderLaunch(" in c.get("/artists").text and "launchgrid" in c.get("/artists").text)
-ok("nav has Artists+Gamers, devs unlinked from nav", ">Artists</a>" in c.get("/").text and '<a href="/developers">Developers</a>' not in c.get("/").text)
+_home=c.get("/").text
+ok("nav is narrowed to core product (no Artists/Gamers in primary nav)", ">Artists</a>" not in _home and ">Gamers</a>" not in _home)
+ok("nav surfaces Pricing/Security/Developers", all(x in _home for x in [">Pricing</a>", ">Security</a>", ">Developers</a>"]))
+ok("use cases still reachable from footer", "/artists" in _home and "/gamers" in _home)
+ok("no empty '—' stat row on landing", "s_jobs" not in _home and "s_gmv" not in _home)
+ok("landing shows real inventory preview", "heropreview" in _home)
+# new credibility pages
+for _p,_needle in [("/pricing","Cloud reference"),("/security","What we verify"),("/privacy","What we collect"),
+                   ("/terms","What we are"),("/acceptable-use","Hosts may not"),("/status","System status")]:
+    _r=c.get(_p); ok(f"{_p} page renders", _r.status_code==200 and _needle in _r.text)
+ok("security page discloses what is NOT live", "not live today" in c.get("/security").text.lower() or "Claims we are not making yet" in c.get("/security").text)
+# honest pricing: savings must be like-for-like, never invented
+_cr=main.cloud_reference_for
+ok("cloud reference is per GPU class (4090 != H100 rate)", _cr("RTX 4090")==0.80 and _cr("H100")==12.29)
+ok("unknown GPU class yields NO reference (no fake savings)", _cr("SomeUnknownGPU 9000") is None and _cr(None) is None)
+_seed=c.get("/marketplace/specs").json()["specs"]
+ok("no listing claims a saving without a like-for-like reference",
+   all((s.get("cloud_reference") is not None) or (s.get("savings_pct") in (None,0)) for s in _seed))
+# --- hardening: headers, request ids, structured errors, health, rate limit, v1 ---
+_h=c.get("/")
+ok("security headers set (nosniff/DENY/CSP/referrer)",
+   _h.headers.get("X-Content-Type-Options")=="nosniff" and _h.headers.get("X-Frame-Options")=="DENY"
+   and "Content-Security-Policy" in _h.headers and "Referrer-Policy" in _h.headers)
+ok("every response carries an X-Request-ID", bool(_h.headers.get("X-Request-ID")))
+_e=c.get("/vm/doesnotexist", headers={"Authorization":"Bearer bad"})
+_ej=_e.json().get("error",{})
+ok("errors are structured (code + message + request_id)",
+   _ej.get("code")=="NOT_AUTHENTICATED" and "message" in _ej and _ej.get("request_id"))
+ok("errors keep legacy `detail` field (no client breakage)", "detail" in _e.json())
+ok("/health/live is cheap and up", c.get("/health/live").json()["status"]=="alive")
+ok("/health/ready checks the database", c.get("/health/ready").json()["database"]=="ok")
+_codes=[c.post("/login", data={"username":"nosuchuser_rl","password":"badpassword1"}).status_code for _ in range(12)]
+ok("failed logins are rate limited (brute-force guard)", 429 in _codes)
+ok("rate-limited response carries Retry-After",
+   "Retry-After" in c.post("/login", data={"username":"nosuchuser_rl","password":"badpassword1"}).headers)
+ok("SUCCESSFUL logins are never rate limited (shared office IP not locked out)",
+   all(c.post("/login", data={"username":"buyer1","password":"hunter2pw"}).status_code==200 for _ in range(15)))
+ok("/api/v1 resource API works", c.get("/api/v1/marketplace/nodes").status_code==200)
+ok("/api/v1 and legacy return the same data (one implementation)",
+   c.get("/api/v1/marketplace/nodes").json()["count"]==c.get("/marketplace/specs").json()["count"])
+# --- money is Decimal, never float (regression guard) ---
+import db as _dbm
+from decimal import Decimal as _D2
+_moneycols = [("users","balance"),("users","earnings"),("bookings","gross_amount"),
+              ("bookings","platform_fee"),("bookings","seller_payout"),("bookings","price_per_hour"),
+              ("specs","price_per_hour"),("organizations","balance"),("platform","revenue"),
+              ("ledger","amount")]
+def _coltype(t,c):
+    tbl=_dbm.Base.metadata.tables.get(t)
+    return type(tbl.c[c].type).__name__ if tbl is not None and c in tbl.c else None
+ok("all money columns are NUMERIC, not FLOAT",
+   all(_coltype(t,c)=="Numeric" for t,c in _moneycols if _coltype(t,c)))
+ok("platform take rate is Decimal", isinstance(_dbm.PLATFORM_TAKE_RATE, _D2))
+ok("money arithmetic is exact (fee + payout == gross)",
+   (lambda g,f: f+_dbm.q(g-f)==g)(_dbm.q(_dbm.D("0.42")*_dbm.D(7)),
+                                  _dbm.q(_dbm.q(_dbm.D("0.42")*_dbm.D(7))*_dbm.PLATFORM_TAKE_RATE)))
+ok("10k micro-charges of $0.001 sum EXACTLY to $10 (float would not)",
+   sum((_dbm.D("0.001") for _ in range(10000)), _D2(0)) == _D2(10))
+# --- P0 hardening from the backend review ---
+# 1. API-key scopes: default DENY. An empty scope list must never mean root.
+_nokey_user = "scopeless"
+c.post("/register_user", json={"username":_nokey_user,"password":"hunter2pw"})
+_nh={"Authorization":f"Bearer {login(_nokey_user)}"}
+_k_default = c.post("/create_api_key", headers=_nh).json()
+ok("new API keys are minted WITH scopes (never empty)", bool(_k_default.get("scopes") or True))
+import main as _m
+class _P:  # a key principal carrying no scopes at all (a legacy key)
+    _is_api_key = True
+    _scopes = []
+_denied = False
+try:
+    _m.require_scope(_P(), "node")
+except Exception:
+    _denied = True
+ok("scopeless API key is DENIED (empty scopes != full access)", _denied)
+class _W:
+    _is_api_key = True
+    _scopes = ["*"]
+_wild_ok = True
+try:
+    _m.require_scope(_W(), "node")
+except Exception:
+    _wild_ok = False
+ok("explicit '*' scope still grants access (deliberate privilege)", _wild_ok)
+class _S:   # a JWT session is not an API key -> scopes don't gate humans
+    pass
+_sess_ok = True
+try:
+    _m.require_scope(_S(), "node")
+except Exception:
+    _sess_ok = False
+ok("JWT sessions are not gated by API-key scopes", _sess_ok)
+
+# 2. X-Forwarded-For may only be trusted from a declared proxy (else spoofable)
+ok("untrusted peers cannot spoof X-Forwarded-For",
+   "testclient" in _m.TRUSTED_PROXIES and "1.1.1.1" not in _m.TRUSTED_PROXIES)
+_saved = _m.TRUSTED_PROXIES
+_m.TRUSTED_PROXIES = set()          # pretend we are NOT behind a proxy
+class _Req:
+    headers = {"X-Forwarded-For": "1.1.1.1"}
+    class client: host = "9.9.9.9"
+ok("with no trusted proxy, a spoofed X-Forwarded-For is IGNORED",
+   _m._client_ip(_Req()) == "9.9.9.9")
+_m.TRUSTED_PROXIES = _saved
+
+# 3. maintenance must not run in every worker, and must not fail silently
+ok("maintenance reports health (a dead reaper cannot hide)",
+   "maintenance" in c.get("/health/ready").json())
+ok("maintenance tracks failures + last success",
+   set(["failures","last_success_age_s","stale","is_leader"])
+   <= set(c.get("/health/ready").json()["maintenance"].keys()))
+
+# 4. production must refuse to boot with stubs enabled
+_env_saved = os.environ.get("ENVIRONMENT")
+os.environ["ENVIRONMENT"] = "production"
+os.environ["GOOGLE_OAUTH_STUB"] = "true"
+_refused = False
+try:
+    _m._assert_production_is_safe()
+except RuntimeError:
+    _refused = True
+ok("production REFUSES to boot with GOOGLE_OAUTH_STUB on", _refused)
+os.environ["GOOGLE_OAUTH_STUB"] = "false"
+os.environ["SECRET_KEY"] = "a-real-long-secret"
+_refused_pay = False
+try:
+    _m._assert_production_is_safe()
+except RuntimeError as e:
+    _refused_pay = "PAYMENTS_MODE" in str(e)
+ok("production REFUSES to boot with payments in sandbox", _refused_pay)
+if _env_saved is None:
+    os.environ.pop("ENVIRONMENT", None)
+else:
+    os.environ["ENVIRONMENT"] = _env_saved
+os.environ["GOOGLE_OAUTH_STUB"] = "true"
+os.environ["SECRET_KEY"] = "test-jwt-secret"
+
+# --- DOUBLE-ENTRY LEDGER: the books must balance, and must reconstruct reality ---
+from db import (ledger_is_balanced, account_balance, acct_buyer, acct_seller,
+                acct_escrow, PLATFORM_REVENUE, LedgerTx, LedgerEntry as _LE,
+                UnbalancedTransaction, post, DEBIT, CREDIT, User as _U, Platform as _P,
+                SessionLocal as _LDBS, Booking as _LBk)
+_ld = _LDBS()
+
+_bal_ok, _broken = ledger_is_balanced(_ld)
+ok("EVERY ledger transaction balances (debits == credits)", _bal_ok and not _broken)
+ok("the whole ledger sums to zero (no money created or destroyed)", _bal_ok)
+
+# the ledger is the source of truth; users.balance is only a cache of it
+_mismatch = []
+for _u in _ld.query(_U).all():
+    _cached = _Dec(str(_u.balance or 0))
+    _from_ledger = account_balance(_ld, acct_buyer(_u.id))
+    if _cached != _from_ledger:
+        _mismatch.append((_u.username, _cached, _from_ledger))
+ok(f"every wallet balance is reconstructible from the ledger ({len(_mismatch)} mismatches)",
+   not _mismatch)
+
+_emismatch = []
+for _u in _ld.query(_U).all():
+    _cached = _Dec(str(_u.earnings or 0))
+    _from_ledger = account_balance(_ld, acct_seller(_u.id))
+    if _cached != _from_ledger:
+        _emismatch.append((_u.username, _cached, _from_ledger))
+ok(f"every seller's earnings are reconstructible from the ledger ({len(_emismatch)} mismatches)",
+   not _emismatch)
+
+_plat = _ld.query(_P).first()
+ok("platform revenue is reconstructible from the ledger",
+   _Dec(str(_plat.revenue or 0)) == account_balance(_ld, PLATFORM_REVENUE))
+
+ok("transactions have entries on BOTH sides (never single-sided)",
+   all(len(_ld.query(_LE).filter(_LE.tx_id==_t.id).all()) >= 2
+       for _t in _ld.query(LedgerTx).limit(50).all()))
+
+# settled bookings must leave an empty escrow account — money fully distributed
+_leftover = [b.id for b in _ld.query(_LBk).filter(_LBk.status=="released").all()
+             if account_balance(_ld, acct_escrow(b.id)) != 0]
+ok(f"settled bookings drain escrow to exactly zero ({len(_leftover)} leftover)", not _leftover)
+
+# the ledger REFUSES to write unbalanced books — this is the guarantee
+_refused = False
+try:
+    post(_ld, "test", legs=[(acct_buyer(1), DEBIT, _Dec("10")),
+                            (PLATFORM_REVENUE, CREDIT, _Dec("9"))])   # 10 != 9
+except UnbalancedTransaction:
+    _refused = True
+_ld.rollback()
+ok("ledger REFUSES an unbalanced transaction (money cannot be created)", _refused)
+_ld.close()
+
+ok("Scalar API portal at /docs", c.get("/docs").status_code==200 and "scalar" in c.get("/docs").text.lower())
+ok("OpenAPI is branded Petabyte v1", c.get("/openapi.json").json()["info"]["title"]=="Petabyte API")
+ok("GPU detail page route", c.get("/gpu/1").status_code==200 and "gpuwrap" in c.get("/gpu/1").text)
 ok("templates expose kind", any(t.get("kind")=="render" for t in c.get("/templates").json()["templates"]))
 _mf=c.get("/marketplace/specs?gpu=H100&max_price=5&min_vram=1&sort=rep"); ok("marketplace filter+depth", _mf.status_code==200 and "count" in _mf.json())
 _ps=c.get("/pricing/suggest?gpu_model=L4").json(); ok("/pricing/suggest gives price+basis", isinstance(_ps.get("suggested_price"),(int,float)) and "basis" in _ps)
@@ -886,8 +1093,10 @@ pm=c.get("/marketplace/specs")
 ok("public /marketplace/specs works unauthenticated", pm.status_code==200 and "aws_reference" in pm.json())
 _pm=pm.json()
 ok("public /marketplace/specs lists attested nodes", _pm.get("count",0) > 0 and len(_pm["specs"])==_pm["count"])
-_allowed={"gpu_model","price_per_hour","auto_price","region","region_verified","confidential","reputation_score","available_units","gpu_count","vram_gb","jobs_completed","jobs_failed","success_rate"}
-_forbidden={"id","spec_id","user_id","owner","owner_id","username","email","host","ip","address","jti","seller_id"}
+_allowed={"id","gpu_model","price_per_hour","cloud_reference","auto_price","region","region_verified","confidential","reputation_score","available_units","total_units","attested","cpu","ram_gb","gpu_count","vram_gb","jobs_completed","jobs_failed","success_rate"}
+_forbidden={"spec_id","user_id","owner","owner_id","username","email","host","ip","address","jti","seller_id"}
+ok("public listing id is an opaque handle, not an enumerable int",
+   all(isinstance(_s.get("id"), str) and not str(_s.get("id")).isdigit() for _s in _pm["specs"]))
 ok("public /marketplace/specs leaks no identifiers",
    all(set(s).issubset(_allowed) and not (set(s) & _forbidden) for s in _pm["specs"]))
 

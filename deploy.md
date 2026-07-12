@@ -1,315 +1,179 @@
-# Deploying Petabyte
+# deploy.md — things only you can do
 
-End-to-end guide to run Petabyte on a live server, then switch it from
-**sandbox** (demo) to **live** (real payments). Two components:
+Everything in this file needs your hands: your DNS, your droplet, your accounts.
+Code-side work is done and green (288 smoke + 11 adversarial assertions).
 
-- **lumaris_api** — the marketplace API + buyer dashboard. Runs on a server (a
-  DigitalOcean droplet in this guide).
-- **lumaris_agent** — the seller node agent. Runs on each GPU machine (NOT on the
-  API droplet — it needs Docker/KVM/GPU).
+Ordered by value. **Do 1 and 2 this week.**
 
 ---
 
-## 0. Architecture at a glance
+## 1. Kill the duplicate sites (highest value on the whole list)
 
-```
-            buyers (CLI / dashboard at /)
-                        |
-                   HTTPS :443
-                        |
-            ┌───────────▼───────────┐
-            │  nginx  →  gunicorn    │   systemd: lumaris-api
-            │  (uvicorn workers)     │
-            │  + lumaris-reaper      │   systemd: lumaris-reaper (refund-on-reap)
-            └───────────┬───────────┘
-                        │
-                   PostgreSQL
-                        ▲
-                        │  X-API-KEY (heartbeat, /jobs/next, signed results)
-            seller GPU nodes (lumaris_agent + Docker sandbox)
-```
+Right now someone can type `www.petabyte.market` or `space.petabyte.market` and land on
+an **older Petabyte with a different design and a broken login (502)**. That reads as a
+dead company. No amount of typography beats fixing this.
 
----
-
-## 1. Prerequisites
-
-- A fresh **Ubuntu 24.04** droplet (1 vCPU / 2 GB is enough to start).
-- A **PostgreSQL** database (DigitalOcean Managed DB, or Postgres on the droplet).
-- A domain you can point at the droplet (for HTTPS).
-- For sellers: any Ubuntu/Debian box with a GPU + Docker.
-
----
-
-## 2. Sanity check locally first (optional, 1 min)
+Full config: **`deploy/canonical-domain.md`**. Short version:
 
 ```bash
-cd lumaris_api
-bash quickstart.sh
-source .venv/bin/activate
-python smoke_test.py            # expect: ALL CHECKS PASSED
-uvicorn main:app --reload       # open http://localhost:8000/  (dashboard)
+# DNS: A @ -> droplet IP; CNAME www -> petabyte.market; CNAME space -> petabyte.market
+sudo certbot --nginx -d petabyte.market -d www.petabyte.market -d space.petabyte.market
+# nginx: 301 www + space -> https://petabyte.market$request_uri   (see canonical-domain.md)
+sudo nginx -t && sudo systemctl reload nginx
 ```
+
+Verify:
+```bash
+curl -sI https://www.petabyte.market/login | head -1    # expect 301
+curl -sI https://petabyte.market/login     | head -1    # expect 200, NOT 502
+```
+
+Then **stop the old service** on whatever box served the old site. A redirect in front of
+a live old app is one nginx typo away from resurfacing.
 
 ---
 
-## 3. Provision the droplet
+## 2. Deploy this build
 
 ```bash
-# from your machine
-scp -r lumaris_api root@DROPLET_IP:/root/lumaris
-
-# on the droplet
-ssh root@DROPLET_IP
-cd /root/lumaris
-bash deploy/deploy.sh
+ssh root@<droplet>
+cd /root/petabyte && git pull        # or upload the zip
+sudo PETABYTE_SRC=/root/petabyte /opt/lumaris/deploy/update.sh
 ```
 
-`deploy.sh` installs Python + Postgres + nginx + certbot + ufw, creates the
-`lumaris` service user and a local DB, generates secrets into
-`/etc/lumaris/lumaris.env` (chmod 600), creates the tables, and starts two
-systemd services behind nginx on port 80:
+**The database migrates itself** — `init_db()` adds the new columns, indexes, and
+backfills opaque public ids for existing listings. Idempotent; safe to run twice.
 
-| Service          | Role                                            |
-|------------------|-------------------------------------------------|
-| `lumaris-api`    | gunicorn + uvicorn workers (bound 127.0.0.1:8000) |
-| `lumaris-reaper` | marks dead nodes offline + **refunds in-flight bookings** |
-| `nginx`          | reverse proxy :80 → :8000                       |
-
-> The reaper runs as its own service; the web app sets `REAPER_DISABLED=true` so
-> it doesn't run once per gunicorn worker. Don't enable both.
-
----
-
-## 4. Configure the environment
-
-Everything is driven by `/etc/lumaris/lumaris.env` (chmod 600). After
-`deploy.sh` it has working defaults; edit it for production, then
-`systemctl restart lumaris-api lumaris-reaper`.
-
-```ini
-# --- Database (REQUIRED: switch off SQLite for production) ---
-DATABASE_URL=postgresql+psycopg2://lumaris:PASSWORD@your-db-host:5432/lumaris
-
-# --- Secrets (ROTATE — old committed ones are compromised, see SECURITY.md) ---
-SECRET_KEY=<openssl rand -hex 32>
-SERVER_PRIVATE_KEY=<python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())">
-
-# --- Marketplace / trust ---
-PLATFORM_TAKE_RATE=0.10
-MIN_REPUTATION=50
-HEARTBEAT_TIMEOUT_S=60
-
-# --- Reaper (separate service owns it) ---
-REAPER_DISABLED=true
-REAPER_INTERVAL_S=20
-
-# --- Web ---
-WEB_CONCURRENCY=3
-LOG_LEVEL=info
-
-# --- Payments (see section 8 to go live) ---
-PAYMENTS_MODE=sandbox            # sandbox = /deposit mints test credits
-PAYMENT_WEBHOOK_SECRET=          # required when PAYMENTS_MODE=live
-
-# --- Dashboard ---
-AWS_REFERENCE_PRICE=12.29        # $/hr shown in the savings column
-
-# --- CORS (only for a separate frontend/CLI origin; dashboard at / is same-origin) ---
-ALLOWED_ORIGINS=                 # e.g. https://app.petabyte.market
-
-# --- WireGuard (keep OFF unless you run a real VPN host; see section 9) ---
-WG_PUBLIC_KEY=<server pubkey>
-WG_ENDPOINT=<droplet public IP>
-WG_APPLY=false
-WG_INTERFACE=wg0
+New env var worth setting:
+```
+S3_SSE=AES256          # AES256 works on AWS S3 AND DigitalOcean Spaces ("aws:kms" is AWS-only)
 ```
 
-Generate secrets:
+Verify after deploy:
 ```bash
-openssl rand -hex 32                                                   # SECRET_KEY
-python3 -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"   # SERVER_PRIVATE_KEY
+curl -s  https://petabyte.market/health/live            # {"status":"alive"}
+curl -s  https://petabyte.market/health/ready           # {"status":"ready","database":"ok"}
+curl -sI https://petabyte.market/ | grep -i content-security-policy   # CSP present
+curl -s  https://petabyte.market/api/v1/marketplace/nodes | head -c 120
+open     https://petabyte.market/docs                   # Scalar API portal
 ```
+
+The deploy script now ends with a **DEBUG env report** classifying every setting as
+`[LIVE] / [STUB] / [SET] / [DEFAULT] / [MISSING]`. Read it. It tells you exactly what this
+deployment will really do.
 
 ---
 
-## 5. Database + migrations (REQUIRED on Postgres)
+## 3. Run the suite against Postgres (now automated)
 
-The bundled Alembic migrations predate the current schema (bookings, tasks,
-ledger, test_workloads, wg_peers, idempotency, processed_webhooks). Regenerate
-and apply once, as the `lumaris` user, after setting `DATABASE_URL`:
+This used to be a manual step because CI only ran SQLite. It no longer is —
+`.github/workflows/tests.yml` runs everything against Postgres 16 on every push, and
+`lumaris_api/run_tests.sh --postgres` does it locally.
+
+Still worth doing **once against YOUR managed Postgres** before real funds, because your
+database has different settings (pooling, timeouts, isolation) than a stock container:
 
 ```bash
-cd /opt/lumaris
-sudo -u lumaris .venv/bin/alembic revision --autogenerate -m "full schema"
-sudo -u lumaris .venv/bin/alembic upgrade head
+ssh root@<droplet>
+cd /root/petabyte/lumaris_api
+DATABASE_URL="<your managed-postgres URL>" python adversarial_test.py   # expect 14 passed
+DATABASE_URL="<your managed-postgres URL>" python postgres_test.py      # expect 12 passed
 ```
 
-> First boot also calls `init_db()` (create_all) for convenience, but use Alembic
-> for anything beyond the first deploy so schema changes are versioned.
+`postgres_test.py` is the one that matters: it proves money is exact **in the database**,
+that exactly one worker wins the maintenance lock, and that 50 parallel debits on one
+wallet resolve correctly. If anything fails, do **not** flip payments live.
 
 ---
 
-## 6. HTTPS
+## 3b. Run maintenance as ONE process (not one per API worker)
+
+Gunicorn runs several workers. The reaper used to live inside the app, so **every worker
+ran it** — racing to fail over the same node and settle the same booking every 20s. Fixed
+in code (advisory lock), but do the deployment side too:
 
 ```bash
-# point an A record (e.g. api.yourdomain.com) at the droplet, then:
-sed -i 's/server_name _;/server_name api.yourdomain.com;/' /etc/nginx/sites-available/lumaris
-systemctl reload nginx
-certbot --nginx -d api.yourdomain.com
+# 1. API workers must NOT run maintenance:
+echo 'REAPER_DISABLED=true'   >> /etc/lumaris/lumaris.env
+# 2. and tell the app who your reverse proxy is, so X-Forwarded-For can be trusted:
+echo 'TRUSTED_PROXIES=127.0.0.1,::1' >> /etc/lumaris/lumaris.env
+
+sudo cp deploy/lumaris-reaper.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now lumaris-reaper
+systemctl status lumaris-reaper
 ```
 
----
-
-## 7. Verify
+**Add an alert.** A dead reaper is a silent money bug — VMs never expire, dead nodes stay
+listed, bookings never settle, and the API keeps reporting healthy the whole time:
 
 ```bash
-systemctl status lumaris-api lumaris-reaper
-curl -s https://api.yourdomain.com/healthz      # {"status":"ok"}
-curl -s https://api.yourdomain.com/readyz       # {"status":"ready"}  (DB reachable)
-# open https://api.yourdomain.com/  -> the buyer dashboard
-journalctl -u lumaris-api -f                     # live logs
+curl -s https://petabyte.market/health/ready | jq .maintenance
+# alert if .stale == true, or .failures keeps climbing
 ```
 
 ---
 
-## 8. Switching to LIVE payments
+## 4. Before taking real money
 
-In **sandbox** mode `/deposit` mints test credits (great for demos). In **live**
-mode that endpoint is disabled and money only enters via a verified webhook.
+- [ ] `PAYMENTS_MODE=live` + real Stripe keys (today: sandbox mints test credit)
+- [ ] `PAYOUT_STUB=false` + real payout provider + **real KYC/AML** (today: simulated)
+- [ ] **Rotate `SECRET_KEY` and the Fernet key** — the old ones were exposed in chat
+- [ ] `GOOGLE_OAUTH_STUB` must be **unset** in prod (if `true`, it's an open demo login)
+- [ ] Set `SENTRY_DSN`, add UptimeRobot on `/health/ready`
+- [ ] `ALLOWED_ORIGINS=https://petabyte.market` (CORS is allow-list only — keep it tight)
+- [ ] `TRUSTED_PROXIES=<nginx address>` — without it, `X-Forwarded-For` is ignored (safe
+      default); with a wrong value, clients could spoof their IP and country
+- [ ] Set `ENVIRONMENT=production`. **The app will now refuse to boot** if any stub is
+      still on (`GOOGLE_OAUTH_STUB`, `PAYOUT_STUB`, `S3_STUB`, sandbox payments, a default
+      `SECRET_KEY`). That refusal is the feature — do not work around it.
+- [ ] Re-mint any API keys issued before scopes existed. Scopeless keys are now **denied**
+      (they used to mean *full access*). `LEGACY_KEYS_FULL_ACCESS=true` exists only as a
+      temporary migration escape hatch — do not leave it on.
 
-### 8a. Env change (no code needed for the generic webhook)
-
-```ini
-PAYMENTS_MODE=live
-PAYMENT_WEBHOOK_SECRET=<a strong shared secret>
-```
-`systemctl restart lumaris-api`. Now `POST /deposit` returns 403, and balances
-are credited only by `POST /webhooks/payment`, which:
-- verifies `X-Signature` = HMAC-SHA256 of the raw body using `PAYMENT_WEBHOOK_SECRET`,
-- is idempotent on `event_id` (safe to retry — no double credit),
-- expects JSON `{"event_id","type","data":{"username","amount"}}`.
-
-Your payment provider (or a small bridge) calls this on successful payment.
-
-### 8b. Code change to use Stripe specifically (optional)
-
-The generic HMAC works as-is. To use Stripe's native verification instead:
-
-1. `pip install stripe` (add to `requirements.txt`).
-2. In `main.py`, replace the signature check inside `payment_webhook`:
-
-```python
-# BEFORE (generic HMAC)
-sig = request.headers.get("X-Signature", "")
-if not verify_webhook_signature(PAYMENT_WEBHOOK_SECRET, raw, sig):
-    raise HTTPException(status_code=401, detail="Invalid webhook signature")
-try:
-    evt = json.loads(raw)
-    event_id = evt["event_id"]
-    username = evt["data"]["username"]
-    amount = float(evt["data"]["amount"])
-except (ValueError, KeyError, TypeError):
-    raise HTTPException(status_code=400, detail="Malformed event")
-
-# AFTER (Stripe)
-import stripe
-sig = request.headers.get("Stripe-Signature", "")
-try:
-    evt = stripe.Webhook.construct_event(raw, sig, PAYMENT_WEBHOOK_SECRET)
-except Exception:
-    raise HTTPException(status_code=401, detail="Invalid webhook signature")
-if evt["type"] != "checkout.session.completed":
-    return {"status": "ignored"}
-session = evt["data"]["object"]
-event_id = evt["id"]
-username = session["metadata"]["username"]     # set this when creating the Checkout Session
-amount = session["amount_total"] / 100.0       # cents -> dollars
-```
-
-Set the buyer's `username` in the Checkout Session `metadata` so the webhook
-knows whom to credit. Everything downstream (idempotency, crediting) is unchanged.
+`grep -rn 'TODO(stub)' lumaris_api/` gives the full inventory of what's still simulated.
 
 ---
 
-## 9. A note on the VPN
+## 5. The big one: prove the tunnel on real machines
 
-WireGuard config generation is correct and never leaks the server key, but live
-peer application is intentionally **off** (`WG_APPLY=false`). The notebook-job
-path (CLI + dashboard) needs no VPN. Turning it on for interactive VM rental
-requires a privileged peer-reconciler service, NAT, and opening UDP 51820 — defer
-until a customer needs SSH into a live VM.
+**This is the only thing standing between "impressive architecture" and "a product".**
+Nobody has yet SSH'd into a real container on a real seller's box.
 
----
+Follow **`docs/vm-runbook.md`**. You need two cheap cloud VMs + your laptop:
 
-## 10. Onboard a seller GPU node
+- **Phase A** — prove NAT traversal: `frps` on a public gateway, `frpc` on a node with
+  *no inbound ports open*, then from your laptop: `ssh -p <port> root@gateway` lands you
+  inside the container. If this works, the core product works.
+- **Phase B** — the stable address: add `sshpiper`, then
+  `ssh vm-<handle>@petabyte.market` routes by username to the current node.
+- **Failover test** — kill node A, confirm the *same handle* lands you on node B.
 
-On each GPU machine (not the API droplet):
-
-```bash
-PETABYTE_API_URL=https://api.yourdomain.com \
-PETABYTE_USER=alice PETABYTE_PASS=secret PRICE_PER_HOUR=1.5 \
-bash <(curl -fsSL https://YOUR_HOST/install.sh)
-```
-
-This installs Docker, detects the GPU, registers + attests the spec, mints an API
-key, writes `/etc/petabyte/agent.env`, and starts the `petabyte-agent` service.
-Verify with `systemctl status petabyte-agent`. See `lumaris_agent/INSTALL.md`.
+Budget half a day. Everything else on this list is subordinate to it.
 
 ---
 
-## 11. Updating / redeploying
+## 6. Windows agent dry run
 
-```bash
-scp -r lumaris_api root@DROPLET_IP:/root/lumaris
-ssh root@DROPLET_IP 'cd /root/lumaris && bash deploy/deploy.sh && \
-  systemctl restart lumaris-api lumaris-reaper'
+The PowerShell scripts (`install.ps1`, `manage.ps1`) are logically complete but have
+**never run on a real Windows box** — I can't execute PowerShell here.
+
+On a spare Windows machine:
+```powershell
+# install, then:
+$env:PETABYTE_ACTION="status";    irm https://petabyte.market/manage.ps1 | iex
+$env:PETABYTE_ACTION="pause";     irm https://petabyte.market/manage.ps1 | iex
+$env:PETABYTE_ACTION="uninstall"; irm https://petabyte.market/manage.ps1 | iex
 ```
-Re-running `deploy.sh` preserves existing secrets and data. If the schema
-changed, run the Alembic migration (section 5) before restarting.
+Confirm the uninstall path especially: it should remove the distro **only if we created
+it**, and disable WSL **only if WSL wasn't already on the machine**.
 
 ---
 
-## 12. Gotchas (in order of likelihood)
+## 7. Deferred deliberately (my recommendation)
 
-1. **Forgot the Alembic migration** → missing tables on Postgres → 500s. Run section 5.
-2. **`ALLOWED_ORIGINS` unset** → a separate frontend/CLI-from-browser hits CORS errors. The dashboard at `/` is fine (same-origin).
-3. **Left `PAYMENTS_MODE=sandbox` in production** → anyone mints free credits via `/deposit`. Set `live`.
-4. **`WG_APPLY=true` without a real VPN host** → `/vpn_config` 500s. Keep `false`.
-5. **Secrets not rotated** → the old committed values are compromised (SECURITY.md).
-
-## 13. Secure backups (object storage)
-
-Backups upload **directly from untrusted seller nodes**, so the security model is:
-the API holds the object-storage credentials; nodes never do.
-
-**Env** (`/etc/lumaris/lumaris.env`):
-```ini
-S3_BUCKET=petabyte-backups
-S3_REGION=us-east-1
-S3_ENDPOINT=                      # set for Cloudflare R2 / MinIO; empty for AWS
-AWS_ACCESS_KEY_ID=__SET_ME__      # the API's creds, NOT the nodes'
-AWS_SECRET_ACCESS_KEY=__SET_ME__
-BACKUP_RESCHEDULE_GRACE_S=900
-```
-
-**How it's secured:**
-- **No standing node credentials.** For each backup the agent calls
-  `POST /jobs/backup_url`; the API returns a **per-object, 15-min pre-signed PUT URL**.
-  A node can write exactly one key and holds nothing reusable.
-- **Per-tenant prefix isolation.** Keys are `backups/{buyer_id}/{task_id}/...`, and the
-  pre-signed URL is for that single key — one seller can't read or clobber another's.
-- **Client-side encryption.** The agent encrypts the tarball with a per-task key
-  (issued by the API, sealed at rest) before upload.
-- **Integrity on restore.** `POST /jobs/restore_url` returns the signed
-  `content_hash`; the agent re-hashes the download and refuses a tampered backup.
-
-**Bucket bootstrap.** `deploy.sh` creates the bucket if missing and hardens it when
-`S3_BUCKET` + creds are set: block-all-public-access, versioning (recover malicious
-overwrites), default SSE, a TLS-only bucket policy, and a 30-day lifecycle expiry.
-Re-run `deploy.sh` after setting the S3 vars, or apply the same `aws s3api` calls
-manually. For stronger isolation, give the API an IAM role scoped to
-`arn:aws:s3:::$S3_BUCKET/backups/*` only.
-
-**Honest limit:** the per-task key is platform-issued, so Petabyte (and the node
-during a job) can read backups. For buyer-confidential data, wrap the data key with
-a buyer-held KMS key / enclave key — roadmap, and it binds to the CC attestation.
+- **Next.js rewrite** — not yet. Do it after §5 passes and §3/§4 are done. Rewriting the
+  presentation layer while the core loop is unproven moves zero product risk.
+- **Hardware-backed attestation (SEV-SNP/TDX)** — Phase 2. Today's attestation is
+  software-signed, and `/security` says so honestly.
+- **gVisor on a real GPU box** — the agent adds `--runtime=runsc` when present; needs
+  verifying on real hardware.
