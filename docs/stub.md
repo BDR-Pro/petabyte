@@ -327,3 +327,223 @@ cd lumaris_api
 - **50 threads racing to debit $10 from a $100 wallet: exactly 10 win**, balance lands on
   exactly `$0.00`, never negative — a genuine parallel race, not a serialised queue
 - the double-entry ledger balances and refuses unbalanced writes on the real engine too
+
+## Pilot safety rails (built before letting a stranger's GPU on the network)
+
+**1. Kill switch.** `POST /admin/bookings/pause {"paused":true,"reason":"..."}` stops NEW
+bookings immediately and returns `503 BOOKINGS_PAUSED` + `Retry-After`. **Running rentals
+are untouched and settle normally** — stopping the world must never destroy someone's
+six-hour render. Enforced at the one chokepoint every booking path converges on, and
+checked *before* capacity is reserved or money moves. Audited.
+
+**2. Egress policy — this one protects the SELLER, not the buyer.**
+A rented container runs on a stranger's home connection, behind their IP. If a workload
+spams, port-scans, or joins a botnet, it is the **host** who gets the abuse complaint and
+the host who can lose their internet. So:
+- every template declares `egress`: `none` (batch — blender, ffmpeg get **no network at
+  all**), `limited` (outbound ok; inbound only via our tunnel), or `open` (nothing uses it)
+- **the agent enforces it**, and **defaults CLOSED** if a template forgets to declare one
+- container ports are published to **`127.0.0.1` only** — the reverse tunnel is the sole
+  ingress
+- the policy is visible to buyers in `/templates`
+
+**3. Email verification.** Not ceremony — it's how you reach a human at 2am when their
+node is emitting abuse traffic. Tokens are single-use, **hashed at rest**, expire in 15
+minutes; disposable domains rejected. **Required before adding a payout destination or
+withdrawing.**
+
+**4. Payout destination changes = the fraud vector.** Take over an account, swap the bank
+details, drain the earnings. Now:
+- **password re-auth** (a stolen session token is not enough)
+- **verified email required** (so the real owner is told, out-of-band)
+- **24h cooling-off** — a freshly-added destination *cannot receive money*. This turns an
+  account takeover from "instant drain" into "you get an email and a day to stop it"
+- the full destination is **never returned by the API**, not even to its owner — it was
+  previously being leaked in full by `GET /wallet/methods`
+- every change is audited (redacted)
+
+**5. Audit log.** `AuditEvent`, append-only: who did what, when, from where, with the
+request id. Covers payout changes, withdrawals, email verification, kill-switch use, and
+denied re-auth attempts. **Never stores secrets or full destinations.** Read it via
+`GET /admin/audit` when money is disputed.
+
+**6. Passwords.** Floor raised 8 → 12, plus rejection of the most-guessed passwords.
+Length beats complexity theatre. (A full HIBP k-anonymity check is the right next step.)
+
+## Product: onboarding, cost transparency, seller diagnostics
+
+Built from the UX review — but only the parts that work with the inventory we actually
+have. Comparison views, saved-search alerts, favorites, and websocket availability were
+deliberately SKIPPED: they all need supply and churn that doesn't exist yet. A comparison
+table across three nodes is a table.
+
+**Also skipped on purpose: the 7-step deployment wizard.** `/launch` is one click. The
+competitors make you configure hardware -> image -> storage -> networking -> SSH key ->
+review. Adding six steps to match them would be a regression. One-click IS the product.
+
+**1. `/onboarding`** — two funnels, because a buyer and a host want completely different
+things and one dashboard serves neither. Returns the checklist for whichever they are,
+with the NEXT step marked. This became necessary the moment email verification started
+gating payouts: without it a seller hits that wall with no idea why.
+
+**2. `/estimate`** — the price BEFORE the buyer commits. Total, hourly rate, what happens
+if they stop early (charged vs refunded, exactly), and a cloud comparison **only where we
+can compare like for like**. The Launch button now shows this and asks for confirmation.
+
+**3. `/seller/dashboard`** — utilization, earnings per node, and crucially a **diagnosis**.
+Every pilot seller asks "my GPU is on, why is nothing running?" within a day, and a
+dashboard that answers with a zero tells them nothing. So it names the blocker and the fix:
+not attested / offline (sleep+hibernate does this) / fully booked / **priced above the
+market median** (with the suggested price) / reputation gate / email unverified. If the
+blocker list is empty, it says so plainly — then it's demand, not them.
+
+**4. Jupyter + PyTorch templates.** The template list had games and image generation but
+nothing for a researcher who wants a notebook on a real GPU — the highest-intent GPU
+renter there is. Jupyter is `stateful`, so it gets snapshotted.
+
+**5. Landing intent split** — "What are you here for?" -> *I need GPUs* / *I have a GPU to
+rent out*. One CTA cannot serve both sides of a marketplace.
+
+## Frontend round 2 (items 9, 14–18)
+
+**Item 9 was a real bug, not a missing feature.** The templates existed and rendered, but
+there was no browsable catalog *page*. Now `/catalog`: filter chips (Notebooks / AI / Art /
+Render / Games), the full launch-card grid, an hours selector, and an honest "templates are
+a convenience, not a limit — here's how to launch any Docker image" block. Linked from the
+primary nav. Jupyter and PyTorch got their own `notebook` category and icons.
+
+**14 — buyer burn rate.** `/buyer/spend`. The number a buyer actually wants isn't "balance",
+it's *what is costing me money right now while I'm not looking*: live burn/hour, 24h
+projection, hours of runway, what's held in escrow (and refundable). Rendered as a live
+strip on `/account`.
+
+**15 — mobile.** A host checks "is my node earning?" from their phone, in bed. A 7-column
+table scrolled sideways is useless there. Under 720px every `.tbl` **collapses into stacked
+cards**, each cell labelled from its header via `data-l`. Applied to marketplace, pricing,
+account, and the seller dashboard.
+
+**16 — actionable errors.** The UI literally rendered `Could not launch (error 503)`. Now
+every booking error carries a code, a human explanation, **and where to go next**:
+> *"That host just went offline — it stopped sending heartbeats. **Nothing was charged.**
+> Try another verified host."* → **[Find another GPU]**
+
+Covers HOST_OFFLINE, GPU_NOT_VERIFIED, NO_CAPACITY, INSUFFICIENT_FUNDS, OWN_HARDWARE,
+GPU_NOT_FOUND. Every failure says whether money moved.
+
+**18 — command palette.** ⌘K / Ctrl+K anywhere: fuzzy search, arrow keys, enter to jump.
+
+**19 — dark mode** was already done properly (designed dark-first, with a real light theme,
+not an inversion).
+
+### Deliberately NOT built, with reasons
+- **20 Global search** — searching across hosts/sellers/models needs inventory that doesn't
+  exist. ⌘K covers navigation, which is the real need today.
+- **21 API playground** — `/docs` (Scalar) already does exactly this: try requests live,
+  copy cURL, view multi-language examples.
+- **23 Trust badges — REFUSED on honesty grounds.** "Enterprise Ready", "Green Energy",
+  "Fast Network" are badges we **cannot verify**. Inventing them is precisely the
+  overclaiming we deleted from the site earlier. We show what we can prove: verified
+  hardware, region-verified, confidential-computing, measured reputation, real success rate.
+- **24 Performance history charts** — we don't record time-series yet. A 30-day uptime chart
+  drawn from no data is a lie with axes. Needs a metrics table first; worth doing later.
+- **8 The 7-step deployment wizard** — still a regression. One-click IS the product.
+
+## Frontend/backend audit — what it found
+
+Two new auditors, both wired into CI (`.github/workflows/tests.yml`, job `frontend`):
+
+- **`audit_frontend.py`** — diffs the UI against the API. Dead calls (JS fetches an
+  endpoint that doesn't exist), dead links, dead DOM ids (`getElementById` on an element
+  that isn't there — the script throws and everything below it never runs), and orphan
+  routes (backend works, no UI reaches it).
+- **`audit_js.py`** — renders every page and runs `node --check` on each `<script>`.
+
+### The big one: a broken `<script>` returns HTTP 200
+Every Python test passed while **17 of 41 script blocks failed to parse**. Escaping a
+quote through Python → HTML attribute → JS string is a minefield: one lost backslash
+makes the string unterminated, the browser throws a SyntaxError, and **every function
+defined below it silently ceases to exist**. Pages looked fine and did nothing.
+
+Root causes, all now fixed:
+- `pbCmd()` emitted an unterminated string — long-standing, broke the shared script on
+  *every* page.
+- Generated `onclick="fn(\'…\')"` handlers lost their backslashes.
+- Apostrophes (`don't`, `Couldn't`) inside JS string literals.
+
+**Permanent fix: no inline `onclick` with nested quotes anywhere.** Elements declare
+`data-act` / `data-a1` / `data-a2` and one delegated listener dispatches. There is no
+escaping left to get wrong, and a smoke test now fails if the pattern reappears.
+
+### Working backend features with no frontend at all
+The orphan-route scan found three, one serious:
+- **Email verification had no UI** — while it *gates payouts*, and the onboarding
+  checklist told users to "verify your email → /account" where nothing existed. Every
+  seller would have hit a dead end at withdrawal. Now built; `/me` returns
+  `email_verified`.
+- **Notifications** — the backend has been emitting payout/refund/node-offline events
+  all along and the app never displayed one. Now shown on `/account`.
+- **VM event timeline** — `created → tunnel_registered → migrated`. This is the failover
+  proof, the most convincing thing we can show a buyer, and it was invisible. Now a
+  Timeline button on every instance, live or finished.
+
+Result: 0 dead calls, 0 dead links, 0 dead DOM ids, 0 broken script blocks.
+
+## The "enterprise redesign" brief — what we took and what we refused
+
+**Built (honest, and genuinely missing):**
+- **SEO / social.** Every page now has a meta description, canonical URL, Open Graph +
+  Twitter card, and schema.org Organization data. Before this, a link to petabyte.market
+  shared in a DM rendered as a bare URL with no title, summary or image.
+- **Arabic + RTL.** Direction is set before paint (no flash). Our CSS uses logical
+  properties throughout, so the layout mirrors. Critically, RTL is *not* "flip
+  everything": money, code, curl commands and monospace identifiers stay LTR inside
+  Arabic text — otherwise a price reads backwards. Translation is in-place via `data-ar`,
+  so there is no separate Arabic build to drift out of sync.
+- **`/contact`.** Real addresses, including a security channel with a no-legal-action
+  promise for good-faith research. An honest teams/volume path for the things the
+  self-serve product genuinely does not do yet (reserved capacity, invoicing, org billing).
+- **A real 404** that says *"nothing is wrong with your account or your instances"* and
+  offers a way out. API clients still get JSON.
+
+**Refused, on purpose:**
+- **Placeholder partner logos, customer logos and testimonials.** We have no customers.
+  Placeholders here are fabricated social proof. One fake logo spotted by an investor ends
+  the evaluation of everything else.
+- **A metrics wall** (availability, providers, countries, GPUs, jobs completed). We would
+  be publishing numbers we do not have.
+- **Trust badges** ("Enterprise Ready", "High Availability", "Green Energy"). Unverifiable.
+  Same refusal as before.
+- **Replacing self-serve with a demo-booking funnel.** This is a strategic pivot dressed as
+  a design brief. One-click launch IS the differentiator — the reason to choose us over
+  Vast.ai or RunPod. An enterprise demo motion needs SOC 2, an SLA, capacity and a sales
+  team; we have none of those, and booking demos we cannot service burns leads permanently.
+  Enterprise is a *later* motion. The honest version — a "talk to us about capacity" path
+  for teams — is on /contact.
+- **"Look like a credible enterprise platform rather than an early-stage startup."** We are
+  an early-stage startup. What earns credibility is the ledger that reconciles to zero, the
+  escrow that refunds to the cent, the tunnel that survives a host dying, and a test suite
+  that catches bugs competitors ship. Not a costume.
+
+## Accelerator feedback — the funding-critical round
+
+The "enterprise redesign" brief came from the accelerator weighing funding. Took the
+honest 80%, adapted the 20% that would have hurt.
+
+**Built:**
+- **`/demo` + demand capture.** A real book-a-demo page with an honest pitch ("see it run,
+  not slides"). `POST /demo/request` (public, IP-rate-limited, email-validated) stores each
+  lead in a `demo_requests` table and notifies admins. `GET /admin/demo-requests` is the
+  founder's demand dashboard — the single most useful artifact for the next investor
+  conversation. Leads are never fabricated; each row is a real person who filled the form.
+- **Credibility strip** on the landing page: escrow-protected / survives host failure /
+  verified hardware / isolated workloads — each claim backed by an existing test.
+- Demo CTA in nav + landing, Arabic throughout the new page.
+
+**Adapted, on purpose (documented in outputs/accelerator-response.md):**
+- Demo bookings run *alongside* self-serve, not replacing it. One-click launch is the moat.
+- Trust section states test-backed truths, not unverifiable badges.
+- No placeholder customer logos / testimonials / vanity metrics. Sections built and ready
+  to populate the moment there's something true to show (accelerator's own logo first).
+
+A written response to the accelerator is in `outputs/accelerator-response.md` — frames the
+three adaptations as founder judgment, not defiance, and offers to reverse any of them.

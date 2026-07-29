@@ -20,7 +20,7 @@ no separate frontend service, no build step). Pages are plain HTML strings in
 ## What it uses
 - **No framework** — hand-written HTML/CSS/vanilla JS, flexbox layout (renders in
   legacy engines too). Google Fonts (Space Grotesk, Inter, JetBrains Mono) via CDN.
-- **Brand: "Deep Ocean Compute."** Deep-navy base `#080D1C` with teal/cyan
+- **Brand: Petabyte.** Deep-navy base `#080D1C` with teal/cyan
   bioluminescent accents (`#4FD6C9` → `#74ECDD`) and an amber energy accent
   (`#F5B23D`). The hexagon node mark is the signature, served from
   `/static/petabyte-logo.png` (teal-gradient) with `/favicon.ico` + apple-touch icon.

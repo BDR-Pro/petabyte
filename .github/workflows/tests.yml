@@ -76,3 +76,34 @@ jobs:
         #     (without it, every gunicorn worker runs its own reaper)
         #   * 50 threads racing one wallet -> exactly the right number win
         run: python postgres_test.py
+
+  frontend:
+    # A broken <script> still returns HTTP 200. Python tests cannot see it.
+    # Parse the JS of every rendered page with a real JS engine, and check that
+    # every endpoint the UI calls actually exists on the backend.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: pip install -r lumaris_api/requirements.txt
+      - name: frontend/backend contract
+        working-directory: lumaris_api
+        run: python audit_frontend.py
+        env:
+          SECRET_KEY: t
+          PAYMENT_WEBHOOK_SECRET: w
+          WG_PUBLIC_KEY: x
+          WG_ENDPOINT: y
+          GOOGLE_OAUTH_STUB: "true"
+      - name: rendered JavaScript parses
+        working-directory: lumaris_api
+        run: python audit_js.py
+        env:
+          SECRET_KEY: t
+          PAYMENT_WEBHOOK_SECRET: w
+          WG_PUBLIC_KEY: x
+          WG_ENDPOINT: y
+          GOOGLE_OAUTH_STUB: "true"

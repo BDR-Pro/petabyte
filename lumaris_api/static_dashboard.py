@@ -11,8 +11,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   --ink:#EAEEF7; --mut:#8A93AD; --amber:#F5B23D; --cyan:#4FD6C9; --grid:#151C33;
   --pos:#57D9A3; --warn:#F0A44B; --bad:#E5788B;
   --disp:'Space Grotesk',system-ui,sans-serif; --body:'Inter',system-ui,sans-serif; --mono:'JetBrains Mono',ui-monospace,monospace;
+  /* code editor + console: dark by default */
+  --editor-bg:#0B1122; --editor-ink:#EAEEF7; --console-ink:#BFE9E2;
 }
-html[data-theme=light]{--bg:#EDF3F8;--panel:#FFFFFF;--panel2:#F5F9FC;--line:#DBE5EE;--line2:#C2D2DF;--ink:#0F1B2D;--mut:#4B5C72;--amber:#B87814;--cyan:#0E9C93;--grid:#E6EDF3;}
+html[data-theme=light]{--bg:#EDF3F8;--panel:#FFFFFF;--panel2:#F5F9FC;--line:#DBE5EE;--line2:#C2D2DF;--ink:#0F1B2D;--mut:#4B5C72;--amber:#B87814;--cyan:#0E9C93;--grid:#E6EDF3;--editor-bg:#F5F9FC;--editor-ink:#0F1B2D;--console-ink:#0E5C55;}
 html[data-theme=light] body{background:radial-gradient(1200px 500px at 80% -10%,rgba(245,178,61,.10),transparent 60%),radial-gradient(900px 500px at 0% 0%,rgba(20,179,168,.10),transparent 55%),var(--bg)}
 html[data-theme=light] .bar{background:rgba(237,243,248,.82)}
 html[data-theme=light] input{background:#FFFFFF}
@@ -41,7 +43,10 @@ a{color:inherit}
 .bar .wrap{display:flex;align-items:center;gap:14px;height:62px}
 .logo{display:flex;align-items:center;gap:10px;font-family:var(--disp);font-weight:700;font-size:18px;letter-spacing:-.01em}
 .spark{width:22px;height:22px;display:block}
-.tagline{color:var(--mut);font-size:12px;letter-spacing:.02em}
+.navlinks{display:flex;align-items:center;gap:20px;margin-left:18px}
+.navlinks a{color:var(--mut);font-size:13.5px;text-decoration:none;transition:color .15s;white-space:nowrap}
+.navlinks a:hover{color:var(--ink)}
+@media(max-width:1024px){.navlinks{display:none}}
 .auth{margin-left:auto;display:flex;align-items:center;gap:8px}
 input{font-family:var(--body);background:#0B1122;border:1px solid var(--line2);color:var(--ink);
   border-radius:10px;padding:9px 11px;font-size:13px;outline:none;transition:border-color .15s,box-shadow .15s}
@@ -103,11 +108,11 @@ section{padding:30px 0}
 /* run panel */
 .run{display:grid;grid-template-columns:1.2fr .8fr;gap:16px}
 @media(max-width:820px){.run{grid-template-columns:1fr}.board{grid-template-columns:repeat(2,1fr)}.tbl .hide{display:none}}
-textarea{width:100%;min-height:120px;background:#0B1122;border:1px solid var(--line2);color:var(--ink);border-radius:12px;
+textarea{width:100%;min-height:120px;background:var(--editor-bg);border:1px solid var(--line2);color:var(--editor-ink);border-radius:12px;
   padding:13px;font-family:var(--mono);font-size:12.5px;line-height:1.6;resize:vertical;outline:none}
 textarea:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(245,178,61,.12)}
-.console{background:#080C18;border:1px solid var(--line);border-radius:12px;padding:14px;min-height:120px;
-  font-family:var(--mono);font-size:12.5px;line-height:1.65;white-space:pre-wrap;color:#BFE9E2;overflow:auto}
+.console{background:var(--editor-bg);border:1px solid var(--line);border-radius:12px;padding:14px;min-height:120px;
+  font-family:var(--mono);font-size:12.5px;line-height:1.65;white-space:pre-wrap;color:var(--console-ink);overflow:auto}
 .console .sys{color:var(--mut)} .console .ok{color:var(--pos)} .console .amber{color:var(--amber)}
 .empty{color:var(--mut);font-family:var(--mono);font-size:12px;padding:22px 14px;text-align:center}
 .foot{color:var(--mut);font-size:12px;padding:26px 0 40px;text-align:center;border-top:1px solid var(--line);margin-top:10px}
@@ -115,11 +120,18 @@ textarea:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(245,178,61,.1
 </style></head>
 <body>
 <div class="bar"><div class="wrap">
-  <div class="logo">
+  <a class="logo" href="/" style="text-decoration:none;color:inherit">
     <svg class="spark" viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" fill="#F5B23D"/></svg>
     Petabyte
-  </div>
-  <span class="tagline">the compute exchange</span>
+  </a>
+  <nav class="navlinks">
+    <a href="/marketplace">Marketplace</a>
+    <a href="/catalog">Templates</a>
+    <a href="/pricing">Pricing</a>
+    <a href="/install">For GPU owners</a>
+    <a href="/security">Security</a>
+    <a href="/developers">Developers</a>
+  </nav>
   <div class="auth">
     <button class="tt" onclick="toggleTheme()" title="Toggle light / dark" aria-label="Toggle theme">
       <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M19 5l-1.4 1.4M6.4 17.6 5 19"/></svg>

@@ -4,6 +4,19 @@ from db import (get_user_by_id, record_notification, set_notification_status)
 from notify_providers import get_email_provider
 
 TEMPLATES = {
+    "demo.requested": ("{subject}", "{body}"),
+    # --- security events. These are the emails that let a real owner stop a thief. ---
+    "payout_method.added": (
+        "A payout destination was added to your account",
+        "A {kind} payout destination ending {dest} was added. It cannot receive funds "
+        "for {hours} hours. If this wasn't you, change your password immediately."),
+    "email.verify": (
+        "Verify your email",
+        "Confirm your email address: {link}\nThis link expires in {minutes} minutes."),
+    "node.offline": (
+        "Your node went offline",
+        "{gpu} stopped sending heartbeats and is no longer visible to buyers. "
+        "Any running rental was moved to another host."),
     "payout.requested": ("Your withdrawal is processing",
                          "We received your withdrawal of ${amount} via {kind}. "
                          "You'll get another email when it completes."),

@@ -6,14 +6,15 @@ from fastapi.responses import PlainTextResponse, JSONResponse, Response, HTMLRes
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from contextlib import asynccontextmanager
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
 import logging
+from decimal import Decimal
 import os
 import secrets
 import time
@@ -25,7 +26,10 @@ from utils import (
     gen_secure_api_key, decode_api_key, verify_attestation, verify_signed_proof,
 )
 from db import (
-    D, q, qc, Money,
+    D, q, qc, Money, BookingsPaused, SellerSpec, Booking, list_payout_methods, VMRoute, bookings_are_paused, set_bookings_paused, audit,
+    start_email_verification, confirm_email, is_disposable_email, redact_destination,
+    payout_method_is_cooled_off, AuditEvent, PAYOUT_COOLING_OFF_H, verify_password,
+    EMAIL_TOKEN_TTL_MIN,
     get_db, SessionLocal, PLATFORM_TAKE_RATE, HEARTBEAT_TIMEOUT_S,
     create_user, login_user, get_user_by_username, set_role,
     save_specs, get_spec_by_id, spec_is_live, touch_spec, reap_stale_specs,
@@ -66,7 +70,8 @@ from static_dashboard import DASHBOARD_HTML
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
                    GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
-                   PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML)
+                   PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TEMPLATES_HTML,
+                   CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -83,6 +88,16 @@ REAPER_DISABLED = os.getenv("REAPER_DISABLED", "false").lower() == "true"
 # TODO(stub): PAYMENTS_MODE=sandbox mints test credit on /deposit — go live via Stripe (stub.md #1)
 PAYMENTS_MODE = os.getenv("PAYMENTS_MODE", "sandbox").lower()      # sandbox|live
 BASE_DOMAIN = os.getenv("BASE_DOMAIN", "petabyte.market")          # for stable VM URLs
+
+# The passwords attackers try first. A full HIBP k-anonymity check is the right next
+# step (it needs an outbound call); this blocks the ones that get guessed in seconds.
+COMMON_PASSWORDS = {
+    "password", "password1", "password123", "passw0rd", "123456", "12345678",
+    "123456789", "1234567890", "qwerty", "qwerty123", "letmein", "welcome",
+    "welcome123", "admin", "admin123", "iloveyou", "abc123", "monkey", "dragon",
+    "football", "baseball", "sunshine", "princess", "trustno1", "changeme",
+    "passsword", "p@ssw0rd", "qwertyuiop", "1q2w3e4r", "zaq12wsx", "letmein123",
+}
 GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "")                     # gateway -> /vm/{id}/route auth
 PAYMENT_WEBHOOK_SECRET = os.getenv("PAYMENT_WEBHOOK_SECRET", "")
 AWS_REFERENCE_PRICE = os.getenv("AWS_REFERENCE_PRICE", "12.29")
@@ -404,9 +419,40 @@ class RequestVMModel(BaseModel):
     org_id: Optional[int] = None
 
 
+class DemoRequestModel(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: str = Field(min_length=3, max_length=200)
+    organization: Optional[str] = Field(default=None, max_length=200)
+    role: Optional[str] = Field(default=None, max_length=40)
+    workload: Optional[str] = Field(default=None, max_length=2000)
+    message: Optional[str] = Field(default=None, max_length=2000)
+    preferred_time: Optional[str] = Field(default=None, max_length=200)
+    source: Optional[str] = Field(default=None, max_length=80)
+
+    @field_validator("email")
+    @classmethod
+    def _looks_like_email(cls, v: str) -> str:
+        v = v.strip()
+        if "@" not in v or "." not in v.split("@")[-1]:
+            raise ValueError("That does not look like an email address.")
+        return v
+
+
 class UserRegisterModel(BaseModel):
     username: str = Field(min_length=3, max_length=64)
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=12, max_length=128)   # length beats complexity rules
+
+    @field_validator("password")
+    @classmethod
+    def _not_a_terrible_password(cls, v: str) -> str:
+        # Length is the strongest single lever. Beyond that, the only rule worth having
+        # is "don't pick one of the passwords everybody picks" — complexity theatre
+        # (must contain a symbol!) mostly produces Password1!
+        if v.lower() in COMMON_PASSWORDS:
+            raise ValueError("That password is one of the most commonly used — pick another.")
+        if len(set(v)) < 5:
+            raise ValueError("Password is too repetitive.")
+        return v
 
 
 class RoleModel(BaseModel):
@@ -497,6 +543,7 @@ class PayoutMethodModel(BaseModel):
     kind: str                         # gift_card|usdc|bank
     destination: str                  # email | wallet address | account ref
     label: Optional[str] = None
+    password: Optional[str] = None    # step-up re-auth: a stolen token is not enough
 
 
 class WithdrawModel(BaseModel):
@@ -663,6 +710,31 @@ def _client_ip(request: Request):
     return peer
 
 
+def _fail_json(status: int, code: str, message: str):
+    """Structured error for public marketing endpoints (no idempotency plumbing)."""
+    raise HTTPException(status_code=status, detail={"code": code, "message": message})
+
+
+def _notify_founder_of_lead(db, lead):
+    """Tell the founder a demand signal just arrived.
+
+    Routed to any admin account so it shows up in the same notifications panel as
+    everything else. Best-effort: a failure here must never lose the lead, which is
+    already committed."""
+    try:
+        from db import User
+        admins = db.query(User).filter(User.role == "admin").all()
+        who = lead.organization or lead.name
+        for a in admins:
+            notifications.notify(
+                db, a.id, "demo.requested",
+                subject=f"Demo request from {who}",
+                body=f"{lead.name} ({lead.email}) — role: {lead.role or 'n/a'}. "
+                     f"Ref {lead.public_id}.")
+    except Exception:
+        logger.exception("failed to notify founder of demo lead %s", lead.public_id)
+
+
 def _require_seller(db: Session, user: dict):
     owner = get_user_by_username(db, _username(user))
     if not owner or owner.role != "seller":
@@ -799,6 +871,22 @@ def account_page():
 def status_page():
     """Plain service status — honest, generated from live heartbeats."""
     return HTMLResponse(STATUS_HTML)
+
+@app.get("/templates-catalog", response_class=HTMLResponse)
+@app.get("/catalog", response_class=HTMLResponse)
+def templates_page():
+    return TEMPLATES_HTML
+
+@app.get("/demo", response_class=HTMLResponse)
+@app.get("/book-a-demo", response_class=HTMLResponse)
+def demo_page():
+    return DEMO_HTML
+
+
+@app.get("/contact", response_class=HTMLResponse)
+def contact_page():
+    return CONTACT_HTML
+
 
 @app.get("/pricing", response_class=HTMLResponse)
 def pricing_page():
@@ -1025,6 +1113,36 @@ def api_reference():
 </body></html>""")
 
 
+@app.exception_handler(BookingsPaused)
+async def _bookings_paused_handler(request: Request, exc: BookingsPaused):
+    """The kill switch is on. 503 + Retry-After: honest, and clients back off."""
+    return JSONResponse(
+        status_code=503,
+        headers={"Retry-After": "300"},
+        content={"error": {"code": "BOOKINGS_PAUSED",
+                           "message": str(exc) or "New bookings are temporarily paused.",
+                           "request_id": getattr(request.state, "request_id", None)},
+                 "detail": str(exc)})
+
+
+@app.exception_handler(404)
+async def not_found(request: Request, exc):
+    """Humans browsing get a page they can navigate out of.
+
+    Careful: an endpoint that deliberately raises 404 with a structured detail (e.g.
+    GPU_NOT_FOUND, which carries a code, a message and a `next` action) must NOT be
+    swallowed by this handler — hand those back to the structured error handler."""
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, dict):
+        return await _structured_http_error(request, exc)
+    accepts_html = "text/html" in (request.headers.get("accept") or "")
+    if accepts_html and not request.url.path.startswith(("/api/", "/v1/")):
+        return HTMLResponse(NOTFOUND_HTML, status_code=404)
+    return JSONResponse({"error": {"code": "NOT_FOUND",
+                                   "message": "That endpoint does not exist."}},
+                        status_code=404)
+
+
 @app.exception_handler(HTTPException)
 async def _structured_http_error(request: Request, exc: HTTPException):
     """Every error is machine-readable: a stable code, a human message, and the
@@ -1032,9 +1150,11 @@ async def _structured_http_error(request: Request, exc: HTTPException):
     rid = getattr(request.state, "request_id", None)
     detail = exc.detail
     code = None
+    nxt = None
     if isinstance(detail, dict):
         code = detail.get("code")
         message = detail.get("message", "Request failed.")
+        nxt = detail.get("next")          # where the user can actually go to fix it
     else:
         message = str(detail)
     if not code:
@@ -1046,7 +1166,9 @@ async def _structured_http_error(request: Request, exc: HTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         headers=getattr(exc, "headers", None) or {},
-        content={"error": {"code": code, "message": message, "request_id": rid},
+        content={"error": {k: v for k, v in
+                           {"code": code, "message": message,
+                            "next": nxt, "request_id": rid}.items() if v},
                  "detail": message},   # keep `detail` so existing clients don't break
     )
 
@@ -1128,7 +1250,7 @@ def google_login(db: Session = Depends(get_db)):
     """Redirect to Google's consent screen. Stub short-circuits to the callback."""
     # TODO(stub): Google OAuth stub login — NEVER enable in production (stub.md #5)
     if os.getenv("GOOGLE_OAUTH_STUB", "").lower() == "true":
-        return RedirectResponse(url="/auth/google/callback?code=stub&email=demo@petabyte.market")
+        return RedirectResponse(url="/auth/google/callback?code=stub&email=info@petabyte.market")
     cid = os.environ.get("GOOGLE_CLIENT_ID")
     redirect = os.environ.get("GOOGLE_REDIRECT_URI")
     if not cid or not redirect:
@@ -1146,7 +1268,7 @@ def google_callback(code: str = Query(...), email: Optional[str] = Query(None),
     """Exchange the code for the user's email, create-or-login, issue our JWT."""
     # TODO(stub): Google OAuth stub login — NEVER enable in production (stub.md #5)
     if os.getenv("GOOGLE_OAUTH_STUB", "").lower() == "true":
-        user_email = email or "demo@petabyte.market"
+        user_email = email or "info@petabyte.market"
     else:
         import httpx as _hx
         tok = _hx.post("https://oauth2.googleapis.com/token", timeout=20, data={
@@ -1312,13 +1434,24 @@ def request_vm(req: RequestVMModel, user: dict = Depends(get_current_user),
         _fail(401, "Unknown user")
     spec = get_spec_by_id(db, req.spec_id)
     if not spec:
-        _fail(404, "Spec not found")
+        _fail(404, {"code": "GPU_NOT_FOUND",
+                    "message": "That GPU isn't listed any more — the host may have taken it "
+                               "offline. Browse what's available now.",
+                    "next": "/marketplace"})
     if not spec.attested:
-        _fail(409, "Spec not attested yet")
+        _fail(409, {"code": "GPU_NOT_VERIFIED",
+                    "message": "This host hasn't finished proving its hardware, so it can't "
+                               "take paid work yet. Pick a verified host.",
+                    "next": "/marketplace"})
     if not spec_is_live(spec):
-        _fail(503, "Spec offline (no recent heartbeat)")
+        _fail(503, {"code": "HOST_OFFLINE",
+                    "message": "That host just went offline — it stopped sending heartbeats. "
+                               "Nothing was charged. Try another verified host.",
+                    "next": "/marketplace"})
     if spec.user_id == buyer.id:
-        _fail(400, "Cannot rent your own spec")
+        _fail(400, {"code": "OWN_HARDWARE",
+                    "message": "This is your own machine. You can't rent from yourself — "
+                               "earnings come from other people's jobs."})
     if req.require_confidential and not spec.confidential:
         _fail(403, "Spec is not confidential-computing attested")
     if req.require_region and ((spec.region or "") != req.require_region or not spec.region_verified):
@@ -1342,17 +1475,35 @@ def request_vm(req: RequestVMModel, user: dict = Depends(get_current_user),
 
     # Atomic capacity reservation — prevents double-sell under concurrency.
     if not try_reserve_unit(db, req.spec_id):
-        _fail(409, "No capacity available")
+        _fail(409, {"code": "NO_CAPACITY",
+                    "message": "Every unit on this host was taken while you were deciding. "
+                               "Nothing was charged. Another host may have the same GPU.",
+                    "next": "/marketplace"})
+
+    # Kill switch, checked BEFORE we reserve capacity or move a cent. The guard inside
+    # book_with_escrow stays as defence-in-depth, but the clean path is to refuse early
+    # rather than debit-then-refund.
+    _paused, _reason = bookings_are_paused(db)
+    if _paused:
+        release_unit(db, req.spec_id)
+        if idempotency_key:
+            idem_abort(db, idempotency_key, username, endpoint)
+        raise BookingsPaused(_reason)
 
     # Atomic debit (org budget-capped, or personal); return the unit if it fails.
     debited = try_org_debit(db, pay_org_id, gross) if pay_org_id else try_debit(db, buyer.id, gross)
     if not debited:
         release_unit(db, req.spec_id)
-        _fail(402, "Insufficient funds or budget cap exceeded")
+        _fail(402, {"code": "INSUFFICIENT_FUNDS",
+                    "message": "Not enough in your wallet for this rental. You prepay the "
+                               "full window into escrow and get the unused hours back when "
+                               "you stop.",
+                    "next": "/account"})
 
     try:
         booking = book_with_escrow(db, buyer, spec, req.hours, req.vpn, PLATFORM_TAKE_RATE, org_id=pay_org_id)
-    except Exception:
+    except Exception as _e:
+        # Compensate FIRST — give the unit back and return the money — then report.
         release_unit(db, req.spec_id)
         if pay_org_id:
             org_refund(db, pay_org_id, gross)
@@ -1360,6 +1511,9 @@ def request_vm(req: RequestVMModel, user: dict = Depends(get_current_user),
             deposit(db, buyer, gross)
         if idempotency_key:
             idem_abort(db, idempotency_key, username, endpoint)
+        if isinstance(_e, BookingsPaused):
+            raise            # the kill switch is not a 500; say so honestly
+        logger.exception("booking failed for %s spec=%s", username, req.spec_id)
         raise HTTPException(status_code=500, detail="Booking failed")
 
     resp = {
@@ -1465,6 +1619,9 @@ def jobs_next(agent=Depends(api_key_user), db: Session = Depends(get_db)):
         return {"task_id": task.id, "task_type": "template", "template": task.template,
                 "image": tpl.get("image"), "port": tpl.get("port"),
                 "cache": tpl.get("cache"), "gpu": tpl.get("gpu", True),
+                # The agent enforces this. Default CLOSED: if a template forgets to
+                # declare a policy, the workload gets no network rather than the host's.
+                "egress": tpl.get("egress", "none"),
                 "params": json.loads(task.template_params or "{}"), **_backup}
     return {"task_id": task.id, "task_type": "vm", "vm_type": task.vm_type,
             "cpu": task.cpu, "ram": task.ram, "cuda": task.cuda}
@@ -1647,6 +1804,258 @@ def spec_reputation(spec_id: int, user: dict = Depends(get_current_user),
     events = [{"type": e.event_type, "value": e.value, "meta": e.meta,
                "at": str(e.created_at)} for e in recent_rep_events(db, spec_id)]
     return {"spec_id": spec_id, "reputation": rep, "recent_events": events}
+
+
+@app.get("/buyer/spend", tags=["wallet"])
+def buyer_spend(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """What am I spending, right now, and on what?
+
+    The number a buyer actually wants is not "balance" — it's "what is currently
+    burning". Live rentals accrue cost every hour whether or not you're looking."""
+    me = get_user_by_username(db, _username(user))
+    live = db.query(VMRoute).filter(VMRoute.buyer_id == me.id,
+                                    VMRoute.status.in_(["created", "running",
+                                                        "migrating"])).all()
+    burn = sum((D(v.hourly_rate) for v in live), Decimal(0))
+    bookings = db.query(Booking).filter(Booking.buyer_id == me.id).all()
+    spent = sum((D(b.gross_amount) for b in bookings
+                 if b.status == "released"), Decimal(0))
+    escrowed = sum((D(b.gross_amount) for b in bookings
+                    if b.status in ("escrowed", "active")), Decimal(0))
+    by_tpl = {}
+    for v in live:
+        by_tpl[v.template] = q(D(by_tpl.get(v.template, 0)) + D(v.hourly_rate))
+    return {
+        "balance": D(me.balance),
+        "in_escrow": q(escrowed),           # already paid, not yet settled
+        "spent_lifetime": q(spent),
+        "active_instances": len(live),
+        "burn_rate_per_hour": q(burn),
+        "projected_24h": q(burn * 24),
+        "burn_by_template": by_tpl,
+        "hours_of_runway": (int(D(me.balance) / burn) if burn > 0 else None),
+    }
+
+
+@app.get("/onboarding", tags=["account"])
+def onboarding(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Where am I, and what do I do next?
+
+    Two different funnels — a buyer and a host want completely different things, and a
+    single dashboard serves neither. This returns the checklist for whichever they are,
+    with the NEXT step marked. It exists because verification now gates payouts: without
+    a checklist, a seller hits that wall with no idea why."""
+    me = get_user_by_username(db, _username(user))
+    specs = db.query(SellerSpec).filter(SellerSpec.user_id == me.id).all()
+    is_host = bool(specs) or me.role == "seller"
+
+    if is_host:
+        attested = [s for s in specs if s.attested]
+        live = [s for s in attested if spec_is_live(s)]
+        earned = D(me.earnings) > 0
+        has_method = bool(list_payout_methods(db, me.id))
+        steps = [
+            {"key": "list_hardware", "title": "List your hardware",
+             "detail": "One command on the machine with the GPU.",
+             "done": bool(specs), "action": "/install"},
+            {"key": "verify_hardware", "title": "Prove the hardware",
+             "detail": "The agent signs a hardware report. Until it does, buyers can't see you.",
+             "done": bool(attested), "action": "/install"},
+            {"key": "come_online", "title": "Come online",
+             "detail": "Heartbeat every 30s. Sleep/hibernate takes you offline.",
+             "done": bool(live), "action": "/account"},
+            {"key": "verify_email", "title": "Verify your email",
+             "detail": "Required before you can be paid — and it's how we reach you if "
+                       "your node has a problem.",
+             "done": bool(me.email_verified), "action": "/account"},
+            {"key": "payout_method", "title": "Add a payout destination",
+             "detail": "Bank, USDC, or gift card. New destinations wait "
+                       f"{PAYOUT_COOLING_OFF_H}h before they can receive funds.",
+             "done": has_method, "action": "/account"},
+            {"key": "first_earning", "title": "Earn your first dollar",
+             "detail": "Rentals settle automatically when they finish.",
+             "done": earned, "action": "/account"},
+        ]
+    else:
+        booked = db.query(Booking).filter(Booking.buyer_id == me.id).count()
+        steps = [
+            {"key": "fund_wallet", "title": "Add funds",
+             "detail": "You prepay into escrow; unused hours are refunded when you stop.",
+             "done": D(me.balance) > 0, "action": "/account"},
+            {"key": "browse", "title": "Find a GPU",
+             "detail": "Live inventory, priced by the hosts themselves.",
+             "done": booked > 0, "action": "/marketplace"},
+            {"key": "first_launch", "title": "Launch your first workload",
+             "detail": "Pick a template, press Launch. We place it on the cheapest "
+                       "verified node that fits.",
+             "done": booked > 0, "action": "/account"},
+            {"key": "verify_email", "title": "Verify your email",
+             "detail": "So we can tell you when a node fails or a job finishes.",
+             "done": bool(me.email_verified), "action": "/account"},
+        ]
+
+    done = sum(1 for s in steps if s["done"])
+    nxt = next((s for s in steps if not s["done"]), None)
+    return {
+        "role": "host" if is_host else "buyer",
+        "steps": steps,
+        "completed": done, "total": len(steps),
+        "percent": round(100 * done / len(steps)),
+        "next_step": nxt,
+    }
+
+
+@app.get("/seller/dashboard", tags=["seller"])
+def seller_dashboard(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Everything a host needs — and crucially, WHY THEY ARE NOT EARNING.
+
+    Every pilot seller asks this within a day: "my GPU is on, why is nothing running?"
+    A dashboard that only shows earnings answers it with a zero, which tells them
+    nothing. So we diagnose it: are you online? attested? priced above the market? are
+    all your units already busy? Each blocker comes with the fix."""
+    me = get_user_by_username(db, _username(user))
+    specs = db.query(SellerSpec).filter(SellerSpec.user_id == me.id).all()
+    if not specs:
+        return {"nodes": [], "totals": {"earnings": D(me.earnings), "nodes": 0},
+                "blockers": [{"issue": "You haven't listed any hardware yet.",
+                              "fix": "Install the agent — one command on the machine "
+                                     "with the GPU.", "action": "/install"}]}
+
+    market = [D(s.price_per_hour) for s in db.query(SellerSpec).filter(
+                 SellerSpec.attested.is_(True)).all() if spec_is_live(s)]
+    median = sorted(market)[len(market)//2] if market else None
+
+    nodes, blockers = [], []
+    for sp in specs:
+        live = spec_is_live(sp)
+        total = (sp.jobs_completed or 0) + (sp.jobs_failed or 0)
+        busy = (sp.total_units or 0) - (sp.available_units or 0)
+        util = round(100.0 * busy / sp.total_units, 1) if sp.total_units else 0.0
+        rep = compute_reputation(db, sp)
+        earned = sum((D(b.seller_payout) for b in db.query(Booking).filter(
+                        Booking.spec_id == sp.id, Booking.status == "released").all()),
+                     Decimal(0))
+        nodes.append({
+            "id": sp.public_id, "gpu_model": sp.gpu_model,
+            "online": live, "attested": bool(sp.attested),
+            "price_per_hour": D(sp.price_per_hour),
+            "units_total": sp.total_units, "units_busy": busy,
+            "utilization_pct": util,
+            "jobs_completed": sp.jobs_completed, "jobs_failed": sp.jobs_failed,
+            "success_rate": round(100.0 * sp.jobs_completed / total, 1) if total else None,
+            "reputation": rep["score"] if isinstance(rep, dict) else rep,
+            "earned_total": q(earned),
+            "last_seen": sp.last_seen.isoformat() if sp.last_seen else None,
+        })
+
+        # --- the diagnosis ---
+        if not sp.attested:
+            blockers.append({"node": sp.public_id,
+                             "issue": "This node isn't verified, so it's hidden from buyers.",
+                             "fix": "The agent proves the hardware on startup. Check it's "
+                                    "running: `petabyte status`."})
+        elif not live:
+            blockers.append({"node": sp.public_id,
+                             "issue": "This node stopped sending heartbeats — buyers can't see it.",
+                             "fix": "Check the machine is awake and the agent is running. "
+                                    "Sleep/hibernate will do this."})
+        elif sp.available_units == 0:
+            blockers.append({"node": sp.public_id,
+                             "issue": "Fully booked — every unit is rented.",
+                             "fix": "This is a good problem. Add capacity or raise your price."})
+        elif median and D(sp.price_per_hour) > median * D("1.25"):
+            blockers.append({"node": sp.public_id,
+                             "issue": f"Priced {int((D(sp.price_per_hour)/median - 1) * 100)}% "
+                                      f"above the market median (${median}/hr) — buyers pick "
+                                      f"the cheapest node that fits.",
+                             "fix": f"Try ${qc(median)}/hr, or turn on auto-pricing."})
+        elif not me.can_accept_paid_jobs:
+            blockers.append({"node": sp.public_id,
+                             "issue": "Your account can't take paid work yet.",
+                             "fix": "Reputation is below the threshold — run test jobs."})
+
+    if not me.email_verified:
+        blockers.append({"issue": "Your email isn't verified, so you can't be paid out.",
+                         "fix": "Verify your email — it's also how we reach you if your "
+                                "node has a problem.", "action": "/account"})
+
+    live_nodes = [n for n in nodes if n["online"]]
+    return {
+        "nodes": nodes,
+        "totals": {
+            "earnings_available": D(me.earnings),
+            "earned_lifetime": q(sum((D(n["earned_total"]) for n in nodes), Decimal(0))),
+            "nodes": len(nodes), "nodes_online": len(live_nodes),
+            "avg_utilization_pct": round(
+                sum(n["utilization_pct"] for n in live_nodes) / len(live_nodes), 1)
+                if live_nodes else 0.0,
+            "market_median_price": qc(median) if median else None,
+        },
+        # If this list is empty and you're still earning nothing, it's demand, not you.
+        "blockers": blockers,
+    }
+
+
+class EstimateModel(BaseModel):
+    spec_id: Optional[str] = None       # public handle
+    template: Optional[str] = None
+    hours: int = Field(1, ge=1, le=720)
+
+
+@app.post("/estimate", tags=["marketplace"])
+def estimate_cost(data: EstimateModel, db: Session = Depends(get_db)):
+    """What will this actually cost me? Answered BEFORE the buyer commits.
+
+    Nobody should click Launch without knowing the number. We show the total, the
+    hourly rate, what happens if they stop early, and — honestly — what it would have
+    cost on a comparable public cloud, but only where we can compare like for like."""
+    spec = None
+    if data.spec_id:
+        spec = get_spec_by_public_id(db, data.spec_id)
+    else:
+        # same selection the router would make: cheapest eligible live node
+        cands = [s for s in db.query(SellerSpec).filter(
+                    SellerSpec.attested.is_(True), SellerSpec.available_units > 0).all()
+                 if spec_is_live(s)]
+        if data.template:
+            tpl = TEMPLATES.get(data.template)
+            if tpl and tpl.get("gpu"):
+                cands = [s for s in cands if s.gpu_model]
+        spec = min(cands, key=lambda s: D(s.price_per_hour)) if cands else None
+
+    if not spec:
+        raise HTTPException(status_code=404, detail={
+            "code": "NO_CAPACITY",
+            "message": "No matching GPU is available right now."})
+
+    rate = D(spec.price_per_hour)
+    hours = data.hours
+    total = q(rate * D(hours))
+    fee = q(total * PLATFORM_TAKE_RATE)
+    ref = cloud_reference_for(spec.gpu_model)
+    cloud_total = q(D(ref) * D(hours)) if ref else None
+
+    return {
+        "gpu_model": spec.gpu_model, "region": spec.region,
+        "price_per_hour": rate, "hours": hours,
+        "total": total,
+        "min_charge": q(rate),                  # one hour minimum
+        "platform_fee_included": fee,           # taken FROM the rental, not added on top
+        "you_pay_now": total,                   # prepaid into escrow
+        "if_you_stop_after_1h": {
+            "charged": q(rate),
+            "refunded": q(total - rate),
+        },
+        "cloud_comparison": ({"reference_per_hour": D(ref),
+                              "reference_total": cloud_total,
+                              "you_save": q(cloud_total - total)}
+                             if cloud_total and cloud_total > total else None),
+        "notes": [
+            "You prepay into escrow. Stop early and the unused hours are refunded.",
+            "Minimum charge is one hour.",
+            "The 10% platform fee is taken from the rental, not added to your bill.",
+        ],
+    }
 
 
 @app.get("/marketplace/stats", tags=["marketplace"])
@@ -1863,15 +2272,53 @@ def get_notifications(user: dict = Depends(get_current_user), db: Session = Depe
 
 # ------------------- PAYOUTS (withdraw earnings) -------------------
 
-@app.post("/wallet/methods")
-def add_method(data: PayoutMethodModel, user: dict = Depends(get_current_user),
-               db: Session = Depends(get_db)):
+@app.post("/wallet/methods", tags=["wallet"])
+def add_method(data: PayoutMethodModel, request: Request,
+               user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Add a payout destination.
+
+    This is THE fraud vector in a marketplace: take over an account, swap the bank
+    details, drain the earnings. So we make it expensive:
+      * the current password must be re-entered (a stolen session is not enough)
+      * the account's email must be verified (so the real owner gets told)
+      * the destination is quarantined for a cooling-off period before it can be paid
+      * the change is written to the audit log, and the owner is notified
+    """
     me = get_user_by_username(db, _username(user))
+
+    # step-up: prove you know the password, not just that you hold a token
+    if not data.password or not verify_password(data.password, me.password):
+        audit(db, "payout_method.add_denied", actor=me, ip=_client_ip(request),
+              request_id=getattr(request.state, "request_id", None),
+              detail={"reason": "bad password re-auth"})
+        raise HTTPException(status_code=403, detail={
+            "code": "REAUTH_REQUIRED",
+            "message": "Confirm your password to change payout details."})
+
+    if not me.email_verified:
+        raise HTTPException(status_code=403, detail={
+            "code": "EMAIL_NOT_VERIFIED",
+            "message": "Verify your email before adding a payout destination — it is how "
+                       "we tell you if someone changes it."})
     try:
         m = add_payout_method(db, me, data.kind, data.destination, data.label)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"status": "ok", "method_id": m.id, "kind": m.kind, "verified": m.verified}
+
+    audit(db, "payout_method.added", actor=me, resource_type="payout_method",
+          resource_id=m.id, ip=_client_ip(request),
+          request_id=getattr(request.state, "request_id", None),
+          detail={"kind": m.kind, "destination": redact_destination(m.destination)})
+    try:   # tell the owner OUT OF BAND — a thief holding a session token can't unsend this
+        notifications.notify(db, me.id, "payout_method.added", kind=m.kind,
+                             dest=redact_destination(m.destination)[-4:],
+                             hours=PAYOUT_COOLING_OFF_H)
+    except Exception:
+        logger.exception("failed to notify payout method change")
+
+    return {"status": "ok", "method_id": m.id, "kind": m.kind, "verified": m.verified,
+            "destination": redact_destination(m.destination),
+            "payable_after_hours": PAYOUT_COOLING_OFF_H}
 
 
 @app.post("/wallet/methods/{method_id}/verify")
@@ -1892,26 +2339,212 @@ def verify_method(method_id: int, user: dict = Depends(get_current_user),
 @app.get("/wallet/methods")
 def get_methods(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
-    return {"methods": [{"id": m.id, "kind": m.kind, "destination": m.destination,
-                         "label": m.label, "verified": m.verified}
+    # NEVER return the full destination — not even to its owner. If the account is
+    # compromised, the bank details should not be readable from the API.
+    return {"methods": [{"id": m.id, "kind": m.kind,
+                         "destination": redact_destination(m.destination),
+                         "label": m.label, "verified": m.verified,
+                         "payable": payout_method_is_cooled_off(m)}
                         for m in list_payout_methods(db, me.id)]}
 
 
-@app.post("/wallet/withdraw")
-def withdraw(data: WithdrawModel, user: dict = Depends(get_current_user),
-             db: Session = Depends(get_db)):
+@app.post("/wallet/withdraw", tags=["wallet"])
+def withdraw(data: WithdrawModel, request: Request,
+             user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Withdraw earnings. Money leaving the system is the highest-risk action here, so
+    it is gated on: a verified email, a screened destination, and a cooling-off period
+    that means a freshly-added (i.e. possibly attacker-added) destination cannot be
+    drained immediately."""
     me = get_user_by_username(db, _username(user))
+    if not me.email_verified:
+        raise HTTPException(status_code=403, detail={
+            "code": "EMAIL_NOT_VERIFIED",
+            "message": "Verify your email before withdrawing."})
     m = get_payout_method(db, data.method_id, me.id)
     if not m:
         raise HTTPException(status_code=404, detail="Method not found")
     if not m.verified:
         raise HTTPException(status_code=403, detail="Method not verified")
+
+    # COOLING-OFF: a destination added minutes ago cannot receive money yet. This is
+    # what turns an account takeover from "instant drain" into "you get an email and
+    # 24 hours to stop it".
+    if not payout_method_is_cooled_off(m):
+        audit(db, "payout.blocked_cooling_off", actor=me,
+              resource_type="payout_method", resource_id=m.id, ip=_client_ip(request),
+              request_id=getattr(request.state, "request_id", None))
+        raise HTTPException(status_code=403, detail={
+            "code": "PAYOUT_METHOD_COOLING_OFF",
+            "message": f"This destination was added recently and cannot receive funds "
+                       f"for {PAYOUT_COOLING_OFF_H}h after being added."})
+
     p = request_payout(db, me, m, data.amount)
     if not p:
         raise HTTPException(status_code=402, detail="Insufficient earnings")
+    audit(db, "payout.requested", actor=me, resource_type="payout", resource_id=p.id,
+          ip=_client_ip(request),
+          request_id=getattr(request.state, "request_id", None),
+          detail={"amount_usd": str(p.amount_usd), "kind": p.kind,
+                  "destination": redact_destination(m.destination)})
     notifications.notify(db, me.id, "payout.requested", amount=p.amount_usd, kind=p.kind)
     return {"status": "ok", "payout_id": p.id, "amount_usd": p.amount_usd,
             "payout_status": p.status, "kind": p.kind}
+
+
+# ------------------- EMAIL VERIFICATION -------------------
+
+class EmailModel(BaseModel):
+    email: str = Field(max_length=254)
+
+
+class EmailConfirmModel(BaseModel):
+    token: str = Field(max_length=256)
+
+
+@app.post("/demo/request", tags=["marketing"])
+def request_demo(body: DemoRequestModel, request: Request, db: Session = Depends(get_db)):
+    """Someone asked to see the product or get access.
+
+    No login required — the whole point is to hear from people who are not users yet.
+    We rate-limit by IP so the form cannot be turned into a spam cannon, store the
+    lead, and notify the founder out of band. We never invent these rows; each one is
+    a real person who wanted a walkthrough."""
+    from db import DemoRequest, _rand_vm_id
+    ip = _client_ip(request)
+    # cheap abuse guard: at most a handful of requests per IP per hour
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    recent = db.query(DemoRequest).filter(
+        DemoRequest.ip_address == ip, DemoRequest.created_at >= since).count()
+    if recent >= 8:
+        _fail_json(429, "TOO_MANY_REQUESTS",
+                   "You have sent several requests already. We have them — "
+                   "we will be in touch shortly.")
+    lead = DemoRequest(
+        public_id=_rand_vm_id(), name=body.name.strip(), email=body.email,
+        organization=(body.organization or "").strip() or None,
+        role=(body.role or "").strip() or None,
+        workload=(body.workload or "").strip() or None,
+        message=(body.message or "").strip() or None,
+        preferred_time=(body.preferred_time or "").strip() or None,
+        source=(body.source or "").strip() or None,
+        ip_address=ip, status="new")
+    db.add(lead)
+    db.commit()
+    # accountable, but never store this person's message as a secret
+    audit(db, "demo.requested", actor_type="system", resource_type="demo_request",
+          resource_id=lead.public_id, ip=ip,
+          detail={"role": lead.role, "org": lead.organization, "source": lead.source})
+    _notify_founder_of_lead(db, lead)
+    return {"ok": True,
+            "message": "Thanks — we have your request. Expect an email within one "
+                       "business day to set up a time.",
+            "reference": lead.public_id}
+
+
+@app.get("/admin/demo-requests", tags=["marketing"])
+def list_demo_requests(user: dict = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    """The founder's view of inbound demand — the thing an investor wants to see."""
+    u = get_user_by_username(db, _username(user))
+    if not _is_admin(u):
+        raise HTTPException(status_code=403, detail="Admins only.")
+    from db import DemoRequest
+    rows = db.query(DemoRequest).order_by(DemoRequest.created_at.desc()).limit(200).all()
+    return {"count": len(rows),
+            "requests": [{"reference": r.public_id, "name": r.name, "email": r.email,
+                          "organization": r.organization, "role": r.role,
+                          "workload": r.workload, "preferred_time": r.preferred_time,
+                          "source": r.source, "status": r.status,
+                          "at": r.created_at.isoformat() if r.created_at else None}
+                         for r in rows]}
+
+
+@app.post("/email/verify/request", tags=["account"])
+def request_email_verification(data: EmailModel, request: Request,
+                               user: dict = Depends(get_current_user),
+                               db: Session = Depends(get_db)):
+    """Send a verification link. The token is single-use, expires in 15 minutes, and
+    only its HASH is stored — a database leak does not hand out verified emails."""
+    if "@" not in data.email or "." not in data.email.rsplit("@", 1)[-1]:
+        raise HTTPException(status_code=400, detail="Not a valid email address")
+    if is_disposable_email(data.email):
+        raise HTTPException(status_code=400, detail={
+            "code": "DISPOSABLE_EMAIL",
+            "message": "Disposable email domains aren't accepted. We need to be able to "
+                       "reach you if your node has a problem."})
+    me = get_user_by_username(db, _username(user))
+    token = start_email_verification(db, me, data.email)
+    audit(db, "email.verification_requested", actor=me, ip=_client_ip(request),
+          request_id=getattr(request.state, "request_id", None),
+          detail={"email": redact_destination(data.email)})
+    link = f"https://{BASE_DOMAIN}/email/verify?u={me.username}&t={token}"
+    try:
+        notifications.notify(db, me.id, "email.verify", link=link,
+                             minutes=EMAIL_TOKEN_TTL_MIN)
+    except Exception:
+        logger.exception("failed to send verification email")
+    out = {"status": "sent", "expires_in_minutes": EMAIL_TOKEN_TTL_MIN}
+    if os.getenv("NOTIFY_STUB", "").lower() == "true":
+        out["debug_token"] = token       # tests/sandbox only; never in production
+    return out
+
+
+@app.post("/email/verify/confirm", tags=["account"])
+def confirm_email_verification(data: EmailConfirmModel, request: Request,
+                               user: dict = Depends(get_current_user),
+                               db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    if not confirm_email(db, me.username, data.token):
+        raise HTTPException(status_code=400, detail={
+            "code": "INVALID_OR_EXPIRED_TOKEN",
+            "message": "That link is invalid or has expired. Request a new one."})
+    return {"status": "verified", "email_verified": True}
+
+
+# ------------------- KILL SWITCH (admin) -------------------
+
+class PauseModel(BaseModel):
+    paused: bool
+    reason: Optional[str] = Field(None, max_length=280)
+
+
+@app.post("/admin/bookings/pause", tags=["account"])
+def admin_pause_bookings(data: PauseModel, request: Request,
+                         admin=Depends(require_admin), db: Session = Depends(get_db)):
+    """THE KILL SWITCH.
+
+    Stops NEW bookings immediately. Running rentals are untouched and settle normally —
+    stopping the world must never destroy someone's six-hour render. Use it when a node
+    is misbehaving, a seller's ISP is complaining, or you see something in the ledger
+    you don't understand."""
+    me = get_user_by_username(db, _username(admin))
+    p = set_bookings_paused(db, data.paused, data.reason, actor=me)
+    return {"status": "ok", "bookings_paused": p.bookings_paused,
+            "reason": p.pause_reason}
+
+
+@app.get("/admin/bookings/pause", tags=["account"])
+def admin_pause_status(admin=Depends(require_admin), db: Session = Depends(get_db)):
+    paused, reason = bookings_are_paused(db)
+    return {"bookings_paused": paused, "reason": reason}
+
+
+@app.get("/admin/audit", tags=["account"])
+def admin_audit_log(limit: int = Query(100, ge=1, le=500),
+                    action: Optional[str] = None,
+                    admin=Depends(require_admin), db: Session = Depends(get_db)):
+    """Append-only: who did what, when. Read this when money is disputed."""
+    qy = db.query(AuditEvent).order_by(AuditEvent.id.desc())
+    if action:
+        qy = qy.filter(AuditEvent.action == action)
+    return {"events": [{"id": e.id, "action": e.action,
+                        "actor": e.actor_username, "actor_type": e.actor_type,
+                        "resource": f"{e.resource_type}:{e.resource_id}"
+                                    if e.resource_type else None,
+                        "ip": e.ip_address, "request_id": e.request_id,
+                        "detail": e.detail,
+                        "at": e.created_at.isoformat() if e.created_at else None}
+                       for e in qy.limit(limit).all()]}
 
 
 @app.get("/wallet/payouts")
@@ -2075,6 +2708,7 @@ def whoami_profile(user: dict = Depends(get_current_user), db: Session = Depends
         (Booking.buyer_id == u.id) | (Booking.seller_id == u.id)).count()
     return {
         "username": u.username, "email": u.email, "role": u.role,
+        "email_verified": bool(u.email_verified),   # the UI must know: it gates payouts
         "reputation": u.reputation, "balance": round(u.balance, 2),
         "earnings": round(u.earnings, 2), "can_accept_paid_jobs": u.can_accept_paid_jobs,
         "is_admin": _is_admin(u), "nodes": nodes, "bookings": bookings,

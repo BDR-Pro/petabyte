@@ -1,6 +1,6 @@
 """Static site pages served by the API (same-origin, no build step).
 
-Brand: "Deep Ocean Compute" — deep-navy background with teal/cyan bioluminescent
+Brand: Petabyte — deep-navy background with teal/cyan bioluminescent
 accents and an amber energy accent, Space Grotesk (display) + Inter (body) +
 JetBrains Mono (data). The hexagon node mark (/static/petabyte-logo.png) is the
 signature. Token persists in localStorage as 'pb_token' across pages.
@@ -9,15 +9,36 @@ signature. Token persists in localStorage as 'pb_token' across pages.
 _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>%%TITLE%%</title>
+<meta name="description" content="%%DESC%%"/>
+<link rel="canonical" href="https://petabyte.market%%PATH%%"/>
+<meta property="og:type" content="website"/>
+<meta property="og:site_name" content="Petabyte"/>
+<meta property="og:title" content="%%TITLE%%"/>
+<meta property="og:description" content="%%DESC%%"/>
+<meta property="og:url" content="https://petabyte.market%%PATH%%"/>
+<meta property="og:image" content="https://petabyte.market/static/og-card.png"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:site" content="@engcool"/>
+<meta name="twitter:title" content="%%TITLE%%"/>
+<meta name="twitter:description" content="%%DESC%%"/>
+<meta name="twitter:image" content="https://petabyte.market/static/og-card.png"/>
+<meta name="theme-color" content="#050B16"/>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Organization","name":"Petabyte",
+ "url":"https://petabyte.market","logo":"https://petabyte.market/static/petabyte-logo.png",
+ "description":"A marketplace for renting and monetizing GPU compute.",
+ "sameAs":["https://github.com/BDR-Pro","https://x.com/engcool"]}
+</script>
+<script>(function(){try{var l=localStorage.getItem('pb_lang')||'en';document.documentElement.setAttribute('lang',l);document.documentElement.setAttribute('dir',l==='ar'?'rtl':'ltr');}catch(e){}})();</script>
 <script>(function(){try{var t=localStorage.getItem('pb_theme');if(t!=='light'&&t!=='dark')t=(window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';document.documentElement.setAttribute('data-theme',t);document.documentElement.setAttribute('data-bs-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');document.documentElement.setAttribute('data-bs-theme','dark');}})();</script>
 <link rel="icon" type="image/png" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/static/petabyte-mark-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
 <script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 <style>
-/* ---- Bootstrap 5.3 themed to Deep Ocean (our layer loads after and wins) ---- */
+/* ---- Bootstrap 5.3 themed to match (our layer loads after and wins) ---- */
 [data-bs-theme]{--bs-body-bg:transparent;--bs-body-color:var(--ink);--bs-border-color:var(--line);
  --bs-primary:#35E0D0;--bs-primary-rgb:53,224,208;--bs-warning:#FFB224;--bs-warning-rgb:255,178,36;
  --bs-link-color:var(--teal);--bs-link-hover-color:var(--teal-br);
@@ -29,9 +50,9 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 .navbar-toggler svg{width:18px;height:18px;display:block}
 @media(max-width:991.98px){
  .navbar-collapse{flex-basis:100%;padding:10px 4px 12px}
- .navlinks{flex-direction:column;gap:2px;margin-left:0}
+ .navlinks{flex-direction:column;gap:2px;margin-inline-start:0}
  .navlinks a{padding:9px 13px}
- .navcta{margin-left:0;margin-top:8px;flex-wrap:wrap}}
+ .navcta{margin-inline-start:0;margin-top:8px;flex-wrap:wrap}}
 :root{--abyss:#030711;--depth:#0A1226;--depth2:#0D1832;--line:#16223F;--line2:#243456;
 --ink:#F2F6FF;--mut:#9BA9C9;--dim:#5C6C8F;
 --teal:#35E0D0;--teal-br:#8FF5E8;--deep:#149A90;--amber:#FFB224;--amber-br:#FFD076;
@@ -74,11 +95,11 @@ nav .wrap{display:flex;align-items:center;gap:22px;height:58px;background:var(--
 .brand{display:flex;align-items:center;gap:10px;font-family:var(--disp);font-weight:700;font-size:18px;letter-spacing:-.02em}
 .brand img{width:26px;height:26px;display:block;filter:drop-shadow(0 0 8px rgba(53,224,208,.5))}
 .brand .p{color:var(--teal)}
-.navlinks{display:flex;gap:4px;margin-left:6px}
+.navlinks{display:flex;gap:4px;margin-inline-start:6px}
 .navlinks a{font-size:13px;font-weight:500;color:var(--mut);padding:7px 13px;border-radius:999px;transition:color .15s,background-color .15s}
 .navlinks a:hover{color:var(--ink);background:rgba(255,255,255,.05)}
 .navlinks a.active{color:var(--teal);background:rgba(53,224,208,.10)}
-.navcta{margin-left:auto;display:flex;align-items:center;gap:10px}
+.navcta{margin-inline-start:auto;display:flex;align-items:center;gap:10px}
 .signin{font-size:13px;font-weight:500;color:var(--mut);padding:7px 12px;border-radius:999px;transition:color .15s}
 .signin:hover{color:var(--teal)}
 /* ---------- buttons ---------- */
@@ -131,7 +152,7 @@ html[data-theme=light] .codeline{background:#0E1A2E}
 .copybtn:hover{color:var(--teal);border-color:var(--teal)}
 /* ---------- tables ---------- */
 .tbl{width:100%;border-collapse:collapse;font-size:13px}
-.tbl th{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);text-align:left;padding:13px 16px;border-bottom:1px solid var(--line)}
+.tbl th{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);text-align:start;padding:13px 16px;border-bottom:1px solid var(--line)}
 .tbl td{padding:13px 16px;border-bottom:1px solid var(--hair)}
 .tbl tr:last-child td{border-bottom:0}
 .tbl tbody tr{transition:background-color .12s}
@@ -147,7 +168,7 @@ html[data-theme=light] .codeline{background:#0E1A2E}
 /* ---------- forms ---------- */
 input,select,textarea{font-family:var(--body);background:var(--panel2);border:1px solid var(--line2);color:var(--ink);border-radius:11px;padding:10px 13px;font-size:13.5px;outline:none;transition:border-color .15s,box-shadow .15s}
 input:focus,select:focus,textarea:focus{border-color:var(--teal);box-shadow:0 0 0 4px rgba(53,224,208,.13)}
-select{appearance:none;-webkit-appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);background-position:calc(100% - 17px) 55%,calc(100% - 12px) 55%;background-size:5px 5px;background-repeat:no-repeat;padding-right:32px}
+select{appearance:none;-webkit-appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);background-position:calc(100% - 17px) 55%,calc(100% - 12px) 55%;background-size:5px 5px;background-repeat:no-repeat;padding-inline-end:32px}
 .field{display:flex;flex-direction:column;gap:5px}
 .field>span{font-family:var(--mono);font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--dim)}
 .filterbar{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
@@ -156,7 +177,7 @@ select{appearance:none;-webkit-appearance:none;background-image:linear-gradient(
 .empty svg{width:36px;height:36px;color:var(--dim);margin-bottom:12px}
 .empty .et{font-family:var(--disp);font-weight:600;font-size:15px;color:var(--ink);margin-bottom:4px}
 .empty .es{font-size:12.5px;margin-bottom:16px}
-.stepchip{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:7px;background:rgba(53,224,208,.12);border:1px solid rgba(53,224,208,.35);color:var(--teal);font-family:var(--mono);font-size:11px;font-weight:600;margin-right:8px;flex:none}
+.stepchip{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:7px;background:rgba(53,224,208,.12);border:1px solid rgba(53,224,208,.35);color:var(--teal);font-family:var(--mono);font-size:11px;font-weight:600;margin-inline-end:8px;flex:none}
 /* ---------- sonar launch cards (signature) ---------- */
 .lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
 .lcard{position:relative;display:flex;flex-direction:column;padding:17px 17px 15px;border:1px solid var(--line);border-radius:var(--r);
@@ -197,6 +218,47 @@ html[data-theme=light] .themetoggle .sun{display:none}html[data-theme=light] .th
 html[data-theme=light] .hexbg{opacity:.10}
 .card,.panel,.stat,nav .wrap{transition:background-color .3s,border-color .3s}
 @media(max-width:780px){.navlinks{display:none}nav .wrap{height:54px}}
+/* ---------- Arabic / RTL ----------
+   RTL is not "flip everything". Numbers, money, code, curl commands and monospace
+   identifiers must stay LTR even inside an Arabic sentence, or a price reads backwards. */
+html[dir="rtl"] body{font-family:'IBM Plex Sans Arabic','Figtree',system-ui,sans-serif}
+html[dir="rtl"] h1,html[dir="rtl"] h2,html[dir="rtl"] h3{font-family:'IBM Plex Sans Arabic','Sora',sans-serif;letter-spacing:0}
+html[dir="rtl"] .eyebrow,html[dir="rtl"] .lbl,html[dir="rtl"] .mini{letter-spacing:0}
+/* these carry meaning in one direction only */
+html[dir="rtl"] .mono,html[dir="rtl"] code,html[dir="rtl"] .codeline,
+html[dir="rtl"] .tbl td.mono,html[dir="rtl"] input[type="number"]{direction:ltr;text-align:start;unicode-bidi:isolate}
+html[dir="rtl"] .hexbg{transform:scaleX(-1)}
+html[dir="rtl"] .grad{background-position:right}
+[dir] .arrow-fwd::after{content:"\2192"}
+html[dir="rtl"] .arrow-fwd::after{content:"\2190"}
+
+/* ---------- mobile ----------
+   A host checks "is my node earning?" from their phone, in bed. A 7-column table
+   scrolled sideways is useless there. Below 720px every .tbl collapses into stacked
+   cards, each row labelled by its header via data-l. */
+@media(max-width:720px){
+  .wrap{padding:0 16px}
+  h1{font-size:clamp(28px,8vw,40px)!important}
+  .stat{flex:1 1 100%}
+  .filterbar{gap:10px}
+  .filterbar .field{flex:1 1 calc(50% - 5px)}
+  .lfoot{flex-wrap:wrap}
+  .lfoot .codeline{order:2;flex:1 1 100%}
+  .lbtn{order:1;width:100%;justify-content:center}
+  .panel{overflow:visible}
+  .tbl thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  .tbl,.tbl tbody,.tbl tr,.tbl td{display:block;width:100%}
+  .tbl tr{border:1px solid var(--line);border-radius:var(--r-sm);margin-bottom:10px;
+    background:linear-gradient(180deg,var(--depth2),var(--panel2));padding:4px 0}
+  .tbl td{display:flex;justify-content:space-between;align-items:center;gap:14px;
+    border-bottom:1px solid var(--hair);padding:10px 14px;text-align:end}
+  .tbl td:last-child{border-bottom:0}
+  .tbl td::before{content:attr(data-l);font-family:var(--mono);font-size:9.5px;
+    letter-spacing:.14em;text-transform:uppercase;color:var(--dim);text-align:start;flex:none}
+  .tbl td:empty{display:none}
+  footer .fcols{gap:24px}
+  footer .fcol{min-width:44%}
+}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>"""
 
@@ -207,18 +269,20 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
 </button>
 <div class="collapse navbar-collapse" id="pbnav">
 <div class="navlinks">
-  <a href="/marketplace">Marketplace</a><a href="/pricing">Pricing</a>
-  <a href="/install">For GPU owners</a><a href="/security">Security</a><a href="/developers">Developers</a>
+  <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
+  <a href="/install" data-ar="لمالكي كروت الرسومات">For GPU owners</a><a href="/security" data-ar="الأمان">Security</a><a href="/developers" data-ar="المطورون">Developers</a>
 </div>
 <div class="navcta">
   <a class="signin" id="adminlink" href="/admin" style="display:none">Admin</a>
   <a class="signin" id="mename" href="/account" style="display:none;color:var(--teal)"></a>
+  <button class="themetoggle" onclick="toggleLang()" aria-label="Switch language" title="English / العربية" style="font-family:var(--mono);font-size:11px;font-weight:600" id="langbtn">AR</button>
   <button class="themetoggle" onclick="toggleTheme()" aria-label="Toggle light or dark theme" title="Toggle light / dark">
     <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M19 5l-1.4 1.4M6.4 17.6 5 19"/></svg>
     <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
   </button>
   <a class="signin" id="signinlink" href="/login">Sign in</a>
   <a class="signin" id="signoutlink" href="#" onclick="signout();return false" style="display:none">Sign out</a>
+  <a class="btn btn-ghost" href="/demo" data-ar="احجز عرضاً">Book a demo</a>
   <a class="btn btn-amber" href="/app">Open app</a>
 </div>
 </div>
@@ -228,10 +292,10 @@ _FOOT = """<footer>
 <div class="fcols">
   <div class="fcol" style="flex:1.4;min-width:200px">
     <span class="fb"><img src="/static/petabyte-logo.png" alt=""/> <b style="font-family:var(--disp);color:var(--ink)">Petabyte</b></span>
-    <p class="mut" style="font-size:12px;margin-top:10px;max-width:30ch">Deep Ocean Compute — a verified marketplace for community GPU power. Riyadh.</p>
+    <p class="mut" style="font-size:12px;margin-top:10px;max-width:30ch">A verified marketplace for community GPU power. Operated from Riyadh by Petabyte, Inc.</p>
   </div>
   <div class="fcol"><div class="fh">Product</div>
-    <a href="/marketplace">Marketplace</a><a href="/pricing">Pricing</a><a href="/app">Console</a>
+    <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/pricing" data-ar="الأسعار">Pricing</a><a href="/app">Console</a>
   </div>
   <div class="fcol"><div class="fh">Use cases</div>
     <a href="/artists">Rendering &amp; art</a><a href="/gamers">Game servers</a><a href="/developers">AI &amp; inference</a>
@@ -240,7 +304,7 @@ _FOOT = """<footer>
     <a href="/install">List your PC</a><a href="/account">Earnings</a><a href="/keys">API keys</a>
   </div>
   <div class="fcol"><div class="fh">Developers</div>
-    <a href="/docs">API reference</a><a href="/developers">Quickstart</a><a href="/keys">API keys</a>
+    <a href="/docs">API reference</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/developers">Quickstart</a><a href="/keys">API keys</a>
   </div>
   <div class="fcol"><div class="fh">Company</div>
     <a href="/security">Security &amp; trust</a><a href="/investors">About</a><a href="/status">Status</a>
@@ -250,7 +314,8 @@ _FOOT = """<footer>
   </div>
 </div>
 <div class="wrap">
-<span class="fb">© Petabyte · Deep Ocean Compute</span>
+<span class="fb">© Petabyte, Inc.</span>
+<span class="mut" style="font-size:11.5px" data-ar="شركة بيتابايت — مؤسسة كشركة أمريكية في ولاية ديلاوير، وتُدار من الرياض.">Petabyte, Inc. — a Delaware C-corporation · operated from Riyadh, Saudi Arabia</span>
 <span>verified compute · escrowed settlement</span>
 </div></footer>"""
 
@@ -262,6 +327,27 @@ function tok(){return localStorage.getItem('pb_token');}
 function authed(){return !!tok();}
 async function api(p,o){o=o||{};o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
  if(tok())o.headers['Authorization']='Bearer '+tok();var r=await fetch(p,o);var b={};try{b=await r.json()}catch(e){}return {ok:r.ok,status:r.status,body:b};}
+function toggleLang(){
+  var h=document.documentElement, next=(h.getAttribute('dir')==='rtl')?'en':'ar';
+  try{localStorage.setItem('pb_lang',next);}catch(e){}
+  location.reload();
+}
+// Translate in place. Every translatable node carries data-ar; we swap textContent
+// and flip direction. No separate Arabic build to drift out of sync.
+function applyLang(){
+  var ar = document.documentElement.getAttribute('dir')==='rtl';
+  var b=document.getElementById('langbtn'); if(b) b.textContent = ar ? 'EN' : 'AR';
+  document.querySelectorAll('[data-ar]').forEach(function(el){
+    if(!el.hasAttribute('data-en')) el.setAttribute('data-en', el.textContent);
+    el.textContent = ar ? el.getAttribute('data-ar') : el.getAttribute('data-en');
+  });
+  document.querySelectorAll('[data-ar-ph]').forEach(function(el){
+    if(!el.hasAttribute('data-en-ph')) el.setAttribute('data-en-ph', el.placeholder||'');
+    el.placeholder = ar ? el.getAttribute('data-ar-ph') : el.getAttribute('data-en-ph');
+  });
+}
+document.addEventListener('DOMContentLoaded', applyLang);
+
 function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-theme')==='light'?'dark':'light';h.setAttribute('data-theme',t);h.setAttribute('data-bs-theme',t);try{localStorage.setItem('pb_theme',t);}catch(e){}}
 function signout(){try{localStorage.removeItem('pb_token');}catch(e){}location.href='/';}
 (function(){var si=document.getElementById('signinlink'),so=document.getElementById('signoutlink');
@@ -280,14 +366,103 @@ window.PBICONS={
  valheim:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 21 13 13M13 3c5 0 8 3 8 8-4 0-6-1-8-4-2 3-4 4-8 4 0-5 3-8 8-8z"/></svg>',
  factorio:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2.1 2.1M16.9 16.9 19 19M19 5l-2.1 2.1M7.1 16.9 5 19"/></svg>',
  _default:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/></svg>'};
+PBICONS["jupyter"]='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="4" r="1.4"/><path d="M4 9c2.6 3 13.4 3 16 0M4 15c2.6 3 13.4 3 16 0"/></svg>';
+PBICONS["pytorch"]='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 6 9a8.5 8.5 0 1 0 12 0z"/><circle cx="15" cy="7.5" r="1.1" fill="currentColor"/></svg>';
 function pbIcon(n){return PBICONS[n]||PBICONS._default;}
 function pbEmpty(cols,title,sub,ctaHref,ctaText){
  return '<tr><td colspan='+cols+'><div class="empty">'+
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M8 15h4"/></svg>'+
   '<div class="et">'+title+'</div><div class="es">'+sub+'</div>'+
   (ctaHref?('<a class="btn btn-teal" href="'+ctaHref+'">'+ctaText+'</a>'):'')+'</div></td></tr>';}
+// ---- Command palette (Cmd/Ctrl+K). Power users never touch a nav bar. ----
+var PB_CMDS=[
+ {t:"Browse GPUs",           h:"/marketplace", k:"gpu hardware rent inventory"},
+ {t:"Templates",             h:"/catalog",     k:"launch jupyter pytorch ollama blender run"},
+ {t:"Your account",          h:"/account",     k:"dashboard wallet vms nodes"},
+ {t:"Pricing",               h:"/pricing",     k:"cost price hourly"},
+ {t:"API docs",              h:"/docs",        k:"api reference developers curl"},
+ {t:"API keys",              h:"/keys",        k:"key token auth"},
+ {t:"List your GPU",         h:"/install",     k:"sell host earn agent seller"},
+ {t:"Security & trust",      h:"/security",    k:"verified attestation isolation escrow"},
+ {t:"Status",                h:"/status",      k:"uptime health incident"},
+];
+function pbPalette(){
+  if(document.getElementById('pbpal'))return;
+  var d=document.createElement('div');d.id='pbpal';
+  d.style.cssText='position:fixed;inset:0;z-index:200;background:rgba(3,7,17,.72);backdrop-filter:blur(6px);display:flex;align-items:flex-start;justify-content:center;padding-top:14vh';
+  d.innerHTML='<div style="width:min(560px,92vw);background:var(--panel);border:1px solid var(--line2);border-radius:16px;overflow:hidden;box-shadow:0 30px 80px -30px rgba(0,0,0,.8)">'+
+    '<input id="pbpalq" placeholder="Search or jump to…" autocomplete="off" style="width:100%;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:15px 18px;font-size:15px;background:transparent"/>'+
+    '<div id="pbpalr" style="max-height:52vh;overflow:auto;padding:6px"></div></div>';
+  document.body.appendChild(d);
+  var q=document.getElementById('pbpalq'),res=document.getElementById('pbpalr'),sel=0,list=PB_CMDS;
+  function paint(){
+    res.innerHTML=list.map(function(c,i){
+      return '<a href="'+c.h+'" style="display:flex;align-items:center;gap:11px;padding:11px 13px;border-radius:10px;'+(i===sel?'background:rgba(53,224,208,.10)':'')+'">'+
+        '<span class="mono mini" style="color:var(--teal)">↵</span>'+
+        '<span style="flex:1;font-size:14px">'+c.t+'</span>'+
+        '<span class="mini">'+c.h+'</span></a>';}).join('')
+      || '<div class="mut" style="padding:18px;text-align:center;font-size:13px">Nothing matches.</div>';
+  }
+  function filter(){
+    var v=q.value.toLowerCase().trim();sel=0;
+    list=!v?PB_CMDS:PB_CMDS.filter(function(c){return (c.t+' '+c.k).toLowerCase().indexOf(v)>=0;});
+    paint();
+  }
+  q.addEventListener('input',filter);
+  d.addEventListener('click',function(e){if(e.target===d)close();});
+  function close(){d.remove();document.removeEventListener('keydown',keys);}
+  function keys(e){
+    if(e.key==='Escape'){close();}
+    else if(e.key==='ArrowDown'){e.preventDefault();sel=Math.min(sel+1,list.length-1);paint();}
+    else if(e.key==='ArrowUp'){e.preventDefault();sel=Math.max(sel-1,0);paint();}
+    else if(e.key==='Enter'&&list[sel]){location.href=list[sel].h;}
+  }
+  document.addEventListener('keydown',keys);
+  paint();q.focus();
+}
+document.addEventListener('keydown',function(e){
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();pbPalette();}
+});
 window._PBCMDS={};
-function pbCmd(name,hours){return 'curl -sX POST https://petabyte.market/launch -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d \'{"template":"'+name+'","hours":'+(hours||2)+'}\'';}
+function pbGoGpu(id){ location.href='/gpu/'+id; }
+function pbCloseModal(a1, el){ var m = el && el.closest ? el.closest('div') : null; while(m && m.parentNode !== document.body) m = m.parentNode; if(m) m.remove(); }
+
+// One delegated click handler for everything. No nested quotes in generated HTML,
+// so there is no escaping to get wrong. (A lost backslash here used to kill the
+// whole script block.)
+document.addEventListener('click', function(e){
+  var el = e.target.closest && e.target.closest('[data-act]');
+  if(!el) return;
+  var fn = window[el.getAttribute('data-act')];
+  if(typeof fn !== 'function') return;
+  e.preventDefault();
+  fn(el.getAttribute('data-a1'), el.getAttribute('data-a2') || el);
+});
+
+// Show the price BEFORE the buyer commits. Never let someone click Launch and only
+// then find out what it cost.
+async function pbConfirm(name,hours){
+  var est=null;
+  try{
+    var r=await fetch('/estimate',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({template:name,hours:hours})});
+    if(r.ok) est=await r.json();
+  }catch(e){}
+  if(!est){ if(confirm('Launch '+name+' for '+hours+'h?')) pbLaunch(name,hours); return; }
+  var L=[];
+  L.push('Launch '+name+' on a '+(est.gpu_model||'CPU')+'?');
+  L.push('');
+  L.push('$'+Number(est.price_per_hour).toFixed(2)+'/hour x '+est.hours+'h = $'+Number(est.total).toFixed(2));
+  L.push('You prepay this into escrow.');
+  L.push('');
+  L.push('Stop after 1 hour: charged $'+Number(est.if_you_stop_after_1h.charged).toFixed(2)+', refunded $'+Number(est.if_you_stop_after_1h.refunded).toFixed(2)+'.');
+  if(est.cloud_comparison){
+    L.push('');
+    L.push('A comparable public cloud would cost about $'+Number(est.cloud_comparison.reference_total).toFixed(2)+'.');
+  }
+  if(confirm(L.join(String.fromCharCode(10)))) pbLaunch(name,hours);
+}
+function pbCmd(name,hours){var Q=String.fromCharCode(39);return 'curl -sX POST https://petabyte.market/launch -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '+Q+'{"template":"'+name+'","hours":'+(hours||2)+'}'+Q;}
 async function pbCopy(name,btn){var c=window._PBCMDS[name]||'';try{await navigator.clipboard.writeText(c);}catch(e){
  var ta=document.createElement('textarea');ta.value=c;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');}catch(_){ }document.body.removeChild(ta);}
  if(btn){var o=btn.textContent;btn.textContent='copied';setTimeout(function(){btn.textContent=o;},1200);}}
@@ -302,8 +477,8 @@ async function renderLaunch(elId,kinds,hours){var el=document.getElementById(elI
    (t.port?('<span class="lport">:'+t.port+'</span>'):'<span class="lport">batch</span>')+'</div>'+
    '<div class="lfoot">'+
     '<div class="codeline"><code>'+cmd.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</code>'+
-    '<button class="copybtn" onclick="pbCopy(\''+t.name+'\',this)">copy</button></div>'+
-    '<button class="btn btn-amber lbtn" onclick="pbLaunch(\''+t.name+'\','+(hours||2)+')">Launch</button>'+
+    '<button class="copybtn" data-act="pbCopy" data-a1="'+t.name+'">copy</button></div>'+
+    '<button class="btn btn-amber lbtn" data-act="pbConfirm" data-a1="'+t.name+'" data-a2="'+(hours||2)+'">Launch</button>'+
    '</div></div>';}).join('');}
 function _lres(){var e=document.getElementById('launchresult');if(e){e.style.display='';}return e;}
 async function pbLaunch(name,hours){var out=_lres();if(!out)return;
@@ -313,7 +488,17 @@ async function pbLaunch(name,hours){var out=_lres();if(!out)return;
  if(r.status===401){out.innerHTML='<div class="lres">Please <a class="teal" href="/login">sign in</a> first.</div>';return;}
  if(r.status===402){out.innerHTML='<div class="lres">Add funds first — <a class="teal" href="/account">open your wallet</a>.</div>';return;}
  if(r.status===409){out.innerHTML='<div class="lres">No matching GPU is online right now. Try again shortly.</div>';return;}
- if(!r.ok){out.innerHTML='<div class="lres">Could not launch (error '+r.status+').</div>';return;}
+ if(!r.ok){
+   // Never show a bare status code. Say what happened, whether money moved,
+   // and where to go next.
+   var e=(r.body&&r.body.error)||{};
+   var msg=e.message||'Something went wrong on our side. Nothing was charged.';
+   var lbl=e.next==='/marketplace'?'Find another GPU':(e.next==='/account'?'Add funds':'Continue');
+   var act=e.next?('<a class="btn btn-teal" style="margin-top:12px" href="'+e.next+'">'+lbl+'</a>'):'';
+   var rid=e.request_id?('<div class="mini" style="margin-top:10px">Reference '+e.request_id+'</div>'):'';
+   out.innerHTML='<div class="lres"><div style="font-family:var(--disp);font-weight:600;color:var(--warn);margin-bottom:4px">Could not launch '+name+'</div>'+
+     '<div class="mut" style="font-size:13px">'+msg+'</div>'+act+rid+'</div>';
+   return;}
  var b=r.body;
  out.innerHTML='<div class="lres"><div class="lresok">✓ Reserved '+name+' on '+(b.gpu_model||'a node')+' · booking #'+b.booking_id+' · $'+(b.gross_amount!=null?b.gross_amount:'?')+' / '+b.hours+'h</div>'+
   '<div class="mut" style="margin-bottom:4px">Your stable address — it stays the same even if the node changes:</div>'+
@@ -331,21 +516,36 @@ function pbPollVM(vmid,port){var prep=document.getElementById('lprep'),t0=Date.n
 </script>"""
 
 
-def _page(title, body):
-    return _HEAD.replace("%%TITLE%%", title) + _NAV + _AUTHJS + body + _FOOT + "</body></html>"
+_DEFAULT_DESC = ("Rent GPUs by the hour from verified hosts, or earn from hardware you "
+                 "already own. Escrowed payments, refunded to the cent for hours you do "
+                 "not use.")
 
 
-LANDING_HTML = _page("Petabyte — the compute exchange", """
+def _page(title, body, desc=None, path="/"):
+    """Every page carries its own description, canonical URL and share card.
+
+    Without these, a link to petabyte.market shared in a DM or on X renders as a bare
+    URL with no title, no summary and no image."""
+    head = (_HEAD.replace("%%TITLE%%", title)
+                 .replace("%%DESC%%", (desc or _DEFAULT_DESC).replace('"', "&quot;"))
+                 .replace("%%PATH%%", path))
+    return head + _NAV + _AUTHJS + body + _FOOT + "</body></html>"
+
+
+LANDING_HTML = _page("Petabyte — the compute exchange",
+    desc="Rent verified GPUs by the hour, or earn from hardware you already own. One click to launch. Escrow refunds every hour you do not use.", path="/", body="""
 <div class="hero"><div class="wrap" style="padding:74px 24px 30px">
   <img class="hexbg" src="/static/petabyte-logo.png" alt=""/>
   <div class="cols" style="align-items:center;gap:34px">
     <div style="flex:1.35 1 420px;min-width:300px">
       <div class="eyebrow"><span class="dot"></span> verified gpu marketplace</div>
-      <h1 style="font-size:clamp(40px,6.8vw,76px);margin:20px 0 16px;max-width:15ch">GPU compute <span class="grad">without cloud prices.</span></h1>
-      <p class="mut" style="font-size:17px;max-width:52ch">Rent GPUs by the hour from verified hosts, or earn from hardware you already own. Your money sits in escrow until the work is done — if a node drops, you're refunded.</p>
-      <div style="display:flex;gap:12px;margin-top:28px;flex-wrap:wrap">
-        <a class="btn btn-amber" href="/marketplace">Browse live GPUs →</a>
-        <a class="btn btn-teal" href="/install">List your GPU</a>
+      <h1 style="font-size:clamp(40px,6.8vw,76px);margin:20px 0 16px;max-width:15ch"><span data-ar="قدرة حوسبة بدون أسعار السحابة.">GPU compute <span class="grad">without cloud prices.</span></span></h1>
+      <p class="mut" style="font-size:17px;max-width:52ch" data-ar="استأجر كروت رسومات بالساعة من مضيفين موثّقين، أو اربح من عتاد تملكه بالفعل. تُحفظ أموالك في ضمان حتى ينتهي العمل — وإذا تعطّل الجهاز، تُعاد إليك.">Rent GPUs by the hour from verified hosts, or earn from hardware you already own. Your money sits in escrow until the work is done — if a node drops, you are refunded.</p>
+      <div class="mini" style="margin-top:28px;margin-bottom:10px" data-ar="ما الذي تبحث عنه؟">What are you here for?</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <a class="btn btn-amber arrow-fwd" href="/marketplace" data-ar="أحتاج كروت رسومات">I need GPUs </a>
+        <a class="btn btn-teal" href="/install" data-ar="لديّ كرت رسومات لتأجيره">I have a GPU to rent out</a>
+      <div class="mini" style="margin-top:14px" data-ar="تفضّل جولة معنا؟ ">Prefer a walkthrough? <a class="teal" href="/demo" data-ar="احجز عرضاً مدته ٢٠ دقيقة">Book a 20-minute demo</a></div>
       </div>
     </div>
     <div class="panel" style="flex:1 1 320px;min-width:290px;padding:18px 20px">
@@ -360,6 +560,35 @@ LANDING_HTML = _page("Petabyte — the compute exchange", """
     </div></div>
   </div>
 </div></div>
+
+<!-- CREDIBILITY: every claim here is enforced by a test in the repo. No vanity metrics,
+     no fabricated logos. What we can prove, and nothing we cannot. -->
+<div class="wrap" style="padding:6px 24px 4px">
+  <div class="mini" style="text-align:center;margin-bottom:14px" data-ar="ما الذي نضمنه فعلاً — كل بند منها مغطّى باختبار.">What we actually guarantee — every line below is enforced by a test</div>
+  <div class="cols" style="gap:14px;flex-wrap:wrap">
+    <div class="card" style="flex:1 1 210px">
+      <div class="lbl">Escrow-protected</div>
+      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="تُحفظ أموالك في ضمان وتُعاد الساعات غير المستخدمة بالسنت.">Your money is held in escrow and released only for work done. Stop early and the unused hours are refunded to the cent.</p>
+    </div>
+    <div class="card" style="flex:1 1 210px">
+      <div class="lbl">Survives a host failure</div>
+      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="إذا تعطّل الجهاز أثناء العمل، ننقلك تلقائياً إلى مضيف آخر.">If a host drops mid-job, we move your instance to another node and you keep going. There is a timeline for every rental that proves it.</p>
+    </div>
+    <div class="card" style="flex:1 1 210px">
+      <div class="lbl">Verified hardware</div>
+      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="لا يقبل أي جهاز عملاً مدفوعاً قبل إثبات عتاده تشفيرياً.">No machine can take paid work until it has cryptographically proven what GPU it actually has. Unverified nodes are marked as such.</p>
+    </div>
+    <div class="card" style="flex:1 1 210px">
+      <div class="lbl">Isolated workloads</div>
+      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="يعمل كل عبء داخل جهاز افتراضي دقيق، ومنافذه مغلقة افتراضياً لحماية شبكة المضيف.">Each workload runs in its own micro-VM with a default-closed network, so one tenant cannot reach another and a host's home network stays protected.</p>
+    </div>
+  </div>
+  <div style="text-align:center;margin-top:16px">
+    <a class="btn btn-ghost" href="/security" data-ar="كيف يعمل هذا">How this works</a>
+    <a class="btn btn-ghost" href="/demo" data-ar="شاهده مباشرةً">See it live</a>
+  </div>
+</div>
+
 
 <!-- launch anything: the signature cards, on the front door -->
 <div class="wrap" style="padding:40px 24px 8px">
@@ -407,7 +636,7 @@ async function heroPreview(){
         '<div style="font-family:var(--disp);font-weight:600;font-size:14px">'+(s.gpu_model||'CPU')+(s.vram_gb?' <span class="mut" style="font-weight:400">· '+s.vram_gb+'GB</span>':'')+'</div>'+
         '<div class="mini" style="margin-top:2px">'+(s.region||'unknown region')+' · '+(s.available_units>0?'<span class="teal">available now</span>':'busy')+'</div>'+
        '</div>'+
-       '<div style="text-align:right;flex:none">'+
+       '<div style="text-align:end;flex:none">'+
         '<div class="mono amber" style="font-size:15px;font-weight:600">$'+Number(s.price_per_hour).toFixed(2)+'</div>'+
         '<div class="mini">/hour'+(save>0?' · <span style="color:var(--pos)">'+save+'% off</span>':'')+'</div>'+
        '</div></a>';}).join('');
@@ -426,7 +655,8 @@ renderLaunch('launchgrid',['game','art','render','ai'],2);
 </script>""")
 
 
-MARKETPLACE_HTML = _page("Petabyte — marketplace", """
+MARKETPLACE_HTML = _page("Petabyte — marketplace",
+    desc="Browse verified GPUs by model, VRAM, region and price. Compare each one against public cloud rates before you commit.", path="/marketplace", body="""
 <div class="wrap" style="padding:48px 22px 10px">
   <div class="eyebrow"><span class="dot"></span> live inventory</div>
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px">Available <span class="grad-teal">GPUs</span></h1>
@@ -471,16 +701,17 @@ async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await 
   return '<tr><td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
    '<td class="mono mut" style="font-size:12px">'+vram+'</td>'+
    '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+(s.auto_price?' <span class="badge cc" title="demand-priced within seller bounds">auto</span>':'')+'</td>'+
-   '<td class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
+   '<td data-l="vs cloud" class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
    '<td>'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
-   '<td class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td>'+
+   '<td data-l="Region" class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td>'+
    '<td class="mono" style="color:'+rc+'">'+rep+'</td>'+
    '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
 load();setInterval(load,8000);
 </script>""")
 
 
-INSTALL_HTML = _page("Petabyte — become a seller", """
+INSTALL_HTML = _page("Petabyte — become a seller",
+    desc="List a GPU you already own and earn when it is idle. One command to install the agent. Your machine stays yours.", path="/install", body="""
 <div class="wrap" style="padding:48px 22px 10px">
   <div class="eyebrow"><span class="dot"></span> node onboarding</div>
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px">List your GPU in <span class="grad-teal">one command</span></h1>
@@ -549,7 +780,8 @@ async function mkkey(){
 </script>""")
 
 
-DEVELOPERS_HTML = _page("Petabyte — developers", """
+DEVELOPERS_HTML = _page("Petabyte — developers",
+    desc="Launch GPU workloads from the API in one call. Keys, scopes, templates and a full reference.", path="/developers", body="""
 <div class="wrap" style="padding:48px 22px 10px">
   <div class="eyebrow"><span class="dot"></span> API reference</div>
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px">Build on the <span class="grad-teal">exchange</span></h1>
@@ -615,7 +847,7 @@ async function list(){var r=await api('/account/keys');var tb=document.getElemen
  tb.innerHTML=r.body.keys.map(function(k){return '<tr><td>'+(k.label||'—')+'</td><td class="mono mut">'+(k.scopes||'—')+'</td>'+
   '<td class="mono mut" style="font-size:11px">'+k.created_at.slice(0,10)+'</td><td class="mono mut" style="font-size:11px">'+k.expires_at.slice(0,10)+'</td>'+
   '<td>'+(k.revoked?'<span class="badge">revoked</span>':'<span class="badge ok">active</span>')+'</td>'+
-  '<td>'+(k.revoked?'':'<button class="btn-ghost" onclick="rv(\\''+k.jti+'\\')">revoke</button>')+'</td></tr>';}).join('');}
+  '<td>'+(k.revoked?'':'<button class="btn-ghost" data-act="rv" data-a1="'+k.jti+'">revoke</button>')+'</td></tr>';}).join('');}
 async function mk(){if(!authed()){document.getElementById('needauth').style.display='';return;}
  var q=new URLSearchParams({days:document.getElementById('days').value||'90'});
  var lb=document.getElementById('label').value,sc=document.getElementById('scopes').value;
@@ -631,7 +863,7 @@ INVESTORS_HTML = _page("Petabyte — investors", """
   <img class="hexbg" src="/static/petabyte-logo.png" alt=""/>
   <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
     <div class="eyebrow"><span class="dot"></span> compute-as-a-commodity</div>
-    <div class="mini" style="text-align:right;line-height:1.9">petabyte.market<br><span style="color:var(--teal)">raising · pre-revenue</span></div>
+    <div class="mini" style="text-align:end;line-height:1.9">petabyte.market<br><span style="color:var(--teal)">raising · pre-revenue</span></div>
   </div>
   <h1 style="font-size:clamp(30px,5.2vw,50px);margin:20px 0 12px;max-width:20ch">The routing layer for <span class="grad-teal">GPU compute</span>, priced like an energy market.</h1>
   <p class="mut" style="font-size:16px;max-width:70ch">Petabyte aggregates underutilized GPU capacity from distributed providers and routes it to buyers at prices far below the hyperscalers — with confidential computing, escrow-protected settlement, and automated payout rails built in from day one.</p>
@@ -643,7 +875,7 @@ INVESTORS_HTML = _page("Petabyte — investors", """
     <p class="mut">A decentralized marketplace that unlocks that hidden supply. Buyers get cheaper on-demand GPUs without lock-in, secured by micro-VM isolation and escrow. Providers turn idle hardware into revenue — automated payouts, idle-fallback so nothing sits unused.</p></div>
 </div></div>
 <div class="wrap" style="padding:16px 22px 8px">
-  <div class="panel" style="padding:22px 24px;border-left:3px solid var(--teal);background:linear-gradient(100deg,rgba(79,214,201,.07),rgba(44,158,155,.03))">
+  <div class="panel" style="padding:22px 24px;border-inline-start:3px solid var(--teal);background:linear-gradient(100deg,rgba(79,214,201,.07),rgba(44,158,155,.03))">
     <div class="lbl">Vision — beyond a marketplace</div>
     <p class="mut" style="max-width:92ch">Petabyte starts as a GPU marketplace but builds toward the <span class="teal">routing layer for compute-as-a-commodity</span> — real-time pricing and cross-provider arbitrage that treat GPU power like electricity. The deeper lever: pairing this with <span class="teal">structurally cheap electrons</span> to power AI where the electron is cheapest — the path to a sovereign, trust-minimized compute network.</p>
   </div>
@@ -767,14 +999,14 @@ async function loadUsers(){var q=document.getElementById('uq').value;
      '<td class="mut mono" style="font-size:12px">'+(u.email||'—')+'</td>'+
      '<td>'+(u.role==='seller'?'<span class="badge ok">seller</span>':'<span class="badge">buyer</span>')+'</td>'+
      '<td class="mono">'+u.reputation+'</td><td class="mono">'+money(u.balance)+'</td><td class="mono amber">'+money(u.earnings)+'</td>'+
-     '<td><button class="btn-ghost" onclick="setRole(\\''+u.username+'\\',\\''+other+'\\')">make '+other+'</button></td></tr>';}).join('');}
+     '<td><button class="btn-ghost" data-act="setRole" data-a1="'+u.username+'" data-a2="'+other+'">make '+other+'</button></td></tr>';}).join('');}
 async function setRole(u,role){await api('/admin/users/'+encodeURIComponent(u)+'/role',{method:'POST',body:JSON.stringify({role:role})});loadUsers();}
 async function loadSpecs(){var r=await api('/admin/specs');var tb=document.getElementById('srows');
   if(!r.ok||!r.body.specs.length){tb.innerHTML='<tr><td colspan=8 class="mut mono" style="padding:20px;text-align:center">No nodes.</td></tr>';return;}
   tb.innerHTML=r.body.specs.map(function(s){var t=[];if(s.confidential)t.push('<span class="badge cc">conf</span>');if(s.region_verified)t.push('<span class="badge ok">region ✓</span>');
     var st=s.status==='online'?'<span class="badge ok">online</span>':'<span class="badge">'+s.status+'</span>';
     return '<tr><td class="mono mut">'+s.id+'</td><td>'+s.owner+'</td>'+
-     '<td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
+     '<td data-l="GPU" style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
      '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+'</td><td>'+st+'</td>'+
      '<td>'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
      '<td class="mono">'+s.jobs_completed+'/'+s.jobs_failed+'</td>'+
@@ -877,6 +1109,79 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
 </div>
 
 <div id="hub" style="display:none">
+  <!-- onboarding: what do I do next? -->
+  <div class="wrap" id="onbsection" style="padding:22px 22px 0;display:none">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
+        <div>
+          <div class="lbl" id="onblbl">Getting started</div>
+          <h2 style="font-size:18px" id="onbnext">—</h2>
+          <p class="mut" style="font-size:13px;margin-top:2px" id="onbdetail"></p>
+        </div>
+        <div style="text-align:end;flex:none">
+          <div class="mono teal" style="font-size:24px;font-weight:700" id="onbpct">0%</div>
+          <div class="mini" id="onbcount"></div>
+        </div>
+      </div>
+      <div style="height:6px;background:var(--hair);border-radius:999px;margin:14px 0 12px;overflow:hidden">
+        <div id="onbbar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--teal),var(--amber));transition:width .5s"></div>
+      </div>
+      <div id="onbsteps" style="display:flex;flex-direction:column;gap:2px"></div>
+    </div>
+  </div>
+
+  <!-- EMAIL VERIFICATION — required before payouts, and how we reach you at 2am -->
+  <div class="wrap" id="emailsection" style="padding:20px 22px 0;display:none">
+    <div class="card" style="border-color:rgba(255,178,36,.4)">
+      <div class="lbl am">Action needed</div>
+      <h2 style="font-size:17px;margin-bottom:5px">Verify your email</h2>
+      <p class="mut" style="font-size:13px;margin-bottom:12px">Required before you can be paid out — and it's how we reach you if your node has a problem.</p>
+      <div class="filterbar">
+        <label class="field" style="flex:1;min-width:220px"><span>Email</span>
+          <input id="emailin" type="email" placeholder="you@example.com"/></label>
+        <button class="btn btn-amber" onclick="sendVerify()">Send link</button>
+      </div>
+      <div id="emailtok" style="display:none;margin-top:12px">
+        <div class="filterbar">
+          <label class="field" style="flex:1;min-width:220px"><span>Paste the code from your email</span>
+            <input id="emailcode" placeholder="verification code"/></label>
+          <button class="btn btn-teal" onclick="confirmVerify()">Verify</button>
+        </div>
+      </div>
+      <div id="emailmsg" class="mini" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <!-- NOTIFICATIONS — you have a whole notification system; show it -->
+  <div class="wrap" id="notifsection" style="padding:20px 22px 0;display:none">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+      <div class="lbl" style="margin:0">Activity</div>
+      <span class="badge ok" id="notifcount"></span>
+    </div>
+    <div class="panel" id="notiflist" style="padding:4px 16px"></div>
+  </div>
+
+  <!-- what is burning money RIGHT NOW -->
+  <div class="wrap" id="burnsection" style="padding:20px 22px 0;display:none">
+    <div class="stats">
+      <div class="stat"><div class="l">Balance</div><div class="n mono" id="b_bal">—</div></div>
+      <div class="stat"><div class="l">Burning now</div><div class="n mono amber" id="b_burn">—</div></div>
+      <div class="stat"><div class="l">Next 24h</div><div class="n mono" id="b_24">—</div></div>
+      <div class="stat"><div class="l">Runway</div><div class="n mono teal" id="b_run">—</div></div>
+    </div>
+    <p class="mut" style="font-size:12.5px;margin-top:8px" id="b_note"></p>
+  </div>
+
+  <!-- seller diagnostics: WHY am I not earning? -->
+  <div class="wrap" id="diagsection" style="padding:20px 22px 0;display:none">
+    <div class="lbl am">Your nodes</div>
+    <div id="diagblockers" style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px"></div>
+    <div class="panel" style="overflow:auto">
+      <table class="tbl"><thead><tr><th>GPU</th><th>Status</th><th>$/hr</th><th>Utilization</th><th>Jobs</th><th>Rep</th><th>Earned</th></tr></thead>
+      <tbody id="diagrows"></tbody></table>
+    </div>
+  </div>
+
   <!-- profile header -->
   <div class="hero"><div class="wrap" style="padding:44px 22px 10px">
     <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
@@ -1030,17 +1335,45 @@ async function boot(){
   document.getElementById('njobs').textContent=u.bookings;
   document.getElementById('wbal').textContent=money(u.balance);
   document.getElementById('wearn').textContent=money(u.earnings);
-  loadNodes();loadJobs();loadKeys();loadMethods();loadTemplates();loadVMs();loadEarnings();
+  loadNodes();loadJobs();loadKeys();loadMethods();loadTemplates();loadVMs();loadEarnings();loadOnboarding();loadDiagnostics();loadBurn();loadEmail();loadNotifs();setInterval(loadBurn,20000);
 }
 async function loadVMs(){var r=await api('/vm');if(!r.ok)return;var vms=r.body.vms||[];
   if(!vms.length)return; document.getElementById('vmsection').style.display='';
   document.getElementById('vmrows').innerHTML=vms.map(function(v){
     var live=(v.status==='running'||v.status==='starting'||v.status==='migrating');
-    var act=live?('<button class="btn-ghost" style="padding:4px 10px;font-size:11px" onclick="vmExtend(\\''+v.vm_id+'\\')">+1h</button> <button class="btn-ghost" style="padding:4px 10px;font-size:11px" onclick="vmStop(\\''+v.vm_id+'\\')">Stop</button>'):'';
+    var act='<button class="btn-ghost" style="padding:4px 10px;font-size:11px" data-act="vmEvents" data-a1="'+v.vm_id+'">Timeline</button>'+(live?(' '+'<button class="btn-ghost" style="padding:4px 10px;font-size:11px" data-act="vmExtend" data-a1="'+v.vm_id+'">+1h</button> <button class="btn-ghost" style="padding:4px 10px;font-size:11px" data-act="vmStop" data-a1="'+v.vm_id+'">Stop</button>'):'');
     return '<tr><td class="mono" style="font-size:11px">vm-'+v.vm_id+'</td><td style="text-transform:capitalize">'+(v.template||'')+'</td>'+
       '<td><span class="badge '+(v.status==='running'?'ok':'')+'">'+v.status+'</span></td>'+
       '<td class="mono amber">$'+Number(v.hourly_rate||0).toFixed(2)+'</td>'+
       '<td class="mono">'+(v.hours_left||0)+'h</td><td>'+act+'</td></tr>';}).join('');}
+// --- VM EVENT TIMELINE. The backend records created -> tunnel_registered ->
+// migrated -> tunnel_registered. That timeline IS the failover proof — the single
+// most convincing thing we can show a buyer — and it was never displayed.
+async function vmEvents(id){
+  var r=await api('/vm/'+id+'/events'); if(!r.ok)return;
+  var evs=r.body.events||[];
+  var d=document.createElement('div');
+  d.style.cssText='position:fixed;inset:0;z-index:200;background:rgba(3,7,17,.72);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:20px';
+  var label={'created':'Instance created','tunnel_registered':'Reachable through the tunnel',
+             'migrated':'Host failed — moved to another node','stopped':'Stopped',
+             'expired':'Prepaid window ended','extended':'Extended'};
+  d.innerHTML='<div style="width:min(520px,94vw);background:var(--panel);border:1px solid var(--line2);border-radius:16px;padding:22px">'+
+    '<div class="lbl">Timeline</div><h2 style="font-size:17px;margin-bottom:14px">'+id+'</h2>'+
+    (evs.length?evs.map(function(e,i){
+      var mig=e.event==='migrated';
+      return '<div style="display:flex;gap:12px;align-items:flex-start;padding:9px 0">'+
+        '<div style="display:flex;flex-direction:column;align-items:center;flex:none">'+
+          '<span style="width:9px;height:9px;border-radius:50%;background:'+(mig?'var(--warn)':'var(--teal)')+'"></span>'+
+          (i<evs.length-1?'<span style="width:1px;flex:1;min-height:20px;background:var(--line2)"></span>':'')+
+        '</div><div style="flex:1"><div style="font-size:13.5px;font-family:var(--disp);font-weight:600;'+(mig?'color:var(--warn)':'')+'">'+
+        (label[e.event]||e.event)+'</div>'+
+        (e.detail?'<div class="mut" style="font-size:12px">'+e.detail+'</div>':'')+
+        '<div class="mini">'+(e.at||'').replace('T',' ').slice(0,19)+'</div></div></div>';}).join('')
+      :'<div class="mut" style="font-size:13px">No events yet.</div>')+
+    '<div style="margin-top:14px;text-align:end"><button class="btn btn-ghost" data-act="pbCloseModal">Close</button></div></div>';
+  d.addEventListener('click',function(e){if(e.target===d)d.remove();});
+  document.body.appendChild(d);
+}
 async function vmStop(id){await api('/vm/'+id+'/stop',{method:'POST'});loadVMs();}
 async function vmExtend(id){var r=await api('/vm/'+id+'/extend',{method:'POST',body:JSON.stringify({hours:1})});if(r.status===402)wmsg('Add funds to extend.');loadVMs();}
 async function loadEarnings(){var r=await api('/seller/earnings');if(!r.ok)return;var e=r.body;
@@ -1070,7 +1403,7 @@ async function loadKeys(){var r=await api('/account/keys');var tb=document.getEl
   tb.innerHTML=r.body.keys.map(function(k){return '<tr><td>'+(k.label||'—')+'</td><td class="mono mut">'+(k.scopes||'—')+'</td>'+
    '<td class="mono mut" style="font-size:11px">'+k.expires_at.slice(0,10)+'</td>'+
    '<td>'+(k.revoked?'<span class="badge">revoked</span>':'<span class="badge ok">active</span>')+'</td>'+
-   '<td>'+(k.revoked?'':'<button class="btn-ghost" onclick="rvkey(\\''+k.jti+'\\')">revoke</button>')+'</td></tr>';}).join('');}
+   '<td>'+(k.revoked?'':'<button class="btn-ghost" data-act="rvkey" data-a1="'+k.jti+'">revoke</button>')+'</td></tr>';}).join('');}
 async function mkkey(){var lb=document.getElementById('klabel').value;var q=new URLSearchParams({days:'90'});if(lb)q.set('label',lb);
   var r=await api('/create_api_key?'+q.toString(),{method:'POST'});var el=document.getElementById('knew');el.style.display='';
   el.textContent=r.ok?('Copy now — shown once:\\n\\n'+r.body.api_key):'Could not create key.';loadKeys();}
@@ -1086,6 +1419,124 @@ async function loadMethods(){var r=await api('/wallet/methods');var el=document.
   if(r.ok&&r.body.methods&&r.body.methods.length){el.innerHTML='Payout methods: '+r.body.methods.map(function(m){return '<span class="badge ok">'+(m.kind||m.type||'method')+'</span>';}).join(' ');}
   else{el.innerHTML='No payout method yet — add bank / USDC / gift card in the <a class="teal" href="/app">dashboard</a> to withdraw.';}}
 async function loadTemplates(){renderLaunch('launchgrid',['ai','render','art','game'],2);}
+
+// --- ONBOARDING: what do I do next? Buyers and hosts get different funnels. ---
+async function loadOnboarding(){
+  var r=await api('/onboarding'); if(!r.ok)return; var o=r.body;
+  if(o.percent>=100){document.getElementById('onbsection').style.display='none';return;}
+  document.getElementById('onbsection').style.display='';
+  document.getElementById('onblbl').textContent = o.role==='host'?'Getting paid':'Getting started';
+  document.getElementById('onbpct').textContent = o.percent+'%';
+  document.getElementById('onbcount').textContent = o.completed+' of '+o.total+' done';
+  document.getElementById('onbbar').style.width = o.percent+'%';
+  if(o.next_step){
+    document.getElementById('onbnext').textContent = o.next_step.title;
+    document.getElementById('onbdetail').textContent = o.next_step.detail;
+  }
+  document.getElementById('onbsteps').innerHTML = o.steps.map(function(s,i){
+    var isNext = o.next_step && s.key===o.next_step.key;
+    return '<div style="display:flex;align-items:center;gap:11px;padding:8px 0;border-bottom:1px solid var(--hair);'+(isNext?'':'opacity:.62')+'">'+
+      (s.done
+        ? '<span style="width:20px;height:20px;border-radius:50%;background:rgba(74,222,156,.15);border:1px solid var(--pos);color:var(--pos);display:inline-flex;align-items:center;justify-content:center;font-size:11px;flex:none">✓</span>'
+        : '<span style="width:20px;height:20px;border-radius:50%;border:1px solid '+(isNext?'var(--teal)':'var(--line2)')+';flex:none"></span>')+
+      '<span style="flex:1;font-size:13.5px;'+(s.done?'text-decoration:line-through;color:var(--dim)':'')+'">'+s.title+'</span>'+
+      (!s.done&&isNext?'<a class="btn btn-teal" style="padding:5px 13px;font-size:12px" href="'+s.action+'">Do it</a>':'')+
+      '</div>';}).join('');
+}
+
+// --- EMAIL VERIFICATION. Without this the onboarding checklist is a dead end:
+// it says "verify your email" and there is nowhere to do it — while verification
+// gates every payout.
+async function loadEmail(){
+  var r=await api('/me'); if(!r.ok)return;
+  if(r.body.email_verified){document.getElementById('emailsection').style.display='none';return;}
+  document.getElementById('emailsection').style.display='';
+  if(r.body.email) document.getElementById('emailin').value=r.body.email;
+}
+async function sendVerify(){
+  var e=document.getElementById('emailin').value.trim();
+  var m=document.getElementById('emailmsg');
+  if(!e){m.textContent='Enter an email address.';return;}
+  m.textContent='Sending…';
+  var r=await api('/email/verify/request',{method:'POST',body:JSON.stringify({email:e})});
+  if(!r.ok){m.textContent=(r.body&&r.body.error&&r.body.error.message)||'Could not send the link.';return;}
+  document.getElementById('emailtok').style.display='';
+  m.textContent='Check your inbox. The link expires in '+(r.body.expires_in_minutes||15)+' minutes.';
+  if(r.body.debug_token){document.getElementById('emailcode').value=r.body.debug_token;m.textContent+=' (sandbox: code filled in for you)';}
+}
+async function confirmVerify(){
+  var t=document.getElementById('emailcode').value.trim();
+  var m=document.getElementById('emailmsg');
+  var r=await api('/email/verify/confirm',{method:'POST',body:JSON.stringify({token:t})});
+  if(!r.ok){m.textContent=(r.body&&r.body.error&&r.body.error.message)||'That code is invalid or expired.';return;}
+  m.textContent='Verified.';
+  document.getElementById('emailsection').style.display='none';
+  loadOnboarding();
+}
+
+// --- NOTIFICATIONS. The backend has emitted these all along (payout requested/
+// confirmed/failed, node offline, refunds) and the app never showed a single one.
+async function loadNotifs(){
+  var r=await api('/notifications'); if(!r.ok)return;
+  var ns=(r.body.notifications||[]).slice(0,12);
+  if(!ns.length)return;
+  document.getElementById('notifsection').style.display='';
+  document.getElementById('notifcount').textContent=ns.length+' recent';
+  var icon={'payout.requested':'↑','payout.confirmed':'✓','payout.failed':'!',
+            'booking.refunded':'↩','job.completed':'✓','node.offline':'!',
+            'payout_method.added':'⚠','email.verify':'✉'};
+  document.getElementById('notiflist').innerHTML=ns.map(function(n){
+    var bad=(n.event_type||'').indexOf('failed')>=0||(n.event_type||'').indexOf('offline')>=0||(n.event_type||'')==='payout_method.added';
+    return '<div style="display:flex;gap:12px;align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--hair)">'+
+      '<span class="mono" style="width:20px;flex:none;color:'+(bad?'var(--warn)':'var(--teal)')+'">'+(icon[n.event_type]||'•')+'</span>'+
+      '<div style="flex:1;min-width:0">'+
+        '<div style="font-size:13.5px;font-family:var(--disp);font-weight:600">'+(n.subject||n.event_type)+'</div>'+
+        '<div class="mut" style="font-size:12.5px">'+(n.body||'')+'</div></div>'+
+      '<span class="mini" style="flex:none">'+(n.status||'')+'</span></div>';}).join('');
+}
+
+// --- BURN RATE: the number a buyer actually wants is not "balance", it's
+// "what is costing me money right now, even while I'm not looking".
+async function loadBurn(){
+  var r=await api('/buyer/spend'); if(!r.ok)return; var b=r.body;
+  if(!b.active_instances && !(Number(b.spent_lifetime)>0)) return;
+  document.getElementById('burnsection').style.display='';
+  var money=function(x){return '$'+Number(x||0).toFixed(2);};
+  document.getElementById('b_bal').textContent=money(b.balance);
+  document.getElementById('b_burn').textContent=money(b.burn_rate_per_hour)+'/hr';
+  document.getElementById('b_24').textContent=money(b.projected_24h);
+  document.getElementById('b_run').textContent=(b.hours_of_runway!=null?b.hours_of_runway+'h':'—');
+  document.getElementById('b_note').textContent=
+    b.active_instances
+      ? b.active_instances+' instance'+(b.active_instances===1?'':'s')+' running. '+
+        money(b.in_escrow)+' is held in escrow and refunded for hours you do not use.'
+      : 'Nothing running. '+money(b.spent_lifetime)+' spent to date.';
+}
+
+// --- SELLER DIAGNOSTICS: "my GPU is on, why am I earning nothing?" ---
+async function loadDiagnostics(){
+  var r=await api('/seller/dashboard'); if(!r.ok)return; var d=r.body;
+  if(!d.nodes||!d.nodes.length)return;
+  document.getElementById('diagsection').style.display='';
+  document.getElementById('diagblockers').innerHTML=(d.blockers||[]).map(function(b){
+    return '<div class="card" style="padding:14px 16px;border-color:rgba(255,178,36,.35)">'+
+      '<div style="font-family:var(--disp);font-weight:600;font-size:13.5px;color:var(--amber)">'+b.issue+'</div>'+
+      '<div class="mut" style="font-size:12.5px;margin-top:3px">'+b.fix+'</div></div>';}).join('')
+    || '<div class="mut mono" style="font-size:12px">No blockers — your nodes are visible and priced competitively. If you are still not earning, it is demand, not you.</div>';
+  document.getElementById('diagrows').innerHTML=d.nodes.map(function(n){
+    return '<tr>'+
+      '<td data-l="GPU" style="font-family:var(--disp);font-weight:600">'+(n.gpu_model||'CPU')+'</td>'+
+      '<td data-l="Status">'+(n.online?'<span class="badge ok">online</span>':'<span class="badge">offline</span>')+
+        (n.attested?'':' <span class="badge cc">unverified</span>')+'</td>'+
+      '<td data-l="$/hr" class="mono amber">$'+Number(n.price_per_hour).toFixed(2)+'</td>'+
+      '<td data-l="Utilization"><div style="display:flex;align-items:center;gap:7px">'+
+        '<div style="flex:1;height:5px;background:var(--hair);border-radius:999px;overflow:hidden;min-width:44px">'+
+        '<div style="height:100%;width:'+n.utilization_pct+'%;background:var(--teal)"></div></div>'+
+        '<span class="mono mini">'+n.utilization_pct+'%</span></div></td>'+
+      '<td data-l="Jobs" class="mono">'+n.jobs_completed+(n.jobs_failed?' <span style="color:var(--bad)">/'+n.jobs_failed+'</span>':'')+'</td>'+
+      '<td data-l="Rep" class="mono">'+(n.reputation!=null?n.reputation:'—')+'</td>'+
+      '<td data-l="Earned" class="mono teal">$'+Number(n.earned_total).toFixed(2)+'</td></tr>';}).join('');
+}
 boot();
 </script>""")
 
@@ -1154,19 +1605,19 @@ async function hosts(){var r=await fetch('/marketplace/specs?sort=price');var b=
   tb.innerHTML=b.specs.map(function(s){
    var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
    var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
-   return '<tr style="cursor:pointer" onclick="location.href=\'/gpu/'+s.id+'\'">'+
-    '<td><div style="font-family:var(--disp);font-weight:600">'+(s.gpu_count>1?s.gpu_count+'× ':'')+(s.gpu_model||'CPU')+'</div>'+
+   return '<tr style="cursor:pointer" data-act="pbGoGpu" data-a1="'+s.id+'">'+
+    '<td data-l="GPU"><div style="font-family:var(--disp);font-weight:600">'+(s.gpu_count>1?s.gpu_count+'× ':'')+(s.gpu_model||'CPU')+'</div>'+
       '<div class="mini" style="margin-top:2px">'+(s.cpu?s.cpu+' vCPU':'')+(s.ram_gb?' · '+s.ram_gb+'GB RAM':'')+'</div></td>'+
-    '<td class="mono mut">'+(s.vram_gb?s.vram_gb+' GB':'—')+'</td>'+
-    '<td><div class="mono amber" style="font-weight:600">$'+s.price_per_hour.toFixed(2)+'</div>'+
+    '<td data-l="VRAM" class="mono mut">'+(s.vram_gb?s.vram_gb+' GB':'—')+'</td>'+
+    '<td data-l="$/hr"><div class="mono amber" style="font-weight:600">$'+s.price_per_hour.toFixed(2)+'</div>'+
       (s.auto_price?'<span class="badge cc" style="font-size:9px">auto</span>':'')+'</td>'+
     '<td class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
-    '<td>'+(s.attested?'<span class="badge ok">verified</span>':'<span class="badge">unverified</span>')+
+    '<td data-l="Trust">'+(s.attested?'<span class="badge ok">verified</span>':'<span class="badge">unverified</span>')+
       (s.confidential?' <span class="badge cc">CC</span>':'')+'</td>'+
-    '<td class="mut mono" style="font-size:12px">'+(s.region||'—')+(s.region_verified?' <span class="teal">✓</span>':'')+'</td>'+
-    '<td class="mono" style="color:'+rc+'">'+(s.reputation_score!=null?s.reputation_score:'—')+
+    '<td data-l="Region" class="mut mono" style="font-size:12px">'+(s.region||'—')+(s.region_verified?' <span class="teal">✓</span>':'')+'</td>'+
+    '<td data-l="Reputation" class="mono" style="color:'+rc+'">'+(s.reputation_score!=null?s.reputation_score:'—')+
       '<div class="mini">'+(s.success_rate!=null?s.success_rate+'% ok':'no history')+'</div></td>'+
-    '<td><span class="badge '+(s.available_units>0?'ok':'')+'">'+(s.available_units>0?s.available_units+' free':'busy')+'</span></td>'+
+    '<td data-l="Available"><span class="badge '+(s.available_units>0?'ok':'')+'">'+(s.available_units>0?s.available_units+' free':'busy')+'</span></td>'+
     '</tr>';}).join('');}
 hosts();setInterval(hosts,8000);
 </script>""")
@@ -1252,7 +1703,7 @@ GPU_DETAIL_HTML = _page("Petabyte — GPU", """
 </div>
 <script>
 var SPEC_ID=location.pathname.split('/').pop();
-function row(k,v){return '<div style="display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid var(--hair)"><span class="mut" style="font-size:13px">'+k+'</span><span class="mono" style="font-size:13px;text-align:right">'+v+'</span></div>';}
+function row(k,v){return '<div style="display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid var(--hair)"><span class="mut" style="font-size:13px">'+k+'</span><span class="mono" style="font-size:13px;text-align:end">'+v+'</span></div>';}
 async function loadGpu(){
  var r=await fetch('/marketplace/specs/'+SPEC_ID);
  var w=document.getElementById('gpuwrap');
@@ -1313,7 +1764,8 @@ loadGpu();setInterval(loadGpu,15000);
 </script>""")
 
 
-PRICING_HTML = _page("Petabyte — pricing", """
+PRICING_HTML = _page("Petabyte — pricing",
+    desc="Live GPU prices per hour, compared against comparable public cloud rates. You prepay into escrow and are refunded for unused hours.", path="/pricing", body="""
 <div class="hero"><div class="wrap" style="padding:60px 24px 18px">
   <div class="eyebrow"><span class="dot"></span> pricing</div>
   <h1 style="font-size:clamp(34px,5vw,54px);margin:16px 0 12px">Pay for the hours <span class="grad">you actually use.</span></h1>
@@ -1350,10 +1802,10 @@ async function prices(){
   var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
   return '<tr>'+
    '<td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
-   '<td class="mono mut">'+(s.vram_gb?s.vram_gb+' GB':'—')+'</td>'+
-   '<td class="mono amber" style="font-weight:600">$'+Number(s.price_per_hour).toFixed(2)+'/hr</td>'+
-   '<td class="mono mut">'+(s.cloud_reference?'$'+Number(s.cloud_reference).toFixed(2)+'/hr':'<span class="mini">no comparable rate</span>')+'</td>'+
-   '<td class="mono" style="color:var(--pos)">'+(save>0?save+'%':'—')+'</td>'+
+   '<td data-l="VRAM" class="mono mut">'+(s.vram_gb?s.vram_gb+' GB':'—')+'</td>'+
+   '<td data-l="Petabyte" class="mono amber" style="font-weight:600">$'+Number(s.price_per_hour).toFixed(2)+'/hr</td>'+
+   '<td data-l="Cloud" class="mono mut">'+(s.cloud_reference?'$'+Number(s.cloud_reference).toFixed(2)+'/hr':'<span class="mini">no comparable rate</span>')+'</td>'+
+   '<td data-l="You save" class="mono" style="color:var(--pos)">'+(save>0?save+'%':'—')+'</td>'+
    '<td class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td>'+
    '<td><a class="btn btn-teal" style="padding:6px 14px;font-size:12px" href="/gpu/'+s.spec_id+'">View</a></td></tr>';}).join('');
 }
@@ -1361,7 +1813,8 @@ prices();setInterval(prices,10000);
 </script>""")
 
 
-SECURITY_HTML = _page("Petabyte — security &amp; trust", """
+SECURITY_HTML = _page("Petabyte — security &amp; trust",
+    desc="How Petabyte isolates workloads, verifies hardware, protects host networks, and holds buyer funds in escrow.", path="/security", body="""
 <div class="hero"><div class="wrap" style="padding:60px 24px 18px">
   <div class="eyebrow"><span class="dot"></span> security &amp; trust</div>
   <h1 style="font-size:clamp(34px,5vw,54px);margin:16px 0 12px">What we verify, <span class="grad">and what we don't.</span></h1>
@@ -1402,7 +1855,7 @@ SECURITY_HTML = _page("Petabyte — security &amp; trust", """
       <li style="padding:3px 0">A published external security audit or SOC 2 report.</li>
       <li style="padding:3px 0">Formal data-residency guarantees. Region is host-reported unless marked verified.</li>
     </ul>
-    <p class="mut" style="font-size:13px;margin-top:12px">If a claim matters for your workload, ask us before you book — <a class="teal" href="mailto:security@petabyte.market">security@petabyte.market</a>.</p>
+    <p class="mut" style="font-size:13px;margin-top:12px">If a claim matters for your workload, ask us before you book — <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.</p>
   </div>
 </div>
 
@@ -1421,7 +1874,7 @@ def _legal(title, body):
   <p class="mini" style="margin-bottom:26px">Last updated 11 July 2026 · Petabyte, Riyadh, Saudi Arabia</p>
   <div class="card" style="line-height:1.75">""" + body + """
   <p class="mut" style="font-size:12.5px;margin-top:20px;padding-top:14px;border-top:1px solid var(--hair)">
-    Questions: <a class="teal" href="mailto:legal@petabyte.market">legal@petabyte.market</a>.
+    Questions: <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.
     This document is provided in good faith and is not a substitute for legal advice.</p>
   </div>
 </div>""")
@@ -1440,7 +1893,7 @@ PRIVACY_HTML = _legal("Privacy policy", """
 <h2 """ + _LEGAL_H + """>What hosts can see</h2>
 <p class="mut">A host runs your container on their machine. They can see that a job is running and its resource usage. Containers limit but do not eliminate what a determined host could observe — see our <a class="teal" href="/security">security page</a> for the honest boundary. Do not place data on shared infrastructure that you could not tolerate the host seeing.</p>
 <h2 """ + _LEGAL_H + """>Retention and your rights</h2>
-<p class="mut">Financial records are kept as required for accounting. Other data is kept while your account is open. You can request a copy of your data or ask us to delete your account by emailing <a class="teal" href="mailto:privacy@petabyte.market">privacy@petabyte.market</a>.</p>
+<p class="mut">Financial records are kept as required for accounting. Other data is kept while your account is open. You can request a copy of your data or ask us to delete your account by emailing <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.</p>
 """)
 
 TERMS_HTML = _legal("Terms of service", """
@@ -1457,6 +1910,8 @@ TERMS_HTML = _legal("Terms of service", """
 <p class="mut">To the extent permitted by law, our liability for any rental is limited to the amount you paid for it. We are not liable for lost work, lost profits, or data loss — keep your own backups.</p>
 <h2 """ + _LEGAL_H + """>Termination</h2>
 <p class="mut">We may suspend accounts that breach these terms or the acceptable use policy. You can close your account at any time; hosts can uninstall the agent in one command.</p>
+<h2 """ + _LEGAL_H + """>Company</h2>
+<p class="mut">Petabyte is operated by <b>Petabyte, Inc.</b>, a C-corporation incorporated in the State of Delaware, United States, with operations in Riyadh, Saudi Arabia. For legal notices, contracts, or verification of the entity during due diligence, write to <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.</p>
 """)
 
 AUP_HTML = _legal("Acceptable use policy", """
@@ -1478,11 +1933,12 @@ AUP_HTML = _legal("Acceptable use policy", """
   <li style="padding:3px 0">Take payment and deliberately fail to deliver compute.</li>
 </ul>
 <h2 """ + _LEGAL_H + """>Enforcement</h2>
-<p class="mut">We may suspend a rental or an account, withhold settlement, and where required report to authorities. Report abuse to <a class="teal" href="mailto:abuse@petabyte.market">abuse@petabyte.market</a> — include the VM address or node id if you have it.</p>
+<p class="mut">We may suspend a rental or an account, withhold settlement, and where required report to authorities. Report abuse to <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a> — include the VM address or node id if you have it.</p>
 """)
 
 
-STATUS_HTML = _page("Petabyte — status", """
+STATUS_HTML = _page("Petabyte — status",
+    desc="Live platform status and component health.", path="/status", body="""
 <div class="wrap" style="padding:56px 24px 8px;max-width:820px">
   <div class="eyebrow"><span class="dot"></span> service status</div>
   <h1 style="font-size:clamp(30px,4.4vw,44px);margin:16px 0 20px">System status</h1>
@@ -1505,4 +1961,193 @@ async function stat(){
   srow('API',api_ok,detail)+srow('Marketplace',api_ok,nodes)+srow('Settlement',api_ok,api_ok?'operational':'degraded');
 }
 stat();setInterval(stat,15000);
+</script>""")
+
+
+TEMPLATES_HTML = _page("Petabyte — templates",
+    desc="One-click templates: Jupyter, PyTorch, Ollama, vLLM, ComfyUI, Blender, game servers — or bring any Docker image.", path="/catalog", body="""
+<div class="hero"><div class="wrap" style="padding:56px 24px 12px">
+  <div class="eyebrow"><span class="dot"></span> one-click templates</div>
+  <h1 style="font-size:clamp(32px,5vw,52px);margin:16px 0 12px">Pick a workload. <span class="grad">Press launch.</span></h1>
+  <p class="mut" style="font-size:16px;max-width:60ch">No wizard. No configuring storage, networking, and SSH keys before you can do anything. Choose what you want to run — we place it on the cheapest verified GPU that fits and hand you the address.</p>
+</div></div>
+
+<div class="wrap" style="padding:14px 24px 8px">
+  <div class="filterbar" style="margin-bottom:18px">
+    <div id="tplchips" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+    <div style="margin-inline-start:auto;display:flex;align-items:center;gap:9px">
+      <span class="mini">Hours</span>
+      <input id="tplhours" type="number" min="1" max="720" value="2" style="width:72px" onchange="paintTemplates()"/>
+    </div>
+  </div>
+  <div id="tplgrid"></div>
+  <div id="launchresult" style="display:none"></div>
+
+  <div class="card" style="margin-top:22px">
+    <div class="lbl">Bring your own</div>
+    <h2 style="font-size:17px;margin-bottom:6px">Any Docker image, via the API</h2>
+    <p class="mut" style="font-size:13px;margin-bottom:10px">Templates are a convenience, not a limit. If you have your own image, launch it directly.</p>
+    <div class="codeline"><code>curl -sX POST https://petabyte.market/api/v1/deployments -H "X-API-KEY: $KEY" -H "Content-Type: application/json" -d '{"image":"my/image:tag","hours":4}'</code>
+      <button class="copybtn" onclick="navigator.clipboard&amp;&amp;navigator.clipboard.writeText(this.previousElementSibling.textContent);this.textContent='copied'">copy</button></div>
+    <p class="mut" style="font-size:12.5px;margin-top:10px">Full reference in the <a class="teal" href="/docs">API docs</a>.</p>
+  </div>
+</div>
+<script>
+var TPL_KINDS=[["all","Everything"],["notebook","Notebooks"],["ai","AI &amp; inference"],["art","Art &amp; image"],["render","Render &amp; video"],["game","Game servers"]];
+var TPL_ACTIVE="all";
+function paintChips(){
+  document.getElementById('tplchips').innerHTML=TPL_KINDS.map(function(k){
+    var on=k[0]===TPL_ACTIVE;
+    return '<button class="btn '+(on?'btn-teal':'btn-ghost')+'" style="padding:7px 15px;font-size:12.5px" onclick="TPL_ACTIVE=\\''+k[0]+'\\';paintChips();paintTemplates()">'+k[1]+'</button>';
+  }).join('');
+}
+function paintTemplates(){
+  var h=parseInt(document.getElementById('tplhours').value||'2',10);
+  var kinds = TPL_ACTIVE==='all' ? ['notebook','ai','art','render','game'] : [TPL_ACTIVE];
+  renderLaunch('tplgrid', kinds, h);
+}
+paintChips();paintTemplates();
+</script>""")
+
+
+CONTACT_HTML = _page("Petabyte — contact",
+    desc="Talk to Petabyte: support, hosting, volume and investor enquiries. "
+         "Riyadh, Saudi Arabia.",
+    path="/contact", body="""
+<div class="hero"><div class="wrap" style="padding:56px 24px 10px">
+  <div class="eyebrow"><span class="dot"></span> contact</div>
+  <h1 style="font-size:clamp(32px,5vw,52px);margin:16px 0 12px">Talk to a <span class="grad">human.</span></h1>
+  <p class="mut" style="font-size:16px;max-width:58ch">Petabyte is a small team in Riyadh. That means you get a real answer from someone who actually built the thing — usually within a day.</p>
+</div></div>
+
+<div class="wrap" style="padding:14px 24px 8px">
+  <div class="cols" style="gap:18px;align-items:stretch">
+    <div class="card" style="flex:1 1 320px">
+      <div class="lbl">Where to write</div>
+      <p style="margin-top:8px"><a class="teal mono" style="font-size:16px" href="mailto:info@petabyte.market">info@petabyte.market</a></p>
+      <p class="mut" style="font-size:13px;margin-top:8px">One inbox for everything — support, listing a GPU, security reports, and investor questions. Put the topic in the subject line and it reaches the right person.</p>
+      <p class="mut" style="font-size:12.5px;margin-top:12px">Based in Riyadh, Saudi Arabia (UTC+3). We answer security reports first, and we will not take legal action against good-faith research.</p>
+    </div>
+
+    <div class="card" style="flex:1 1 320px">
+      <div class="lbl am">Teams &amp; volume</div>
+      <h2 style="font-size:17px;margin-bottom:6px">Need more than the self-serve flow?</h2>
+      <p class="mut" style="font-size:13.5px;margin-bottom:12px">Most people never need to talk to us — you sign up, add funds, and launch. Get in touch if you need something the product does not do yet:</p>
+      <ul class="mut" style="font-size:13.5px;padding-inline-start:18px;line-height:1.85">
+        <li>Reserved capacity for a training run</li>
+        <li>Invoicing instead of prepaid balance</li>
+        <li>A specific region, or hardware we do not list</li>
+        <li>Shared org billing across a team</li>
+      </ul>
+      <a class="btn btn-amber" style="margin-top:14px" href="mailto:info@petabyte.market?subject=Capacity%20enquiry">Email us about capacity</a>
+      <p class="mini" style="margin-top:10px">We will tell you honestly if we cannot serve you yet.</p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <div class="lbl">Elsewhere</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
+      <a class="btn btn-ghost" href="https://github.com/BDR-Pro" rel="noopener">GitHub</a>
+      <a class="btn btn-ghost" href="https://x.com/engcool" rel="noopener">X</a>
+      <a class="btn btn-ghost" href="/status">Platform status</a>
+      <a class="btn btn-ghost" href="/security">Security</a>
+    </div>
+  </div>
+</div>""")
+
+
+NOTFOUND_HTML = _page("Petabyte — page not found",
+    desc="That page does not exist.", path="/", body="""
+<div class="wrap" style="padding:90px 24px 60px;text-align:center">
+  <div class="mono" style="font-size:56px;color:var(--teal);font-weight:600">404</div>
+  <h1 style="font-size:clamp(26px,4vw,38px);margin:12px 0 10px">That page is not here.</h1>
+  <p class="mut" style="max-width:46ch;margin:0 auto 22px">The link may be old, or we may have moved it. Nothing is wrong with your account or your instances.</p>
+  <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+    <a class="btn btn-teal" href="/marketplace">Browse GPUs</a>
+    <a class="btn btn-ghost" href="/catalog">Templates</a>
+    <a class="btn btn-ghost" href="/account">Your account</a>
+    <a class="btn btn-ghost" href="/contact">Contact us</a>
+  </div>
+  <p class="mini" style="margin-top:20px">Press <span class="mono">&#8984;K</span> to jump anywhere.</p>
+</div>""")
+
+
+DEMO_HTML = _page("Petabyte — book a demo",
+    desc="See Petabyte live. We will walk you through the marketplace, launch a real "
+         "GPU, and show your workload running. Book a 20-minute call.",
+    path="/demo", body="""
+<div class="hero"><div class="wrap" style="padding:56px 24px 10px">
+  <div class="eyebrow"><span class="dot"></span> book a demo</div>
+  <h1 style="font-size:clamp(32px,5.4vw,54px);margin:16px 0 12px" data-ar="شاهد النظام وهو يعمل.">See it <span class="grad">actually run.</span></h1>
+  <p class="mut" style="font-size:16px;max-width:60ch" data-ar="مكالمة مدتها ٢٠ دقيقة. نعرض لك السوق مباشرةً، ونشغّل كرت رسومات حقيقياً، ونمرّ على حالتك أنت — لا شرائح فقط.">A 20-minute call. We show you the live marketplace, launch a real GPU, and walk through your actual workload — not slides. If we are not a fit yet, we will tell you.</p>
+</div></div>
+
+<div class="wrap" style="padding:14px 24px 30px">
+  <div class="cols" style="gap:18px;align-items:flex-start">
+    <div class="card" style="flex:1.2 1 340px">
+      <div class="lbl">Tell us what you need</div>
+      <div id="demoform" style="margin-top:10px">
+        <div class="filterbar" style="flex-direction:column;align-items:stretch;gap:12px">
+          <label class="field"><span data-ar="الاسم">Name</span><input id="d_name" data-ar-ph="اسمك" placeholder="Your name"/></label>
+          <label class="field"><span data-ar="البريد الإلكتروني">Email</span><input id="d_email" type="email" data-ar-ph="you@company.com" placeholder="you@company.com"/></label>
+          <label class="field"><span data-ar="جهة العمل (اختياري)">Organization (optional)</span><input id="d_org" data-ar-ph="الشركة أو الجامعة" placeholder="Company or university"/></label>
+          <label class="field"><span data-ar="ما الذي تريد تشغيله؟">What do you want to run?</span><textarea id="d_workload" rows="3" data-ar-ph="مثال: تدريب نموذج، استنتاج، معالجة فيديو…" placeholder="e.g. fine-tuning, batch inference, rendering, ~200 GPU-hours"></textarea></label>
+          <div class="cols" style="gap:10px">
+            <label class="field" style="flex:1"><span data-ar="أنا…">I am…</span>
+              <select id="d_role">
+                <option value="buyer" data-ar="أحتاج قدرة حوسبة">I need compute</option>
+                <option value="host" data-ar="لديّ عتاد لتأجيره">I have hardware to rent out</option>
+                <option value="investor" data-ar="مستثمر">An investor</option>
+                <option value="other" data-ar="أخرى">Something else</option>
+              </select></label>
+            <label class="field" style="flex:1"><span data-ar="وقت يناسبك (اختياري)">Good times (optional)</span><input id="d_time" data-ar-ph="مثال: صباح الأحد" placeholder="e.g. Sunday mornings"/></label>
+          </div>
+          <button class="btn btn-amber" style="width:100%;justify-content:center" data-act="submitDemo" data-ar="اطلب موعداً">Request a demo</button>
+          <div id="d_msg" class="mini" style="min-height:18px"></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="flex:1 1 300px;display:flex;flex-direction:column;gap:14px">
+      <div class="card">
+        <div class="lbl am">What you will see</div>
+        <ul class="mut" style="font-size:13.5px;padding-inline-start:18px;line-height:1.9;margin-top:6px">
+          <li data-ar="السوق الحقيقي — كروت رسومات فعلية بأسعارها الآن.">The real marketplace — actual GPUs at their live prices</li>
+          <li data-ar="تشغيل حقيقي بنقرة واحدة، ننتظر حتى يعمل.">A one-click launch, live, until it is running</li>
+          <li data-ar="كيف يحمي الضمان أموالك ويعيد الساعات غير المستخدمة.">How escrow holds your money and refunds unused hours</li>
+          <li data-ar="ماذا يحدث عند تعطّل مضيف أثناء العمل.">What happens when a host dies mid-job</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="lbl">Prefer to just try it?</div>
+        <p class="mut" style="font-size:13px;margin:6px 0 12px" data-ar="لست مضطراً لحجز موعد. يمكنك التسجيل وإضافة رصيد والتشغيل خلال دقائق.">You do not have to book anything. You can sign up, add funds, and launch in minutes.</p>
+        <a class="btn btn-teal" style="width:100%;justify-content:center" href="/marketplace" data-ar="تصفّح كروت الرسومات">Browse GPUs now</a>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+async function submitDemo(){
+  var m=document.getElementById('d_msg');
+  var name=(document.getElementById('d_name').value||'').trim();
+  var email=(document.getElementById('d_email').value||'').trim();
+  if(!name||!email){m.style.color='var(--warn)';m.textContent='Please add your name and email.';return;}
+  m.style.color='';m.textContent='Sending…';
+  var payload={name:name,email:email,
+    organization:(document.getElementById('d_org').value||'').trim(),
+    workload:(document.getElementById('d_workload').value||'').trim(),
+    role:document.getElementById('d_role').value,
+    preferred_time:(document.getElementById('d_time').value||'').trim(),
+    source:'demo-page'};
+  try{
+    var r=await fetch('/demo/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    var b=await r.json();
+    if(!r.ok){m.style.color='var(--warn)';m.textContent=(b.error&&b.error.message)||(b.detail)||'Could not send. Try emailing info@petabyte.market.';return;}
+    document.getElementById('demoform').innerHTML='<div style="text-align:center;padding:20px 10px">'+
+      '<div class="mono" style="font-size:32px;color:var(--teal)">&#10003;</div>'+
+      '<div style="font-family:var(--disp);font-weight:600;margin:8px 0 4px">Request received</div>'+
+      '<div class="mut" style="font-size:13.5px">'+b.message+'</div>'+
+      '<div class="mini" style="margin-top:10px">Reference '+b.reference+'</div></div>';
+  }catch(e){m.style.color='var(--warn)';m.textContent='Network error. Try emailing info@petabyte.market.';}
+}
 </script>""")

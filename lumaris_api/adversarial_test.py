@@ -58,10 +58,10 @@ def sign(payload):
 
 def tok(u):
     return {"Authorization": "Bearer " + c.post("/login",
-            data={"username": u, "password": "pw12345678"}).json()["access_token"]}
+            data={"username": u, "password": "pw-correct-horse-battery"}).json()["access_token"]}
 
 def mkseller(nm, price, units):
-    c.post("/register_user", json={"username": nm, "password": "pw12345678"})
+    c.post("/register_user", json={"username": nm, "password": "pw-correct-horse-battery"})
     h = tok(nm)
     c.post("/change_role", headers=h, json={"role": "seller"})
     sid = c.post("/register_specs", headers=h, json={
@@ -82,7 +82,7 @@ bh, bspec = mkseller("advnodeB", 2.0, 6)
 buyers = []
 for i in range(6):
     u = f"advbuyer{i}"
-    c.post("/register_user", json={"username": u, "password": "pw12345678"})
+    c.post("/register_user", json={"username": u, "password": "pw-correct-horse-battery"})
     hh = tok(u)
     c.post("/deposit", headers=hh, json={"amount": float(DEPOSIT)})
     buyers.append(hh)

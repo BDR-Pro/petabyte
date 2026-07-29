@@ -74,7 +74,7 @@ def sign(p):
 
 def tok(u):
     return {"Authorization": "Bearer " + c.post(
-        "/login", data={"username": u, "password": "pw12345678"}).json()["access_token"]}
+        "/login", data={"username": u, "password": "pw-correct-horse-battery"}).json()["access_token"]}
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ def talk(sock, msg: str) -> str:
 # seed: two sellers (A cheaper so /launch picks it), one buyer
 # ---------------------------------------------------------------------------
 def mkseller(nm, price):
-    c.post("/register_user", json={"username": nm, "password": "pw12345678"})
+    c.post("/register_user", json={"username": nm, "password": "pw-correct-horse-battery"})
     h = tok(nm)
     c.post("/change_role", headers=h, json={"role": "seller"})
     sid = c.post("/register_specs", headers=h, json={
@@ -147,7 +147,7 @@ def mkseller(nm, price):
 print("\n=== setup ===", flush=True)
 ah, aspec, akey = mkseller("tunnelA", 1.0)
 bh, bspec, bkey = mkseller("tunnelB", 2.0)
-c.post("/register_user", json={"username": "tunnelbuyer", "password": "pw12345678"})
+c.post("/register_user", json={"username": "tunnelbuyer", "password": "pw-correct-horse-battery"})
 buyer_h = tok("tunnelbuyer")
 c.post("/deposit", headers=buyer_h, json={"amount": 50})
 

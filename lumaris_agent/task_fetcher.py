@@ -204,6 +204,32 @@ def _start_backup_thread(task):
     return stop
 
 
+def _egress_flags(task):
+    """Apply the template's egress policy.
+
+    This exists to protect the SELLER, not the buyer. The container runs on someone's
+    home connection, behind their IP. If a workload spams, scans, or joins a botnet,
+    it is the host who gets the abuse complaint and the host who can lose their
+    internet. So the default is NO NETWORK, and a template must explicitly ask for
+    more.
+
+      none    -> --network none          (batch work needs nothing)
+      limited -> outbound ok, inbound only via the tunnel on the service port
+      open    -> unrestricted (highest risk to the host; used only where unavoidable)
+    """
+    policy = (task.get("egress") or "none").lower()
+    if policy == "none":
+        return ["--network", "none"]
+    if policy == "limited":
+        # Outbound works; inbound is unreachable because the port is published to
+        # 127.0.0.1 only and the ONLY way in is the reverse tunnel we control.
+        # (A full L3 allow-list belongs on the host firewall — see docs/egress.md.)
+        return []
+    if policy == "open":
+        return []
+    return ["--network", "none"]               # unknown policy -> closed
+
+
 def _isolation_flags(task):
     """Phase-1 workload isolation (see docs/isolation-roadmap.md). Uses gVisor
     (runsc) when installed for a user-space kernel boundary, plus conservative
@@ -238,8 +264,9 @@ def _run_template(task):
                                    "status": "failed"})
         return
     name = f"pb-{task.get('template')}-{_uuid.uuid4().hex[:8]}"
-    cmd = ["docker", "run", "-d", "--name", name, "-p", f"{port}:{port}"]
+    cmd = ["docker", "run", "-d", "--name", name, "-p", f"127.0.0.1:{port}:{port}"]
     cmd += _isolation_flags(task)              # Phase-1 sandbox (gVisor if present)
+    cmd += _egress_flags(task)                 # protect the HOST's home internet
     if task.get("gpu"):
         cmd += ["--gpus", "all"]
     if task.get("cache"):

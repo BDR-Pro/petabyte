@@ -1,4 +1,5 @@
-import os, json, time, base64
+import os
+import re, json, time, base64
 from decimal import Decimal as _Dec
 from concurrent.futures import ThreadPoolExecutor
 from cryptography.fernet import Fernet
@@ -51,9 +52,9 @@ def ok(label, cond):
     print(("PASS " if cond else "FAIL ") + label); assert cond, label
 
 # ---- setup: seller + buyer, seller role, attested spec with 3 units ----
-c.post("/register_user", json={"username":"seller1","password":"hunter2pw"})
-c.post("/register_user", json={"username":"buyer1","password":"hunter2pw"})
-def login(u): return c.post("/login", data={"username":u,"password":"hunter2pw"}).json()["access_token"]
+c.post("/register_user", json={"username":"seller1","password":"hunter2-correct-horse"})
+c.post("/register_user", json={"username":"buyer1","password":"hunter2-correct-horse"})
+def login(u): return c.post("/login", data={"username":u,"password":"hunter2-correct-horse"}).json()["access_token"]
 sh = {"Authorization":f"Bearer {login('seller1')}"}
 bh = {"Authorization":f"Bearer {login('buyer1')}"}
 c.post("/deposit", headers=bh, json={"amount":100000.0})  # fund buyer for all test bookings
@@ -154,7 +155,7 @@ ok("create_task ok", rt.status_code==200)
 task_id = rt.json()["task_id"]
 
 # a DIFFERENT user's agent key must NOT be able to claim seller1's job
-c.post("/register_user", json={"username":"seller2","password":"hunter2pw"})
+c.post("/register_user", json={"username":"seller2","password":"hunter2-correct-horse"})
 s2t = login("seller2"); s2h={"Authorization":f"Bearer {s2t}"}
 c.post("/change_role", headers=s2h, json={"role":"seller"})
 s2key = c.post("/create_api_key", headers=s2h).json()["api_key"]
@@ -220,8 +221,8 @@ ok("low-rep seller's spec is unbookable", c.post("/request_vm", headers=bh, json
 
 # ---- SETTLEMENT: escrow -> release, and refund-on-reap ----
 import db as dbmod3
-c.post("/register_user", json={"username":"seller3","password":"hunter2pw"})
-c.post("/register_user", json={"username":"buyer3","password":"hunter2pw"})
+c.post("/register_user", json={"username":"seller3","password":"hunter2-correct-horse"})
+c.post("/register_user", json={"username":"buyer3","password":"hunter2-correct-horse"})
 s3h={"Authorization":f"Bearer {login('seller3')}"}
 b3h={"Authorization":f"Bearer {login('buyer3')}"}
 c.post("/change_role", headers=s3h, json={"role":"seller"})
@@ -283,8 +284,8 @@ ok("duplicate event not re-credited", round(c.get("/wallet", headers=b3h).json()
 
 
 # ---- CONFIDENTIAL COMPUTING (TEE attestation) ----
-c.post("/register_user", json={"username":"seller4","password":"hunter2pw"})
-c.post("/register_user", json={"username":"buyer4","password":"hunter2pw"})
+c.post("/register_user", json={"username":"seller4","password":"hunter2-correct-horse"})
+c.post("/register_user", json={"username":"buyer4","password":"hunter2-correct-horse"})
 s4h={"Authorization":f"Bearer {login('seller4')}"}
 b4h={"Authorization":f"Bearer {login('buyer4')}"}
 c.post("/change_role", headers=s4h, json={"role":"seller"})
@@ -349,7 +350,7 @@ ok("buyer can independently verify the enclave report", buyer_ok)
 
 # ---- ORGANIZATIONS (shared wallet, roles, budget cap) + REGION GATING ----
 for u in ["orgadmin","orgmember","orgseller","outsider"]:
-    c.post("/register_user", json={"username":u,"password":"hunter2pw"})
+    c.post("/register_user", json={"username":u,"password":"hunter2-correct-horse"})
 adminh={"Authorization":f"Bearer {login('orgadmin')}"}
 memberh={"Authorization":f"Bearer {login('orgmember')}"}
 outsiderh={"Authorization":f"Bearer {login('outsider')}"}
@@ -397,7 +398,7 @@ ok("org usage export has the booking", usage["total_gross"]==10.0 and len(usage[
 
 # ---- GEOIP REGION VERIFICATION (declared vs detected) ----
 for u in ["geoseller","geobuyer"]:
-    c.post("/register_user", json={"username":u,"password":"hunter2pw"})
+    c.post("/register_user", json={"username":u,"password":"hunter2-correct-horse"})
 gsh={"Authorization":f"Bearer {login('geoseller')}"}
 gbh={"Authorization":f"Bearer {login('geobuyer')}"}
 c.post("/change_role", headers=gsh, json={"role":"seller"})
@@ -432,7 +433,7 @@ ok("/specs shows region_verified false for spoofed node", any(s["spec_id"]==sidF
 
 # ==== #9 templates, #4 benchmark, #5 job mgmt, #10 scoped keys + analytics ====
 for u in ["seller5","buyer5"]:
-    c.post("/register_user", json={"username":u,"password":"hunter2pw"})
+    c.post("/register_user", json={"username":u,"password":"hunter2-correct-horse"})
 s5h={"Authorization":f"Bearer {login('seller5')}"}
 b5tok=login("buyer5"); b5h={"Authorization":f"Bearer {b5tok}"}
 c.post("/change_role", headers=s5h, json={"role":"seller"})
@@ -504,7 +505,7 @@ ok("org analytics totals spend", an["total_spend"]==10.0 and an["bookings"]>=1)
 
 
 # ==== BACKUP / RESTORE (any stateful task) + GAME SERVERS ====
-from db import SessionLocal as _DBS, SellerSpec as _Spec, Task as _T, Booking as _Bk, settle_dead_specs as _settle
+from db import SessionLocal as _DBS, SellerSpec as _Spec, Task as _T, Booking as _Bk, settle_dead_specs as _settle, SellerPayoutMethod as _PM
 from datetime import datetime as _dt, timezone as _tz, timedelta as _td
 def _set_offline(sid):
     d=_DBS(); s=d.get(_Spec,sid); s.status="offline"; d.add(s); d.commit(); d.close()
@@ -518,7 +519,7 @@ def _age_interrupt(tid):
     d=_DBS(); t=d.get(_T,tid); t.interrupted_at=_dt.now(_tz.utc)-_td(seconds=100000); d.add(t); d.commit(); d.close()
 
 for u in ["seller6","buyer6"]:
-    c.post("/register_user", json={"username":u,"password":"hunter2pw"})
+    c.post("/register_user", json={"username":u,"password":"hunter2-correct-horse"})
 s6h={"Authorization":f"Bearer {login('seller6')}"}
 b6h={"Authorization":f"Bearer {login('buyer6')}"}
 c.post("/change_role", headers=s6h, json={"role":"seller"})
@@ -591,7 +592,7 @@ ok("restore_url rejects unknown snapshot", c.post("/jobs/restore_url", headers={
 
 # ==== REPUTATION (event-sourced) ====
 for u in ["repseller","repbuyer"]:
-    c.post("/register_user", json={"username":u,"password":"hunter2pw"})
+    c.post("/register_user", json={"username":u,"password":"hunter2-correct-horse"})
 rsh={"Authorization":f"Bearer {login('repseller')}"}
 rbh={"Authorization":f"Bearer {login('repbuyer')}"}
 c.post("/change_role", headers=rsh, json={"role":"seller"})
@@ -622,7 +623,7 @@ ok("/specs surfaces reputation_score", any(s["spec_id"]==sidR and "reputation_sc
 
 # ==== AI ROUTER (/solve over own inventory) ====
 for u in ["rtA","rtB","rtC","rtbuyer"]:
-    c.post("/register_user", json={"username":u,"password":"hunter2pw"})
+    c.post("/register_user", json={"username":u,"password":"hunter2-correct-horse"})
 def seller(u, price, gpu="H100", region=None, country=None, xff=None):
     h={"Authorization":f"Bearer {login(u)}"}
     c.post("/change_role", headers=h, json={"role":"seller"})
@@ -655,11 +656,11 @@ ok("router respects price ceiling", all(s["price_per_hour"]<=3.0 for s in cheap[
 ok("router 409s when nothing fits", c.post("/solve", headers=rth, json={"min_vram":99999}).status_code==409)
 
 # ==== RENDER FARM (frame splitting across nodes) ====
-c.post("/register_user", json={"username":"renderbuyer","password":"hunter2pw"})
+c.post("/register_user", json={"username":"renderbuyer","password":"hunter2-correct-horse"})
 rndh={"Authorization":f"Bearer {login('renderbuyer')}"}
 c.post("/deposit", headers=rndh, json={"amount":200.0})
 for u in ["rr1","rr2"]:
-    c.post("/register_user", json={"username":u,"password":"hunter2pw"})
+    c.post("/register_user", json={"username":u,"password":"hunter2-correct-horse"})
 hR1,sidR1,skR1,keyR1=seller("rr1",2.0,gpu="RENDERGPU")
 hR2,sidR2,skR2,keyR2=seller("rr2",2.0,gpu="RENDERGPU")
 job=c.post("/render", headers=rndh, json={"blend_ref":"s3://pb/scene.blend","frame_start":1,"frame_end":100,"nodes":2,"hours":1,"gpu_class":"RENDERGPU"}).json()
@@ -689,7 +690,7 @@ def _worker():
     n=_procpay(d, _pend(d), _sps, mbi, on_status=on_status); d.close(); return n
 
 for u in ["payseller","paybuyer"]:
-    c.post("/register_user", json={"username":u,"password":"hunter2pw"})
+    c.post("/register_user", json={"username":u,"password":"hunter2-correct-horse"})
 psh={"Authorization":f"Bearer {login('payseller')}"}
 pbh={"Authorization":f"Bearer {login('paybuyer')}"}
 c.post("/change_role", headers=psh, json={"role":"seller"})
@@ -709,10 +710,63 @@ c.post("/jobs/result", headers={"X-API-KEY":keyP}, json={"task_id":tP,"status":"
 ok("seller accrued earnings from job", c.get("/wallet", headers=psh).json()["earnings"]==9.0)
 
 c.post("/account/email", headers=psh, json={"email":"seller@example.com"})
-# add a gift-card payout method, then verify (KYC/screen)
-mid=c.post("/wallet/methods", headers=psh, json={"kind":"gift_card","destination":"seller@example.com","label":"Amazon"}).json()["method_id"]
+
+# --- payout destination = THE fraud vector. Adding one is deliberately expensive. ---
+_pw = "hunter2-correct-horse"
+_noreauth = c.post("/wallet/methods", headers=psh,
+                   json={"kind":"gift_card","destination":"seller@example.com","label":"Amazon"})
+ok("adding a payout destination WITHOUT password re-auth is refused",
+   _noreauth.status_code==403 and _noreauth.json()["error"]["code"]=="REAUTH_REQUIRED")
+_badpw = c.post("/wallet/methods", headers=psh,
+                json={"kind":"gift_card","destination":"seller@example.com","password":"wrong-password-here"})
+ok("wrong password re-auth is refused", _badpw.status_code==403)
+
+# email must be verified first — it is how the owner finds out someone changed it
+_unverified = c.post("/wallet/methods", headers=psh,
+                     json={"kind":"gift_card","destination":"seller@example.com","password":_pw})
+ok("payout destination blocked until email is verified",
+   _unverified.status_code==403 and _unverified.json()["error"]["code"]=="EMAIL_NOT_VERIFIED")
+
+# verify the email properly: token is single-use, hashed at rest, 15-min expiry
+_req = c.post("/email/verify/request", headers=psh, json={"email":"seller@example.com"})
+ok("email verification requested", _req.status_code==200)
+_tok = _req.json()["debug_token"]
+ok("a WRONG token does not verify",
+   c.post("/email/verify/confirm", headers=psh, json={"token":"not-the-token"}).status_code==400)
+ok("the right token verifies the email",
+   c.post("/email/verify/confirm", headers=psh, json={"token":_tok}).json()["email_verified"] is True)
+ok("the token is single-use (replay refused)",
+   c.post("/email/verify/confirm", headers=psh, json={"token":_tok}).status_code==400)
+ok("disposable email domains are rejected",
+   c.post("/email/verify/request", headers=psh, json={"email":"x@mailinator.com"}).status_code==400)
+# re-verify (the disposable attempt cleared the flag)
+_tok2 = c.post("/email/verify/request", headers=psh, json={"email":"seller@example.com"}).json()["debug_token"]
+c.post("/email/verify/confirm", headers=psh, json={"token":_tok2})
+
+_add = c.post("/wallet/methods", headers=psh,
+              json={"kind":"gift_card","destination":"seller@example.com","label":"Amazon","password":_pw})
+ok("payout destination added with re-auth + verified email", _add.status_code==200)
+mid=_add.json()["method_id"]
+ok("the API never returns the full destination back",
+   "@example.com" in _add.json()["destination"] and "seller@" not in _add.json()["destination"])
+_listed = c.get("/wallet/methods", headers=psh).json()["methods"][0]
+ok("listing methods returns a REDACTED destination", "seller@example.com" != _listed["destination"])
+
 ok("unverified method blocks withdraw", c.post("/wallet/withdraw", headers=psh, json={"method_id":mid,"amount":5}).status_code==403)
 c.post(f"/wallet/methods/{mid}/verify", headers=psh)
+
+# COOLING-OFF: a destination added seconds ago cannot be drained. This turns an
+# account takeover from "instant drain" into "you get an email and 24h to stop it".
+_cool = c.post("/wallet/withdraw", headers=psh, json={"method_id":mid,"amount":5.0})
+ok("freshly-added destination CANNOT receive money yet (cooling-off)",
+   _cool.status_code==403 and _cool.json()["error"]["code"]=="PAYOUT_METHOD_COOLING_OFF")
+
+# age the method past the cooling-off window, as time would
+_agedb=_DBS()
+_m=_agedb.query(_PM).filter(_PM.id==mid).first()
+_m.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
+_agedb.add(_m); _agedb.commit(); _agedb.close()
+
 # manual withdraw $5 -> earnings 4, payout requested -> worker sends -> confirmed
 w=c.post("/wallet/withdraw", headers=psh, json={"method_id":mid,"amount":5.0})
 ok("withdraw debits earnings", w.status_code==200 and c.get("/wallet", headers=psh).json()["earnings"]==4.0)
@@ -723,7 +777,7 @@ notes={n["event_type"]:n for n in c.get("/notifications", headers=psh).json()["n
 ok("withdraw sent a 'requested' email", notes.get("payout.requested",{}).get("status")=="sent")
 ok("worker sent a 'confirmed' email", notes.get("payout.confirmed",{}).get("status")=="sent")
 # a user with no email -> notification recorded as skipped
-c.post("/register_user", json={"username":"noemail","password":"hunter2pw"})
+c.post("/register_user", json={"username":"noemail","password":"hunter2-correct-horse"})
 neh={"Authorization":f"Bearer {login('noemail')}"}
 import notifications as _n2
 _d=_PDBS(); _me=_d.query(__import__('db').User).filter_by(username='noemail').first()
@@ -753,11 +807,11 @@ ok("schedule advanced to next week", _pdt.fromisoformat(str(adv).replace(' ','T'
 
 
 # ==== VIDEO TRANSCODE (fan-out + stitch) + BUYER UPLOAD ====
-c.post("/register_user", json={"username":"tcbuyer","password":"hunter2pw"})
+c.post("/register_user", json={"username":"tcbuyer","password":"hunter2-correct-horse"})
 tcb={"Authorization":f"Bearer {login('tcbuyer')}"}
 c.post("/deposit", headers=tcb, json={"amount":200.0})
 for u in ["tc1","tc2"]:
-    c.post("/register_user", json={"username":u,"password":"hunter2pw"})
+    c.post("/register_user", json={"username":u,"password":"hunter2-correct-horse"})
 htc1,sidTC1,skTC1,keyTC1=seller("tc1",1.0,gpu="TCGPU")
 htc2,sidTC2,skTC2,keyTC2=seller("tc2",1.0,gpu="TCGPU")
 keymap={sidTC1:(keyTC1,skTC1), sidTC2:(keyTC2,skTC2)}
@@ -815,7 +869,7 @@ ok("render assembles via manifest (stitch created)", rman["status"]=="assembling
 
 # ==== IDLE FALLBACK (earn when unrented) ====
 for u in ["idleseller"]:
-    c.post("/register_user", json={"username":u,"password":"hunter2pw"})
+    c.post("/register_user", json={"username":u,"password":"hunter2-correct-horse"})
 ish={"Authorization":f"Bearer {login('idleseller')}"}
 c.post("/change_role", headers=ish, json={"role":"seller"})
 sidI=c.post("/register_specs", headers=ish, json={"cpu":8,"ram":32,"duration":24,"price_per_hour":1.0,"provider":"idleseller","gpu_model":"H100","units":2}).json()["spec_id"]
@@ -889,12 +943,12 @@ ok("errors are structured (code + message + request_id)",
 ok("errors keep legacy `detail` field (no client breakage)", "detail" in _e.json())
 ok("/health/live is cheap and up", c.get("/health/live").json()["status"]=="alive")
 ok("/health/ready checks the database", c.get("/health/ready").json()["database"]=="ok")
-_codes=[c.post("/login", data={"username":"nosuchuser_rl","password":"badpassword1"}).status_code for _ in range(12)]
+_codes=[c.post("/login", data={"username":"nosuchuser_rl","password":"badpassword1-nope-wrong"}).status_code for _ in range(12)]
 ok("failed logins are rate limited (brute-force guard)", 429 in _codes)
 ok("rate-limited response carries Retry-After",
-   "Retry-After" in c.post("/login", data={"username":"nosuchuser_rl","password":"badpassword1"}).headers)
+   "Retry-After" in c.post("/login", data={"username":"nosuchuser_rl","password":"badpassword1-nope-wrong"}).headers)
 ok("SUCCESSFUL logins are never rate limited (shared office IP not locked out)",
-   all(c.post("/login", data={"username":"buyer1","password":"hunter2pw"}).status_code==200 for _ in range(15)))
+   all(c.post("/login", data={"username":"buyer1","password":"hunter2-correct-horse"}).status_code==200 for _ in range(15)))
 ok("/api/v1 resource API works", c.get("/api/v1/marketplace/nodes").status_code==200)
 ok("/api/v1 and legacy return the same data (one implementation)",
    c.get("/api/v1/marketplace/nodes").json()["count"]==c.get("/marketplace/specs").json()["count"])
@@ -919,7 +973,7 @@ ok("10k micro-charges of $0.001 sum EXACTLY to $10 (float would not)",
 # --- P0 hardening from the backend review ---
 # 1. API-key scopes: default DENY. An empty scope list must never mean root.
 _nokey_user = "scopeless"
-c.post("/register_user", json={"username":_nokey_user,"password":"hunter2pw"})
+c.post("/register_user", json={"username":_nokey_user,"password":"hunter2-correct-horse"})
 _nh={"Authorization":f"Bearer {login(_nokey_user)}"}
 _k_default = c.post("/create_api_key", headers=_nh).json()
 ok("new API keys are minted WITH scopes (never empty)", bool(_k_default.get("scopes") or True))
@@ -1049,6 +1103,266 @@ _ld.rollback()
 ok("ledger REFUSES an unbalanced transaction (money cannot be created)", _refused)
 _ld.close()
 
+# --- KILL SWITCH: stop new bookings, never kill running rentals ---
+from db import set_bookings_paused as _pause, bookings_are_paused as _paused_q, AuditEvent as _AE
+_ks=_DBS()
+_running_before = _ks.query(_Bk).filter(_Bk.status.in_(["escrowed","active"])).count()
+_pause(_ks, True, "pilot incident drill")
+_ks.close()
+_blocked = c.post("/launch", headers=bh, json={"template":"ollama","hours":1})
+ok("kill switch: NEW bookings refused with 503 + BOOKINGS_PAUSED",
+   _blocked.status_code==503 and _blocked.json()["error"]["code"]=="BOOKINGS_PAUSED")
+ok("kill switch: response tells clients when to retry",
+   "Retry-After" in _blocked.headers)
+_ks=_DBS()
+_running_after = _ks.query(_Bk).filter(_Bk.status.in_(["escrowed","active"])).count()
+ok("kill switch: RUNNING rentals are untouched (no 6-hour render destroyed)",
+   _running_after == _running_before)
+ok("kill switch: reading a VM still works while paused",
+   c.get("/vm", headers=bh).status_code==200)
+_pause(_ks, False)
+_ks.close()
+ok("kill switch: bookings work again after resume",
+   c.post("/launch", headers=bh, json={"template":"ollama","hours":1}).status_code==200)
+
+# --- EGRESS: the seller's home internet is not the buyer's playground ---
+from templates_registry import TEMPLATES as _TPL
+ok("every template declares an egress policy",
+   all("egress" in v for v in _TPL.values()))
+ok("batch templates get NO network at all (blender/ffmpeg)",
+   _TPL["blender"]["egress"]=="none" and _TPL["ffmpeg"]["egress"]=="none")
+ok("no template is 'open' (nothing gets unrestricted use of a host's connection)",
+   not any(v["egress"]=="open" for v in _TPL.values()))
+_cat={t["name"]: t for t in c.get("/templates").json()["templates"]}
+ok("egress policy is visible to buyers in the catalog", _cat["blender"]["egress"]=="none")
+# The agent must ENFORCE the policy — a policy the runtime ignores is a comment.
+# (Import just the function; the agent module pulls deps that don't belong in API tests.)
+import os as _os, re as _re
+_agent_src = open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                "..", "lumaris_agent", "task_fetcher.py")).read()
+_ns = {}
+_fn = _re.search(r"def _egress_flags\(task\):.*?(?=\ndef )", _agent_src, _re.S).group(0)
+exec(_fn, _ns)
+_egress_flags = _ns["_egress_flags"]
+ok("agent applies --network none for an egress=none workload",
+   _egress_flags({"egress": "none"}) == ["--network", "none"])
+ok("agent DEFAULTS CLOSED when a template forgets to declare a policy",
+   _egress_flags({}) == ["--network", "none"])
+ok("agent gives a 'limited' workload no --network none (tunnel is the only way in)",
+   _egress_flags({"egress": "limited"}) == [])
+ok("agent treats an UNKNOWN policy as closed",
+   _egress_flags({"egress": "whatever"}) == ["--network", "none"])
+ok("container ports are published to LOOPBACK only (tunnel is the only ingress)",
+   '127.0.0.1:{port}:{port}' in _agent_src or '"-p", f"127.0.0.1:{port}:{port}"' in _agent_src)
+
+# --- AUDIT LOG: who did what, for when money is disputed ---
+_al=_DBS()
+_actions={e.action for e in _al.query(_AE).all()}
+_al.close()
+ok("audit log records payout destination changes", "payout_method.added" in _actions)
+ok("audit log records withdrawals", "payout.requested" in _actions)
+ok("audit log records email verification", "email.verified" in _actions)
+ok("audit log records use of the kill switch", "platform.bookings_paused" in _actions)
+ok("audit log never stores a full payout destination",
+   not any("seller@example.com" in (e.detail or "") for e in _DBS().query(_AE).all()))
+
+# --- PASSWORDS ---
+ok("passwords under 12 chars are rejected",
+   c.post("/register_user", json={"username":"shortpw","password":"short123"}).status_code==422)
+ok("the most-guessed passwords are rejected",
+   c.post("/register_user", json={"username":"commonpw","password":"password1234"}).status_code==422 or
+   c.post("/register_user", json={"username":"commonpw2","password":"qwertyuiop"}).status_code==422)
+
+# --- ONBOARDING: two funnels, next step always known ---
+_onb = c.get("/onboarding", headers=bh).json()
+ok("onboarding knows a buyer is a buyer", _onb["role"]=="buyer")
+ok("onboarding always names the NEXT step (or is complete)",
+   _onb["next_step"] is not None or _onb["percent"]==100)
+ok("onboarding reports progress", 0 <= _onb["percent"] <= 100 and _onb["total"]>0)
+_onbs = c.get("/onboarding", headers=sh).json()
+ok("onboarding knows a host is a host", _onbs["role"]=="host")
+ok("host checklist includes email verification (it gates payouts)",
+   any(s["key"]=="verify_email" for s in _onbs["steps"]))
+
+# --- COST ESTIMATOR: never let someone commit money blind ---
+_est = c.post("/estimate", json={"template":"ollama","hours":3})
+ok("cost estimate works before booking", _est.status_code==200)
+_e=_est.json()
+ok("estimate: total == rate x hours (exact)",
+   _Dec(str(_e["total"])) == _Dec(str(_e["price_per_hour"])) * 3)
+ok("estimate explains the early-stop refund",
+   _Dec(str(_e["if_you_stop_after_1h"]["charged"])) + _Dec(str(_e["if_you_stop_after_1h"]["refunded"]))
+   == _Dec(str(_e["total"])))
+ok("estimate states the fee is taken FROM the rental, not added on top",
+   any("not added" in n for n in _e["notes"]))
+ok("estimate refuses to invent a cloud saving it can't back up",
+   _e["cloud_comparison"] is None or _e["cloud_comparison"]["reference_per_hour"] is not None)
+
+# --- SELLER DIAGNOSTICS: "why am I earning nothing?" ---
+_dash = c.get("/seller/dashboard", headers=sh).json()
+ok("seller dashboard lists nodes with utilization", "nodes" in _dash and "totals" in _dash)
+ok("seller dashboard DIAGNOSES why they aren't earning", "blockers" in _dash)
+ok("seller dashboard reports utilization %",
+   all("utilization_pct" in n for n in _dash["nodes"]))
+_novice = c.get("/seller/dashboard", headers=bh).json()
+ok("a seller with no hardware is told to install the agent",
+   _novice["blockers"] and "action" in _novice["blockers"][0])
+
+# --- new templates for the highest-intent GPU renter: the researcher ---
+_tpl = {t["name"]: t for t in c.get("/templates").json()["templates"]}
+ok("jupyter notebook template exists (the researcher's front door)", "jupyter" in _tpl)
+ok("pytorch base template exists", "pytorch" in _tpl)
+ok("jupyter is stateful (people leave notebooks running -> snapshot them)",
+   _tpl["jupyter"]["stateful"] is True)
+
+# --- TEMPLATE CATALOG on the frontend (item 9) ---
+_cat_pg = c.get("/catalog")
+ok("browsable template catalog page exists", _cat_pg.status_code==200 and "tplgrid" in _cat_pg.text)
+ok("catalog has filter chips by workload kind", "Notebooks" in _cat_pg.text and "Game servers" in _cat_pg.text)
+ok("catalog is linked from the primary nav", '>Templates</a>' in c.get("/").text)
+ok("notebooks are their own category", _tpl["jupyter"]["kind"]=="notebook")
+ok("catalog tells you templates are not a limit (BYO docker image)", "Any Docker image" in _cat_pg.text)
+
+# --- ACTIONABLE ERRORS (item 16): never a bare status code ---
+_offline = c.post("/request_vm", headers=bh, json={"spec_id": 999999, "hours": 1})
+_err = _offline.json()["error"]
+ok("errors carry a machine code AND a human message",
+   _err.get("code") and len(_err.get("message",""))>25)
+ok("errors tell the user where to GO next", "next" in _err)
+ok("the UI never renders a bare status code",
+   "Could not launch (error " not in open("pages.py").read())
+ok("launch failures say nothing was charged",
+   "Nothing was charged" in open("main.py").read())
+
+# --- BUYER: what is burning money right now (item 14) ---
+_spend = c.get("/buyer/spend", headers=bh).json()
+ok("buyer sees a live burn rate, not just a balance", "burn_rate_per_hour" in _spend)
+ok("buyer sees a 24h projection and runway",
+   "projected_24h" in _spend and "hours_of_runway" in _spend)
+ok("buyer sees what is held in escrow (refundable)", "in_escrow" in _spend)
+
+# --- MOBILE (item 15): tables must collapse into cards on a phone ---
+_css = c.get("/").text
+ok("tables collapse to cards under 720px (a host checks their phone)",
+   "@media(max-width:720px)" in _css and ".tbl td::before" in _css)
+ok("table cells carry their header label for the mobile card view",
+   all('data-l=' in c.get(p).text for p in ["/marketplace", "/pricing", "/account"]))
+
+# --- COMMAND PALETTE (item 18) ---
+ok("Cmd/Ctrl+K opens a command palette", "pbPalette" in _css and "metaKey" in _css)
+
+# --- FRONTEND/BACKEND CONTRACT (these were silently broken; a dead <script>
+#     still returns HTTP 200, so nothing here was caught by tests before) ---
+ok("email verification has a UI (it gates payouts — the checklist used to dead-end)",
+   "sendVerify" in c.get("/account").text and "confirmVerify" in c.get("/account").text)
+ok("/me tells the UI whether email is verified",
+   "email_verified" in c.get("/me", headers=bh).json())
+ok("notifications are shown in-app (backend emitted them; UI never displayed one)",
+   "loadNotifs" in c.get("/account").text)
+ok("every instance exposes its event timeline (the failover proof)",
+   "vmEvents" in c.get("/account").text)
+# No generated HTML may contain an inline onclick that embeds an escaped quote —
+# that is the exact construct whose lost backslash killed entire script blocks.
+_pages_src = open("pages.py").read()
+ok("no inline onclick with nested escaped quotes (the bug that killed script blocks)",
+   not re.search(r"""onclick="\w+\(\\+'""", _pages_src))
+ok("click handlers are delegated via data-act", 'data-act="pbConfirm"' in c.get("/").text)
+
+# --- SEO / social ---
+_pr = c.get("/pricing").text
+ok("pages carry a meta description", 'name="description"' in _pr)
+ok("pages carry an Open Graph card (a shared link is not a bare URL)",
+   'property="og:title"' in _pr and 'property="og:image"' in _pr)
+ok("pages declare a canonical URL", 'rel="canonical"' in _pr)
+ok("structured data identifies the organization", "schema.org" in _pr)
+
+# --- 404 that a human can navigate out of ---
+_nf = c.get("/definitely-not-a-page", headers={"accept": "text/html"})
+ok("404 returns a real page, not a stack trace", _nf.status_code == 404 and "404" in _nf.text)
+ok("404 reassures that nothing is wrong with the account",
+   "Nothing is wrong with your account" in _nf.text)
+ok("API clients still get JSON on 404",
+   c.get("/api/v1/nope").status_code == 404)
+
+# --- contact ---
+_ct = c.get("/contact")
+ok("contact page exists", _ct.status_code == 200)
+ok("contact page shows the single contact address", "info@petabyte.market" in _ct.text)
+ok("contact page has an honest teams/volume path (not a fake enterprise funnel)",
+   "Reserved capacity" in _ct.text)
+
+# --- Arabic / RTL ---
+_ld = c.get("/").text
+ok("language can be switched to Arabic", "toggleLang" in _ld and "pb_lang" in _ld)
+ok("direction is set before paint (no flash of wrong direction)",
+   "dir" in _ld and "rtl" in _ld)
+ok("nav and hero carry Arabic copy", 'data-ar=' in _ld)
+ok("RTL keeps money/code/monospace left-to-right (a price must not read backwards)",
+   'html[dir="rtl"] .mono' in _ld and "direction:ltr" in _ld)
+# our own stylesheet must be direction-agnostic; vendored Bootstrap is not ours to fix
+_our_css = open("pages.py").read()
+ok("our layout uses logical CSS properties so it mirrors under RTL",
+   "padding-inline-start" in _our_css
+   and not re.search(r"^\s*[^/*]*\bmargin-left:", _our_css, re.M))
+
+# --- DEMAND CAPTURE: an honest demo/request path (the accelerator's top ask) ---
+_dm = c.post("/demo/request", json={"name": "Test Person", "email": "t@example.com",
+             "organization": "Test Org", "role": "buyer",
+             "workload": "fine-tuning", "source": "smoke"})
+ok("anyone (no login) can request a demo", _dm.status_code == 200)
+ok("a demo request returns a reference the person can quote",
+   bool(_dm.json().get("reference")))
+ok("a bad email is rejected, not silently stored",
+   c.post("/demo/request", json={"name": "x", "email": "not-email"}).status_code == 422)
+ok("the demo page exists and points at the live product, not slides",
+   "See it" in c.get("/demo").text and "one-click launch" in c.get("/demo").text.lower())
+ok("book-a-demo sits ALONGSIDE self-serve, not replacing it (still one-click)",
+   ">Browse GPUs now<" in c.get("/demo").text and "Book a demo" in c.get("/").text)
+
+# --- CREDIBILITY built from true, test-backed claims (no fabricated logos/metrics) ---
+_home = c.get("/").text
+ok("landing states only what we can prove (escrow, failover, verified, isolated)",
+   "Escrow-protected" in _home and "Survives a host failure" in _home
+   and "Verified hardware" in _home)
+ok("no fabricated customer/partner logos on the landing page",
+   "customer-logo" not in _home and "Trusted by 100" not in _home)
+
+# --- entity / legal identity (honest credibility, no exposed tax numbers) ---
+_foot = c.get("/").text
+_terms = c.get("/terms").text
+ok("footer names the legal entity and jurisdiction",
+   "Delaware C-corporation" in _foot and "Petabyte, Inc." in _foot)
+ok("terms carry a company/entity block with a legal contact",
+   "State of Delaware" in _terms and "info@petabyte.market" in _terms)
+ok("no tax ID / EIN is exposed on the site (fraud surface, not a trust signal)",
+   "EIN" not in _foot + _terms and "Tax ID" not in _foot + _terms
+   and "Employer Identification" not in _foot + _terms)
+# retired strings must not reappear anywhere in the rendered pages
+_all_pages = "".join(c.get(p).text for p in
+                     ["/", "/terms", "/privacy", "/acceptable-use", "/contact"])
+ok("the 'Deep Ocean Compute' brand is fully removed from the site",
+   "deep ocean" not in _all_pages.lower())
+ok("no role-specific legacy addresses remain", "legal@petabyte.market" not in _all_pages and "hello@petabyte.market" not in _all_pages)
+
+# --- /app console: same nav + readable editor in both themes (screenshot bugs) ---
+_app = c.get("/app").text
+ok("the console nav carries the same site links as every other page",
+   "/marketplace" in _app and "/catalog" in _app and "/security" in _app
+   and "/pricing" in _app)
+ok("the code editor is theme-aware, not hardcoded dark (was black-on-black in light mode)",
+   "var(--editor-bg)" in _app and "var(--editor-ink)" in _app)
+ok("a light-mode editor background is actually defined",
+   "--editor-bg:#F5F9FC" in _app)
+
+# --- one email everywhere ---
+_home = c.get("/")
+_pool = _app + c.get("/").text + _ct.text + c.get("/terms").text
+ok("every contact address on the site is info@ (collapsed to one inbox)",
+   "info@petabyte.market" in _pool
+   and not any(a in _pool for a in ["hello@petabyte", "support@petabyte",
+       "security@petabyte", "hosts@petabyte", "investors@petabyte",
+       "legal@petabyte", "abuse@petabyte", "privacy@petabyte", "demo@petabyte"]))
+
 ok("Scalar API portal at /docs", c.get("/docs").status_code==200 and "scalar" in c.get("/docs").text.lower())
 ok("OpenAPI is branded Petabyte v1", c.get("/openapi.json").json()["info"]["title"]=="Petabyte API")
 ok("GPU detail page route", c.get("/gpu/1").status_code==200 and "gpuwrap" in c.get("/gpu/1").text)
@@ -1124,6 +1438,10 @@ ok("admin whoami true for admin", c.get("/admin/whoami", headers=GAH).json().get
 ok("admin whoami 403 for non-admin", c.get("/admin/whoami", headers=NAH).status_code==403)
 ok("admin users list flags admin", any(u["username"]=="gtest@example.com" and u["is_admin"] for u in c.get("/admin/users", headers=GAH).json()["users"]))
 ok("admin specs list", c.get("/admin/specs", headers=GAH).status_code==200)
+ok("demo requests are stored as real leads (demand evidence for investors)",
+   c.get("/admin/demo-requests", headers=GAH).json().get("count", 0) >= 1)
+ok("non-admins cannot read the lead list",
+   c.get("/admin/demo-requests", headers=NAH).status_code == 403)
 ok("admin payouts list", c.get("/admin/payouts", headers=GAH).status_code==200)
 _rr=c.post("/admin/users/buyer1/role", headers=GAH, json={"role":"seller"})
 ok("admin can set role", _rr.status_code==200 and _rr.json()["role"]=="seller")
@@ -1142,8 +1460,8 @@ ok("revoke via UI route", c.post(f"/keys/{jti}/revoke", headers=s5h).status_code
 ok("revoked key shows revoked", any(k["jti"]==jti and k["revoked"] for k in c.get("/account/keys", headers=s5h).json()["keys"]))
 ok("cannot revoke someone else's key", c.post(f"/keys/{jti}/revoke", headers=pbh).status_code==404)
 # --- one-shot /launch: auto-pick node, book, start template (no spec_id needed) ---
-c.post("/register_user", json={"username":"launchbuyer","password":"pw12345678"})
-_lbh={"Authorization":"Bearer "+c.post("/login", data={"username":"launchbuyer","password":"pw12345678"}).json()["access_token"]}
+c.post("/register_user", json={"username":"launchbuyer","password":"pw-correct-horse-battery"})
+_lbh={"Authorization":"Bearer "+c.post("/login", data={"username":"launchbuyer","password":"pw-correct-horse-battery"}).json()["access_token"]}
 c.post("/deposit", headers=_lbh, json={"amount":500})
 _lr=c.post("/launch", headers=_lbh, json={"template":"minecraft","hours":1})
 ok("/launch auto-books + starts a template", _lr.status_code==200 and "task_id" in _lr.json() and _lr.json().get("port")==25565)
@@ -1153,8 +1471,8 @@ ok("/launch requires auth", c.post("/launch", json={"template":"minecraft"}).sta
 # --- VM routing + stable URL + failover (the Buyer/VM -> new node, same URL model) ---
 from datetime import datetime as _dt, timezone as _tz, timedelta as _td
 def _mkseller(nm, price):
-    c.post("/register_user", json={"username":nm,"password":"pw12345678"})
-    h={"Authorization":"Bearer "+c.post("/login", data={"username":nm,"password":"pw12345678"}).json()["access_token"]}
+    c.post("/register_user", json={"username":nm,"password":"pw-correct-horse-battery"})
+    h={"Authorization":"Bearer "+c.post("/login", data={"username":nm,"password":"pw-correct-horse-battery"}).json()["access_token"]}
     c.post("/change_role", headers=h, json={"role":"seller"})
     sd=c.post("/register_specs", headers=h, json={"cpu":8,"ram":32,"gpu_model":"L4","duration":24,"price_per_hour":price,"provider":nm,"units":2}).json()["spec_id"]
     at={"cpu":8,"ram":32,"gpu_model":"L4","nonce":nm,"ts":int(time.time())}
@@ -1162,8 +1480,8 @@ def _mkseller(nm, price):
     k=c.post("/create_api_key", headers=h).json()["api_key"]; c.post("/heartbeat", headers={"X-API-KEY":k}, json={"spec_id":sd})
     return h, sd
 _ah,_asp=_mkseller("vmnodeA",0.4); _bh,_bsp=_mkseller("vmnodeB",0.8)
-c.post("/register_user", json={"username":"vmbuyerX","password":"pw12345678"})
-_vbh={"Authorization":"Bearer "+c.post("/login", data={"username":"vmbuyerX","password":"pw12345678"}).json()["access_token"]}
+c.post("/register_user", json={"username":"vmbuyerX","password":"pw-correct-horse-battery"})
+_vbh={"Authorization":"Bearer "+c.post("/login", data={"username":"vmbuyerX","password":"pw-correct-horse-battery"}).json()["access_token"]}
 c.post("/deposit", headers=_vbh, json={"amount":200})
 _lv=c.post("/launch", headers=_vbh, json={"template":"comfyui","hours":2}).json()
 _vmid=_lv["vm_id"]; _url0=_lv["url"]["ssh"]
@@ -1183,8 +1501,8 @@ ok("buyer can stop the VM", c.post(f"/vm/{_vmid}/stop", headers=_vbh).status_cod
 
 # --- metering + extend + expiry + pricing engine + seller earnings ---
 _mh,_msp=_mkseller("meterseller",1.0)
-c.post("/register_user", json={"username":"meterbuyer","password":"pw12345678"})
-_mbh={"Authorization":"Bearer "+c.post("/login", data={"username":"meterbuyer","password":"pw12345678"}).json()["access_token"]}
+c.post("/register_user", json={"username":"meterbuyer","password":"pw-correct-horse-battery"})
+_mbh={"Authorization":"Bearer "+c.post("/login", data={"username":"meterbuyer","password":"pw-correct-horse-battery"}).json()["access_token"]}
 c.post("/deposit", headers=_mbh, json={"amount":50})
 _mv=c.post("/launch", headers=_mbh, json={"template":"comfyui","hours":1}).json()["vm_id"]
 _g=c.get(f"/vm/{_mv}", headers=_mbh).json()
@@ -1195,8 +1513,8 @@ _mv2=c.post("/launch", headers=_mbh, json={"template":"comfyui","hours":1}).json
 _de=dbmod.SessionLocal(); _vv=dbmod.get_vm_route(_de,_mv2); _vv.paid_until=_dt.now(_tz.utc)-_td(minutes=1); _de.add(_vv); _de.commit()
 ok("meter_and_expire auto-stops expired VM", dbmod.meter_and_expire(dbmod.SessionLocal())>=1)
 # auto-pricing clamp
-c.post("/register_user", json={"username":"autoseller","password":"pw12345678"})
-_auth={"Authorization":"Bearer "+c.post("/login", data={"username":"autoseller","password":"pw12345678"}).json()["access_token"]}
+c.post("/register_user", json={"username":"autoseller","password":"pw-correct-horse-battery"})
+_auth={"Authorization":"Bearer "+c.post("/login", data={"username":"autoseller","password":"pw-correct-horse-battery"}).json()["access_token"]}
 c.post("/change_role", headers=_auth, json={"role":"seller"})
 _asid=c.post("/register_specs", headers=_auth, json={"cpu":8,"ram":32,"gpu_model":"A100","duration":24,"price_per_hour":9.0,"provider":"a","units":2,"auto_price":True,"min_price":0.5,"max_price":2.0}).json()["spec_id"]
 _aat={"cpu":8,"ram":32,"gpu_model":"A100","nonce":"autoseller","ts":int(time.time())}
@@ -1215,8 +1533,8 @@ _se=c.get("/seller/earnings", headers=_auth).json()
 ok("price changes logged for auto-priced node", any(p["reason"]=="auto" for p in _se.get("recent_price_changes",[])))
 ok("marketplace exposes auto_price flag", any("auto_price" in s for s in c.get("/marketplace/specs").json()["specs"]) or c.get("/marketplace/specs").json()["count"]>=0)
 # org-wallet extend: booking billed to an org can be extended from the org wallet
-c.post("/register_user", json={"username":"orgextuser","password":"pw12345678"})
-_oeh={"Authorization":"Bearer "+c.post("/login", data={"username":"orgextuser","password":"pw12345678"}).json()["access_token"]}
+c.post("/register_user", json={"username":"orgextuser","password":"pw-correct-horse-battery"})
+_oeh={"Authorization":"Bearer "+c.post("/login", data={"username":"orgextuser","password":"pw-correct-horse-battery"}).json()["access_token"]}
 _oid=c.post("/orgs", headers=_oeh, json={"name":"ExtendCo"}).json()["org_id"]
 c.post(f"/orgs/{_oid}/deposit", headers=_oeh, json={"amount":100})
 _ob=c.post("/request_vm", headers=_oeh, json={"spec_id":_msp,"hours":1,"org_id":_oid}).json()

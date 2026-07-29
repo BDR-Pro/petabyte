@@ -129,6 +129,9 @@ class User(Base):
     role = Column(String, default="buyer", nullable=False)
     reputation = Column(Integer, default=100, nullable=False)
     email = Column(String, nullable=True)
+    email_verified = Column(Boolean, default=False, nullable=False)
+    email_token = Column(String, nullable=True)         # hashed verification token
+    email_token_exp = Column(DateTime, nullable=True)   # short-lived
     notify_email = Column(Boolean, default=True)
     tests_passed = Column(Integer, default=0, nullable=False)
     tests_failed = Column(Integer, default=0, nullable=False)
@@ -498,6 +501,78 @@ class Platform(Base):
     __tablename__ = "platform"
     id = Column(Integer, primary_key=True)
     revenue = Column(Money, default=Decimal(0), nullable=False)
+    # KILL SWITCH. Stops NEW bookings while letting running rentals finish and settle
+    # normally. In a pilot you will need to stop the world at 2am without killing
+    # someone's 6-hour render.
+    bookings_paused = Column(Boolean, default=False, nullable=False)
+    pause_reason = Column(String, nullable=True)
+    paused_at = Column(DateTime, nullable=True)
+
+
+class AuditEvent(Base):
+    """Append-only record of who did what. Never updated, never deleted.
+
+    This is what you read when a buyer disputes a charge, when a payout goes to the
+    wrong bank account, or when you need to know which key launched the workload that
+    got a seller's ISP angry. The reputation log is about node quality; this is about
+    accountability."""
+    __tablename__ = "audit_events"
+    id = Column(Integer, primary_key=True, index=True)
+    actor_user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    actor_username = Column(String, index=True, nullable=True)   # kept even if user is deleted
+    actor_type = Column(String, default="user")                  # user|api_key|system|admin
+    action = Column(String, index=True, nullable=False)          # e.g. payout_method.changed
+    resource_type = Column(String, nullable=True)
+    resource_id = Column(String, nullable=True)
+    ip_address = Column(String, nullable=True)
+    request_id = Column(String, nullable=True)
+    detail = Column(Text, nullable=True)                         # JSON, never secrets
+    created_at = Column(DateTime, default=_utcnow, index=True)
+
+
+def audit(db: Session, action: str, actor=None, actor_type="user", resource_type=None,
+          resource_id=None, ip=None, request_id=None, detail=None, commit=True):
+    """Write an audit event. Never log secrets, tokens, or full payout destinations."""
+    ev = AuditEvent(
+        actor_user_id=getattr(actor, "id", None),
+        actor_username=getattr(actor, "username", None),
+        actor_type=actor_type, action=action,
+        resource_type=resource_type,
+        resource_id=str(resource_id) if resource_id is not None else None,
+        ip_address=ip, request_id=request_id,
+        detail=json.dumps(detail) if isinstance(detail, dict) else detail)
+    db.add(ev)
+    if commit:
+        db.commit()
+    return ev
+
+
+class BookingsPaused(Exception):
+    """Raised when the kill switch is on. New bookings refused; running ones untouched."""
+
+
+def bookings_are_paused(db: Session):
+    """(paused, reason). The kill switch."""
+    p = db.query(Platform).first()
+    if p and p.bookings_paused:
+        return True, (p.pause_reason or "Bookings are temporarily paused.")
+    return False, None
+
+
+def set_bookings_paused(db: Session, paused: bool, reason: str = None, actor=None):
+    p = db.query(Platform).first()
+    if not p:
+        p = Platform(revenue=Decimal(0))
+        db.add(p)
+        db.flush()
+    p.bookings_paused = bool(paused)
+    p.pause_reason = reason if paused else None
+    p.paused_at = _utcnow() if paused else None
+    db.add(p)
+    audit(db, "platform.bookings_paused" if paused else "platform.bookings_resumed",
+          actor=actor, actor_type="admin", detail={"reason": reason}, commit=False)
+    db.commit()
+    return p
 
 
 class AttestationChallenge(Base):
@@ -595,6 +670,29 @@ class IdleSettlement(Base):
     __table_args__ = (UniqueConstraint("worker_id", "period", name="uq_idle_settle"),)
 
 
+class DemoRequest(Base):
+    """A person asked to see the product or get access.
+
+    This is the single most valuable thing a pre-revenue marketplace can collect:
+    evidence of demand, with a name attached. Each row is a real human who wanted
+    a walkthrough — exactly what an investor is asking to see. We never fabricate
+    these; they only exist because someone filled in the form."""
+    __tablename__ = "demo_requests"
+    id = Column(Integer, primary_key=True, index=True)
+    public_id = Column(String, unique=True, index=True)     # opaque handle for URLs
+    name = Column(String, nullable=False)
+    email = Column(String, index=True, nullable=False)
+    organization = Column(String, nullable=True)
+    role = Column(String, nullable=True)                    # buyer | host | investor | other
+    workload = Column(Text, nullable=True)                  # what they want to run
+    message = Column(Text, nullable=True)
+    preferred_time = Column(String, nullable=True)          # free text, their words
+    source = Column(String, nullable=True)                  # which page/CTA
+    status = Column(String, default="new", index=True)      # new|contacted|scheduled|done|declined
+    ip_address = Column(String, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+
+
 class ProcessedWebhook(Base):
     """Idempotency for payment webhooks — an event is credited at most once."""
     __tablename__ = "processed_webhooks"
@@ -655,6 +753,11 @@ def _ensure_columns():
         "bookings": [("test", "BOOLEAN NOT NULL DEFAULT true")],
         "specs": [("min_price", "FLOAT"), ("max_price", "FLOAT"),
                   ("auto_price", "BOOLEAN DEFAULT false"), ("public_id", "VARCHAR")],
+        "users": [("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
+                  ("email_token_exp", "TIMESTAMP")],
+        "platform": [("bookings_paused", "BOOLEAN DEFAULT false"),
+                     ("pause_reason", "VARCHAR"), ("paused_at", "TIMESTAMP")],
+        "ledger": [("tx_id", "INTEGER"), ("direction", "VARCHAR")],
         "vm_routes": [("hourly_rate", "FLOAT DEFAULT 0"), ("started_at", "TIMESTAMP"),
                       ("paid_until", "TIMESTAMP"), ("stopped_at", "TIMESTAMP")],
     }
@@ -1483,6 +1586,13 @@ def book_with_escrow(db: Session, buyer: "User", spec: "SellerSpec", hours: int,
                      vpn: bool, take_rate: float, org_id: int = None) -> "Booking":
     """Create the booking and hold funds in escrow. Caller has already debited
     the buyer and reserved a unit; this records the booking + escrow ledger entry."""
+    # KILL SWITCH. Refuse NEW bookings when paused. Running rentals are untouched and
+    # settle normally — stopping the world must never destroy someone's 6-hour render.
+    # Enforced HERE, at the one place every booking path converges, so no endpoint can
+    # accidentally route around it.
+    _paused, _reason = bookings_are_paused(db)
+    if _paused:
+        raise BookingsPaused(_reason)
     gross = q(D(spec.price_per_hour) * D(hours))
     fee = q(gross * D(take_rate))
     payout = q(gross - fee)
@@ -2260,3 +2370,87 @@ def get_or_create_oauth_user(db: Session, email: str, provider: str = "google") 
 
 
 init_db()
+
+
+# ---------------------------------------------------------------------------
+# Email verification.
+# The point is NOT ceremony. It is that when a seller's machine starts emitting
+# abuse traffic at 2am, you need to be able to reach a human. No verified email
+# means no incident contact, no password reset, and no way to warn a host that
+# their node is compromised.
+# ---------------------------------------------------------------------------
+EMAIL_TOKEN_TTL_MIN = int(os.getenv("EMAIL_TOKEN_TTL_MIN", "15"))
+_DISPOSABLE = {
+    "mailinator.com", "guerrillamail.com", "10minutemail.com", "tempmail.com",
+    "throwawaymail.com", "yopmail.com", "trashmail.com", "getnada.com",
+    "temp-mail.org", "sharklasers.com", "dispostable.com", "fakeinbox.com",
+}
+
+
+def is_disposable_email(email: str) -> bool:
+    return bool(email) and email.rsplit("@", 1)[-1].lower() in _DISPOSABLE
+
+
+def _hash_token(tok: str) -> str:
+    return hashlib.sha256(tok.encode()).hexdigest()
+
+
+def start_email_verification(db: Session, user: "User", email: str):
+    """Returns the RAW token (emailed to the user). Only its hash is stored."""
+    tok = secrets.token_urlsafe(32)
+    user.email = email
+    user.email_verified = False
+    user.email_token = _hash_token(tok)
+    user.email_token_exp = _utcnow() + timedelta(minutes=EMAIL_TOKEN_TTL_MIN)
+    db.add(user)
+    db.commit()
+    return tok
+
+
+def confirm_email(db: Session, username: str, token: str) -> bool:
+    u = db.query(User).filter(User.username == username).first()
+    if not u or not u.email_token or not u.email_token_exp:
+        return False
+    exp = u.email_token_exp
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if exp < _utcnow():
+        return False                                  # expired
+    if not secrets.compare_digest(u.email_token, _hash_token(token)):
+        return False                                  # wrong token, constant-time
+    u.email_verified = True
+    u.email_token = None                              # single use
+    u.email_token_exp = None
+    db.add(u)
+    audit(db, "email.verified", actor=u, resource_type="user", resource_id=u.id,
+          commit=False)
+    db.commit()
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Payout destination changes = THE fraud vector in a marketplace. Take over an
+# account, swap the bank details, drain the earnings. So: a new destination is
+# quarantined for a cooling-off period before it can receive money, and the change
+# is always audited.
+# ---------------------------------------------------------------------------
+PAYOUT_COOLING_OFF_H = int(os.getenv("PAYOUT_COOLING_OFF_H", "24"))
+
+
+def payout_method_is_cooled_off(method) -> bool:
+    created = getattr(method, "created_at", None)
+    if not created:
+        return True
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return (_utcnow() - created) >= timedelta(hours=PAYOUT_COOLING_OFF_H)
+
+
+def redact_destination(dest: str) -> str:
+    """Never show a full bank/wallet destination back to anyone, ever."""
+    if not dest:
+        return ""
+    if "@" in dest:
+        name, _, dom = dest.partition("@")
+        return (name[:2] + "***@" + dom) if len(name) > 2 else ("***@" + dom)
+    return ("*" * max(0, len(dest) - 4)) + dest[-4:]
