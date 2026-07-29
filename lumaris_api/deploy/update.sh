@@ -31,6 +31,9 @@ rsync -rc --exclude .venv --exclude '*.db' --exclude '*.db-*' --exclude '.env' \
 # bundle the node installers so /install.sh and /install.ps1 serve on the deployed host
 mkdir -p "$APP/installers"
 cp "$SRC/lumaris_agent/install.sh" "$SRC/lumaris_agent/install.ps1" "$SRC/lumaris_agent/manage.ps1" "$SRC/lumaris_agent/uninstall.sh" "$APP/installers/" 2>/dev/null || true
+# Bundle the agent CODE into a tarball the API serves at /agent.tar.gz, so the node
+# installer never has to clone GitHub (works when the repo is private; no creds on hosts).
+tar -czf "$APP/installers/agent.tar.gz" -C "$SRC" lumaris_agent 2>/dev/null || true
 
 # reinstall deps only if requirements changed
 if ! git diff --quiet "$before" "$after" -- lumaris_api/requirements.txt 2>/dev/null; then
@@ -63,4 +66,4 @@ echo "deployed ${before:0:7} -> ${after:0:7}"
 
 # Print the env health report at the end of every deploy. Inside GitHub Actions this
 # also lands in the job Step Summary, so you can read it on github.com without SSH.
-LUMARIS_REPORT_FILE="${LUMARIS_REPORT_FILE:-}" bash "$APP/deploy/env-report.sh" || true
+bash "$APP/deploy/env-report.sh" || true

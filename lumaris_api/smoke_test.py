@@ -1413,7 +1413,7 @@ ok("a fresh deploy is NOT ENVIRONMENT=production (would refuse to boot with stub
 _rep=open("deploy/env-report.sh").read()
 for _v in ["ENVIRONMENT","CAL_BOOKING_URL","LEGACY_KEYS_FULL_ACCESS","TRUSTED_PROXIES","PAYMENTS_MODE"]:
     ok("env-report.sh surfaces "+_v+" (shown on every deploy + Actions summary)", _v in _rep)
-ok("env-report.sh publishes to the GitHub Actions step summary", "GITHUB_STEP_SUMMARY" in _rep)
+ok("env-report.sh prints the report (workflow captures stdout into the summary)", "report" in _rep)
 ok("update.sh (the workflow's deploy) runs the env report", "env-report.sh" in open("deploy/update.sh").read())
 _wf=open("../../.github/workflows/deploy-server.yml").read() if __import__("os").path.exists("../../.github/workflows/deploy-server.yml") else open("../.github/workflows/deploy-server.yml").read() if __import__("os").path.exists("../.github/workflows/deploy-server.yml") else ""
 if _wf:
@@ -1421,8 +1421,12 @@ if _wf:
        "capture_stdout" not in _wf)
     ok("deploy workflow publishes the report to the job summary",
        "GITHUB_STEP_SUMMARY" in _wf)
-ok("env-report.sh can write the report to a file for CI to fetch",
-   "LUMARIS_REPORT_FILE" in open("deploy/env-report.sh").read())
+    ok("deploy workflow does not scp a report file back (that step failed on empty archive)",
+       "scp-action" not in _wf)
+    ok("the report step never fails the deploy (if: always + fallback text)",
+       "if: always()" in _wf)
+ok("env-report.sh no longer depends on file round-trip or env-through-sudo",
+   "LUMARIS_REPORT_FILE" not in open("deploy/env-report.sh").read())
 _upd=open("deploy/update.sh").read()
 ok("update.sh auto-detects the git checkout (no more PETABYTE_SRC hand-override)",
    "/root/petabyte" in _upd and "/opt/petabyte" in _upd and "for _cand in" in _upd)
@@ -1430,6 +1434,19 @@ ok("update.sh still honours an explicit PETABYTE_SRC override",
    "${PETABYTE_SRC:-}" in _upd)
 ok("update.sh fails with a helpful message when no checkout is found",
    "could not find the petabyte git checkout" in _upd)
+
+# --- newsletter + landing video (marketing) ---
+_home=c.get("/").text
+ok("landing page has a newsletter signup form",
+   "subscribeNewsletter" in _home and "nl_email" in _home)
+ok("landing page embeds the video via privacy-friendly nocookie host",
+   "landingvideoframe" in _home and "youtube-nocookie" in _home)
+ok("newsletter degrades honestly when Mailchimp is unconfigured",
+   c.post("/newsletter/subscribe", json={"email":"x@y.com"}).status_code == 503)
+ok("bad email to newsletter is rejected",
+   c.post("/newsletter/subscribe", json={"email":"nope"}).status_code == 422)
+_lv=c.get("/landing/video").json()
+ok("landing video endpoint returns a default id", bool(_lv.get("video_id")))
 
 ok("Scalar API portal at /docs", c.get("/docs").status_code==200 and "scalar" in c.get("/docs").text.lower())
 ok("OpenAPI is branded Petabyte v1", c.get("/openapi.json").json()["info"]["title"]=="Petabyte API")
@@ -1462,6 +1479,16 @@ _katt={"cpu":8,"ram":32,"gpu_model":"L4","nonce":"kn","ts":int(time.time())}
 ok("prove/attest with API key only", c.post("/prove", headers=_kh, json={"spec_id":_ksid,"attestation":_katt,"signature":sign_proof(_VENDOR_SK,_katt),"pubkey":base64.b64encode(_VENDOR_SK.public_key().public_bytes_raw()).decode()}).status_code==200)
 ok("register_specs blocks no-auth", c.post("/register_specs", json={"cpu":1,"ram":1,"duration":1,"price_per_hour":1,"provider":"x","units":1}).status_code==401)
 ok("login page offers Google sign-in", "auth/google/login" in c.get("/login").text)
+# --- private-repo readiness: agent installs from OUR server, not a GitHub clone ---
+ok("installer fetches the agent bundle from the server (works when repo is private)",
+   "/agent.tar.gz" in open("../lumaris_agent/install.sh").read())
+ok("agent updater also prefers the server bundle over git",
+   "/agent.tar.gz" in open("../lumaris_agent/update.sh").read())
+ok("git clone remains only as a fallback in the installer",
+   "falling back to git clone" in open("../lumaris_agent/install.sh").read())
+ok("deploy builds the agent bundle the API serves",
+   "agent.tar.gz" in open("deploy/update.sh").read())
+
 ok("install.sh served by API", c.get("/install.sh").status_code==200 and "petabyte-agent" in c.get("/install.sh").text)
 ok("install.ps1 served by API", c.get("/install.ps1").status_code==200)
 ok("installers are key-based (no creds)", "PETABYTE_API_KEY" in c.get("/install.sh").text and "PETABYTE_PASS" not in c.get("/install.sh").text)
@@ -1506,6 +1533,16 @@ ok("admin whoami true for admin", c.get("/admin/whoami", headers=GAH).json().get
 ok("admin whoami 403 for non-admin", c.get("/admin/whoami", headers=NAH).status_code==403)
 ok("admin users list flags admin", any(u["username"]=="gtest@example.com" and u["is_admin"] for u in c.get("/admin/users", headers=GAH).json()["users"]))
 ok("admin specs list", c.get("/admin/specs", headers=GAH).status_code==200)
+ok("admin can set the landing video from a full Shorts URL",
+   c.post("/admin/landing/video", headers=GAH,
+          json={"video":"https://youtube.com/shorts/UUSWYaxboDA?si=x"}).json().get("video_id")=="UUSWYaxboDA")
+ok("the landing then serves the admin-set video",
+   c.get("/landing/video").json().get("video_id")=="UUSWYaxboDA")
+ok("garbage video input is rejected",
+   c.post("/admin/landing/video", headers=GAH, json={"video":"!!!"}).status_code==400)
+ok("non-admins cannot change the landing video",
+   c.post("/admin/landing/video", headers=NAH, json={"video":"x"}).status_code==403)
+ok("the admin panel exposes the video control", "saveVideo" in c.get("/admin").text)
 ok("demo requests are stored as real leads (demand evidence for investors)",
    c.get("/admin/demo-requests", headers=GAH).json().get("count", 0) >= 1)
 ok("non-admins cannot read the lead list",

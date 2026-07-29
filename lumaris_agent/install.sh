@@ -38,8 +38,17 @@ if [ -f "./task_fetcher.py" ]; then
   cp -r ./* "$APP"/                          # running from inside lumaris_agent/ locally
 else
   TMP=$(mktemp -d)
-  git clone --depth 1 "$REPO" "$TMP"         # monorepo; take only the agent subfolder
-  cp -r "$TMP/$SUBDIR/." "$APP"/
+  # Preferred: fetch the agent bundle from OUR server (no GitHub needed => works when the
+  # repo is private, and no host ever holds a git credential).
+  if curl -fsSL "$PETABYTE_API_URL/agent.tar.gz" -o "$TMP/agent.tar.gz" 2>/dev/null \
+     && tar -xzf "$TMP/agent.tar.gz" -C "$TMP" 2>/dev/null && [ -d "$TMP/lumaris_agent" ]; then
+    cp -r "$TMP/lumaris_agent/." "$APP"/
+  else
+    # Fallback: clone the repo (needs access if the repo is private).
+    echo "==> agent bundle unavailable, falling back to git clone"
+    git clone --depth 1 "$REPO" "$TMP/repo"
+    cp -r "$TMP/repo/$SUBDIR/." "$APP"/
+  fi
   rm -rf "$TMP"
 fi
 cd "$APP"

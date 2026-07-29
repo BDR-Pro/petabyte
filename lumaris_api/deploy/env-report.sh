@@ -69,23 +69,7 @@ report() {
   echo "Details: docs/stub.md · grep -rn 'TODO(stub)' for code sites"
 }
 
-# Print to the deploy log always.
+# Just print the report. The deploy log shows it, and the GitHub Actions workflow
+# captures this stdout over SSH into the job summary. No file round-trip, no env vars
+# through sudo — both of those were fragile and could fail the whole deploy.
 report
-
-# Write the report to a file when asked (LUMARIS_REPORT_FILE). The GitHub Actions deploy
-# sets this, then scp's the file back and puts it in the job summary — because
-# $GITHUB_STEP_SUMMARY exists only on the runner, not on this box over SSH.
-if [ -n "${LUMARIS_REPORT_FILE:-}" ]; then
-  report > "$LUMARIS_REPORT_FILE" 2>/dev/null || true
-fi
-
-# If this script itself runs on the runner (GITHUB_STEP_SUMMARY present), publish directly.
-# Secrets are already masked (shown as ***).
-if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-  {
-    echo "## Deploy environment report"
-    echo '```'
-    report
-    echo '```'
-  } >> "$GITHUB_STEP_SUMMARY"
-fi

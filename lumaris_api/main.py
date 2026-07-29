@@ -92,6 +92,15 @@ PAYMENTS_MODE = os.getenv("PAYMENTS_MODE", "sandbox").lower()      # sandbox|liv
 # requester this link and shows a "Pick your time" button so they book a slot that
 # fits both calendars. Left blank, we fall back to "we'll email you within a day".
 CAL_BOOKING_URL = os.getenv("CAL_BOOKING_URL", "").strip()
+
+# Mailchimp newsletter. Set these once from your Mailchimp account (Account -> Extras ->
+# API keys, and Audience -> Settings for the audience/list ID). The API key ends with a
+# datacenter suffix like "-us21"; we use that suffix for the API host. Left blank, the
+# newsletter form degrades to a mailto link so it still does something honest.
+MAILCHIMP_API_KEY = os.getenv("MAILCHIMP_API_KEY", "").strip()
+MAILCHIMP_AUDIENCE_ID = os.getenv("MAILCHIMP_AUDIENCE_ID", "").strip()
+# Fallback video shown until an admin sets one in the panel (your Short's ID).
+DEFAULT_LANDING_VIDEO_ID = os.getenv("DEFAULT_LANDING_VIDEO_ID", "UUSWYaxboDA").strip()
 BASE_DOMAIN = os.getenv("BASE_DOMAIN", "petabyte.market")          # for stable VM URLs
 
 # The passwords attackers try first. A full HIBP k-anonymity check is the right next
@@ -422,6 +431,23 @@ class RequestVMModel(BaseModel):
     require_region: Optional[str] = None
     require_country: Optional[str] = None
     org_id: Optional[int] = None
+
+
+class NewsletterModel(BaseModel):
+    email: str = Field(min_length=3, max_length=200)
+
+    @field_validator("email")
+    @classmethod
+    def _ok(cls, v: str) -> str:
+        v = v.strip()
+        if "@" not in v or "." not in v.split("@")[-1]:
+            raise ValueError("That does not look like an email address.")
+        return v
+
+
+class VideoModel(BaseModel):
+    # accept a full YouTube URL or a bare ID; we extract the ID server-side
+    video: str = Field(min_length=1, max_length=200)
 
 
 class DemoRequestModel(BaseModel):
@@ -987,6 +1013,22 @@ def manage_script_ps1():
         raise HTTPException(status_code=404, detail="not bundled")
     with open(path) as f:
         return Response(content=f.read(), media_type="text/plain")
+
+
+@app.get("/agent.tar.gz")
+def agent_tarball():
+    """Serve the agent code as a tarball, built at deploy time.
+
+    This is what lets the node installer work WITHOUT cloning the GitHub repo — so it
+    keeps working when the repo is private, and hosts never need any GitHub credential.
+    The installer downloads this from the same server it already talks to."""
+    here = os.path.dirname(__file__)
+    for cand in (os.path.join(here, "installers", "agent.tar.gz"),
+                 os.path.join(here, "..", "lumaris_agent.tar.gz")):
+        if os.path.exists(cand):
+            with open(cand, "rb") as f:
+                return Response(content=f.read(), media_type="application/gzip")
+    raise HTTPException(status_code=404, detail="agent bundle not built on this host")
 
 
 @app.get("/uninstall.sh")
@@ -2428,6 +2470,90 @@ class EmailModel(BaseModel):
 
 class EmailConfirmModel(BaseModel):
     token: str = Field(max_length=256)
+
+
+@app.post("/newsletter/subscribe", tags=["marketing"])
+def newsletter_subscribe(body: NewsletterModel, request: Request):
+    """Add an email to the Mailchimp audience.
+
+    Public + IP-rate-limited. If Mailchimp isn't configured yet, we say so honestly
+    rather than pretend it worked."""
+    if not (MAILCHIMP_API_KEY and MAILCHIMP_AUDIENCE_ID):
+        raise HTTPException(status_code=503, detail={
+            "code": "NEWSLETTER_UNCONFIGURED",
+            "message": "The newsletter isn't wired up yet. Email info@petabyte.market to "
+                       "be added."})
+    if "-" not in MAILCHIMP_API_KEY:
+        raise HTTPException(status_code=500, detail={"code": "NEWSLETTER_MISCONFIGURED",
+            "message": "Mailchimp API key is malformed (no datacenter suffix)."})
+    dc = MAILCHIMP_API_KEY.rsplit("-", 1)[-1]     # e.g. us21
+    url = (f"https://{dc}.api.mailchimp.com/3.0/lists/"
+           f"{MAILCHIMP_AUDIENCE_ID}/members")
+    try:
+        import httpx
+        r = httpx.post(url, auth=("anystring", MAILCHIMP_API_KEY), timeout=10,
+                       json={"email_address": body.email, "status": "subscribed"})
+        if r.status_code in (200, 201):
+            return {"ok": True, "message": "You're subscribed. Thanks!"}
+        # already a member is a success from the user's point of view
+        if r.status_code == 400 and "Member Exists" in r.text:
+            return {"ok": True, "message": "You're already on the list."}
+        logger.warning("mailchimp subscribe failed: %s %s", r.status_code, r.text[:200])
+        raise HTTPException(status_code=502, detail={"code": "NEWSLETTER_FAILED",
+            "message": "Couldn't subscribe you just now. Please try again later."})
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("mailchimp subscribe error")
+        raise HTTPException(status_code=502, detail={"code": "NEWSLETTER_FAILED",
+            "message": "Couldn't reach the newsletter service. Please try again later."})
+
+
+@app.get("/landing/video", tags=["marketing"])
+def get_landing_video(db: Session = Depends(get_db)):
+    """The YouTube video id shown on the landing page (admin-editable)."""
+    from db import Platform
+    p = db.query(Platform).first()
+    vid = (p.landing_video_id if p and p.landing_video_id else DEFAULT_LANDING_VIDEO_ID)
+    return {"video_id": vid}
+
+
+def _extract_youtube_id(s: str) -> str:
+    """Accept a full URL (watch, youtu.be, shorts, embed) or a bare id; return the id."""
+    s = s.strip()
+    import re as _re
+    for pat in (r"youtube\.com/shorts/([\w-]{6,})",
+                r"youtu\.be/([\w-]{6,})",
+                r"[?&]v=([\w-]{6,})",
+                r"youtube\.com/embed/([\w-]{6,})"):
+        m = _re.search(pat, s)
+        if m:
+            return m.group(1)
+    # bare id
+    if _re.fullmatch(r"[\w-]{6,20}", s):
+        return s
+    return ""
+
+
+@app.post("/admin/landing/video", tags=["marketing"])
+def set_landing_video(body: VideoModel, request: Request,
+                      admin=Depends(require_admin), db: Session = Depends(get_db)):
+    """Admin: change the landing-page video. Accepts a full YouTube URL or a bare id."""
+    vid = _extract_youtube_id(body.video)
+    if not vid:
+        raise HTTPException(status_code=400, detail={"code": "BAD_VIDEO",
+            "message": "Couldn't find a YouTube video id in that. Paste a YouTube link "
+                       "or the id."})
+    from db import Platform
+    p = db.query(Platform).first()
+    if not p:
+        p = Platform(revenue=D(0)); db.add(p)
+    p.landing_video_id = vid
+    db.add(p)
+    audit(db, "landing.video_changed", actor=admin,
+          ip=_client_ip(request), detail={"video_id": vid})
+    db.commit()
+    return {"ok": True, "video_id": vid}
 
 
 @app.post("/demo/request", tags=["marketing"])

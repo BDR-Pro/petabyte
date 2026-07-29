@@ -596,6 +596,29 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
   </div>
 </div>
 
+<!-- LANDING VIDEO (admin-editable id via /landing/video) -->
+<div class="wrap" style="padding:22px 24px 6px">
+  <div id="landingvideo" style="max-width:420px;margin:0 auto;display:none">
+    <div style="position:relative;padding-bottom:177.78%;height:0;border-radius:16px;overflow:hidden;border:1px solid var(--line2);background:#000">
+      <iframe id="landingvideoframe" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0"
+        loading="lazy" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture"
+        allowfullscreen title="Petabyte"></iframe>
+    </div>
+  </div>
+</div>
+<script>
+(async function(){
+  try{
+    var r=await fetch('/landing/video'); if(!r.ok)return;
+    var id=(await r.json()).video_id; if(!id)return;
+    var f=document.getElementById('landingvideoframe');
+    // privacy-friendly nocookie host; Shorts play fine in the standard embed
+    f.src='https://www.youtube-nocookie.com/embed/'+id+'?rel=0&modestbranding=1';
+    document.getElementById('landingvideo').style.display='';
+  }catch(e){}
+})();
+</script>
+
 
 <!-- launch anything: the signature cards, on the front door -->
 <div class="wrap" style="padding:40px 24px 8px">
@@ -625,6 +648,35 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
     <h2 style="font-size:17px;margin-bottom:6px">Turn idle silicon into income</h2>
     <p class="mut" style="font-size:13px">One command to list. Weekly payouts — bank, USDC, or gift card.</p></a>
 </div></div>
+
+<!-- NEWSLETTER (Mailchimp via /newsletter/subscribe) -->
+<div class="wrap" style="padding:10px 24px 40px">
+  <div class="card" style="max-width:560px;margin:0 auto;text-align:center">
+    <div class="lbl" data-ar="النشرة البريدية">Newsletter</div>
+    <h2 style="font-size:19px;margin:6px 0 6px" data-ar="تابع تطوّر Petabyte">Follow how Petabyte is built</h2>
+    <p class="mut" style="font-size:13.5px;margin-bottom:14px" data-ar="بريد إلكتروني بين الحين والآخر عن الميزات والتقدّم. لا رسائل مزعجة، وإلغاء الاشتراك بأي وقت.">An occasional email on features and progress. No spam, unsubscribe anytime.</p>
+    <div class="filterbar" style="justify-content:center;gap:8px">
+      <input id="nl_email" type="email" data-ar-ph="بريدك الإلكتروني" placeholder="you@example.com" style="flex:1;min-width:200px;max-width:320px"/>
+      <button class="btn btn-teal" data-act="subscribeNewsletter" data-ar="اشترك">Subscribe</button>
+    </div>
+    <div id="nl_msg" class="mini" style="min-height:18px;margin-top:10px"></div>
+  </div>
+</div>
+<script>
+async function subscribeNewsletter(){
+  var m=document.getElementById('nl_msg');
+  var e=(document.getElementById('nl_email').value||'').trim();
+  if(!e){m.style.color='var(--warn)';m.textContent='Enter your email.';return;}
+  m.style.color='';m.textContent='Subscribing…';
+  try{
+    var r=await fetch('/newsletter/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:e})});
+    var b=await r.json();
+    if(r.ok){m.style.color='var(--pos)';m.textContent=b.message||'Subscribed. Thanks!';document.getElementById('nl_email').value='';}
+    else{m.style.color='var(--warn)';m.textContent=(b.error&&b.error.message)||b.detail||'Could not subscribe.';}
+  }catch(err){m.style.color='var(--warn)';m.textContent='Network error. Try again.';}
+}
+</script>
+
 <script>
 async function heroPreview(){
  try{
@@ -975,6 +1027,25 @@ ADMIN_HTML = _page("Petabyte — admin", """
       <tbody id="prows"><tr><td colspan=5 class="mut mono" style="padding:20px;text-align:center">loading…</td></tr></tbody></table>
     </div>
   </div>
+
+  <!-- LANDING PAGE settings: the admin-editable video -->
+  <div class="wrap" style="padding:22px 22px 30px">
+    <div class="lbl" style="margin-bottom:12px">Landing page</div>
+    <div class="card">
+      <h2 style="font-size:16px;margin-bottom:4px">Homepage video</h2>
+      <p class="mut" style="font-size:13px;margin-bottom:12px">Paste a YouTube link (a normal video or a Short) or just its id. It replaces the video on the landing page immediately.</p>
+      <div class="filterbar" style="gap:8px">
+        <input id="vid_in" placeholder="https://youtube.com/shorts/… or a video id" style="flex:1;min-width:240px"/>
+        <button class="btn btn-teal" onclick="saveVideo()">Save video</button>
+      </div>
+      <div id="vid_msg" class="mini" style="margin-top:10px"></div>
+      <div id="vid_preview" style="max-width:220px;margin-top:14px;display:none">
+        <div style="position:relative;padding-bottom:177.78%;height:0;border-radius:12px;overflow:hidden;border:1px solid var(--line2)">
+          <iframe id="vid_frame" style="position:absolute;inset:0;width:100%;height:100%;border:0" allowfullscreen title="preview"></iframe>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -996,7 +1067,23 @@ async function boot(){
   document.getElementById('a_rev').textContent=money(o.platform_revenue);
   document.getElementById('a_pend').textContent=o.payouts_pending.count+' · '+money(o.payouts_pending.amount);
   document.getElementById('console').style.display='';
-  loadUsers();loadSpecs();loadPayouts();
+  loadUsers();loadSpecs();loadPayouts();loadVideo();
+}
+async function loadVideo(){
+  try{var r=await fetch('/landing/video');if(!r.ok)return;var id=(await r.json()).video_id;
+    if(id){document.getElementById('vid_in').value=id;showVideoPreview(id);}}catch(e){}
+}
+function showVideoPreview(id){
+  var p=document.getElementById('vid_preview'),f=document.getElementById('vid_frame');
+  f.src='https://www.youtube-nocookie.com/embed/'+id+'?rel=0';p.style.display='';
+}
+async function saveVideo(){
+  var m=document.getElementById('vid_msg');var v=(document.getElementById('vid_in').value||'').trim();
+  if(!v){m.style.color='var(--warn)';m.textContent='Paste a YouTube link or id.';return;}
+  m.style.color='';m.textContent='Saving…';
+  var r=await api('/admin/landing/video',{method:'POST',body:JSON.stringify({video:v})});
+  if(r.ok){m.style.color='var(--pos)';m.textContent='Saved. Video id: '+r.body.video_id;showVideoPreview(r.body.video_id);}
+  else{m.style.color='var(--warn)';m.textContent=(r.body&&r.body.error&&r.body.error.message)||'Could not save.';}
 }
 async function loadUsers(){var q=document.getElementById('uq').value;
   var r=await api('/admin/users'+(q?('?q='+encodeURIComponent(q)):''));var tb=document.getElementById('urows');

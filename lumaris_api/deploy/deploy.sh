@@ -41,6 +41,8 @@ rsync -a --delete \
 mkdir -p "$APP_DIR/installers"
 cp "$SRC_DIR"/../lumaris_agent/install.sh "$SRC_DIR"/../lumaris_agent/install.ps1 "$SRC_DIR"/../lumaris_agent/manage.ps1 "$SRC_DIR"/../lumaris_agent/uninstall.sh "$APP_DIR/installers/" 2>/dev/null \
   && echo "==> bundled node installers" || echo "!! agent installers not found next to $SRC_DIR (skipped)"
+# Bundle the agent CODE so /agent.tar.gz can serve it (no GitHub clone on hosts => private-safe).
+tar -czf "$APP_DIR/installers/agent.tar.gz" -C "$SRC_DIR/.." lumaris_agent 2>/dev/null || true
 
 echo "==> Python venv + dependencies"
 python3 -m venv "$APP_DIR/.venv"
@@ -173,6 +175,12 @@ NICEHASH_ORG_ID=
 # --- Confidential computing / TEE attestation (optional) ---
 TEE_MEASUREMENT_ALLOWLIST=
 TEE_TRUSTED_ROOT=
+
+# --- Newsletter (Mailchimp). Set both to enable the landing-page signup. ---
+MAILCHIMP_API_KEY=
+MAILCHIMP_AUDIENCE_ID=
+# --- Landing page fallback video id (admin can override in /admin) ---
+DEFAULT_LANDING_VIDEO_ID=UUSWYaxboDA
 
 # --- Demo scheduling (Cal.com). Set to your booking link to enable self-booking. ---
 CAL_BOOKING_URL=
