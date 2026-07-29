@@ -63,4 +63,4 @@ echo "deployed ${before:0:7} -> ${after:0:7}"
 
 # Print the env health report at the end of every deploy. Inside GitHub Actions this
 # also lands in the job Step Summary, so you can read it on github.com without SSH.
-LUMARIS_REPORT_FILE="${LUMARIS_REPORT_FILE:-}" bash "$APP/deploy/env-report.sh" || true
+bash "$APP/deploy/env-report.sh" || true

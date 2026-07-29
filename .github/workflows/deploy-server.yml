@@ -12,37 +12,29 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      # Run the deploy. The remote script writes the env report to a file on the box
-      # (LUMARIS_REPORT_FILE), because $GITHUB_STEP_SUMMARY only exists on the runner,
-      # not over SSH. envs: forwards the path into the remote shell.
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: LUMARIS_REPORT_FILE
-          script: |
-            export LUMARIS_REPORT_FILE=/tmp/lumaris-env-report.txt
-            sudo LUMARIS_REPORT_FILE=/tmp/lumaris-env-report.txt /opt/lumaris/deploy/update.sh
+          script: sudo /opt/lumaris/deploy/update.sh
 
-      # Pull the report file back and put it in the job summary (readable on github.com).
-      - name: Fetch env report
-        if: always()
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: /tmp/lumaris-env-report.txt
-          target: ./_report
-          strip_components: 1
-
-      - name: Publish env report to job summary
+      # Fetch the env report over a plain SSH command and drop it in the job summary.
+      # This never fails the run: if the report can't be read, we say so and move on.
+      - name: Env report to job summary
         if: always()
         run: |
-          echo "## Deploy environment report" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cat ./_report/lumaris-env-report.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null \
-            || echo "(env report not produced — check the deploy step log)" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          REPORT="$(ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key \
+            "${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }}" \
+            'sudo bash /opt/lumaris/deploy/env-report.sh 2>/dev/null' || true)"
+          rm -f ~/.ssh/deploy_key
+          {
+            echo "## Deploy environment report"
+            echo '```'
+            if [ -n "$REPORT" ]; then echo "$REPORT"; else echo "(report unavailable — deploy log has details)"; fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

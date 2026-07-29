@@ -620,3 +620,13 @@ update.sh used to default SRC=/opt/petabyte, but the checkout on this droplet is
 falls through to the probe instead of hard-failing. AUTO_DEPLOY.md corrected to
 /root/petabyte. Guarded by smoke tests. You can now just run
 `sudo /opt/lumaris/deploy/update.sh` (or let the workflow do it) with no override.
+
+
+## Deploy report — simplified (the scp step was failing)
+
+The "fetch report" step used appleboy/scp-action to pull /tmp/lumaris-env-report.txt back
+and failed with "tar: empty archive" when the file wasn't written (env-var-through-sudo
+didn't survive). Removed all of that. Now: the workflow just SSHes and runs
+env-report.sh, capturing its stdout into the job summary from the runner. No scp, no file
+round-trip, no env vars through sudo. The report step is `if: always()` with fallback text,
+so it can NEVER fail the deploy — a broken report just shows "(report unavailable)".

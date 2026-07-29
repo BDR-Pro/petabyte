@@ -1413,7 +1413,7 @@ ok("a fresh deploy is NOT ENVIRONMENT=production (would refuse to boot with stub
 _rep=open("deploy/env-report.sh").read()
 for _v in ["ENVIRONMENT","CAL_BOOKING_URL","LEGACY_KEYS_FULL_ACCESS","TRUSTED_PROXIES","PAYMENTS_MODE"]:
     ok("env-report.sh surfaces "+_v+" (shown on every deploy + Actions summary)", _v in _rep)
-ok("env-report.sh publishes to the GitHub Actions step summary", "GITHUB_STEP_SUMMARY" in _rep)
+ok("env-report.sh prints the report (workflow captures stdout into the summary)", "report" in _rep)
 ok("update.sh (the workflow's deploy) runs the env report", "env-report.sh" in open("deploy/update.sh").read())
 _wf=open("../../.github/workflows/deploy-server.yml").read() if __import__("os").path.exists("../../.github/workflows/deploy-server.yml") else open("../.github/workflows/deploy-server.yml").read() if __import__("os").path.exists("../.github/workflows/deploy-server.yml") else ""
 if _wf:
@@ -1421,8 +1421,12 @@ if _wf:
        "capture_stdout" not in _wf)
     ok("deploy workflow publishes the report to the job summary",
        "GITHUB_STEP_SUMMARY" in _wf)
-ok("env-report.sh can write the report to a file for CI to fetch",
-   "LUMARIS_REPORT_FILE" in open("deploy/env-report.sh").read())
+    ok("deploy workflow does not scp a report file back (that step failed on empty archive)",
+       "scp-action" not in _wf)
+    ok("the report step never fails the deploy (if: always + fallback text)",
+       "if: always()" in _wf)
+ok("env-report.sh no longer depends on file round-trip or env-through-sudo",
+   "LUMARIS_REPORT_FILE" not in open("deploy/env-report.sh").read())
 _upd=open("deploy/update.sh").read()
 ok("update.sh auto-detects the git checkout (no more PETABYTE_SRC hand-override)",
    "/root/petabyte" in _upd and "/opt/petabyte" in _upd and "for _cand in" in _upd)
