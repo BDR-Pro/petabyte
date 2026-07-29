@@ -609,3 +609,14 @@ first-time setup. Three ways to see it:
 - **SSH:** `sudo bash /opt/lumaris/deploy/env-report.sh` anytime.
 - **Deploy log:** it's printed at the tail of every `update.sh` run.
 Smoke tests assert the report covers the safety-critical vars and that update.sh calls it.
+
+## Deploy no longer needs PETABYTE_SRC (was failing every deploy)
+
+update.sh used to default SRC=/opt/petabyte, but the checkout on this droplet is at
+/root/petabyte — so every deploy died with "not a git checkout" unless you passed
+`PETABYTE_SRC=/root/petabyte` by hand. Fixed: update.sh now auto-detects the checkout
+(honours PETABYTE_SRC if set, else probes /root/petabyte, /opt/petabyte,
+/home/petabyte/petabyte) and gives a clear error if none exists. A bad PETABYTE_SRC now
+falls through to the probe instead of hard-failing. AUTO_DEPLOY.md corrected to
+/root/petabyte. Guarded by smoke tests. You can now just run
+`sudo /opt/lumaris/deploy/update.sh` (or let the workflow do it) with no override.

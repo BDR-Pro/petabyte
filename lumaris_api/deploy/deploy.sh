@@ -175,7 +175,7 @@ TEE_MEASUREMENT_ALLOWLIST=
 TEE_TRUSTED_ROOT=
 
 # --- Demo scheduling (Cal.com). Set to your booking link to enable self-booking. ---
-CAL_BOOKING_URL=https://cal.com/bader-alotaibi/demo
+CAL_BOOKING_URL=
 
 # --- WireGuard (VPN for booked VMs) ---
 WG_PUBLIC_KEY=$WG_PUB

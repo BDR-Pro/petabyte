@@ -1423,6 +1423,13 @@ if _wf:
        "GITHUB_STEP_SUMMARY" in _wf)
 ok("env-report.sh can write the report to a file for CI to fetch",
    "LUMARIS_REPORT_FILE" in open("deploy/env-report.sh").read())
+_upd=open("deploy/update.sh").read()
+ok("update.sh auto-detects the git checkout (no more PETABYTE_SRC hand-override)",
+   "/root/petabyte" in _upd and "/opt/petabyte" in _upd and "for _cand in" in _upd)
+ok("update.sh still honours an explicit PETABYTE_SRC override",
+   "${PETABYTE_SRC:-}" in _upd)
+ok("update.sh fails with a helpful message when no checkout is found",
+   "could not find the petabyte git checkout" in _upd)
 
 ok("Scalar API portal at /docs", c.get("/docs").status_code==200 and "scalar" in c.get("/docs").text.lower())
 ok("OpenAPI is branded Petabyte v1", c.get("/openapi.json").json()["info"]["title"]=="Petabyte API")

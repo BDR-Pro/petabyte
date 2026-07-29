@@ -4,7 +4,8 @@ Push to `main` → GitHub Actions SSHes into the droplet and runs `deploy/update
 which pulls the monorepo and syncs `lumaris_api/` into the running app dir, migrates,
 and restarts. No manual SSH.
 
-Layout: the monorepo is checked out at **`/opt/petabyte`** (the pull source); the API
+Layout: the monorepo is checked out at **`/root/petabyte`** on this droplet (the pull
+source); `update.sh` auto-detects it, so no `PETABYTE_SRC` override is needed. The API
 runs from **`/opt/lumaris`** (created by the first `deploy.sh`). `update.sh` rsyncs
 `lumaris_api/` from the checkout into `/opt/lumaris`, so it never touches your venv,
 database, or `/etc/lumaris/lumaris.env`.
@@ -13,7 +14,9 @@ database, or `/etc/lumaris/lumaris.env`.
 
 ### 1. Clone the monorepo on the droplet
     ssh root@DROPLET_IP
-    git clone https://github.com/BDR-Pro/petabyte.git /opt/petabyte
+    git clone https://github.com/BDR-Pro/petabyte.git /root/petabyte
+    # (update.sh probes /root/petabyte then /opt/petabyte; either works. To use a
+    #  different path, pass PETABYTE_SRC=/your/path.)
     # /opt/lumaris already exists from the first deploy.sh run
 
 ### 2. A deploy SSH key
@@ -40,4 +43,4 @@ run it manually from the Actions tab). Watch for the "deployed <old> -> <new>" l
 then: curl https://yourdomain.com/healthz
 
 ## Rollback
-    ssh root@DROPLET_IP 'cd /opt/petabyte && git reset --hard HEAD~1 && /opt/lumaris/deploy/update.sh'
+    ssh root@DROPLET_IP 'cd /root/petabyte && git reset --hard HEAD~1 && /opt/lumaris/deploy/update.sh'

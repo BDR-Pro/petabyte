@@ -2,10 +2,23 @@
 # Pull the latest code from the monorepo checkout and redeploy the API. Called by
 # the GitHub Actions deploy workflow over SSH (or run by hand). See AUTO_DEPLOY.md.
 set -euo pipefail
-SRC="${PETABYTE_SRC:-/opt/petabyte}"     # monorepo git checkout (repo root)
 APP=/opt/lumaris                          # running app dir (services point here)
 
-[ -d "$SRC/.git" ] || { echo "ERROR: $SRC is not a git checkout. See deploy/AUTO_DEPLOY.md."; exit 1; }
+# Find the monorepo git checkout. Honour an explicit PETABYTE_SRC, otherwise probe the
+# known locations — the checkout has historically lived at /root/petabyte on this box and
+# /opt/petabyte in the docs, so we stop guessing and just look. This is why deploys used
+# to fail with "not a git checkout" unless you passed PETABYTE_SRC by hand.
+SRC=""
+for _cand in "${PETABYTE_SRC:-}" /root/petabyte /opt/petabyte /home/petabyte/petabyte; do
+  [ -n "$_cand" ] && [ -d "$_cand/.git" ] && { SRC="$_cand"; break; }
+done
+if [ -z "$SRC" ]; then
+  echo "ERROR: could not find the petabyte git checkout." >&2
+  echo "Looked in: \${PETABYTE_SRC:-<unset>}, /root/petabyte, /opt/petabyte, /home/petabyte/petabyte" >&2
+  echo "Fix: clone it, or run with PETABYTE_SRC=/path/to/petabyte. See deploy/AUTO_DEPLOY.md." >&2
+  exit 1
+fi
+echo "==> source checkout: $SRC"
 cd "$SRC"
 before=$(git rev-parse HEAD 2>/dev/null || echo none)
 git pull --ff-only

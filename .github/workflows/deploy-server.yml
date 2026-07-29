@@ -23,7 +23,6 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           envs: LUMARIS_REPORT_FILE
           script: |
-            sudo PETABYTE_SRC=/root/petabyte /opt/lumaris/deploy/update.sh
             export LUMARIS_REPORT_FILE=/tmp/lumaris-env-report.txt
             sudo LUMARIS_REPORT_FILE=/tmp/lumaris-env-report.txt /opt/lumaris/deploy/update.sh
 
