@@ -602,7 +602,9 @@ The env health report now lives in `deploy/env-report.sh` (was inline in deploy.
 runs at the end of BOTH deploy.sh and update.sh — so it prints on every deploy, not just
 first-time setup. Three ways to see it:
 - **GitHub Actions:** open the "Deploy server" workflow run → the report is in the job's
-  Step Summary (published by the workflow + by the script's GITHUB_STEP_SUMMARY block).
+  Step Summary. Mechanism: the remote deploy writes the report to LUMARIS_REPORT_FILE on
+  the box, the workflow scp's that file back and cats it into the summary. (Do NOT use
+  appleboy/ssh-action capture_stdout — it is not a valid input; a smoke test guards this.)
   Secrets show as *** — safe to read there.
 - **SSH:** `sudo bash /opt/lumaris/deploy/env-report.sh` anytime.
 - **Deploy log:** it's printed at the tail of every `update.sh` run.

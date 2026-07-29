@@ -1415,6 +1415,14 @@ for _v in ["ENVIRONMENT","CAL_BOOKING_URL","LEGACY_KEYS_FULL_ACCESS","TRUSTED_PR
     ok("env-report.sh surfaces "+_v+" (shown on every deploy + Actions summary)", _v in _rep)
 ok("env-report.sh publishes to the GitHub Actions step summary", "GITHUB_STEP_SUMMARY" in _rep)
 ok("update.sh (the workflow's deploy) runs the env report", "env-report.sh" in open("deploy/update.sh").read())
+_wf=open("../../.github/workflows/deploy-server.yml").read() if __import__("os").path.exists("../../.github/workflows/deploy-server.yml") else open("../.github/workflows/deploy-server.yml").read() if __import__("os").path.exists("../.github/workflows/deploy-server.yml") else ""
+if _wf:
+    ok("deploy workflow does not use the invalid capture_stdout input",
+       "capture_stdout" not in _wf)
+    ok("deploy workflow publishes the report to the job summary",
+       "GITHUB_STEP_SUMMARY" in _wf)
+ok("env-report.sh can write the report to a file for CI to fetch",
+   "LUMARIS_REPORT_FILE" in open("deploy/env-report.sh").read())
 
 ok("Scalar API portal at /docs", c.get("/docs").status_code==200 and "scalar" in c.get("/docs").text.lower())
 ok("OpenAPI is branded Petabyte v1", c.get("/openapi.json").json()["info"]["title"]=="Petabyte API")

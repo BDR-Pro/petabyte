@@ -12,23 +12,38 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      # Run the deploy. The remote script writes the env report to a file on the box
+      # (LUMARIS_REPORT_FILE), because $GITHUB_STEP_SUMMARY only exists on the runner,
+      # not over SSH. envs: forwards the path into the remote shell.
       - name: Deploy over SSH
-        id: deploy
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          # capture_stdout lets us surface the env report in the job summary below
-          capture_stdout: true
-          script: sudo PETABYTE_SRC=/root/petabyte /opt/lumaris/deploy/update.sh
+          envs: LUMARIS_REPORT_FILE
+          script: |
+            sudo PETABYTE_SRC=/root/petabyte /opt/lumaris/deploy/update.sh
+            export LUMARIS_REPORT_FILE=/tmp/lumaris-env-report.txt
+            sudo LUMARIS_REPORT_FILE=/tmp/lumaris-env-report.txt /opt/lumaris/deploy/update.sh
+
+      # Pull the report file back and put it in the job summary (readable on github.com).
+      - name: Fetch env report
+        if: always()
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: /tmp/lumaris-env-report.txt
+          target: ./_report
+          strip_components: 1
 
       - name: Publish env report to job summary
         if: always()
         run: |
           echo "## Deploy environment report" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          # pull just the report section out of the deploy output
-          printf '%s\n' "${{ steps.deploy.outputs.stdout }}" \
-            | sed -n '/environment report/,/Details:/p' >> "$GITHUB_STEP_SUMMARY"
+          cat ./_report/lumaris-env-report.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null \
+            || echo "(env report not produced — check the deploy step log)" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
