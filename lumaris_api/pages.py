@@ -30,6 +30,7 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
  "sameAs":["https://github.com/BDR-Pro","https://x.com/engcool"]}
 </script>
 <script>(function(){try{var l=localStorage.getItem('pb_lang')||'en';document.documentElement.setAttribute('lang',l);document.documentElement.setAttribute('dir',l==='ar'?'rtl':'ltr');}catch(e){}})();</script>
+<script>(function(){try{document.documentElement.setAttribute('data-auth',localStorage.getItem('pb_token')?'in':'out');}catch(e){}})();</script>
 <script>(function(){try{var t=localStorage.getItem('pb_theme');if(t!=='light'&&t!=='dark')t=(window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';document.documentElement.setAttribute('data-theme',t);document.documentElement.setAttribute('data-bs-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');document.documentElement.setAttribute('data-bs-theme','dark');}})();</script>
 <link rel="icon" type="image/png" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/static/petabyte-mark-180.png">
@@ -45,6 +46,9 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
  --bs-font-sans-serif:'Figtree',system-ui,sans-serif;--bs-body-font-size:14.5px;--bs-body-line-height:1.65;
  --bs-border-radius:14px;--bs-border-radius-lg:18px;--bs-secondary-color:var(--mut)}
 .navbar{--bs-navbar-padding-y:0;--bs-navbar-padding-x:0}
+/* the nav is dense (6 links + AR + theme + sign-in + 2 buttons); give it room and
+   collapse to the hamburger earlier so nothing wraps mid-label */
+@media(min-width:992px) and (max-width:1180px){.navlinks a{padding:7px 8px;font-size:12.5px}.navcta{gap:6px}}
 .navbar-toggler{border:1px solid var(--line2);border-radius:999px;padding:7px 11px;color:var(--mut)}
 .navbar-toggler:focus{box-shadow:0 0 0 4px rgba(53,224,208,.15)}
 .navbar-toggler svg{width:18px;height:18px;display:block}
@@ -95,16 +99,19 @@ nav .wrap{display:flex;align-items:center;gap:22px;height:58px;background:var(--
 .brand{display:flex;align-items:center;gap:10px;font-family:var(--disp);font-weight:700;font-size:18px;letter-spacing:-.02em}
 .brand img{width:26px;height:26px;display:block;filter:drop-shadow(0 0 8px rgba(53,224,208,.5))}
 .brand .p{color:var(--teal)}
-.navlinks{display:flex;gap:4px;margin-inline-start:6px}
-.navlinks a{font-size:13px;font-weight:500;color:var(--mut);padding:7px 13px;border-radius:999px;transition:color .15s,background-color .15s}
+.navlinks{display:flex;gap:2px;margin-inline-start:6px;flex-wrap:nowrap}
+.navlinks a{font-size:13px;font-weight:500;color:var(--mut);padding:7px 11px;border-radius:999px;transition:color .15s,background-color .15s;white-space:nowrap}
 .navlinks a:hover{color:var(--ink);background:rgba(255,255,255,.05)}
 .navlinks a.active{color:var(--teal);background:rgba(53,224,208,.10)}
-.navcta{margin-inline-start:auto;display:flex;align-items:center;gap:10px}
-.signin{font-size:13px;font-weight:500;color:var(--mut);padding:7px 12px;border-radius:999px;transition:color .15s}
+.navcta{margin-inline-start:auto;display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.signin{font-size:13px;font-weight:500;color:var(--mut);padding:7px 10px;border-radius:999px;transition:color .15s;white-space:nowrap}
+/* auth-state visibility, decided before first paint (no flash of the wrong button) */
+html[data-auth=in] #signinlink{display:none!important}
+html[data-auth=out] #signoutlink,html[data-auth=out] #mename,html[data-auth=out] #adminlink{display:none!important}
 .signin:hover{color:var(--teal)}
 /* ---------- buttons ---------- */
 button,.btn{font-family:var(--disp);font-weight:600;border:0;border-radius:999px;padding:10px 20px;font-size:13.5px;cursor:pointer;
- transition:transform .12s,filter .15s,border-color .15s,color .15s,box-shadow .15s;display:inline-flex;align-items:center;gap:8px}
+ transition:transform .12s,filter .15s,border-color .15s,color .15s,box-shadow .15s;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
 button:active,.btn:active{transform:translateY(1px)}
 .btn-amber{background:linear-gradient(180deg,var(--amber-br),var(--amber));color:#241802;
  box-shadow:0 6px 24px -8px rgba(255,178,36,.55),inset 0 1px 0 rgba(255,255,255,.35)}
@@ -321,7 +328,7 @@ _FOOT = """<footer>
 
 # token bootstrap: capture #t=JWT from the OAuth redirect, persist across pages
 _AUTHJS = """<script>
-(function(){var h=location.hash.match(/t=([^&]+)/);if(h){localStorage.setItem('pb_token',decodeURIComponent(h[1]));history.replaceState(null,'',location.pathname);}})();
+(function(){var h=location.hash.match(/t=([^&]+)/);if(h){localStorage.setItem('pb_token',decodeURIComponent(h[1]));document.documentElement.setAttribute('data-auth','in');history.replaceState(null,'',location.pathname);}})();
 function tok(){return localStorage.getItem('pb_token');}
 (function(){try{var p=location.pathname.replace(new RegExp('[/]$'),'')||'/';document.querySelectorAll('.navlinks a').forEach(function(a){if(a.getAttribute('href')===p)a.classList.add('active');});}catch(e){}})();
 function authed(){return !!tok();}
@@ -658,30 +665,30 @@ renderLaunch('launchgrid',['game','art','render','ai'],2);
 MARKETPLACE_HTML = _page("Petabyte — marketplace",
     desc="Browse verified GPUs by model, VRAM, region and price. Compare each one against public cloud rates before you commit.", path="/marketplace", body="""
 <div class="wrap" style="padding:48px 22px 10px">
-  <div class="eyebrow"><span class="dot"></span> live inventory</div>
-  <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px">Available <span class="grad-teal">GPUs</span></h1>
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="المعروض المباشر">live inventory</span></div>
+  <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px" data-ar="كروت الرسومات المتاحة">Available <span class="grad-teal">GPUs</span></h1>
   <p class="mut" id="mnote">Loading verified nodes…</p>
 </div>
 <div class="wrap" style="padding:12px 22px 30px">
   <div class="panel filterbar" style="padding:16px 18px;margin-bottom:14px">
-    <div class="field"><span>GPU model</span><input id="fgpu" placeholder="H100, 4090…" size="10" onkeydown="if(event.key==='Enter')load()"/></div>
-    <div class="field"><span>Max $/hr</span><input id="fprice" type="number" placeholder="any" size="7" step="0.1" onkeydown="if(event.key==='Enter')load()"/></div>
-    <div class="field"><span>Min VRAM</span><input id="fvram" type="number" placeholder="GB" size="7" onkeydown="if(event.key==='Enter')load()"/></div>
-    <div class="field"><span>Region</span><input id="fregion" placeholder="any" size="8" onkeydown="if(event.key==='Enter')load()"/></div>
-    <div class="field"><span>Sort by</span><select id="fsort" onchange="load()"><option value="price">Cheapest</option><option value="rep">Most trusted</option><option value="vram">Most VRAM</option></select></div>
-    <label class="mini" style="display:flex;align-items:center;gap:6px;padding-bottom:9px"><input id="fconf" type="checkbox" style="width:15px;height:15px;padding:0"/> confidential</label>
+    <div class="field"><span data-ar="طراز الكرت">GPU model</span><input id="fgpu" placeholder="H100, 4090…" size="10" onkeydown="if(event.key==='Enter')load()"/></div>
+    <div class="field"><span data-ar="أقصى $/ساعة">Max $/hr</span><input id="fprice" type="number" placeholder="any" size="7" step="0.1" onkeydown="if(event.key==='Enter')load()"/></div>
+    <div class="field"><span data-ar="أدنى ذاكرة">Min VRAM</span><input id="fvram" type="number" placeholder="GB" size="7" onkeydown="if(event.key==='Enter')load()"/></div>
+    <div class="field"><span data-ar="المنطقة">Region</span><input id="fregion" placeholder="any" size="8" onkeydown="if(event.key==='Enter')load()"/></div>
+    <div class="field"><span data-ar="ترتيب حسب">Sort by</span><select id="fsort" onchange="load()"><option value="price" data-ar="الأرخص">Cheapest</option><option value="rep" data-ar="الأكثر ثقة">Most trusted</option><option value="vram" data-ar="أكبر ذاكرة">Most VRAM</option></select></div>
+    <label class="mini" style="display:flex;align-items:center;gap:6px;padding-bottom:9px"><input id="fconf" type="checkbox" style="width:15px;height:15px;padding:0"/> <span data-ar="سرّية">confidential</span></label>
     <div style="display:flex;gap:8px;padding-bottom:1px">
-      <button class="btn btn-teal" onclick="load()">Apply</button>
-      <button class="btn-ghost btn" onclick="clearf()">Reset</button>
+      <button class="btn btn-teal" onclick="load()" data-ar="تطبيق">Apply</button>
+      <button class="btn-ghost btn" onclick="clearf()" data-ar="إعادة تعيين">Reset</button>
     </div>
   </div>
   <div class="panel" style="overflow:auto">
-    <table class="tbl"><thead><tr><th>GPU</th><th>VRAM</th><th>$/hr</th><th>vs cloud</th><th>trust</th><th>region</th><th>rep</th><th>free</th></tr></thead>
+    <table class="tbl"><thead><tr><th data-ar="الكرت">GPU</th><th data-ar="الذاكرة">VRAM</th><th>$/hr</th><th data-ar="مقابل السحابة">vs cloud</th><th data-ar="الثقة">trust</th><th data-ar="المنطقة">region</th><th data-ar="السمعة">rep</th><th data-ar="متاح">free</th></tr></thead>
     <tbody id="mrows"><tr><td colspan="8" style="padding:24px;text-align:center" class="mut mono">loading…</td></tr></tbody></table>
   </div>
   <div style="margin-top:18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-    <a class="btn btn-amber" href="/app">Sign in to book →</a>
-    <span class="mut">Browsing is open. Booking needs an account. Availability updates live.</span>
+    <a class="btn btn-amber" href="/app" data-ar="سجّل الدخول للحجز ←">Sign in to book →</a>
+    <span class="mut" data-ar="التصفّح متاح للجميع. الحجز يتطلّب حساباً. يتحدّث التوفّر مباشرةً.">Browsing is open. Booking needs an account. Availability updates live.</span>
   </div>
 </div>
 <script>
@@ -713,56 +720,56 @@ load();setInterval(load,8000);
 INSTALL_HTML = _page("Petabyte — become a seller",
     desc="List a GPU you already own and earn when it is idle. One command to install the agent. Your machine stays yours.", path="/install", body="""
 <div class="wrap" style="padding:48px 22px 10px">
-  <div class="eyebrow"><span class="dot"></span> node onboarding</div>
-  <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px">List your GPU in <span class="grad-teal">one command</span></h1>
-  <p class="mut" style="max-width:56ch">Any NVIDIA machine can become a node. The installer verifies your hardware, sandboxes jobs in Docker, and brings you online in ~30 seconds. No exclusivity.</p>
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="تسجيل جهاز">node onboarding</span></div>
+  <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px" data-ar="أدرِج كرت رسوماتك بأمرٍ واحد">List your GPU in <span class="grad-teal">one command</span></h1>
+  <p class="mut" style="max-width:56ch" data-ar="أي جهاز NVIDIA يمكن أن يصبح عقدة. يتحقق المُثبِّت من عتادك، ويعزل المهام داخل Docker، ويجعلك متصلاً خلال ٣٠ ثانية تقريباً. دون حصرية.">Any NVIDIA machine can become a node. The installer verifies your hardware, sandboxes jobs in Docker, and brings you online in ~30 seconds. No exclusivity.</p>
 </div>
 <div class="wrap" style="padding:6px 22px 0">
   <div class="card" style="border-color:rgba(79,214,201,.3);background:linear-gradient(180deg,rgba(79,214,201,.05),transparent)">
-    <div class="lbl">Step 1 · your node key</div>
-    <p class="mut" id="ikhint">Nodes connect with an API key — no password ever lives on the machine. <a class="teal" href="/login">Sign in</a> to generate one.</p>
+    <div class="lbl" data-ar="الخطوة ١ · مفتاح جهازك">Step 1 · your node key</div>
+    <p class="mut" id="ikhint" data-ar="تتصل الأجهزة عبر مفتاح API — لا تُخزَّن أي كلمة مرور على الجهاز إطلاقاً. سجّل الدخول لإنشاء مفتاح.">Nodes connect with an API key — no password ever lives on the machine. <a class="teal" href="/login">Sign in</a> to generate one.</p>
     <div id="ikauthed" style="display:none">
-      <p class="mut" style="margin-bottom:12px">Generate a node key, then paste it into the command below as <code class="teal">PETABYTE_API_KEY</code>. The node registers &amp; attests itself with this key.</p>
-      <button class="btn-amber" onclick="mkkey()">Create node key</button>
+      <p class="mut" style="margin-bottom:12px" data-ar="أنشئ مفتاح جهاز، ثم ألصقه في الأمر أدناه كـ PETABYTE_API_KEY. يسجّل الجهاز نفسه ويثبت عتاده بهذا المفتاح.">Generate a node key, then paste it into the command below as <code class="teal">PETABYTE_API_KEY</code>. The node registers &amp; attests itself with this key.</p>
+      <button class="btn-amber" onclick="mkkey()" data-ar="أنشئ مفتاح جهاز">Create node key</button>
       <pre id="ikkey" style="display:none;margin-top:14px"></pre>
     </div>
   </div>
 </div>
 <div class="wrap" style="padding:12px 22px 30px">
-  <div class="mini" style="margin:6px 0 12px">Step 2 · run the installer</div>
+  <div class="mini" style="margin:6px 0 12px" data-ar="الخطوة ٢ · شغّل المُثبِّت">Step 2 · run the installer</div>
   <div class="cols c3">
-    <div class="card"><div class="lbl">Linux · Ubuntu/Debian</div>
+    <div class="card"><div class="lbl" data-ar="لينكس · أوبونتو/دبيان">Linux · Ubuntu/Debian</div>
       <pre>PETABYTE_API_URL=https://petabyte.market \\
 PETABYTE_API_KEY=pk_your_node_key \\
 PRICE_PER_HOUR=1.5 \\
 bash &lt;(curl -fsSL https://petabyte.market/install.sh)</pre></div>
-    <div class="card"><div class="lbl">Windows · WSL2</div>
+    <div class="card"><div class="lbl" data-ar="ويندوز · WSL2">Windows · WSL2</div>
       <pre>$env:PETABYTE_API_URL="https://petabyte.market"
 $env:PETABYTE_API_KEY="pk_your_node_key"
 $env:PRICE_PER_HOUR="1.5"
 irm https://petabyte.market/install.ps1 | iex</pre>
-      <p class="mut" style="font-size:12px;margin-top:9px">Elevated PowerShell. Installs WSL2 + the agent.</p></div>
-    <div class="card"><div class="lbl">Verify</div>
+      <p class="mut" style="font-size:12px;margin-top:9px" data-ar="PowerShell بصلاحيات المدير. يثبّت WSL2 والوكيل.">Elevated PowerShell. Installs WSL2 + the agent.</p></div>
+    <div class="card"><div class="lbl" data-ar="تحقّق">Verify</div>
       <pre>systemctl status petabyte-agent
 journalctl -u petabyte-agent -f</pre>
-      <p class="mut" style="font-size:12px;margin-top:9px">Your GPU appears in the <a class="teal" href="/marketplace">marketplace</a> within a minute.</p></div>
+      <p class="mut" style="font-size:12px;margin-top:9px" data-ar="يظهر كرت رسوماتك في السوق خلال دقيقة.">Your GPU appears in the <a class="teal" href="/marketplace">marketplace</a> within a minute.</p></div>
   </div>
   <div class="card" style="margin-top:16px">
-    <div class="lbl">What should I charge?</div>
-    <p class="mut" style="margin-bottom:10px">Type your GPU — we suggest a price from what similar live nodes charge and the cloud reference. You always set the final number.</p>
+    <div class="lbl" data-ar="كم ينبغي أن أطلب؟">What should I charge?</div>
+    <p class="mut" style="margin-bottom:10px" data-ar="اكتب اسم كرت رسوماتك — نقترح سعراً بناءً على ما تطلبه الأجهزة المشابهة والمرجع السحابي. القرار النهائي دائماً لك.">Type your GPU — we suggest a price from what similar live nodes charge and the cloud reference. You always set the final number.</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <input id="pgpu" placeholder="e.g. RTX 4090" size="14" onkeydown="if(event.key==='Enter')suggest()"/>
-      <button class="btn btn-teal" onclick="suggest()">Suggest a price</button>
+      <button class="btn btn-teal" onclick="suggest()" data-ar="اقترح سعراً">Suggest a price</button>
       <span id="psug" class="mono" style="font-size:13px"></span>
     </div>
   </div>
-  <div class="card" style="margin-top:16px"><div class="lbl">Try it risk-free</div>
-    <p class="mut">The agent runs in an isolated Linux sandbox — it never touches your games or files, and only works when your PC is idle. <b class="teal">Pause</b> anytime, or <b class="teal">remove it completely</b> in one command. If Petabyte turned on WSL for you, uninstalling turns it back off.</p>
+  <div class="card" style="margin-top:16px"><div class="lbl" data-ar="جرّبه دون مخاطرة">Try it risk-free</div>
+    <p class="mut" data-ar="يعمل الوكيل داخل بيئة لينكس معزولة — لا يمسّ ألعابك أو ملفاتك، ويعمل فقط حين يكون جهازك خاملاً. أوقفه مؤقتاً متى شئت، أو أزِله تماماً بأمرٍ واحد. وإذا فعّلت Petabyte خاصية WSL لك، فإن إلغاء التثبيت يعيدها كما كانت.">The agent runs in an isolated Linux sandbox — it never touches your games or files, and only works when your PC is idle. <b class="teal">Pause</b> anytime, or <b class="teal">remove it completely</b> in one command. If Petabyte turned on WSL for you, uninstalling turns it back off.</p>
     <pre style="margin-top:10px">$env:PETABYTE_ACTION="pause";     irm https://petabyte.market/manage.ps1 | iex
 $env:PETABYTE_ACTION="uninstall"; irm https://petabyte.market/manage.ps1 | iex</pre>
   </div>
-  <div class="card" style="margin-top:16px"><div class="lbl am">Get paid</div>
-    <p class="mut">One balance. Withdraw anytime or on a weekly schedule — bank, USDC, or gift card. Opt in to idle-fallback and earn a background trickle whenever the node isn't rented. <a class="teal" href="/app">Open the app →</a></p>
+  <div class="card" style="margin-top:16px"><div class="lbl am" data-ar="استلم أرباحك">Get paid</div>
+    <p class="mut" data-ar="رصيد واحد. اسحب في أي وقت أو وفق جدول أسبوعي — تحويل بنكي أو USDC أو بطاقة هدية. فعّل خيار التعدين عند الخمول لتكسب دخلاً في الخلفية كلما لم يكن جهازك مؤجراً.">One balance. Withdraw anytime or on a weekly schedule — bank, USDC, or gift card. Opt in to idle-fallback and earn a background trickle whenever the node isn't rented. <a class="teal" href="/app">Open the app →</a></p>
   </div>
 </div>
 <script>
@@ -1093,7 +1100,7 @@ async function go(){
     }
     var t=await login(u,p);
     if(!t){fail(mode==="register"?"Account created — but sign-in failed. Try signing in.":"Wrong username or password."); return;}
-    localStorage.setItem('pb_token', t);
+    localStorage.setItem('pb_token', t);document.documentElement.setAttribute('data-auth','in');
     location.href='/app';
   }catch(e){fail("Network error — check your connection and try again.");}
 }
@@ -1767,32 +1774,32 @@ loadGpu();setInterval(loadGpu,15000);
 PRICING_HTML = _page("Petabyte — pricing",
     desc="Live GPU prices per hour, compared against comparable public cloud rates. You prepay into escrow and are refunded for unused hours.", path="/pricing", body="""
 <div class="hero"><div class="wrap" style="padding:60px 24px 18px">
-  <div class="eyebrow"><span class="dot"></span> pricing</div>
-  <h1 style="font-size:clamp(34px,5vw,54px);margin:16px 0 12px">Pay for the hours <span class="grad">you actually use.</span></h1>
-  <p class="mut" style="font-size:16px;max-width:58ch">Hosts set their own prices, so rates vary by GPU and availability. You are billed for the time you hold the machine — stop early and the unused prepay is refunded.</p>
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="الأسعار">pricing</span></div>
+  <h1 style="font-size:clamp(34px,5vw,54px);margin:16px 0 12px" data-ar="ادفع مقابل الساعات التي تستخدمها فعلاً.">Pay for the hours <span class="grad">you actually use.</span></h1>
+  <p class="mut" style="font-size:16px;max-width:58ch" data-ar="يحدّد المضيفون أسعارهم بأنفسهم، لذا تختلف الأسعار حسب الكرت والتوفّر. تُحاسَب على المدة التي تحتجز فيها الجهاز — أوقف مبكراً ويُعاد إليك المبلغ غير المستخدم.">Hosts set their own prices, so rates vary by GPU and availability. You are billed for the time you hold the machine — stop early and the unused prepay is refunded.</p>
 </div></div>
 
 <div class="wrap" style="padding:26px 24px 8px">
-  <div class="lbl">Live prices</div>
+  <div class="lbl" data-ar="أسعار مباشرة">Live prices</div>
   <div class="panel" style="overflow:auto">
     <table class="tbl">
-      <thead><tr><th>GPU</th><th>VRAM</th><th>Petabyte</th><th>Cloud reference</th><th>You save</th><th>Region</th><th></th></tr></thead>
+      <thead><tr><th data-ar="الكرت">GPU</th><th data-ar="الذاكرة">VRAM</th><th>Petabyte</th><th data-ar="مرجع السحابة">Cloud reference</th><th data-ar="توفيرك">You save</th><th data-ar="المنطقة">Region</th><th></th></tr></thead>
       <tbody id="prows"><tr><td colspan=7 class="mut mono" style="padding:22px;text-align:center">Loading live prices…</td></tr></tbody>
     </table>
   </div>
-  <p class="mut" style="font-size:12.5px;margin-top:10px">Prices are set by individual hosts and change with demand and availability. "Cloud reference" is an on-demand hyperscaler rate for a comparable GPU class, used as a benchmark — not a quote from any specific provider.</p>
+  <p class="mut" style="font-size:12.5px;margin-top:10px" data-ar="يحدّد كل مضيف أسعاره، وتتغيّر مع الطلب والتوفّر. «مرجع السحابة» هو سعر عند الطلب من مزوّد سحابي كبير لفئة كرت مماثلة، يُستخدم كمعيار للمقارنة — وليس عرض سعر من أي مزوّد بعينه.">Prices are set by individual hosts and change with demand and availability. "Cloud reference" is an on-demand hyperscaler rate for a comparable GPU class, used as a benchmark — not a quote from any specific provider.</p>
 </div>
 
 <div class="wrap" style="padding:34px 24px 8px"><div class="cols c3">
-  <div class="card"><div class="lbl">How billing works</div>
-    <h2 style="font-size:17px;margin-bottom:8px">Hourly, with refunds</h2>
-    <p class="mut" style="font-size:13px">You prepay for a window. When you stop, we bill the hours you held (minimum one) and refund the rest to your wallet. Extend at any time.</p></div>
-  <div class="card"><div class="lbl">Platform fee</div>
-    <h2 style="font-size:17px;margin-bottom:8px">10% on completed rentals</h2>
-    <p class="mut" style="font-size:13px">Taken from the rental, not added on top. Hosts see their exact payout before they list.</p></div>
-  <div class="card"><div class="lbl am">Host payouts</div>
-    <h2 style="font-size:17px;margin-bottom:8px">Withdraw when you want</h2>
-    <p class="mut" style="font-size:13px">Earnings accrue per completed rental and can be withdrawn on demand or on a weekly schedule.</p></div>
+  <div class="card"><div class="lbl" data-ar="كيف تعمل الفوترة">How billing works</div>
+    <h2 style="font-size:17px;margin-bottom:8px" data-ar="بالساعة، مع استرداد">Hourly, with refunds</h2>
+    <p class="mut" style="font-size:13px" data-ar="تدفع مقدّماً لمدة معيّنة. عند الإيقاف نحاسبك على الساعات التي احتجزتها (ساعة واحدة كحد أدنى) ونعيد الباقي إلى محفظتك. يمكنك التمديد في أي وقت.">You prepay for a window. When you stop, we bill the hours you held (minimum one) and refund the rest to your wallet. Extend at any time.</p></div>
+  <div class="card"><div class="lbl" data-ar="رسوم المنصة">Platform fee</div>
+    <h2 style="font-size:17px;margin-bottom:8px" data-ar="١٠٪ على الإيجارات المكتملة">10% on completed rentals</h2>
+    <p class="mut" style="font-size:13px" data-ar="تُقتطع من الإيجار، لا تُضاف فوقه. يرى المضيفون صافي أرباحهم بدقّة قبل الإدراج.">Taken from the rental, not added on top. Hosts see their exact payout before they list.</p></div>
+  <div class="card"><div class="lbl am" data-ar="مدفوعات المضيفين">Host payouts</div>
+    <h2 style="font-size:17px;margin-bottom:8px" data-ar="اسحب متى شئت">Withdraw when you want</h2>
+    <p class="mut" style="font-size:13px" data-ar="تتراكم الأرباح مع كل إيجار مكتمل، ويمكن سحبها عند الطلب أو وفق جدول أسبوعي.">Earnings accrue per completed rental and can be withdrawn on demand or on a weekly schedule.</p></div>
 </div></div>
 <script>
 async function prices(){
@@ -1816,46 +1823,46 @@ prices();setInterval(prices,10000);
 SECURITY_HTML = _page("Petabyte — security &amp; trust",
     desc="How Petabyte isolates workloads, verifies hardware, protects host networks, and holds buyer funds in escrow.", path="/security", body="""
 <div class="hero"><div class="wrap" style="padding:60px 24px 18px">
-  <div class="eyebrow"><span class="dot"></span> security &amp; trust</div>
-  <h1 style="font-size:clamp(34px,5vw,54px);margin:16px 0 12px">What we verify, <span class="grad">and what we don't.</span></h1>
-  <p class="mut" style="font-size:16px;max-width:62ch">Renting compute from strangers only works if both sides know exactly what is guaranteed. Here is the honest version — including the parts we are still building.</p>
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="الأمان والثقة">security &amp; trust</span></div>
+  <h1 style="font-size:clamp(34px,5vw,54px);margin:16px 0 12px" data-ar="ما نتحقّق منه، وما لا نتحقّق منه.">What we verify, <span class="grad">and what we don't.</span></h1>
+  <p class="mut" style="font-size:16px;max-width:62ch" data-ar="استئجار القدرة الحوسبية من غرباء لا ينجح إلا إذا عرف الطرفان بالضبط ما هو مضمون. هذه هي النسخة الصادقة — بما في ذلك الأجزاء التي ما زلنا نبنيها.">Renting compute from strangers only works if both sides know exactly what is guaranteed. Here is the honest version — including the parts we are still building.</p>
 </div></div>
 
 <div class="wrap" style="padding:26px 24px 8px"><div class="cols c2">
-  <div class="card"><div class="lbl">Hardware verification</div>
-    <h2 style="font-size:18px;margin-bottom:8px">Signed hardware reports</h2>
-    <p class="mut" style="font-size:13.5px">When a host installs the agent, it generates a keypair on the machine and signs a report of its CPU, RAM, and GPU model. We verify that signature before the GPU can be listed, so a listing cannot be forged or altered in transit.</p>
-    <p class="mut" style="font-size:13.5px;margin-top:10px"><b class="teal">What this is not:</b> it is not a hardware root of trust. A determined host could still report hardware it does not have. Reputation from completed jobs is the stronger signal, and it is shown on every listing.</p>
+  <div class="card"><div class="lbl" data-ar="التحقّق من العتاد">Hardware verification</div>
+    <h2 style="font-size:18px;margin-bottom:8px" data-ar="تقارير عتاد موقّعة">Signed hardware reports</h2>
+    <p class="mut" style="font-size:13.5px" data-ar="عند تثبيت المضيف للوكيل، يُنشئ زوج مفاتيح على الجهاز ويوقّع تقريراً بمعالجه وذاكرته وطراز كرت رسوماته. نتحقّق من هذا التوقيع قبل السماح بإدراج الكرت، بحيث لا يمكن تزوير الإدراج أو تعديله أثناء النقل.">When a host installs the agent, it generates a keypair on the machine and signs a report of its CPU, RAM, and GPU model. We verify that signature before the GPU can be listed, so a listing cannot be forged or altered in transit.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:10px" data-ar="ما هذا ليس: إنه ليس جذر ثقة عتادياً. يستطيع مضيف مصرّ أن يبلّغ عن عتاد لا يملكه. السمعة المبنية على المهام المكتملة هي الإشارة الأقوى، وتظهر على كل إدراج."><b class="teal">What this is not:</b> it is not a hardware root of trust. A determined host could still report hardware it does not have. Reputation from completed jobs is the stronger signal, and it is shown on every listing.</p>
   </div>
-  <div class="card"><div class="lbl">Workload isolation</div>
-    <h2 style="font-size:18px;margin-bottom:8px">Jobs run in containers</h2>
-    <p class="mut" style="font-size:13.5px">Your workload runs in a Docker container on the host, with privileges dropped, a process limit, and a memory cap. Where the host has gVisor installed, we run the container under a user-space kernel for a stronger boundary between your job and their machine.</p>
-    <p class="mut" style="font-size:13.5px;margin-top:10px"><b class="teal">What this is not:</b> containers are not a hardware boundary. Do not put data on a node that you could not tolerate the host seeing. For sensitive work, use a host that advertises confidential computing, or don't use shared infrastructure.</p>
+  <div class="card"><div class="lbl" data-ar="عزل الأعباء">Workload isolation</div>
+    <h2 style="font-size:18px;margin-bottom:8px" data-ar="تعمل المهام داخل حاويات">Jobs run in containers</h2>
+    <p class="mut" style="font-size:13.5px" data-ar="يعمل عبء عملك داخل حاوية Docker على جهاز المضيف، مع إسقاط الصلاحيات، وحدٍّ للعمليات، وسقفٍ للذاكرة. وحيث يكون gVisor مثبّتاً لدى المضيف، نشغّل الحاوية تحت نواة في فضاء المستخدم لحدٍّ أقوى بين مهمتك وجهازه.">Your workload runs in a Docker container on the host, with privileges dropped, a process limit, and a memory cap. Where the host has gVisor installed, we run the container under a user-space kernel for a stronger boundary between your job and their machine.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:10px" data-ar="ما هذا ليس: الحاويات ليست حدّاً عتادياً. لا تضع على أي جهاز بياناتٍ لا تحتمل أن يراها المضيف. للأعمال الحسّاسة، استخدم مضيفاً يعلن عن الحوسبة السرّية، أو لا تستخدم بنية تحتية مشتركة."><b class="teal">What this is not:</b> containers are not a hardware boundary. Do not put data on a node that you could not tolerate the host seeing. For sensitive work, use a host that advertises confidential computing, or don't use shared infrastructure.</p>
   </div>
-  <div class="card"><div class="lbl">Payment protection</div>
-    <h2 style="font-size:18px;margin-bottom:8px">Escrow, held by Petabyte</h2>
-    <p class="mut" style="font-size:13.5px">When you book, the money leaves your wallet and is held by Petabyte for the rental. The host is paid on completion; the platform takes 10% of the rental. This is an internal ledger, not an on-chain escrow — Petabyte is the custodian.</p>
-    <p class="mut" style="font-size:13.5px;margin-top:10px">Stop early and you are billed only for the hours you held the machine (minimum one). The unused prepay returns to your wallet.</p>
+  <div class="card"><div class="lbl" data-ar="حماية المدفوعات">Payment protection</div>
+    <h2 style="font-size:18px;margin-bottom:8px" data-ar="ضمان تحتفظ به Petabyte">Escrow, held by Petabyte</h2>
+    <p class="mut" style="font-size:13.5px" data-ar="عند الحجز، يخرج المبلغ من محفظتك وتحتفظ به Petabyte طوال مدة الإيجار. يُدفع للمضيف عند الإكمال؛ وتأخذ المنصة ١٠٪ من الإيجار. هذا سجلّ داخلي، وليس ضماناً على البلوكتشين — Petabyte هي الحافظة.">When you book, the money leaves your wallet and is held by Petabyte for the rental. The host is paid on completion; the platform takes 10% of the rental. This is an internal ledger, not an on-chain escrow — Petabyte is the custodian.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:10px" data-ar="أوقف مبكراً فتُحاسَب فقط على الساعات التي احتجزت فيها الجهاز (ساعة واحدة كحد أدنى). ويعود المبلغ غير المستخدم إلى محفظتك.">Stop early and you are billed only for the hours you held the machine (minimum one). The unused prepay returns to your wallet.</p>
   </div>
-  <div class="card"><div class="lbl">When a node disappears</div>
-    <h2 style="font-size:18px;margin-bottom:8px">Failover, or refund</h2>
-    <p class="mut" style="font-size:13.5px">Hosts send a heartbeat. If one goes quiet, we move your machine to another eligible node — the address you connect to does not change — and restore from the most recent snapshot. If no node can take it, the rental is refunded.</p>
-    <p class="mut" style="font-size:13.5px;margin-top:10px"><b class="teal">Be aware:</b> recovery is from the last checkpoint, not a live mirror. A failover means restarting from a snapshot, not zero data loss.</p>
+  <div class="card"><div class="lbl" data-ar="عند اختفاء جهاز">When a node disappears</div>
+    <h2 style="font-size:18px;margin-bottom:8px" data-ar="نقل تلقائي، أو استرداد">Failover, or refund</h2>
+    <p class="mut" style="font-size:13.5px" data-ar="يرسل المضيفون نبضة حياة. فإن صمت أحدهم، ننقل جهازك إلى جهاز مؤهّل آخر — دون تغيّر العنوان الذي تتصل به — ونستعيد من أحدث لقطة. وإن لم يستطع أي جهاز استلامه، يُسترَد الإيجار.">Hosts send a heartbeat. If one goes quiet, we move your machine to another eligible node — the address you connect to does not change — and restore from the most recent snapshot. If no node can take it, the rental is refunded.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:10px" data-ar="انتبه: الاستعادة تكون من آخر نقطة حفظ، لا من نسخة حيّة متزامنة. النقل التلقائي يعني إعادة التشغيل من لقطة، وليس انعدام فقدان البيانات."><b class="teal">Be aware:</b> recovery is from the last checkpoint, not a live mirror. A failover means restarting from a snapshot, not zero data loss.</p>
   </div>
 </div></div>
 
 <div class="wrap" style="padding:22px 24px 8px">
   <div class="card">
-    <div class="lbl am">Still building</div>
-    <h2 style="font-size:18px;margin-bottom:10px">Claims we are not making yet</h2>
-    <p class="mut" style="font-size:13.5px">We would rather be trusted than impressive. These are on the roadmap and are <b>not</b> live today:</p>
+    <div class="lbl am" data-ar="قيد البناء">Still building</div>
+    <h2 style="font-size:18px;margin-bottom:10px" data-ar="ادّعاءات لا نطلقها بعد">Claims we are not making yet</h2>
+    <p class="mut" style="font-size:13.5px" data-ar="نفضّل أن نكون موثوقين لا مبهرين. هذه في خارطة الطريق وهي ليست فعّالة اليوم:">We would rather be trusted than impressive. These are on the roadmap and are <b>not</b> live today:</p>
     <ul class="mut" style="font-size:13.5px;margin:10px 0 0 20px">
-      <li style="padding:3px 0">Hardware-backed attestation (SEV-SNP / TDX). Today's attestation is software-signed by the agent.</li>
-      <li style="padding:3px 0">Independent benchmark verification of advertised performance.</li>
-      <li style="padding:3px 0">A published external security audit or SOC 2 report.</li>
-      <li style="padding:3px 0">Formal data-residency guarantees. Region is host-reported unless marked verified.</li>
+      <li style="padding:3px 0" data-ar="إثبات مدعوم عتادياً (SEV-SNP / TDX). الإثبات اليوم موقّع برمجياً من الوكيل.">Hardware-backed attestation (SEV-SNP / TDX). Today's attestation is software-signed by the agent.</li>
+      <li style="padding:3px 0" data-ar="تحقّق مستقل من الأداء المُعلَن عبر قياسات معيارية.">Independent benchmark verification of advertised performance.</li>
+      <li style="padding:3px 0" data-ar="تدقيق أمني خارجي منشور أو تقرير SOC 2.">A published external security audit or SOC 2 report.</li>
+      <li style="padding:3px 0" data-ar="ضمانات رسمية لموقع تخزين البيانات. المنطقة مُبلّغ عنها من المضيف ما لم تُوسم بأنها موثّقة.">Formal data-residency guarantees. Region is host-reported unless marked verified.</li>
     </ul>
-    <p class="mut" style="font-size:13px;margin-top:12px">If a claim matters for your workload, ask us before you book — <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.</p>
+    <p class="mut" style="font-size:13px;margin-top:12px" data-ar="إن كان أي ادّعاء مهمّاً لعبء عملك، اسألنا قبل الحجز —">If a claim matters for your workload, ask us before you book — <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.</p>
   </div>
 </div>
 
@@ -1968,8 +1975,8 @@ TEMPLATES_HTML = _page("Petabyte — templates",
     desc="One-click templates: Jupyter, PyTorch, Ollama, vLLM, ComfyUI, Blender, game servers — or bring any Docker image.", path="/catalog", body="""
 <div class="hero"><div class="wrap" style="padding:56px 24px 12px">
   <div class="eyebrow"><span class="dot"></span> one-click templates</div>
-  <h1 style="font-size:clamp(32px,5vw,52px);margin:16px 0 12px">Pick a workload. <span class="grad">Press launch.</span></h1>
-  <p class="mut" style="font-size:16px;max-width:60ch">No wizard. No configuring storage, networking, and SSH keys before you can do anything. Choose what you want to run — we place it on the cheapest verified GPU that fits and hand you the address.</p>
+  <h1 style="font-size:clamp(32px,5vw,52px);margin:16px 0 12px" data-ar="اختر عبء عمل. اضغط تشغيل.">Pick a workload. <span class="grad">Press launch.</span></h1>
+  <p class="mut" style="font-size:16px;max-width:60ch" data-ar="لا معالج إعداد. لا ضبط للتخزين والشبكة ومفاتيح SSH قبل أن تفعل أي شيء. اختر ما تريد تشغيله — نضعه على أرخص كرت رسومات موثّق يناسبه ونعطيك العنوان.">No wizard. No configuring storage, networking, and SSH keys before you can do anything. Choose what you want to run — we place it on the cheapest verified GPU that fits and hand you the address.</p>
 </div></div>
 
 <div class="wrap" style="padding:14px 24px 8px">
@@ -1985,8 +1992,8 @@ TEMPLATES_HTML = _page("Petabyte — templates",
 
   <div class="card" style="margin-top:22px">
     <div class="lbl">Bring your own</div>
-    <h2 style="font-size:17px;margin-bottom:6px">Any Docker image, via the API</h2>
-    <p class="mut" style="font-size:13px;margin-bottom:10px">Templates are a convenience, not a limit. If you have your own image, launch it directly.</p>
+    <h2 style="font-size:17px;margin-bottom:6px" data-ar="أي صورة Docker، عبر الواجهة البرمجية">Any Docker image, via the API</h2>
+    <p class="mut" style="font-size:13px;margin-bottom:10px" data-ar="القوالب وسيلة راحة، لا قيد. إن كانت لديك صورتك الخاصة، شغّلها مباشرةً.">Templates are a convenience, not a limit. If you have your own image, launch it directly.</p>
     <div class="codeline"><code>curl -sX POST https://petabyte.market/api/v1/deployments -H "X-API-KEY: $KEY" -H "Content-Type: application/json" -d '{"image":"my/image:tag","hours":4}'</code>
       <button class="copybtn" onclick="navigator.clipboard&amp;&amp;navigator.clipboard.writeText(this.previousElementSibling.textContent);this.textContent='copied'">copy</button></div>
     <p class="mut" style="font-size:12.5px;margin-top:10px">Full reference in the <a class="teal" href="/docs">API docs</a>.</p>
@@ -2015,42 +2022,42 @@ CONTACT_HTML = _page("Petabyte — contact",
          "Riyadh, Saudi Arabia.",
     path="/contact", body="""
 <div class="hero"><div class="wrap" style="padding:56px 24px 10px">
-  <div class="eyebrow"><span class="dot"></span> contact</div>
-  <h1 style="font-size:clamp(32px,5vw,52px);margin:16px 0 12px">Talk to a <span class="grad">human.</span></h1>
-  <p class="mut" style="font-size:16px;max-width:58ch">Petabyte is a small team in Riyadh. That means you get a real answer from someone who actually built the thing — usually within a day.</p>
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="تواصل معنا">contact</span></div>
+  <h1 style="font-size:clamp(32px,5vw,52px);margin:16px 0 12px" data-ar="تحدّث إلى إنسان.">Talk to a <span class="grad">human.</span></h1>
+  <p class="mut" style="font-size:16px;max-width:58ch" data-ar="Petabyte فريق صغير في الرياض. هذا يعني أنك تحصل على إجابة حقيقية ممّن بنى المنتج فعلاً — عادةً خلال يوم.">Petabyte is a small team in Riyadh. That means you get a real answer from someone who actually built the thing — usually within a day.</p>
 </div></div>
 
 <div class="wrap" style="padding:14px 24px 8px">
   <div class="cols" style="gap:18px;align-items:stretch">
     <div class="card" style="flex:1 1 320px">
-      <div class="lbl">Where to write</div>
+      <div class="lbl" data-ar="أين تكتب">Where to write</div>
       <p style="margin-top:8px"><a class="teal mono" style="font-size:16px" href="mailto:info@petabyte.market">info@petabyte.market</a></p>
-      <p class="mut" style="font-size:13px;margin-top:8px">One inbox for everything — support, listing a GPU, security reports, and investor questions. Put the topic in the subject line and it reaches the right person.</p>
-      <p class="mut" style="font-size:12.5px;margin-top:12px">Based in Riyadh, Saudi Arabia (UTC+3). We answer security reports first, and we will not take legal action against good-faith research.</p>
+      <p class="mut" style="font-size:13px;margin-top:8px" data-ar="بريد واحد لكل شيء — الدعم، وإدراج كرت رسومات، وبلاغات الأمان، وأسئلة المستثمرين. اكتب الموضوع في عنوان الرسالة ليصل إلى الشخص المناسب.">One inbox for everything — support, listing a GPU, security reports, and investor questions. Put the topic in the subject line and it reaches the right person.</p>
+      <p class="mut" style="font-size:12.5px;margin-top:12px" data-ar="مقرّنا الرياض، السعودية (UTC+3). نجيب على بلاغات الأمان أولاً، ولن نتّخذ إجراءً قانونياً ضد الأبحاث حسنة النية.">Based in Riyadh, Saudi Arabia (UTC+3). We answer security reports first, and we will not take legal action against good-faith research.</p>
     </div>
 
     <div class="card" style="flex:1 1 320px">
-      <div class="lbl am">Teams &amp; volume</div>
-      <h2 style="font-size:17px;margin-bottom:6px">Need more than the self-serve flow?</h2>
-      <p class="mut" style="font-size:13.5px;margin-bottom:12px">Most people never need to talk to us — you sign up, add funds, and launch. Get in touch if you need something the product does not do yet:</p>
+      <div class="lbl am" data-ar="الفرق والكميات">Teams &amp; volume</div>
+      <h2 style="font-size:17px;margin-bottom:6px" data-ar="تحتاج أكثر من الخدمة الذاتية؟">Need more than the self-serve flow?</h2>
+      <p class="mut" style="font-size:13.5px;margin-bottom:12px" data-ar="معظم الناس لا يحتاجون للتحدث إلينا — تسجّل، تضيف رصيداً، وتشغّل. تواصل معنا إن كنت تحتاج شيئاً لا يفعله المنتج بعد:">Most people never need to talk to us — you sign up, add funds, and launch. Get in touch if you need something the product does not do yet:</p>
       <ul class="mut" style="font-size:13.5px;padding-inline-start:18px;line-height:1.85">
-        <li>Reserved capacity for a training run</li>
-        <li>Invoicing instead of prepaid balance</li>
-        <li>A specific region, or hardware we do not list</li>
-        <li>Shared org billing across a team</li>
+        <li data-ar="قدرة محجوزة لعملية تدريب">Reserved capacity for a training run</li>
+        <li data-ar="فوترة بدلاً من الرصيد المدفوع مسبقاً">Invoicing instead of prepaid balance</li>
+        <li data-ar="منطقة محدّدة، أو عتاد لا ندرجه">A specific region, or hardware we do not list</li>
+        <li data-ar="فوترة مشتركة للمؤسسة عبر فريق">Shared org billing across a team</li>
       </ul>
-      <a class="btn btn-amber" style="margin-top:14px" href="mailto:info@petabyte.market?subject=Capacity%20enquiry">Email us about capacity</a>
-      <p class="mini" style="margin-top:10px">We will tell you honestly if we cannot serve you yet.</p>
+      <a class="btn btn-amber" style="margin-top:14px" href="mailto:info@petabyte.market?subject=Capacity%20enquiry" data-ar="راسلنا بشأن القدرة">Email us about capacity</a>
+      <p class="mini" style="margin-top:10px" data-ar="سنخبرك بصدق إن كنّا لا نستطيع خدمتك بعد.">We will tell you honestly if we cannot serve you yet.</p>
     </div>
   </div>
 
   <div class="card" style="margin-top:18px">
-    <div class="lbl">Elsewhere</div>
+    <div class="lbl" data-ar="في أماكن أخرى">Elsewhere</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
       <a class="btn btn-ghost" href="https://github.com/BDR-Pro" rel="noopener">GitHub</a>
       <a class="btn btn-ghost" href="https://x.com/engcool" rel="noopener">X</a>
-      <a class="btn btn-ghost" href="/status">Platform status</a>
-      <a class="btn btn-ghost" href="/security">Security</a>
+      <a class="btn btn-ghost" href="/status" data-ar="حالة المنصة">Platform status</a>
+      <a class="btn btn-ghost" href="/security" data-ar="الأمان">Security</a>
     </div>
   </div>
 </div>""")
@@ -2060,8 +2067,8 @@ NOTFOUND_HTML = _page("Petabyte — page not found",
     desc="That page does not exist.", path="/", body="""
 <div class="wrap" style="padding:90px 24px 60px;text-align:center">
   <div class="mono" style="font-size:56px;color:var(--teal);font-weight:600">404</div>
-  <h1 style="font-size:clamp(26px,4vw,38px);margin:12px 0 10px">That page is not here.</h1>
-  <p class="mut" style="max-width:46ch;margin:0 auto 22px">The link may be old, or we may have moved it. Nothing is wrong with your account or your instances.</p>
+  <h1 style="font-size:clamp(26px,4vw,38px);margin:12px 0 10px" data-ar="هذه الصفحة غير موجودة.">That page is not here.</h1>
+  <p class="mut" style="max-width:46ch;margin:0 auto 22px" data-ar="قد يكون الرابط قديماً، أو ربما نقلناه. لا خطب في حسابك أو أجهزتك.">The link may be old, or we may have moved it. Nothing is wrong with your account or your instances.</p>
   <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
     <a class="btn btn-teal" href="/marketplace">Browse GPUs</a>
     <a class="btn btn-ghost" href="/catalog">Templates</a>
@@ -2100,7 +2107,14 @@ DEMO_HTML = _page("Petabyte — book a demo",
                 <option value="investor" data-ar="مستثمر">An investor</option>
                 <option value="other" data-ar="أخرى">Something else</option>
               </select></label>
-            <label class="field" style="flex:1"><span data-ar="وقت يناسبك (اختياري)">Good times (optional)</span><input id="d_time" data-ar-ph="مثال: صباح الأحد" placeholder="e.g. Sunday mornings"/></label>
+            <label class="field" style="flex:1"><span data-ar="اليوم المفضّل (اختياري)">Preferred day (optional)</span><input id="d_date" type="date"/></label>
+            <label class="field" style="flex:1"><span data-ar="الوقت المفضّل">Preferred time</span>
+              <select id="d_slot">
+                <option value="" data-ar="أي وقت يناسبكم">Any time that works</option>
+                <option value="morning" data-ar="صباحاً (٩ص–١٢م بتوقيت الرياض)">Morning (9am–12pm Riyadh)</option>
+                <option value="afternoon" data-ar="بعد الظهر (١٢م–٤م)">Afternoon (12–4pm Riyadh)</option>
+                <option value="evening" data-ar="مساءً (٤م–٧م)">Evening (4–7pm Riyadh)</option>
+              </select></label>
           </div>
           <button class="btn btn-amber" style="width:100%;justify-content:center" data-act="submitDemo" data-ar="اطلب موعداً">Request a demo</button>
           <div id="d_msg" class="mini" style="min-height:18px"></div>
@@ -2127,6 +2141,7 @@ DEMO_HTML = _page("Petabyte — book a demo",
   </div>
 </div>
 <script>
+(function(){var d=document.getElementById('d_date');if(d){var t=new Date();t.setMinutes(t.getMinutes()-t.getTimezoneOffset());d.min=t.toISOString().slice(0,10);}})();
 async function submitDemo(){
   var m=document.getElementById('d_msg');
   var name=(document.getElementById('d_name').value||'').trim();
@@ -2137,7 +2152,7 @@ async function submitDemo(){
     organization:(document.getElementById('d_org').value||'').trim(),
     workload:(document.getElementById('d_workload').value||'').trim(),
     role:document.getElementById('d_role').value,
-    preferred_time:(document.getElementById('d_time').value||'').trim(),
+    preferred_time:[(document.getElementById('d_date').value||''),(document.getElementById('d_slot').value||'')].filter(Boolean).join(' ').trim(),
     source:'demo-page'};
   try{
     var r=await fetch('/demo/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -2145,9 +2160,10 @@ async function submitDemo(){
     if(!r.ok){m.style.color='var(--warn)';m.textContent=(b.error&&b.error.message)||(b.detail)||'Could not send. Try emailing info@petabyte.market.';return;}
     document.getElementById('demoform').innerHTML='<div style="text-align:center;padding:20px 10px">'+
       '<div class="mono" style="font-size:32px;color:var(--teal)">&#10003;</div>'+
-      '<div style="font-family:var(--disp);font-weight:600;margin:8px 0 4px">Request received</div>'+
+      '<div style="font-family:var(--disp);font-weight:600;margin:8px 0 4px" data-ar="تم استلام الطلب">Request received</div>'+
       '<div class="mut" style="font-size:13.5px">'+b.message+'</div>'+
-      '<div class="mini" style="margin-top:10px">Reference '+b.reference+'</div></div>';
+      (b.booking_url?('<a class="btn btn-amber" style="margin-top:14px" href="'+b.booking_url+'" target="_blank" rel="noopener" data-ar="اختر وقتاً يناسبك ←">Pick your time →</a>'):'')+
+      '<div class="mini" style="margin-top:10px" data-ar="المرجع">Reference '+b.reference+'</div></div>';
   }catch(e){m.style.color='var(--warn)';m.textContent='Network error. Try emailing info@petabyte.market.';}
 }
 </script>""")

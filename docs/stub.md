@@ -547,3 +547,51 @@ honest 80%, adapted the 20% that would have hurt.
 
 A written response to the accelerator is in `outputs/accelerator-response.md` — frames the
 three adaptations as founder judgment, not defiance, and offers to reverse any of them.
+
+## Cal.com demo scheduling + Arabic marketing pages
+
+**Cal.com self-scheduling (the "calendar link" flow the founder asked for).**
+Set `CAL_BOOKING_URL` in the env once your Cal.com account exists, e.g.
+`CAL_BOOKING_URL=https://cal.com/petabyte/demo`. Then on a demo request we (1) email the
+requester their booking link and (2) show a "Pick your time" button on the success screen,
+so they self-book a slot that lands on both calendars. Left unset, the flow degrades to the
+honest "we'll email you within a business day" path — no dead links. Wiring is in
+`_email_booking_link()` + `request_demo()`; tests cover both configured and unset.
+
+**Arabic coverage.** Static copy on the main marketing/product pages is now translated via
+`data-ar`: landing, install, marketplace, pricing, security, contact, catalog, demo, 404,
+and /app (which also gained the RTL system + language toggle). ~145 strings, up from ~43.
+Money, code, curl commands and monospace stay LTR under RTL so nothing reads backwards.
+
+**Known remaining Arabic gaps (deliberate):**
+- JS-generated strings (e.g. the marketplace "N GPUs match" line, pbEmpty states) are NOT
+  translated — `data-ar` only covers static DOM. These need a small JS string dictionary;
+  do it as one focused pass rather than scattering ternaries.
+- Legal pages (Terms / Privacy / Acceptable-use) are intentionally NOT machine-translated —
+  a subtly-wrong Arabic legal text is a liability, not a polish item. Get these
+  professionally translated for compliance.
+- developers page, gamers/artists landing variants, account console internals: partial.
+
+## Env template + deploy sync (important)
+
+There are TWO env files, and they must both include every var the code reads:
+- **`lumaris_api/template.env`** — human reference ("every var the app reads").
+- **`lumaris_api/deploy/deploy.sh`** — GENERATES `/etc/lumaris/lumaris.env` on first run
+  from its own heredoc. This is what actually reaches production.
+
+Note: `deploy/update.sh` (the routine redeploy) rsyncs code but EXCLUDES `.env` and never
+touches `/etc/lumaris/lumaris.env` — so a redeploy does NOT overwrite live secrets. New
+vars reach prod either by first-run generation (deploy.sh) or by you editing the live env
+by hand using template.env as the reference.
+
+Audited both against the code and added six missing vars to each: `ENVIRONMENT`,
+`TRUSTED_PROXIES`, `LEGACY_KEYS_FULL_ACCESS`, `PAYOUT_COOLING_OFF_H`, `EMAIL_TOKEN_TTL_MIN`,
+`CAL_BOOKING_URL`. The generated env ships `ENVIRONMENT=development` on purpose — setting
+production makes the app refuse to boot while stubs are on, so a fresh box would brick.
+Flip it to production only after every stub is off (that refusal is the safety feature).
+
+deploy.sh's debug report now prints ENVIRONMENT / LEGACY_KEYS_FULL_ACCESS / TRUSTED_PROXIES
+/ CAL_BOOKING_URL so a misconfig is visible at deploy time.
+
+A smoke test now FAILS if the code ever reads an env var missing from template.env or from
+deploy.sh's generated env — so this drift can't silently happen again.

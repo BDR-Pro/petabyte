@@ -86,6 +86,11 @@ SERVER_PRIVATE_KEY=$FERNET
 BIND=127.0.0.1:8000
 WEB_CONCURRENCY=$WEB_WORKERS
 LOG_LEVEL=info
+# Leave as development until every stub is OFF and PAYMENTS_MODE=live. Setting production
+# makes the app REFUSE to boot while any stub is on (that is the point). Flip it last.
+ENVIRONMENT=development
+# reverse-proxy IPs we trust XFF from (nginx same host => default correct; keep tight)
+TRUSTED_PROXIES=127.0.0.1,::1
 SENTRY_DSN=
 
 # --- Marketplace economics ---
@@ -103,6 +108,8 @@ REAPER_INTERVAL_S=20
 
 # --- Admin console (/admin) — comma-separated usernames or emails ---
 ADMIN_USERS=info@petabyte.market
+# OLD scopeless keys => full access during migration. MUST be false in prod (gate enforces).
+LEGACY_KEYS_FULL_ACCESS=false
 BASE_DOMAIN=petabyte.market
 GATEWAY_TOKEN=$(openssl rand -hex 16)
 
@@ -123,6 +130,8 @@ PAYMENT_WEBHOOK_SECRET=
 
 # --- Seller payouts (stub simulates; set a provider + PAYOUT_STUB=false to go real) ---
 PAYOUT_STUB=true
+# anti-takeover: hours a new payout destination waits before it can receive funds
+PAYOUT_COOLING_OFF_H=24
 TREMENDOUS_API=https://api.tremendous.com/api/v2
 TREMENDOUS_API_KEY=
 TREMENDOUS_FUNDING_ID=
@@ -134,6 +143,7 @@ USDC_CHAIN=MATIC
 
 # --- Email / notifications (stub = no real mail) ---
 NOTIFY_STUB=true
+EMAIL_TOKEN_TTL_MIN=15
 EMAIL_PROVIDER=ses
 EMAIL_FROM=no-reply@petabyte.market
 SENDGRID_API_KEY=
@@ -163,6 +173,9 @@ NICEHASH_ORG_ID=
 # --- Confidential computing / TEE attestation (optional) ---
 TEE_MEASUREMENT_ALLOWLIST=
 TEE_TRUSTED_ROOT=
+
+# --- Demo scheduling (Cal.com). Set to your booking link to enable self-booking. ---
+CAL_BOOKING_URL=https://cal.com/bader-alotaibi/demo
 
 # --- WireGuard (VPN for booked VMs) ---
 WG_PUBLIC_KEY=$WG_PUB
@@ -273,6 +286,12 @@ PM="$(_get PAYMENTS_MODE)"
 if [ "$PM" = "live" ]; then echo "  [LIVE]    PAYMENTS_MODE=live"; else echo "  [STUB]    PAYMENTS_MODE=${PM:-sandbox}   (deposits mint test credit; GMV excluded)"; fi
 _report PAYOUT_STUB stubflag "payouts simulated; no real money out"
 _report STRIPE_API_KEY secret "needed for PAYMENTS_MODE=live"
+echo "-- production safety --"
+ENVV="$(_get ENVIRONMENT)"
+if [ "$ENVV" = "production" ]; then echo "  [LIVE]    ENVIRONMENT=production   (boot gate armed: stubs will block startup)";
+else echo "  [DEV]     ENVIRONMENT=${ENVV:-development}   (flip to production once stubs are off)"; fi
+_report LEGACY_KEYS_FULL_ACCESS stubflag "DANGER if true in prod: scopeless keys = root"
+_report TRUSTED_PROXIES value "XFF trust list; keep tight (rate-limit + geo depend on it)"
 echo "-- identity / auth --"
 _report GOOGLE_OAUTH_STUB stubflag "DANGER if true in prod: open demo login"
 _report GOOGLE_CLIENT_ID secret "Google sign-in off without it"
@@ -287,6 +306,7 @@ echo "-- optional integrations --"
 _report NOTIFY_STUB stubflag "emails recorded, not sent"
 _report NICEHASH_STUB stubflag "idle-mining pricing simulated"
 _report GEOIP_STUB stubflag "region verification from env map"
+_report CAL_BOOKING_URL value "demo self-booking off until set to your Cal.com link"
 echo "==========================================================="
 echo "Legend: [LIVE] real integration · [STUB] simulated (safe) · [SET] secret present"
 echo "        [DEFAULT] using default · [MISSING] unset — feature off or will fail"

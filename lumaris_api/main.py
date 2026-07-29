@@ -87,6 +87,11 @@ REAPER_INTERVAL_S = int(os.getenv("REAPER_INTERVAL_S", "20"))
 REAPER_DISABLED = os.getenv("REAPER_DISABLED", "false").lower() == "true"
 # TODO(stub): PAYMENTS_MODE=sandbox mints test credit on /deposit — go live via Stripe (stub.md #1)
 PAYMENTS_MODE = os.getenv("PAYMENTS_MODE", "sandbox").lower()      # sandbox|live
+# Self-scheduling for demos. When you've created a Cal.com account, set e.g.
+# CAL_BOOKING_URL=https://cal.com/petabyte/demo — the demo flow then emails each
+# requester this link and shows a "Pick your time" button so they book a slot that
+# fits both calendars. Left blank, we fall back to "we'll email you within a day".
+CAL_BOOKING_URL = os.getenv("CAL_BOOKING_URL", "").strip()
 BASE_DOMAIN = os.getenv("BASE_DOMAIN", "petabyte.market")          # for stable VM URLs
 
 # The passwords attackers try first. A full HIBP k-anonymity check is the right next
@@ -713,6 +718,30 @@ def _client_ip(request: Request):
 def _fail_json(status: int, code: str, message: str):
     """Structured error for public marketing endpoints (no idempotency plumbing)."""
     raise HTTPException(status_code=status, detail={"code": code, "message": message})
+
+
+def _email_booking_link(lead):
+    """Email the requester their self-scheduling link (Cal.com).
+
+    This is the flow the founder asked for: instead of a back-and-forth to find a time,
+    the person gets a calendar link and picks a slot that fits both sides. Best-effort;
+    a send failure must never lose the lead, which is already committed."""
+    if not CAL_BOOKING_URL:
+        return
+    try:
+        from notify_providers import get_email_provider
+        subject = "Book your Petabyte demo"
+        body = (f"Hi {lead.name},\n\n"
+                f"Thanks for asking to see Petabyte. Pick a time that suits you here — "
+                f"it lands on our calendar and yours:\n\n"
+                f"  {CAL_BOOKING_URL}\n\n"
+                f"On the call we'll show you the live marketplace, launch a real GPU, and "
+                f"walk through your workload"
+                + (f" ({lead.workload})." if lead.workload else ".")
+                + "\n\nSee you soon,\nPetabyte")
+        get_email_provider().send(lead.email, subject, body)
+    except Exception:
+        logger.exception("failed to email booking link to lead %s", lead.public_id)
 
 
 def _notify_founder_of_lead(db, lead):
@@ -2435,6 +2464,15 @@ def request_demo(body: DemoRequestModel, request: Request, db: Session = Depends
           resource_id=lead.public_id, ip=ip,
           detail={"role": lead.role, "org": lead.organization, "source": lead.source})
     _notify_founder_of_lead(db, lead)
+    # If self-scheduling is configured, email the requester the booking link right away
+    # (this is the "calendar link to pick a slot that fits both of us" flow) and hand
+    # the URL back so the page can show a Pick-your-time button.
+    if CAL_BOOKING_URL:
+        _email_booking_link(lead)
+        return {"ok": True, "booking_url": CAL_BOOKING_URL,
+                "message": "Thanks — pick a time that works for you below, or use the "
+                           "link we just emailed you.",
+                "reference": lead.public_id}
     return {"ok": True,
             "message": "Thanks — we have your request. Expect an email within one "
                        "business day to set up a time.",

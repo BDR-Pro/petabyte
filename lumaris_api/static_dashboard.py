@@ -2,9 +2,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Petabyte — the compute exchange</title>
+<script>(function(){try{var l=localStorage.getItem('pb_lang')||'en';document.documentElement.setAttribute('lang',l);document.documentElement.setAttribute('dir',l==='ar'?'rtl':'ltr');}catch(e){}})();</script>
 <script>(function(){try{var t=localStorage.getItem('pb_theme');if(t!=='light'&&t!=='dark')t=(window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{
   --bg:#0B1020; --panel:#141A2E; --panel2:#101627; --line:#232C45; --line2:#2E3958;
@@ -26,6 +27,11 @@ html[data-theme=light] h1 .grad{background:linear-gradient(100deg,#B87814,#0E9C9
 .tt svg{width:16px;height:16px}.tt .moon{display:none}
 html[data-theme=light] .tt .sun{display:none}html[data-theme=light] .tt .moon{display:inline-flex}
 body{transition:background-color .3s,color .3s}
+html[dir="rtl"] body{font-family:'IBM Plex Sans Arabic',var(--body)}
+html[dir="rtl"] h1,html[dir="rtl"] h2{font-family:'IBM Plex Sans Arabic',var(--disp)}
+html[dir="rtl"] .mono,html[dir="rtl"] textarea,html[dir="rtl"] .console,html[dir="rtl"] input[type=number],html[dir="rtl"] pre{direction:ltr;text-align:left;unicode-bidi:isolate}
+html[dir="rtl"] .auth{margin-left:0;margin-right:auto}
+html[dir="rtl"] .navlinks{margin-left:0;margin-right:18px}
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{margin:0;background:
@@ -133,6 +139,7 @@ textarea:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(245,178,61,.1
     <a href="/developers">Developers</a>
   </nav>
   <div class="auth">
+    <button class="tt" onclick="toggleLang()" title="English / العربية" aria-label="Switch language" style="font-family:var(--mono);font-size:11px;font-weight:600" id="langbtn">AR</button>
     <button class="tt" onclick="toggleTheme()" title="Toggle light / dark" aria-label="Toggle theme">
       <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M19 5l-1.4 1.4M6.4 17.6 5 19"/></svg>
       <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
@@ -150,32 +157,31 @@ textarea:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(245,178,61,.1
 
 <div class="wrap">
   <div class="hero">
-    <div class="eyebrow"><span class="dot"></span> live marketplace</div>
-    <h1>Rent verified GPUs.<br><span class="grad">Settle in seconds.</span></h1>
-    <p class="sub">A decentralized exchange for GPU compute — cryptographically verified nodes,
-    escrowed payments, and prices that undercut hyperscalers. Sign in to browse inventory and run a job.</p>
+    <div class="eyebrow"><span class="dot"></span> <span data-ar="السوق المباشر">live marketplace</span></div>
+    <h1><span data-ar="استأجر كروت رسومات موثّقة.">Rent verified GPUs.</span><br><span class="grad" data-ar="والتسوية خلال ثوانٍ.">Settle in seconds.</span></h1>
+    <p class="sub" data-ar="سوق لامركزي لقدرة كروت الرسومات — أجهزة موثّقة تشفيرياً، ومدفوعات محفوظة في ضمان، وأسعار أقل من مزوّدي السحابة الكبار. سجّل الدخول لتصفّح المعروض وتشغيل مهمة.">A decentralized exchange for GPU compute — cryptographically verified nodes, escrowed payments, and prices that undercut hyperscalers. Sign in to browse inventory and run a job.</p>
   </div>
 
   <div class="board" id="board">
-    <div class="cell"><div class="k">Nodes online</div><div class="v cyan" id="s_nodes">—</div></div>
-    <div class="cell"><div class="k">GPUs listed</div><div class="v" id="s_specs">—</div></div>
-    <div class="cell"><div class="k">Jobs settled</div><div class="v" id="s_jobs">—</div></div>
-    <div class="cell"><div class="k">GMV to date</div><div class="v amber" id="s_gmv">—</div></div>
+    <div class="cell"><div class="k" data-ar="أجهزة متصلة">Nodes online</div><div class="v cyan" id="s_nodes">—</div></div>
+    <div class="cell"><div class="k" data-ar="كروت معروضة">GPUs listed</div><div class="v" id="s_specs">—</div></div>
+    <div class="cell"><div class="k" data-ar="مهام مُسوّاة">Jobs settled</div><div class="v" id="s_jobs">—</div></div>
+    <div class="cell"><div class="k" data-ar="إجمالي المبيعات">GMV to date</div><div class="v amber" id="s_gmv">—</div></div>
   </div>
 
   <section>
-    <div class="h"><h2>Your balance</h2><span class="note" id="paynote"></span></div>
+    <div class="h"><h2 data-ar="رصيدك">Your balance</h2><span class="note" id="paynote"></span></div>
     <div class="panel wallet">
-      <span class="chip">balance <b id="bal" class="mono">$0.00</b></span>
-      <span class="chip">earnings <b id="earn" class="mono">$0.00</b></span>
+      <span class="chip"><span data-ar="الرصيد">balance</span> <b id="bal" class="mono">$0.00</b></span>
+      <span class="chip"><span data-ar="الأرباح">earnings</span> <b id="earn" class="mono">$0.00</b></span>
       <span class="grow"></span>
       <input id="dep" type="number" value="50" min="1" size="6" aria-label="deposit amount"/>
-      <button class="btn-ghost" onclick="deposit()">Add funds</button>
+      <button class="btn-ghost" onclick="deposit()" data-ar="أضف رصيداً">Add funds</button>
     </div>
   </section>
 
   <section>
-    <div class="h"><h2>Available GPUs</h2><span class="note" id="specnote">sign in to view live inventory</span></div>
+    <div class="h"><h2 data-ar="كروت الرسومات المتاحة">Available GPUs</h2><span class="note" id="specnote" data-ar="سجّل الدخول لعرض المعروض المباشر">sign in to view live inventory</span></div>
     <div class="panel" style="overflow:hidden">
       <table class="tbl"><thead><tr>
         <th>GPU</th><th>$/hr</th><th class="hide">vs cloud</th><th>trust</th>
@@ -185,12 +191,12 @@ textarea:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(245,178,61,.1
   </section>
 
   <section>
-    <div class="h"><h2>Run a job</h2><span class="note">books the cheapest match, escrows, streams the result</span></div>
+    <div class="h"><h2 data-ar="شغّل مهمة">Run a job</h2><span class="note" data-ar="يحجز أرخص جهاز مطابق، ويحفظ المبلغ في ضمان، ويبثّ النتيجة">books the cheapest match, escrows, streams the result</span></div>
     <div class="run">
       <div>
         <textarea id="code" spellcheck="false">print("hello from a petabyte gpu")
 print(6 * 7)</textarea>
-        <div style="margin-top:12px"><button class="btn" onclick="runJob()">Run on cheapest GPU →</button></div>
+        <div style="margin-top:12px"><button class="btn" onclick="runJob()" data-ar="شغّل على أرخص جهاز ←">Run on cheapest GPU →</button></div>
       </div>
       <div class="console" id="console"><span class="sys">console idle — sign in, add funds, then run.</span></div>
     </div>
@@ -281,6 +287,10 @@ let tT;function toast(m){clearTimeout(tT);let el=$('toast');
 function applyAuthUI(){var a=!!localStorage.getItem('pb_token');var lb=$('loginbox'),so=$('signout'),who=$('who');
  if(lb)lb.style.display=a?'none':'flex';if(so)so.style.display=a?'':'none';
  if(who){who.style.display=a?'':'none';if(a&&!who.textContent)who.textContent='● signed in';}}
+function toggleLang(){var h=document.documentElement,next=(h.getAttribute('dir')==='rtl')?'en':'ar';try{localStorage.setItem('pb_lang',next);}catch(e){}location.reload();}
+function applyLang(){var ar=document.documentElement.getAttribute('dir')==='rtl';var b=document.getElementById('langbtn');if(b)b.textContent=ar?'EN':'AR';
+  document.querySelectorAll('[data-ar]').forEach(function(el){if(!el.hasAttribute('data-en'))el.setAttribute('data-en',el.textContent);el.textContent=ar?el.getAttribute('data-ar'):el.getAttribute('data-en');});}
+document.addEventListener('DOMContentLoaded',applyLang);
 function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-theme')==='light'?'dark':'light';h.setAttribute('data-theme',t);try{localStorage.setItem('pb_theme',t);}catch(e){}}
 function signout(){try{localStorage.removeItem('pb_token');}catch(e){}location.href='/';}
 applyAuthUI();
