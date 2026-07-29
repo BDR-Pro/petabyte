@@ -595,3 +595,15 @@ deploy.sh's debug report now prints ENVIRONMENT / LEGACY_KEYS_FULL_ACCESS / TRUS
 
 A smoke test now FAILS if the code ever reads an env var missing from template.env or from
 deploy.sh's generated env — so this drift can't silently happen again.
+
+## Seeing the env report (incl. from GitHub)
+
+The env health report now lives in `deploy/env-report.sh` (was inline in deploy.sh) and
+runs at the end of BOTH deploy.sh and update.sh — so it prints on every deploy, not just
+first-time setup. Three ways to see it:
+- **GitHub Actions:** open the "Deploy server" workflow run → the report is in the job's
+  Step Summary (published by the workflow + by the script's GITHUB_STEP_SUMMARY block).
+  Secrets show as *** — safe to read there.
+- **SSH:** `sudo bash /opt/lumaris/deploy/env-report.sh` anytime.
+- **Deploy log:** it's printed at the tail of every `update.sh` run.
+Smoke tests assert the report covers the safety-critical vars and that update.sh calls it.

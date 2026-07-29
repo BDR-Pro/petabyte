@@ -1410,6 +1410,11 @@ ok("deploy.sh generates the safety-critical env vars "
    "(missing: "+", ".join(_missing_dep)+")", not _missing_dep)
 ok("a fresh deploy is NOT ENVIRONMENT=production (would refuse to boot with stubs on)",
    _re.search(r'^\s*ENVIRONMENT=development', _dep, _re.M) is not None)
+_rep=open("deploy/env-report.sh").read()
+for _v in ["ENVIRONMENT","CAL_BOOKING_URL","LEGACY_KEYS_FULL_ACCESS","TRUSTED_PROXIES","PAYMENTS_MODE"]:
+    ok("env-report.sh surfaces "+_v+" (shown on every deploy + Actions summary)", _v in _rep)
+ok("env-report.sh publishes to the GitHub Actions step summary", "GITHUB_STEP_SUMMARY" in _rep)
+ok("update.sh (the workflow's deploy) runs the env report", "env-report.sh" in open("deploy/update.sh").read())
 
 ok("Scalar API portal at /docs", c.get("/docs").status_code==200 and "scalar" in c.get("/docs").text.lower())
 ok("OpenAPI is branded Petabyte v1", c.get("/openapi.json").json()["info"]["title"]=="Petabyte API")

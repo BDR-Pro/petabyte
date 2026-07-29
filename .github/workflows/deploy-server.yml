@@ -13,9 +13,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Deploy over SSH
+        id: deploy
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # capture_stdout lets us surface the env report in the job summary below
+          capture_stdout: true
           script: sudo PETABYTE_SRC=/root/petabyte /opt/lumaris/deploy/update.sh
+
+      - name: Publish env report to job summary
+        if: always()
+        run: |
+          echo "## Deploy environment report" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          # pull just the report section out of the deploy output
+          printf '%s\n' "${{ steps.deploy.outputs.stdout }}" \
+            | sed -n '/environment report/,/Details:/p' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
