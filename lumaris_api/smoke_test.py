@@ -1439,8 +1439,9 @@ ok("update.sh fails with a helpful message when no checkout is found",
 _home=c.get("/").text
 ok("landing page has a newsletter signup form",
    "subscribeNewsletter" in _home and "nl_email" in _home)
-ok("landing page embeds the video via privacy-friendly nocookie host",
-   "landingvideoframe" in _home and "youtube-nocookie" in _home)
+ok("landing page embeds the video with a referrerpolicy + fallback watch link",
+   "landingvideoframe" in _home and "referrerpolicy" in _home
+   and "landingvideolink" in _home)
 ok("newsletter degrades honestly when Mailchimp is unconfigured",
    c.post("/newsletter/subscribe", json={"email":"x@y.com"}).status_code == 503)
 ok("bad email to newsletter is rejected",

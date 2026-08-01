@@ -598,12 +598,16 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 
 <!-- LANDING VIDEO (admin-editable id via /landing/video) -->
 <div class="wrap" style="padding:22px 24px 6px">
-  <div id="landingvideo" style="max-width:420px;margin:0 auto;display:none">
+  <div id="landingvideo" style="max-width:400px;margin:0 auto;display:none">
     <div style="position:relative;padding-bottom:177.78%;height:0;border-radius:16px;overflow:hidden;border:1px solid var(--line2);background:#000">
       <iframe id="landingvideoframe" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0"
-        loading="lazy" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture"
+        loading="lazy"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        referrerpolicy="strict-origin-when-cross-origin"
         allowfullscreen title="Petabyte"></iframe>
     </div>
+    <!-- fallback: if a video ever cannot embed, this is a live link, not a dead box -->
+    <div class="mini" style="text-align:center;margin-top:8px"><a id="landingvideolink" class="teal" href="#" target="_blank" rel="noopener" data-ar="شاهد على يوتيوب">Watch on YouTube ↗</a></div>
   </div>
 </div>
 <script>
@@ -612,8 +616,11 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
     var r=await fetch('/landing/video'); if(!r.ok)return;
     var id=(await r.json()).video_id; if(!id)return;
     var f=document.getElementById('landingvideoframe');
-    // privacy-friendly nocookie host; Shorts play fine in the standard embed
-    f.src='https://www.youtube-nocookie.com/embed/'+id+'?rel=0&modestbranding=1';
+    // Use youtube.com (not nocookie): some Shorts fail to embed on the nocookie host but
+    // play fine on the standard one. rel=0 keeps related videos to this channel.
+    f.src='https://www.youtube.com/embed/'+id+'?rel=0&modestbranding=1&playsinline=1';
+    var link=document.getElementById('landingvideolink');
+    if(link) link.href='https://youtube.com/shorts/'+id;
     document.getElementById('landingvideo').style.display='';
   }catch(e){}
 })();
@@ -1075,7 +1082,7 @@ async function loadVideo(){
 }
 function showVideoPreview(id){
   var p=document.getElementById('vid_preview'),f=document.getElementById('vid_frame');
-  f.src='https://www.youtube-nocookie.com/embed/'+id+'?rel=0';p.style.display='';
+  f.src='https://www.youtube.com/embed/'+id+'?rel=0&playsinline=1';p.style.display='';
 }
 async function saveVideo(){
   var m=document.getElementById('vid_msg');var v=(document.getElementById('vid_in').value||'').trim();
