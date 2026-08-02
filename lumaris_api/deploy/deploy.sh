@@ -179,6 +179,11 @@ TEE_TRUSTED_ROOT=
 # --- Newsletter (Mailchimp). Set both to enable the landing-page signup. ---
 MAILCHIMP_API_KEY=
 MAILCHIMP_AUDIENCE_ID=
+# --- Referrals (credit to both sides on first paid rental; spendable, not cashable) ---
+REFERRAL_REWARD_USD=20
+REFERRAL_MONTHLY_CAP=25
+PUBLIC_BASE_URL=https://petabyte.market
+
 # --- Landing page fallback video id (admin can override in /admin) ---
 DEFAULT_LANDING_VIDEO_ID=UUSWYaxboDA
 

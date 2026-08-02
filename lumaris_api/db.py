@@ -138,6 +138,11 @@ class User(Base):
     can_accept_paid_jobs = Column(Boolean, default=True, nullable=False)
     balance = Column(Money, default=Decimal(0), nullable=False)   # buyer spendable credits
     earnings = Column(Money, default=Decimal(0), nullable=False)  # seller accrued payouts
+    # --- referrals ---
+    referral_code = Column(String, unique=True, index=True, nullable=True)  # this user's share code
+    referred_by = Column(Integer, ForeignKey("users.id"), nullable=True)    # who referred them
+    referral_rewarded = Column(Boolean, default=False, nullable=False)      # did their qualifying event already pay out?
+    referral_signup_meta = Column(String, nullable=True)                    # ip/dest at signup, for self-referral checks
 
 
 class SellerSpec(Base):
@@ -433,6 +438,7 @@ PLATFORM_REVENUE   = "platform_revenue"
 EXTERNAL_PAYMENTS  = "external:payments"    # the card processor
 EXTERNAL_PAYOUTS   = "external:payouts"     # the bank / USDC rail
 EXTERNAL_MINING    = "external:mining"      # NiceHash
+EXTERNAL_PROMO     = "external:promo"       # referral / promotional credit (marketing spend)
 
 
 class UnbalancedTransaction(Exception):
@@ -758,7 +764,9 @@ def _ensure_columns():
         "bookings": [("test", "BOOLEAN NOT NULL DEFAULT true")],
         "specs": [("min_price", "FLOAT"), ("max_price", "FLOAT"),
                   ("auto_price", "BOOLEAN DEFAULT false"), ("public_id", "VARCHAR")],
-        "users": [("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
+        "users": [("referral_code", "VARCHAR"), ("referred_by", "INTEGER"),
+                  ("referral_rewarded", "BOOLEAN DEFAULT false"),
+                  ("referral_signup_meta", "VARCHAR"),("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
                   ("email_token_exp", "TIMESTAMP")],
         "platform": [("bookings_paused", "BOOLEAN DEFAULT false"),
                      ("pause_reason", "VARCHAR"), ("paused_at", "TIMESTAMP"),
@@ -1556,6 +1564,102 @@ def get_user_by_id(db: Session, user_id: int):
 
 # ------------------ Settlement: wallet, escrow, ledger ------------------
 
+def _gen_referral_code(db: Session) -> str:
+    """Short, unambiguous, unique share code."""
+    import secrets, string
+    alpha = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O/1/I
+    for _ in range(20):
+        code = "".join(secrets.choice(alpha) for _ in range(7))
+        if not db.query(User).filter(User.referral_code == code).first():
+            return code
+    return "R" + secrets.token_hex(4).upper()
+
+
+def ensure_referral_code(db: Session, user: "User") -> str:
+    """Every user has a code; created lazily the first time they need it."""
+    if not user.referral_code:
+        user.referral_code = _gen_referral_code(db)
+        db.add(user); db.commit(); db.refresh(user)
+    return user.referral_code
+
+
+def apply_referral(db: Session, new_user: "User", ref_code: str, signup_meta: str = None):
+    """Link a new user to their referrer at signup. No reward yet — that only fires when
+    the new user completes a qualifying paid rental (fraud-resistant)."""
+    if not ref_code:
+        return
+    referrer = db.query(User).filter(User.referral_code == ref_code.strip().upper()).first()
+    if not referrer or referrer.id == new_user.id:
+        return                                  # unknown code, or self
+    new_user.referred_by = referrer.id
+    new_user.referral_signup_meta = (signup_meta or "")[:200]
+    db.add(new_user); db.commit()
+
+
+# Referral reward config (dollars of credit per side). Admin/env tunable.
+def _referral_amount() -> Decimal:
+    import os
+    try:
+        return q(D(os.getenv("REFERRAL_REWARD_USD", "20")))
+    except Exception:
+        return q(D(20))
+
+def _referral_monthly_cap() -> int:
+    import os
+    try:
+        return int(os.getenv("REFERRAL_MONTHLY_CAP", "25"))
+    except Exception:
+        return 25
+
+
+def _grant_promo_credit(db: Session, user: "User", amount: Decimal, why: str, ref_id=None):
+    """Add NON-withdrawable spendable credit to a user's balance, funded from promo
+    expense so the ledger stays balanced. (balance is spend-only; only `earnings`
+    can be withdrawn, so this can never be cashed out.)"""
+    user.balance = q(D(user.balance) + amount)
+    db.add(user)
+    post(db, "referral_credit", legs=[
+        (EXTERNAL_PROMO, DEBIT, amount),
+        (acct_buyer(user.id), CREDIT, amount, user.id),
+    ], reference_id=ref_id, description=why, entry_type="promo")
+
+
+def maybe_reward_referral(db: Session, buyer: "User"):
+    """Called AFTER a rental settles cleanly. If this buyer was referred and hasn't been
+    rewarded yet, grant credit to BOTH sides — with self-referral + monthly-cap guards.
+    Best-effort and fully isolated from settlement: any problem here must never affect
+    the rental that already completed."""
+    try:
+        if not buyer or buyer.referral_rewarded or not buyer.referred_by:
+            return
+        referrer = db.query(User).filter(User.id == buyer.referred_by).first()
+        if not referrer or referrer.id == buyer.id:
+            return
+        # self-referral guard: same signup fingerprint => refuse
+        if (buyer.referral_signup_meta and referrer.referral_signup_meta
+                and buyer.referral_signup_meta == referrer.referral_signup_meta):
+            buyer.referral_rewarded = True; db.add(buyer); db.commit()
+            return
+        # monthly cap: how many rewards has this referrer already earned this month?
+        import datetime as _dt
+        month_start = _dt.datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        already = db.query(LedgerTx).filter(
+            LedgerTx.reference_type == "referral_credit",
+            LedgerTx.reference_id == str(referrer.id),
+            LedgerTx.created_at >= month_start).count()
+        if already >= _referral_monthly_cap():
+            return                              # leave rewarded=False; not their fault, don't burn it
+        amt = _referral_amount()
+        _grant_promo_credit(db, referrer, amt, f"referral: {buyer.username} qualified",
+                            ref_id=referrer.id)
+        _grant_promo_credit(db, buyer, amt, "welcome: referral bonus", ref_id=referrer.id)
+        buyer.referral_rewarded = True
+        db.add(buyer); db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("referral reward failed for buyer %s", getattr(buyer, "id", "?"))
+
+
 def get_or_create_platform(db: Session) -> "Platform":
     p = db.query(Platform).first()
     if not p:
@@ -1650,6 +1754,12 @@ def release_booking(db: Session, booking_id: int) -> bool:
        description="rental completed", entry_type="release")
     db.commit()
     release_unit(db, b.spec_id)  # rental finished -> free capacity
+    # A real paid rental just completed. If this buyer was referred, THIS is the
+    # qualifying event — reward both sides. Isolated: settlement already committed above,
+    # so a referral hiccup can never undo the rental.
+    if b.buyer_id:
+        buyer = db.query(User).filter(User.id == b.buyer_id).first()
+        maybe_reward_referral(db, buyer)
     return True
 
 

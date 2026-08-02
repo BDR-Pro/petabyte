@@ -329,6 +329,7 @@ _FOOT = """<footer>
 # token bootstrap: capture #t=JWT from the OAuth redirect, persist across pages
 _AUTHJS = """<script>
 (function(){var h=location.hash.match(/t=([^&]+)/);if(h){localStorage.setItem('pb_token',decodeURIComponent(h[1]));document.documentElement.setAttribute('data-auth','in');history.replaceState(null,'',location.pathname);}})();
+(function(){try{var m=location.search.match(/[?&]ref=([A-Za-z0-9]{4,16})/);if(m){localStorage.setItem('pb_ref',m[1].toUpperCase());}}catch(e){}})();
 function tok(){return localStorage.getItem('pb_token');}
 (function(){try{var p=location.pathname.replace(new RegExp('[/]$'),'')||'/';document.querySelectorAll('.navlinks a').forEach(function(a){if(a.getAttribute('href')===p)a.classList.add('active');});}catch(e){}})();
 function authed(){return !!tok();}
@@ -1200,8 +1201,10 @@ async function go(){
   document.getElementById('err').style.display='none';
   try{
     if(mode==="register"){
+      var _ref=null;try{_ref=localStorage.getItem('pb_ref')}catch(e){}
       var rr=await fetch('/register_user',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({username:u,password:p})});
+        body:JSON.stringify(_ref?{username:u,password:p,ref:_ref}:{username:u,password:p})});
+      if(rr.ok){try{localStorage.removeItem('pb_ref')}catch(e){}}
       if(!rr.ok){var b={};try{b=await rr.json()}catch(e){}
         if(rr.status===422){fail("Username must be 3–64 characters and password at least 8.");}
         else if(rr.status===429||rr.status===503){fail("Too many attempts — wait a moment and try again.");}

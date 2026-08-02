@@ -28,6 +28,7 @@ from utils import (
 from db import (
     D, q, qc, Money, BookingsPaused, SellerSpec, Booking, list_payout_methods, VMRoute, bookings_are_paused, set_bookings_paused, audit,
     start_email_verification, confirm_email, is_disposable_email, redact_destination,
+    ensure_referral_code, apply_referral, _referral_amount,
     payout_method_is_cooled_off, AuditEvent, PAYOUT_COOLING_OFF_H, verify_password,
     EMAIL_TOKEN_TTL_MIN,
     get_db, SessionLocal, PLATFORM_TAKE_RATE, HEARTBEAT_TIMEOUT_S,
@@ -317,6 +318,14 @@ async def _request_context(request: Request, call_next):
     except Exception:
         logger.exception("unhandled error request_id=%s path=%s", rid, request.url.path)
         raise
+    # Referral attribution: if the visitor arrived with ?ref=CODE on ANY page, remember it
+    # in a cookie so it survives leaving and coming back (people rarely sign up on the first
+    # click). Signup reads this as a fallback. First-touch wins: don't overwrite an existing
+    # cookie, so the original referrer keeps the credit.
+    _ref = request.query_params.get("ref")
+    if _ref and 4 <= len(_ref) <= 16 and _ref.isalnum() and not request.cookies.get("pb_ref"):
+        response.set_cookie("pb_ref", _ref.upper(), max_age=60*60*24*90,  # 90 days
+                            samesite="lax", httponly=False, path="/")
     response.headers["X-Request-ID"] = rid
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -478,6 +487,7 @@ class DemoRequestModel(BaseModel):
 class UserRegisterModel(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=12, max_length=128)   # length beats complexity rules
+    ref: Optional[str] = Field(default=None, max_length=16)   # referral code (optional)
 
     @field_validator("password")
     @classmethod
@@ -1312,11 +1322,21 @@ def readyz(db: Session = Depends(get_db)):
 # ------------------- AUTH -------------------
 
 @app.post("/register_user", tags=["account"])
-def register_user(data: UserRegisterModel, db: Session = Depends(get_db)):
+def register_user(data: UserRegisterModel, request: Request, db: Session = Depends(get_db)):
     user = create_user(db, data.username, data.password)
     if not user:
         raise HTTPException(status_code=400, detail="User already exists")
-    return {"status": "ok", "msg": "User registered"}
+    # Prefer the code in the request body; fall back to the first-touch cookie. This is
+    # what captures the common journey: click the link, browse, come back later, sign up.
+    ref_code = data.ref or request.cookies.get("pb_ref")
+    if ref_code:
+        from db import apply_referral
+        apply_referral(db, user, ref_code, signup_meta=_client_ip(request))
+    resp = JSONResponse({"status": "ok", "msg": "User registered"})
+    # consume the attribution cookie so a later signup on a shared machine isn't mis-credited
+    if request.cookies.get("pb_ref"):
+        resp.delete_cookie("pb_ref", path="/")
+    return resp
 
 
 
@@ -2476,6 +2496,32 @@ class EmailModel(BaseModel):
 
 class EmailConfirmModel(BaseModel):
     token: str = Field(max_length=256)
+
+
+@app.get("/referral", tags=["account"])
+def my_referral(request: Request, me=Depends(get_current_user), db: Session = Depends(get_db)):
+    """This user's share code, link, and earnings so far."""
+    user = get_user_by_username(db, _username(me))
+    if not user:
+        raise HTTPException(status_code=404, detail="user not found")
+    code = ensure_referral_code(db, user)
+    base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
+    # how many people used this code, how many qualified, credit earned
+    from db import User as _U, LedgerTx as _L
+    invited = db.query(_U).filter(_U.referred_by == user.id).count()
+    qualified = db.query(_U).filter(_U.referred_by == user.id,
+                                    _U.referral_rewarded == True).count()  # noqa: E712
+    earned = db.query(_L).filter(_L.reference_type == "referral_credit",
+                                 _L.reference_id == str(user.id)).count() * float(_referral_amount())
+    return {
+        "code": code,
+        "link": f"{base}/?ref={code}",
+        "reward_usd": float(_referral_amount()),
+        "invited": invited,
+        "qualified": qualified,
+        "credit_earned_usd": round(earned, 2),
+        "pending": max(0, invited - qualified),
+    }
 
 
 @app.post("/newsletter/subscribe", tags=["marketing"])

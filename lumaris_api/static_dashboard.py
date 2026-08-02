@@ -181,6 +181,20 @@ textarea:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(245,178,61,.1
   </section>
 
   <section>
+    <div class="h"><h2 data-ar="ادعُ صديقاً واربح">Refer &amp; earn</h2><span class="note" id="refnote" data-ar="رصيد حقيقي — يُنفَق على الحوسبة">real credit — spendable on compute</span></div>
+    <div class="panel wallet" style="flex-wrap:wrap">
+      <span class="chip"><span data-ar="أنت تربح">you earn</span> <b id="ref_amt" class="mono">$20</b></span>
+      <span class="chip"><span data-ar="دُعوا">invited</span> <b id="ref_inv" class="mono">0</b></span>
+      <span class="chip"><span data-ar="أُهّلوا">qualified</span> <b id="ref_qual" class="mono">0</b></span>
+      <span class="chip"><span data-ar="رصيد مكتسب">earned</span> <b id="ref_earned" class="mono">$0.00</b></span>
+      <span class="grow"></span>
+      <input id="ref_link" readonly aria-label="your referral link" style="min-width:220px;flex:1"/>
+      <button class="btn" onclick="copyRef()" data-ar="انسخ الرابط">Copy link</button>
+    </div>
+    <p class="note" style="margin-top:8px" data-ar="يُضاف الرصيد لكِلا الطرفين عندما يُكمل من دعوتَه أول تأجير مدفوع. يُنفَق على الحوسبة (لا يُسحب نقداً).">Both sides get credit when someone you invite completes their first paid rental. Credit is spendable on compute (not withdrawable as cash).</p>
+  </section>
+
+  <section>
     <div class="h"><h2 data-ar="كروت الرسومات المتاحة">Available GPUs</h2><span class="note" id="specnote" data-ar="سجّل الدخول لعرض المعروض المباشر">sign in to view live inventory</span></div>
     <div class="panel" style="overflow:hidden">
       <table class="tbl"><thead><tr>
@@ -236,6 +250,21 @@ async function login(){const f=new URLSearchParams({username:$('u').value,passwo
   const r=await fetch(API+'/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:f});
   const b=await r.json().catch(()=>({}));if(!r.ok){return toast('sign in failed');}
   TOKEN=b.access_token;localStorage.setItem('pb_token',TOKEN);$('who').textContent='● '+$('u').value;applyAuthUI();
+async function loadReferral(){
+  if(!localStorage.getItem('pb_token'))return;
+  try{var r=await fetch('/referral',{headers:{'Authorization':'Bearer '+localStorage.getItem('pb_token')}});
+    if(!r.ok)return;var d=await r.json();
+    $('ref_link').value=d.link;
+    $('ref_amt').textContent='$'+d.reward_usd;
+    $('ref_inv').textContent=d.invited;
+    $('ref_qual').textContent=d.qualified;
+    $('ref_earned').textContent='$'+Number(d.credit_earned_usd||0).toFixed(2);
+  }catch(e){}
+}
+function copyRef(){var i=$('ref_link');if(!i.value)return;i.select();
+  try{navigator.clipboard.writeText(i.value);}catch(e){document.execCommand('copy');}
+  var n=$('refnote');if(n){var t=n.textContent;n.textContent='Copied!';setTimeout(function(){n.textContent=t;},1500);}}
+loadReferral();
   wallet();specs();conReset('signed in — ready to run.','sys');}
 async function deposit(){const r=await api('/deposit',{method:'POST',body:JSON.stringify({amount:parseFloat($('dep').value)})});
   if(r.ok){animate($('bal'),r.body.balance,money);}else if(r.status===403){toast('deposits are handled at checkout')}else{toast('could not add funds')}}

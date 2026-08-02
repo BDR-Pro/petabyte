@@ -1452,6 +1452,77 @@ ok("bad email to newsletter is rejected",
 _lv=c.get("/landing/video").json()
 ok("landing video endpoint returns a default id", bool(_lv.get("video_id")))
 
+# --- referral system ---
+# code is generated + link served
+_rc=c.post("/register_user", json={"username":"ref_alice","password":"hunter2-correct-horse"})
+_at=c.post("/login", data={"username":"ref_alice","password":"hunter2-correct-horse"}).json()["access_token"]
+_ah={"Authorization":f"Bearer {_at}"}
+_rj=c.get("/referral", headers=_ah).json()
+ok("a user gets a referral code + link", bool(_rj.get("code")) and "/?ref=" in _rj.get("link",""))
+ok("referral reward amount is exposed", _rj.get("reward_usd") is not None)
+_alice_code=_rj["code"]
+
+# signup WITH the code links the referral
+c.post("/register_user", json={"username":"ref_bob","password":"hunter2-correct-horse","ref":_alice_code})
+import db as _db
+_s=_db.SessionLocal()
+_bob=_s.query(_db.User).filter(_db.User.username=="ref_bob").first()
+_alice=_s.query(_db.User).filter(_db.User.username=="ref_alice").first()
+ok("signup with a referral code links the new user to the referrer",
+   _bob.referred_by==_alice.id)
+ok("no reward is paid at signup (only on a qualifying paid rental)",
+   _bob.referral_rewarded is False)
+
+# the qualifying event pays BOTH sides
+_bal_alice0=float(_alice.balance); _bal_bob0=float(_bob.balance)
+_db.maybe_reward_referral(_s, _bob)
+_s.refresh(_alice); _s.refresh(_bob)
+ok("qualifying rewards the referrer with spendable credit",
+   float(_alice.balance) > _bal_alice0)
+ok("qualifying rewards the referred user too (both sides)",
+   float(_bob.balance) > _bal_bob0)
+ok("the reward fires only once (idempotent)", _bob.referral_rewarded is True)
+_bal_alice1=float(_alice.balance)
+_db.maybe_reward_referral(_s, _bob)   # again
+_s.refresh(_alice)
+ok("a second call does not double-pay", float(_alice.balance)==_bal_alice1)
+
+# referral credit is NOT withdrawable (it went to balance, not earnings)
+ok("referral credit is spendable but not withdrawable (balance, not earnings)",
+   float(_bob.earnings)==0.0 and float(_bob.balance)>0.0)
+
+# self-referral guard: same signup fingerprint => no reward
+_db.apply_referral(_s, _bob, _alice_code, signup_meta="1.2.3.4")
+_alice.referral_signup_meta="1.2.3.4"; _s.add(_alice); _s.commit()
+_carol=_db.create_user(_s,"ref_carol","hunter2-correct-horse")
+_carol.referred_by=_alice.id; _carol.referral_signup_meta="1.2.3.4"; _s.add(_carol); _s.commit()
+_a2=float(_alice.balance)
+_db.maybe_reward_referral(_s, _carol)
+_s.refresh(_alice)
+ok("self-referral (same signup fingerprint) pays nothing", float(_alice.balance)==_a2)
+_s.close()
+
+# --- referral attribution survives the real journey (cookie, not just first page) ---
+# land on a NON-landing page with ?ref -> cookie set; sign up LATER with no code in body
+_cc=c.get(f"/pricing?ref={_alice_code}")
+ok("visiting any page with ?ref sets the attribution cookie",
+   c.cookies.get("pb_ref")==_alice_code or "pb_ref" in _cc.cookies)
+c.get("/security"); c.get("/marketplace")   # browse away, no ref param
+c.post("/register_user", json={"username":"ref_dave","password":"hunter2-correct-horse"})
+_s2=_db.SessionLocal()
+_dave=_s2.query(_db.User).filter(_db.User.username=="ref_dave").first()
+_al=_s2.query(_db.User).filter(_db.User.username=="ref_alice").first()
+ok("a delayed signup is attributed via the cookie (not just the first page)",
+   _dave.referred_by==_al.id)
+_s2.close()
+ok("the attribution cookie is cleared after signup", not c.cookies.get("pb_ref"))
+# first-touch wins: a second code does not overwrite an existing cookie
+_c2=TestClient(main.app)
+_c2.get(f"/?ref={_alice_code}")               # first touch = alice
+_c2.get("/pricing?ref=ZZZZZZZ")               # later, different code
+ok("first-touch referrer wins (a later code does not overwrite the cookie)",
+   _c2.cookies.get("pb_ref")==_alice_code)
+
 ok("Scalar API portal at /docs", c.get("/docs").status_code==200 and "scalar" in c.get("/docs").text.lower())
 ok("OpenAPI is branded Petabyte v1", c.get("/openapi.json").json()["info"]["title"]=="Petabyte API")
 ok("GPU detail page route", c.get("/gpu/1").status_code==200 and "gpuwrap" in c.get("/gpu/1").text)
