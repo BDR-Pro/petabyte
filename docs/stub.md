@@ -657,3 +657,12 @@ Why: Shorts sometimes throw YouTube Error 153 in the iframe player no matter the
 The fix if that happens is to upload the same clip as a NORMAL video and pick Landscape —
 which now "just works" with no code change. The "Watch on YouTube" fallback link remains
 for any video that still refuses to embed.
+
+
+## Landing video "content blocked" — it was our CSP
+
+The video showed "content blocked / contact the site owner" (not YouTube Error 153). Cause:
+the Content-Security-Policy in main.py had no frame-src, so it fell back to default-src
+'self' and the browser blocked the YouTube iframe entirely. Fixed: CSP now includes
+`frame-src https://www.youtube.com https://www.youtube-nocookie.com`. Smoke test guards it.
+This is separate from Error 153 (a YouTube-side Shorts quirk) — both are now handled.

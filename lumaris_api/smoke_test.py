@@ -935,6 +935,9 @@ _h=c.get("/")
 ok("security headers set (nosniff/DENY/CSP/referrer)",
    _h.headers.get("X-Content-Type-Options")=="nosniff" and _h.headers.get("X-Frame-Options")=="DENY"
    and "Content-Security-Policy" in _h.headers and "Referrer-Policy" in _h.headers)
+ok("CSP allows the YouTube embed (frame-src) so the landing video isn't blocked",
+   "frame-src" in _h.headers.get("Content-Security-Policy","")
+   and "youtube.com" in _h.headers.get("Content-Security-Policy",""))
 ok("every response carries an X-Request-ID", bool(_h.headers.get("X-Request-ID")))
 _e=c.get("/vm/doesnotexist", headers={"Authorization":"Bearer bad"})
 _ej=_e.json().get("error",{})

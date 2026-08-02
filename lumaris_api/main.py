@@ -333,6 +333,10 @@ async def _request_context(request: Request, call_next):
         "font-src 'self' https://fonts.gstatic.com; "
         "img-src 'self' data: https:; "
         "connect-src 'self'; "
+        # Allow the landing-page YouTube embed to load. Without an explicit frame-src, CSP
+        # falls back to default-src 'self' and the browser blocks the iframe ("content
+        # blocked"). This lists only YouTube's embed hosts, nothing else.
+        "frame-src https://www.youtube.com https://www.youtube-nocookie.com; "
         "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
     )
     # Never let a browser or proxy cache an authenticated response.
