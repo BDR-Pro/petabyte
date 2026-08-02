@@ -509,6 +509,9 @@ class Platform(Base):
     paused_at = Column(DateTime, nullable=True)
     # Admin-editable landing-page video (stored as the YouTube video id).
     landing_video_id = Column(String, nullable=True)
+    # "portrait" (9:16, a Short) or "landscape" (16:9, a normal video). Auto-detected
+    # from the pasted URL, admin-overridable.
+    landing_video_orientation = Column(String, nullable=True)
 
 
 class AuditEvent(Base):
@@ -759,7 +762,8 @@ def _ensure_columns():
                   ("email_token_exp", "TIMESTAMP")],
         "platform": [("bookings_paused", "BOOLEAN DEFAULT false"),
                      ("pause_reason", "VARCHAR"), ("paused_at", "TIMESTAMP"),
-                     ("landing_video_id", "VARCHAR")],
+                     ("landing_video_id", "VARCHAR"),
+                     ("landing_video_orientation", "VARCHAR")],
         "ledger": [("tx_id", "INTEGER"), ("direction", "VARCHAR")],
         "vm_routes": [("hourly_rate", "FLOAT DEFAULT 0"), ("started_at", "TIMESTAMP"),
                       ("paid_until", "TIMESTAMP"), ("stopped_at", "TIMESTAMP")],

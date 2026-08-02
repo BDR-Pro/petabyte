@@ -599,7 +599,7 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 <!-- LANDING VIDEO (admin-editable id via /landing/video) -->
 <div class="wrap" style="padding:22px 24px 6px">
   <div id="landingvideo" style="max-width:400px;margin:0 auto;display:none">
-    <div style="position:relative;padding-bottom:177.78%;height:0;border-radius:16px;overflow:hidden;border:1px solid var(--line2);background:#000">
+    <div id="landingvideoratio" style="position:relative;padding-bottom:177.78%;height:0;border-radius:16px;overflow:hidden;border:1px solid var(--line2);background:#000">
       <iframe id="landingvideoframe" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0"
         loading="lazy"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -614,14 +614,17 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 (async function(){
   try{
     var r=await fetch('/landing/video'); if(!r.ok)return;
-    var id=(await r.json()).video_id; if(!id)return;
+    var d=await r.json(); var id=d.video_id; if(!id)return;
+    var portrait=(d.orientation!=='landscape');   // default portrait for back-compat
     var f=document.getElementById('landingvideoframe');
-    // Use youtube.com (not nocookie): some Shorts fail to embed on the nocookie host but
-    // play fine on the standard one. rel=0 keeps related videos to this channel.
     f.src='https://www.youtube.com/embed/'+id+'?rel=0&modestbranding=1&playsinline=1';
+    // portrait = 9:16 tall; landscape = 16:9 wide (a normal video embeds reliably)
+    var box=document.getElementById('landingvideo'), ratio=document.getElementById('landingvideoratio');
+    if(portrait){ box.style.maxWidth='400px'; ratio.style.paddingBottom='177.78%'; }
+    else { box.style.maxWidth='720px'; ratio.style.paddingBottom='56.25%'; }
     var link=document.getElementById('landingvideolink');
-    if(link) link.href='https://youtube.com/shorts/'+id;
-    document.getElementById('landingvideo').style.display='';
+    if(link) link.href=(portrait?'https://youtube.com/shorts/':'https://youtu.be/')+id;
+    box.style.display='';
   }catch(e){}
 })();
 </script>
@@ -1040,9 +1043,14 @@ ADMIN_HTML = _page("Petabyte — admin", """
     <div class="lbl" style="margin-bottom:12px">Landing page</div>
     <div class="card">
       <h2 style="font-size:16px;margin-bottom:4px">Homepage video</h2>
-      <p class="mut" style="font-size:13px;margin-bottom:12px">Paste a YouTube link (a normal video or a Short) or just its id. It replaces the video on the landing page immediately.</p>
+      <p class="mut" style="font-size:13px;margin-bottom:12px">Paste a YouTube link (a normal video or a Short) or just its id. It replaces the video on the landing page immediately. <b class="teal">Shorts sometimes refuse to embed (Error 153)</b> — if yours does, upload it as a normal video and pick Landscape.</p>
       <div class="filterbar" style="gap:8px">
-        <input id="vid_in" placeholder="https://youtube.com/shorts/… or a video id" style="flex:1;min-width:240px"/>
+        <input id="vid_in" placeholder="https://youtube.com/watch?v=… or a video id" style="flex:1;min-width:240px"/>
+        <select id="vid_orient" style="min-width:150px">
+          <option value="auto">Shape: auto-detect</option>
+          <option value="landscape">Landscape (16:9)</option>
+          <option value="portrait">Portrait (Short)</option>
+        </select>
         <button class="btn btn-teal" onclick="saveVideo()">Save video</button>
       </div>
       <div id="vid_msg" class="mini" style="margin-top:10px"></div>
@@ -1077,19 +1085,27 @@ async function boot(){
   loadUsers();loadSpecs();loadPayouts();loadVideo();
 }
 async function loadVideo(){
-  try{var r=await fetch('/landing/video');if(!r.ok)return;var id=(await r.json()).video_id;
-    if(id){document.getElementById('vid_in').value=id;showVideoPreview(id);}}catch(e){}
+  try{var r=await fetch('/landing/video');if(!r.ok)return;var d=await r.json();
+    if(d.video_id){document.getElementById('vid_in').value=d.video_id;
+      if(d.orientation)document.getElementById('vid_orient').value=d.orientation;
+      showVideoPreview(d.video_id, d.orientation);}}catch(e){}
 }
-function showVideoPreview(id){
+function showVideoPreview(id, orient){
   var p=document.getElementById('vid_preview'),f=document.getElementById('vid_frame');
+  var box=p.firstElementChild;
+  box.style.paddingBottom=(orient==='landscape')?'56.25%':'177.78%';
+  p.style.maxWidth=(orient==='landscape')?'320px':'220px';
   f.src='https://www.youtube.com/embed/'+id+'?rel=0&playsinline=1';p.style.display='';
 }
 async function saveVideo(){
   var m=document.getElementById('vid_msg');var v=(document.getElementById('vid_in').value||'').trim();
   if(!v){m.style.color='var(--warn)';m.textContent='Paste a YouTube link or id.';return;}
   m.style.color='';m.textContent='Saving…';
-  var r=await api('/admin/landing/video',{method:'POST',body:JSON.stringify({video:v})});
-  if(r.ok){m.style.color='var(--pos)';m.textContent='Saved. Video id: '+r.body.video_id;showVideoPreview(r.body.video_id);}
+  var orient=document.getElementById('vid_orient').value;
+  var payload={video:v}; if(orient!=='auto')payload.orientation=orient;
+  var r=await api('/admin/landing/video',{method:'POST',body:JSON.stringify(payload)});
+  if(r.ok){m.style.color='var(--pos)';m.textContent='Saved — '+r.body.orientation+' · id '+r.body.video_id;
+    document.getElementById('vid_orient').value=r.body.orientation;showVideoPreview(r.body.video_id,r.body.orientation);}
   else{m.style.color='var(--warn)';m.textContent=(r.body&&r.body.error&&r.body.error.message)||'Could not save.';}
 }
 async function loadUsers(){var q=document.getElementById('uq').value;

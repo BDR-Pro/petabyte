@@ -448,6 +448,8 @@ class NewsletterModel(BaseModel):
 class VideoModel(BaseModel):
     # accept a full YouTube URL or a bare ID; we extract the ID server-side
     video: str = Field(min_length=1, max_length=200)
+    # optional explicit override; else we infer from the URL (a /shorts/ link => portrait)
+    orientation: Optional[str] = Field(default=None, pattern="^(portrait|landscape)$")
 
 
 class DemoRequestModel(BaseModel):
@@ -2515,7 +2517,9 @@ def get_landing_video(db: Session = Depends(get_db)):
     from db import Platform
     p = db.query(Platform).first()
     vid = (p.landing_video_id if p and p.landing_video_id else DEFAULT_LANDING_VIDEO_ID)
-    return {"video_id": vid}
+    orient = (p.landing_video_orientation if p and p.landing_video_orientation
+              else "portrait")   # the seeded default video is a Short
+    return {"video_id": vid, "orientation": orient}
 
 
 def _extract_youtube_id(s: str) -> str:
@@ -2544,16 +2548,21 @@ def set_landing_video(body: VideoModel, request: Request,
         raise HTTPException(status_code=400, detail={"code": "BAD_VIDEO",
             "message": "Couldn't find a YouTube video id in that. Paste a YouTube link "
                        "or the id."})
+    # Infer shape from the URL the admin pasted: a /shorts/ link is a vertical Short;
+    # anything else (watch?v=, youtu.be) is a normal 16:9 video. Explicit override wins.
+    orient = body.orientation or ("portrait" if "/shorts/" in body.video.lower()
+                                  else "landscape")
     from db import Platform
     p = db.query(Platform).first()
     if not p:
         p = Platform(revenue=D(0)); db.add(p)
     p.landing_video_id = vid
+    p.landing_video_orientation = orient
     db.add(p)
     audit(db, "landing.video_changed", actor=admin,
-          ip=_client_ip(request), detail={"video_id": vid})
+          ip=_client_ip(request), detail={"video_id": vid, "orientation": orient})
     db.commit()
-    return {"ok": True, "video_id": vid}
+    return {"ok": True, "video_id": vid, "orientation": orient}
 
 
 @app.post("/demo/request", tags=["marketing"])

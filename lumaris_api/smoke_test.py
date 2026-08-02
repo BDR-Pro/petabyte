@@ -1537,6 +1537,22 @@ ok("admin specs list", c.get("/admin/specs", headers=GAH).status_code==200)
 ok("admin can set the landing video from a full Shorts URL",
    c.post("/admin/landing/video", headers=GAH,
           json={"video":"https://youtube.com/shorts/UUSWYaxboDA?si=x"}).json().get("video_id")=="UUSWYaxboDA")
+ok("a /shorts/ URL is auto-detected as portrait",
+   c.post("/admin/landing/video", headers=GAH,
+          json={"video":"https://youtube.com/shorts/UUSWYaxboDA"}).json().get("orientation")=="portrait")
+ok("a watch?v= URL is auto-detected as landscape (a normal video embeds reliably)",
+   c.post("/admin/landing/video", headers=GAH,
+          json={"video":"https://youtube.com/watch?v=dQw4w9WgXcQ"}).json().get("orientation")=="landscape")
+ok("an explicit orientation override wins over the URL",
+   c.post("/admin/landing/video", headers=GAH,
+          json={"video":"https://youtu.be/abc123","orientation":"portrait"}).json().get("orientation")=="portrait")
+ok("GET /landing/video returns the stored orientation",
+   c.get("/landing/video").json().get("orientation")=="portrait")
+ok("landing page adapts the aspect ratio to orientation",
+   "landingvideoratio" in c.get("/").text and "56.25%" in c.get("/").text)
+ok("admin panel exposes the orientation selector",
+   "vid_orient" in c.get("/admin").text)
+c.post("/admin/landing/video", headers=GAH, json={"video":"UUSWYaxboDA"})
 ok("the landing then serves the admin-set video",
    c.get("/landing/video").json().get("video_id")=="UUSWYaxboDA")
 ok("garbage video input is rejected",

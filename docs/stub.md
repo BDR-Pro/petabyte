@@ -644,3 +644,16 @@ UUSWYaxboDA). Admins change it in /admin → "Landing page → Homepage video": 
 YouTube URL (normal or Short) or a bare id; server extracts the id, stores it, audits the
 change. Embedded via youtube-nocookie for privacy. New env: MAILCHIMP_API_KEY,
 MAILCHIMP_AUDIENCE_ID, DEFAULT_LANDING_VIDEO_ID — all in template.env + deploy.sh.
+
+
+## Landing video: orientation auto-detect (Shorts vs normal video)
+
+The landing player now adapts its shape. On save, orientation is inferred from the URL you
+paste: a /shorts/ link => portrait (9:16), anything else (watch?v=, youtu.be) => landscape
+(16:9). Admin can override via a dropdown (auto / landscape / portrait). Stored on the
+Platform row (landing_video_orientation), returned by GET /landing/video.
+
+Why: Shorts sometimes throw YouTube Error 153 in the iframe player no matter the settings.
+The fix if that happens is to upload the same clip as a NORMAL video and pick Landscape —
+which now "just works" with no code change. The "Watch on YouTube" fallback link remains
+for any video that still refuses to embed.
