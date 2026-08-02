@@ -1626,6 +1626,9 @@ ok("landing page adapts the aspect ratio to orientation",
    "landingvideoratio" in c.get("/").text and "56.25%" in c.get("/").text)
 ok("admin panel exposes the orientation selector",
    "vid_orient" in c.get("/admin").text)
+_appjs=c.get("/app").text
+ok("the dashboard loads the referral card only after auth (not at parse time)",
+   _appjs.count("loadReferral()") >= 2 and "if(TOKEN){wallet();specs();loadReferral()" in _appjs)
 c.post("/admin/landing/video", headers=GAH, json={"video":"UUSWYaxboDA"})
 ok("the landing then serves the admin-set video",
    c.get("/landing/video").json().get("video_id")=="UUSWYaxboDA")

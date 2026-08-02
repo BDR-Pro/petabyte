@@ -251,10 +251,12 @@ async function login(){const f=new URLSearchParams({username:$('u').value,passwo
   const b=await r.json().catch(()=>({}));if(!r.ok){return toast('sign in failed');}
   TOKEN=b.access_token;localStorage.setItem('pb_token',TOKEN);$('who').textContent='● '+$('u').value;applyAuthUI();
 async function loadReferral(){
-  if(!localStorage.getItem('pb_token'))return;
-  try{var r=await fetch('/referral',{headers:{'Authorization':'Bearer '+localStorage.getItem('pb_token')}});
-    if(!r.ok)return;var d=await r.json();
-    $('ref_link').value=d.link;
+  var tok=localStorage.getItem('pb_token'); if(!tok)return;
+  try{var r=await fetch('/referral',{headers:{'Authorization':'Bearer '+tok}});
+    if(!r.ok){console.warn('referral load failed',r.status);return;}
+    var d=await r.json();
+    if(d.link)$('ref_link').value=d.link;
+    if(d.link)$('ref_link').setAttribute('value',d.link);
     $('ref_amt').textContent='$'+d.reward_usd;
     $('ref_inv').textContent=d.invited;
     $('ref_qual').textContent=d.qualified;
@@ -264,8 +266,7 @@ async function loadReferral(){
 function copyRef(){var i=$('ref_link');if(!i.value)return;i.select();
   try{navigator.clipboard.writeText(i.value);}catch(e){document.execCommand('copy');}
   var n=$('refnote');if(n){var t=n.textContent;n.textContent='Copied!';setTimeout(function(){n.textContent=t;},1500);}}
-loadReferral();
-  wallet();specs();conReset('signed in — ready to run.','sys');}
+  wallet();specs();loadReferral();conReset('signed in — ready to run.','sys');}
 async function deposit(){const r=await api('/deposit',{method:'POST',body:JSON.stringify({amount:parseFloat($('dep').value)})});
   if(r.ok){animate($('bal'),r.body.balance,money);}else if(r.status===403){toast('deposits are handled at checkout')}else{toast('could not add funds')}}
 async function wallet(){const r=await api('/wallet');if(r.ok){animate($('bal'),r.body.balance,money);animate($('earn'),r.body.earnings,money);}}
@@ -323,6 +324,6 @@ document.addEventListener('DOMContentLoaded',applyLang);
 function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-theme')==='light'?'dark':'light';h.setAttribute('data-theme',t);try{localStorage.setItem('pb_theme',t);}catch(e){}}
 function signout(){try{localStorage.removeItem('pb_token');}catch(e){}location.href='/';}
 applyAuthUI();
-if(TOKEN){wallet();specs();conReset('signed in — ready to run.','sys');}
+if(TOKEN){wallet();specs();loadReferral();conReset('signed in — ready to run.','sys');}
 stats();setInterval(stats,5000);
 </script></body></html>"""
