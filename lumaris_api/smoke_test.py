@@ -1629,6 +1629,10 @@ ok("admin panel exposes the orientation selector",
 _appjs=c.get("/app").text
 ok("the dashboard loads the referral card only after auth (not at parse time)",
    _appjs.count("loadReferral()") >= 2 and "if(TOKEN){wallet();specs();loadReferral()" in _appjs)
+# guard the exact bug that shipped: loadReferral must be its OWN top-level function, not
+# nested inside login(). If login() closes right before it, the nesting is gone.
+ok("loadReferral is a top-level function (login() closes before it)",
+   "conReset('signed in — ready to run.','sys');}\n\nasync function loadReferral" in _appjs)
 c.post("/admin/landing/video", headers=GAH, json={"video":"UUSWYaxboDA"})
 ok("the landing then serves the admin-set video",
    c.get("/landing/video").json().get("video_id")=="UUSWYaxboDA")

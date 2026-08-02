@@ -250,23 +250,23 @@ async function login(){const f=new URLSearchParams({username:$('u').value,passwo
   const r=await fetch(API+'/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:f});
   const b=await r.json().catch(()=>({}));if(!r.ok){return toast('sign in failed');}
   TOKEN=b.access_token;localStorage.setItem('pb_token',TOKEN);$('who').textContent='● '+$('u').value;applyAuthUI();
+  wallet();specs();loadReferral();conReset('signed in — ready to run.','sys');}
+
 async function loadReferral(){
   var tok=localStorage.getItem('pb_token'); if(!tok)return;
-  try{var r=await fetch('/referral',{headers:{'Authorization':'Bearer '+tok}});
+  try{var r=await fetch(API+'/referral',{headers:{'Authorization':'Bearer '+tok}});
     if(!r.ok){console.warn('referral load failed',r.status);return;}
     var d=await r.json();
-    if(d.link)$('ref_link').value=d.link;
-    if(d.link)$('ref_link').setAttribute('value',d.link);
-    $('ref_amt').textContent='$'+d.reward_usd;
-    $('ref_inv').textContent=d.invited;
-    $('ref_qual').textContent=d.qualified;
-    $('ref_earned').textContent='$'+Number(d.credit_earned_usd||0).toFixed(2);
-  }catch(e){}
+    if(d.link){$('ref_link').value=d.link;$('ref_link').setAttribute('value',d.link);}
+    if(d.reward_usd!=null)$('ref_amt').textContent='$'+d.reward_usd;
+    if(d.invited!=null)$('ref_inv').textContent=d.invited;
+    if(d.qualified!=null)$('ref_qual').textContent=d.qualified;
+    if(d.credit_earned_usd!=null)$('ref_earned').textContent='$'+Number(d.credit_earned_usd||0).toFixed(2);
+  }catch(e){console.warn('referral load error',e);}
 }
 function copyRef(){var i=$('ref_link');if(!i.value)return;i.select();
   try{navigator.clipboard.writeText(i.value);}catch(e){document.execCommand('copy');}
   var n=$('refnote');if(n){var t=n.textContent;n.textContent='Copied!';setTimeout(function(){n.textContent=t;},1500);}}
-  wallet();specs();loadReferral();conReset('signed in — ready to run.','sys');}
 async function deposit(){const r=await api('/deposit',{method:'POST',body:JSON.stringify({amount:parseFloat($('dep').value)})});
   if(r.ok){animate($('bal'),r.body.balance,money);}else if(r.status===403){toast('deposits are handled at checkout')}else{toast('could not add funds')}}
 async function wallet(){const r=await api('/wallet');if(r.ok){animate($('bal'),r.body.balance,money);animate($('earn'),r.body.earnings,money);}}
