@@ -73,7 +73,8 @@ from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
                    GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
                    PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TEMPLATES_HTML,
-                   CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML)
+                   CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML,
+                   SELLER_EARNINGS_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -984,6 +985,12 @@ def status_page():
 def metrics_page():
     """Investor / operations metrics dashboard (data from /metrics/overview)."""
     return HTMLResponse(METRICS_HTML)
+
+@app.get("/seller/payouts", response_class=HTMLResponse)
+def seller_payouts_page():
+    """Seller Stripe onboarding + earnings/transfers/payouts (data from /payments/*).
+    Distinct from the JSON API at /seller/earnings and /seller/earnings/stripe."""
+    return HTMLResponse(SELLER_EARNINGS_HTML)
 
 @app.get("/templates-catalog", response_class=HTMLResponse)
 @app.get("/catalog", response_class=HTMLResponse)
@@ -3149,8 +3156,8 @@ def connect_onboarding_link(data: OnboardingLinkModel,
     base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/") or ""
     url = _sc.create_onboarding_link(
         db, ca,
-        refresh_url=data.refresh_url or f"{base}/seller/earnings?stripe=refresh",
-        return_url=data.return_url or f"{base}/seller/earnings?stripe=return")
+        refresh_url=data.refresh_url or f"{base}/seller/payouts?stripe=refresh",
+        return_url=data.return_url or f"{base}/seller/payouts?stripe=return")
     return {"url": url}
 
 @app.post("/payments/connect/refresh", tags=["payments"])
