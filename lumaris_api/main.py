@@ -2850,6 +2850,71 @@ def admin_audit_log(limit: int = Query(100, ge=1, le=500),
                        for e in qy.limit(limit).all()]}
 
 
+@app.get("/admin/incidents", tags=["account"])
+def admin_incidents(stall_minutes: int = Query(30, ge=1, le=1440),
+                    limit: int = Query(100, ge=1, le=500),
+                    admin=Depends(require_admin), db: Session = Depends(get_db)):
+    """Operator incident view: transactions that failed or are stuck, and WHY.
+
+    Three classes an operator must be able to see at a glance:
+      * stalled bookings — money escrowed/active with no terminal state for a while
+        (a node that never finished, or a job that never got claimed);
+      * failed jobs — with the recorded reason and whether escrow was returned;
+      * failed payouts — money that could not be sent out.
+    Read-only; the fix actions live on the existing admin routes (delist, pause,
+    refund via reaper). This is the 'why is nothing settling' panel."""
+    from db import Booking, Task, Payout, SellerSpec
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=stall_minutes)
+
+    def _age_min(dt):
+        if not dt:
+            return None
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return round((now - dt).total_seconds() / 60, 1)
+
+    stalled = []
+    for b in (db.query(Booking)
+                .filter(Booking.status.in_(["escrowed", "active"]))
+                .order_by(Booking.id.desc()).limit(limit).all()):
+        created = b.created_at if not b.created_at or b.created_at.tzinfo else b.created_at.replace(tzinfo=timezone.utc)
+        if created and created < cutoff:
+            spec = db.query(SellerSpec).filter(SellerSpec.id == b.spec_id).first()
+            live = spec_is_live(spec) if spec else False
+            stalled.append({
+                "booking_id": b.id, "status": b.status,
+                "amount": b.gross_amount, "age_minutes": _age_min(b.created_at),
+                "spec_id": b.spec_id, "node_online": live,
+                "reason": ("node offline — reaper should fail over or refund"
+                           if not live else
+                           "job not completed yet — check the agent claimed it"),
+            })
+
+    failed_jobs = [{
+        "task_id": t.id, "task_type": t.task_type, "booking_id": t.booking_id,
+        "reason": (t.result or "job reported failed"),
+        "age_minutes": _age_min(t.completed_at or t.created_at),
+    } for t in (db.query(Task).filter(Task.status == "failed")
+                  .order_by(Task.id.desc()).limit(limit).all())]
+
+    failed_payouts = [{
+        "payout_id": p.id, "amount_usd": p.amount_usd, "kind": p.kind,
+        "status": p.status, "age_minutes": _age_min(p.created_at),
+        "reason": "provider send failed or reversed — funds returned to earnings",
+    } for p in (db.query(Payout).filter(Payout.status == "failed")
+                  .order_by(Payout.id.desc()).limit(limit).all())]
+
+    return {
+        "stall_minutes": stall_minutes,
+        "counts": {"stalled_bookings": len(stalled),
+                   "failed_jobs": len(failed_jobs),
+                   "failed_payouts": len(failed_payouts)},
+        "stalled_bookings": stalled,
+        "failed_jobs": failed_jobs,
+        "failed_payouts": failed_payouts,
+    }
+
+
 @app.get("/wallet/payouts")
 def get_payouts(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))

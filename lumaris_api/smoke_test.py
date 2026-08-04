@@ -1704,6 +1704,16 @@ ok("demo requests are stored as real leads (demand evidence for investors)",
 ok("non-admins cannot read the lead list",
    c.get("/admin/demo-requests", headers=NAH).status_code == 403)
 ok("admin payouts list", c.get("/admin/payouts", headers=GAH).status_code==200)
+# --- admin incident view: failed/stalled transactions + reasons ---
+_inc=c.get("/admin/incidents", headers=GAH)
+ok("admin incidents ok for admin", _inc.status_code==200 and
+   {"stalled_bookings","failed_jobs","failed_payouts","counts"} <= set(_inc.json()))
+ok("admin incidents blocks non-admin", c.get("/admin/incidents", headers=NAH).status_code==403)
+ok("every reported incident carries a human-readable reason",
+   all("reason" in x for x in _inc.json()["failed_jobs"]) and
+   all("reason" in x for x in _inc.json()["stalled_bookings"]) and
+   all("reason" in x for x in _inc.json()["failed_payouts"]))
+ok("admin panel exposes the incidents view", "loadIncidents" in c.get("/admin").text)
 _rr=c.post("/admin/users/buyer1/role", headers=GAH, json={"role":"seller"})
 ok("admin can set role", _rr.status_code==200 and _rr.json()["role"]=="seller")
 ok("non-admin cannot set role", c.post("/admin/users/buyer1/role", headers=NAH, json={"role":"buyer"}).status_code==403)

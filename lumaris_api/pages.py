@@ -1053,6 +1053,16 @@ ADMIN_HTML = _page("Petabyte — admin", """
     </div>
   </div>
 
+  <!-- INCIDENTS: failed or stalled transactions and why -->
+  <div class="wrap" style="padding:22px 22px 30px">
+    <div class="lbl" style="margin-bottom:12px">Incidents <span class="mut" id="inc_sub"></span></div>
+    <div class="panel" style="overflow:auto">
+      <table class="tbl"><thead><tr><th>Type</th><th>Ref</th><th>Amount</th><th>Age</th><th>Reason</th></tr></thead>
+      <tbody id="incrows"><tr><td colspan=5 class="mut mono" style="padding:20px;text-align:center">loading…</td></tr></tbody></table>
+    </div>
+    <p class="mini" style="margin-top:8px">Stalled = money escrowed/active with no terminal state. Failed jobs are retryable; the reaper fails over or refunds dead nodes.</p>
+  </div>
+
   <!-- LANDING PAGE settings: the admin-editable video -->
   <div class="wrap" style="padding:22px 22px 30px">
     <div class="lbl" style="margin-bottom:12px">Landing page</div>
@@ -1097,7 +1107,18 @@ async function boot(){
   document.getElementById('a_rev').textContent=money(o.platform_revenue);
   document.getElementById('a_pend').textContent=o.payouts_pending.count+' · '+money(o.payouts_pending.amount);
   document.getElementById('console').style.display='';
-  loadUsers();loadSpecs();loadPayouts();loadVideo();
+  loadUsers();loadSpecs();loadPayouts();loadIncidents();loadVideo();
+}
+async function loadIncidents(){
+  var r=await api('/admin/incidents');var tb=document.getElementById('incrows');
+  if(!r.ok){tb.innerHTML='<tr><td colspan=5 class="mut mono" style="padding:20px;text-align:center">could not load</td></tr>';return;}
+  var b=r.body,rows=[];
+  (b.stalled_bookings||[]).forEach(function(x){rows.push(['stalled booking','#'+x.booking_id+(x.node_online?'':' · node offline'),money(x.amount),(x.age_minutes||0)+'m',x.reason]);});
+  (b.failed_jobs||[]).forEach(function(x){rows.push(['failed job','task #'+x.task_id,'—',(x.age_minutes||0)+'m',(x.reason||'').slice(0,80)]);});
+  (b.failed_payouts||[]).forEach(function(x){rows.push(['failed payout','#'+x.payout_id,money(x.amount_usd),(x.age_minutes||0)+'m',x.reason]);});
+  document.getElementById('inc_sub').textContent=b.counts?('· '+b.counts.stalled_bookings+' stalled · '+b.counts.failed_jobs+' failed jobs · '+b.counts.failed_payouts+' failed payouts'):'';
+  if(!rows.length){tb.innerHTML='<tr><td colspan=5 class="mut mono" style="padding:20px;text-align:center">No incidents. Everything is settling normally.</td></tr>';return;}
+  tb.innerHTML=rows.map(function(r){return '<tr><td><span class="badge">'+r[0]+'</span></td><td class="mono">'+r[1]+'</td><td class="mono amber">'+r[2]+'</td><td class="mono mut">'+r[3]+'</td><td class="mut" style="font-size:12.5px">'+r[4]+'</td></tr>';}).join('');
 }
 async function loadVideo(){
   try{var r=await fetch('/landing/video');if(!r.ok)return;var d=await r.json();
