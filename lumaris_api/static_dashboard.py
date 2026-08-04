@@ -272,10 +272,11 @@ async function deposit(){const r=await api('/deposit',{method:'POST',body:JSON.s
 async function wallet(){const r=await api('/wallet');if(r.ok){animate($('bal'),r.body.balance,money);animate($('earn'),r.body.earnings,money);}}
 
 async function specs(){const r=await api('/specs');const tb=$('specs');if(!r.ok){return;}
-  const rows=r.body.specs;$('specnote').textContent=rows.length?`${rows.length} bookable now · reference cloud $${AWS_H100}/hr`:'';
+  const rows=r.body.specs;$('specnote').textContent=rows.length?`${rows.length} bookable now · "vs cloud" compares to the same GPU class`:'';
   if(!rows.length){tb.innerHTML='<tr><td colspan=7 class=empty>No bookable GPUs online right now.</td></tr>';return;}
-  tb.innerHTML=rows.map(s=>{const save=Math.round((1-s.price_per_hour/AWS_H100)*100);
-    const trust=[]; if(s.confidential)trust.push('<span class="badge cc">confidential</span>');
+  tb.innerHTML=rows.map(s=>{const save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
+    const trust=[]; if(s.trust)trust.push(`<span class="badge ${s.trust.rank>=2?'ok':''}" title="${s.trust.evidence}">${s.trust.label}</span>`);
+    if(s.confidential)trust.push('<span class="badge cc" title="Confidential-computing pilot — vendor TEE verification not yet connected">CC pilot</span>');
     if(s.region_verified)trust.push('<span class="badge ok">region ✓</span>');
     const rep=s.reputation_score!=null?`<span class="rep" style="color:${s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)'}">${s.reputation_score}</span>`:'—';
     const tok=s.benchmark_tokens_sec?`<span class="mini">${Math.round(s.benchmark_tokens_sec)} tok/s</span>`:'<span class="mini">—</span>';

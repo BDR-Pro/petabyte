@@ -271,15 +271,12 @@ def launch_docker_vm(task_id: int, vm_id: str, cpu: int, ram: int, cuda: bool) -
         try:
             subprocess.run(["docker", "--version"], check=True, capture_output=True)
         except (subprocess.CalledProcessError, FileNotFoundError):
-            logging.warning("Docker not found, using simulated VM")
-            return {
-                "vm_type": "docker",
-                "vm_id": vm_id,
-                "ip_address": "127.0.0.1",
-                "port": 2222,
-                "connection_string": f"docker exec -it {vm_id} /bin/bash",
-                "status": "simulated"
-            }
+            # No host fallback. Returning a fake endpoint here would hand the buyer a
+            # connection string to a machine that isn't running and let the booking
+            # settle against nothing. Refuse so the server refunds the escrow.
+            raise RuntimeError(
+                "Docker is not available on this node; cannot launch a VM. "
+                "Install Docker + the NVIDIA toolkit and restart the agent.")
         
         # Calculate memory limit (Docker uses MB)
         memory_mb = ram * 1024
@@ -348,30 +345,19 @@ def launch_docker_vm(task_id: int, vm_id: str, cpu: int, ram: int, cuda: bool) -
         }
 
 def launch_qemu_vm(task_id: int, vm_id: str, cpu: int, ram: int, cuda: bool) -> Dict:
-    """Launch a QEMU VM (Linux only)."""
-    logging.info("Launching QEMU VM (Linux only)")
-    # This would call the existing QEMU functions
-    # For now, return placeholder
-    return {
-        "vm_type": "qemu",
-        "vm_id": vm_id,
-        "ip_address": "192.168.1.100",  # Would be actual VM IP
-        "port": 22,
-        "connection_string": f"ssh user@{vm_id}",
-        "status": "running"
-    }
+    """QEMU micro-VM backend — NOT IMPLEMENTED.
+
+    This must NEVER return a synthetic 'running' status: doing so previously reported
+    a fabricated SSH address to the buyer for a machine that does not exist. Until the
+    real QEMU + VFIO passthrough path is built (see docs/isolation-roadmap.md, Phase 2),
+    fail loudly so the booking is refunded rather than silently mis-fulfilled."""
+    raise NotImplementedError(
+        "QEMU micro-VM backend is not implemented yet; use the Docker execution path.")
 
 def launch_firecracker_vm(task_id: int, vm_id: str, cpu: int, ram: int) -> Dict:
-    """Launch a Firecracker VM (Linux only)."""
-    logging.info("Launching Firecracker VM (Linux only)")
-    return {
-        "vm_type": "firecracker",
-        "vm_id": vm_id,
-        "ip_address": "192.168.1.101",
-        "port": 22,
-        "connection_string": f"ssh user@{vm_id}",
-        "status": "running"
-    }
+    """Firecracker micro-VM backend — NOT IMPLEMENTED. See launch_qemu_vm."""
+    raise NotImplementedError(
+        "Firecracker micro-VM backend is not implemented yet; use the Docker execution path.")
 
 if __name__ == "__main__":
     main()

@@ -445,6 +445,11 @@ c.post("/prove", headers=s5h, json={"spec_id":sid5,"attestation":at5,"signature"
 key5=c.post("/create_api_key", headers=s5h).json()["api_key"]
 c.post("/heartbeat", headers={"X-API-KEY":key5}, json={"spec_id":sid5})
 
+# --- TRUST LADDER: levels awarded only on evidence actually held ---
+_t5=[s for s in c.get("/specs", headers=b5h).json()["specs"] if s["spec_id"]==sid5][0]
+ok("attested-but-unbenchmarked node is agent_verified",
+   _t5["trust"]["level"]=="agent_verified" and _t5["trust"]["rank"]==1)
+
 def book5():
     return c.post("/request_vm", headers=b5h, json={"spec_id":sid5,"hours":1}).json()["booking_id"]
 
@@ -463,6 +468,16 @@ ok("benchmark job dispatched", bjob["task_type"]=="benchmark")
 bph={"task_id":bjob["task_id"],"output_hash":"bench","ts":int(time.time())}
 ok("signed benchmark result accepted", c.post("/jobs/benchmark_result", headers={"X-API-KEY":key5}, json={"spec_id":sid5,"tokens_sec":2350.5,"meta":{"model":"llama3-8b","sd_images_sec":4.2},"proof":bph,"signature":sign_proof(sk5,bph)}).status_code==200)
 ok("/specs surfaces tokens/sec", any(s["spec_id"]==sid5 and s["benchmark_tokens_sec"]==2350.5 for s in c.get("/specs", headers=b5h).json()["specs"]))
+# --- TRUST LADDER: a signed benchmark upgrades the level; TEE is never claimed ---
+_t5b=[s for s in c.get("/specs", headers=b5h).json()["specs"] if s["spec_id"]==sid5][0]
+ok("signed benchmark upgrades trust to benchmark_verified",
+   _t5b["trust"]["level"]=="benchmark_verified" and _t5b["trust"]["rank"]==2)
+_pub5=[s for s in c.get("/marketplace/specs").json()["specs"] if s["gpu_model"]=="H100" and s.get("trust",{}).get("level")=="benchmark_verified"]
+ok("marketplace surfaces the trust level publicly", len(_pub5)>=1)
+_det5=c.get(f"/marketplace/specs/{_pub5[0]['id']}").json() if _pub5 else {}
+ok("detail page never claims vendor hardware attestation (stub is not TEE)",
+   _det5.get("verification",{}).get("hardware_attested")==False and
+   _det5.get("verification",{}).get("agent_attested")==True)
 
 # --- #5 QUEUE PRIORITY ---
 lowb=book5(); highb=book5()
@@ -545,6 +560,12 @@ jB=c.get("/jobs/next", headers={"X-API-KEY":key6}).json()
 ok("backup config handed to agent", jB["task_id"]==tB and jB["backup_enabled"] is True and jB["backup_interval_s"]==120 and jB["volume"]=="world")
 ok("no restore on first run", jB["restore_from"] is None)
 ok("template image still present with backups", "minecraft" in jB["image"])
+# volume is interpolated into a root `tar` on the seller machine -> reject traversal
+_bkT=book6()
+ok("path-traversal volume rejected (../ escapes the volume tree)",
+   c.post("/create_task", headers=b6h, json={"booking_id":_bkT,"task_type":"template","template":"minecraft","backup_enabled":True,"volume":"../../etc/cron.d/x"}).status_code==422)
+ok("volume with slashes rejected",
+   c.post("/create_task", headers=b6h, json={"booking_id":_bkT,"task_type":"template","template":"minecraft","backup_enabled":True,"volume":"a/b"}).status_code==422)
 
 # agent records a SIGNED checkpoint
 cph={"task_id":tB,"output_hash":"ck1","ts":int(time.time())}
@@ -655,6 +676,24 @@ cheap=c.post("/solve", headers=rth, json={"workload":"inference","max_price_per_
 ok("router respects price ceiling", all(s["price_per_hour"]<=3.0 for s in cheap["selected"]))
 ok("router 409s when nothing fits", c.post("/solve", headers=rth, json={"min_vram":99999}).status_code==409)
 
+# ---- ROUTING DECISIONS: persisted, deterministic, explainable, owner-only ----
+plan2=c.post("/solve", headers=rth, json={"workload":"inference","redundancy":2}).json()
+ok("solve explains the selection in plain language",
+   "Selected" in plan.get("explanation","") and "because" in plan.get("explanation",""))
+ok("solve persists a decision id", isinstance(plan.get("decision_id"), int))
+ok("router is deterministic (same intent -> same selection)",
+   [s["spec_id"] for s in plan["selected"]]==[s["spec_id"] for s in plan2["selected"]])
+_rd=c.get(f"/routing/decisions/{plan['decision_id']}", headers=rth)
+ok("decision audit is readable by its buyer", _rd.status_code==200)
+_rdb=_rd.json()
+ok("decision audit stores every candidate with a score",
+   len(_rdb["candidates"])>=len(plan["selected"]) and all("score" in x for x in _rdb["candidates"]))
+ok("decision audit records exactly the selected nodes",
+   _rdb["selected_spec_ids"]==[s["spec_id"] for s in plan["selected"]])
+ok("decision audit stores the original intent", _rdb["intent"].get("redundancy")==2)
+ok("routing decision is owner-only",
+   c.get(f"/routing/decisions/{plan['decision_id']}", headers=hA).status_code==404)
+
 # ==== RENDER FARM (frame splitting across nodes) ====
 c.post("/register_user", json={"username":"renderbuyer","password":"hunter2-correct-horse"})
 rndh={"Authorization":f"Bearer {login('renderbuyer')}"}
@@ -679,6 +718,19 @@ from db import (SessionLocal as _PDBS, pending_payouts as _pend, set_payout_stat
                 SellerPayoutMethod as _PM, Payout as _PO, PayoutSchedule as _PS,
                 run_due_schedules as _rds)
 from payout_providers import process_payouts as _procpay
+from payout_providers import screen as _screen, ScreeningUnavailable as _ScrErr
+# Sanctions/AML screen must FAIL CLOSED in live mode: no real screen wired -> raise,
+# never silently approve a real payout destination.
+ok("screen() passes in stub/sandbox mode", _screen("bank", "acct-123") is True)
+def _screen_live_fails_closed():
+    os.environ["PAYOUT_STUB"] = "false"
+    try:
+        _screen("bank", "acct-123"); return False
+    except _ScrErr:
+        return True
+    finally:
+        os.environ["PAYOUT_STUB"] = "true"
+ok("screen() fails closed in live mode with no provider wired", _screen_live_fails_closed())
 import notifications as _notif
 from datetime import datetime as _pdt, timezone as _ptz, timedelta as _ptd
 def _worker():
@@ -1224,7 +1276,8 @@ ok("browsable template catalog page exists", _cat_pg.status_code==200 and "tplgr
 ok("catalog has filter chips by workload kind", "Notebooks" in _cat_pg.text and "Game servers" in _cat_pg.text)
 ok("catalog is linked from the primary nav", '>Templates</a>' in c.get("/").text)
 ok("notebooks are their own category", _tpl["jupyter"]["kind"]=="notebook")
-ok("catalog tells you templates are not a limit (BYO docker image)", "Any Docker image" in _cat_pg.text)
+ok("catalog is honest about curated-templates-only (no arbitrary user images yet)",
+   "curated, audited templates only" in _cat_pg.text and "template" in _cat_pg.text)
 
 # --- ACTIONABLE ERRORS (item 16): never a bare status code ---
 _offline = c.post("/request_vm", headers=bh, json={"spec_id": 999999, "hours": 1})
@@ -1395,7 +1448,12 @@ ok("the code editor / console stay LTR under RTL (money and code must not flip)"
 #     AND generated by deploy.sh, or it silently never reaches production ---
 import re as _re, glob as _glob
 _code_vars=set()
+# Scope: SERVER runtime modules only. The demo harness (demo.py/demo_test.py) is not
+# production config — its DEMO_* helpers must never leak into template.env — so it is
+# excluded here, matching this guard's own "…or it silently never reaches production".
 for _f in _glob.glob("*.py"):
+    if _f.startswith("demo"):
+        continue
     for _m in _re.finditer(r'os\.(?:getenv|environ\.get)\(\s*["\']([A-Z][A-Z0-9_]+)["\']', open(_f).read()):
         _code_vars.add(_m.group(1))
 _tpl=open("template.env").read()
@@ -1577,7 +1635,7 @@ pm=c.get("/marketplace/specs")
 ok("public /marketplace/specs works unauthenticated", pm.status_code==200 and "aws_reference" in pm.json())
 _pm=pm.json()
 ok("public /marketplace/specs lists attested nodes", _pm.get("count",0) > 0 and len(_pm["specs"])==_pm["count"])
-_allowed={"id","gpu_model","price_per_hour","cloud_reference","auto_price","region","region_verified","confidential","reputation_score","available_units","total_units","attested","cpu","ram_gb","gpu_count","vram_gb","jobs_completed","jobs_failed","success_rate"}
+_allowed={"id","gpu_model","price_per_hour","cloud_reference","auto_price","region","region_verified","confidential","reputation_score","available_units","total_units","attested","trust","cpu","ram_gb","gpu_count","vram_gb","jobs_completed","jobs_failed","success_rate"}
 _forbidden={"spec_id","user_id","owner","owner_id","username","email","host","ip","address","jti","seller_id"}
 ok("public listing id is an opaque handle, not an enumerable int",
    all(isinstance(_s.get("id"), str) and not str(_s.get("id")).isdigit() for _s in _pm["specs"]))
@@ -1646,6 +1704,16 @@ ok("demo requests are stored as real leads (demand evidence for investors)",
 ok("non-admins cannot read the lead list",
    c.get("/admin/demo-requests", headers=NAH).status_code == 403)
 ok("admin payouts list", c.get("/admin/payouts", headers=GAH).status_code==200)
+# --- admin incident view: failed/stalled transactions + reasons ---
+_inc=c.get("/admin/incidents", headers=GAH)
+ok("admin incidents ok for admin", _inc.status_code==200 and
+   {"stalled_bookings","failed_jobs","failed_payouts","counts"} <= set(_inc.json()))
+ok("admin incidents blocks non-admin", c.get("/admin/incidents", headers=NAH).status_code==403)
+ok("every reported incident carries a human-readable reason",
+   all("reason" in x for x in _inc.json()["failed_jobs"]) and
+   all("reason" in x for x in _inc.json()["stalled_bookings"]) and
+   all("reason" in x for x in _inc.json()["failed_payouts"]))
+ok("admin panel exposes the incidents view", "loadIncidents" in c.get("/admin").text)
 _rr=c.post("/admin/users/buyer1/role", headers=GAH, json={"role":"seller"})
 ok("admin can set role", _rr.status_code==200 and _rr.json()["role"]=="seller")
 ok("non-admin cannot set role", c.post("/admin/users/buyer1/role", headers=NAH, json={"role":"buyer"}).status_code==403)
@@ -1670,6 +1738,16 @@ _lr=c.post("/launch", headers=_lbh, json={"template":"minecraft","hours":1})
 ok("/launch auto-books + starts a template", _lr.status_code==200 and "task_id" in _lr.json() and _lr.json().get("port")==25565)
 ok("/launch unknown template -> 400", c.post("/launch", headers=_lbh, json={"template":"nope"}).status_code==400)
 ok("/launch requires auth", c.post("/launch", json={"template":"minecraft"}).status_code in (401,403))
+# --- /launch records WHY the node was picked, linked to the booking ---
+_lj=_lr.json()
+ok("/launch explains why the node was picked",
+   "Selected" in _lj.get("routing_explanation","") and "because" in _lj.get("routing_explanation",""))
+_ld=c.get(f"/routing/decisions/{_lj['routing_decision_id']}", headers=_lbh)
+ok("/launch decision audit is readable by the buyer", _ld.status_code==200)
+ok("/launch decision links the booking", _ld.json()["booking_id"]==_lj["booking_id"])
+_bk=c.get(f"/bookings/{_lj['booking_id']}", headers=_lbh).json()
+ok("booking carries its routing explanation",
+   _bk["routing_decision_id"]==_lj["routing_decision_id"] and "because" in (_bk["routing_explanation"] or ""))
 
 # --- VM routing + stable URL + failover (the Buyer/VM -> new node, same URL model) ---
 from datetime import datetime as _dt, timezone as _tz, timedelta as _td

@@ -143,6 +143,9 @@ class User(Base):
     referred_by = Column(Integer, ForeignKey("users.id"), nullable=True)    # who referred them
     referral_rewarded = Column(Boolean, default=False, nullable=False)      # did their qualifying event already pay out?
     referral_signup_meta = Column(String, nullable=True)                    # ip/dest at signup, for self-referral checks
+    # Seeded demo entity. NEVER shown as real traction: metrics separate demo from
+    # real, and the UI badges anything demo as "Demo data".
+    is_demo = Column(Boolean, default=False, nullable=False, index=True)
 
 
 class SellerSpec(Base):
@@ -193,6 +196,33 @@ class SellerSpec(Base):
     tee_vendor = Column(String, nullable=True)         # e.g. nvidia-h100-cc, amd-sev-snp
     tee_measurement = Column(String, nullable=True)    # attested enclave measurement
     tee_report = Column(Text, nullable=True)           # raw report (for buyer re-verify)
+    is_demo = Column(Boolean, default=False, nullable=False, index=True)  # seeded demo node
+
+
+def trust_level_for(spec: "SellerSpec") -> dict:
+    """The honest trust ladder for a listing. A level is awarded ONLY when its
+    technical requirement is actually satisfied by evidence we hold:
+
+      self_reported       registered via the API; nothing proven.
+      agent_verified      the node's agent signed a hardware report with its
+                          Ed25519 device key (/prove) — proves a keyholder on the
+                          node claims this hardware, NOT that the silicon is real.
+      benchmark_verified  agent_verified + a signed benchmark result exists, so
+                          throughput was measured, not declared.
+
+    'hardware_attested' (real vendor TEE chain: NVIDIA NRAS / AMD SEV-SNP / Intel
+    TDX) is deliberately NOT awardable today: the current verifier is a structural
+    stub (stub.md #3). spec.confidential therefore surfaces separately as
+    'cc_pilot' evidence and must never be marketed as hardware attestation."""
+    if not spec.attested:
+        return {"level": "self_reported", "rank": 0, "label": "Self-reported",
+                "evidence": "Listing details supplied by the seller; no proof held."}
+    if spec.benchmark_tokens_sec:
+        return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-verified",
+                "evidence": "Agent-signed hardware report + a signed benchmark "
+                            f"({round(spec.benchmark_tokens_sec)} tok/s) on record."}
+    return {"level": "agent_verified", "rank": 1, "label": "Agent-verified",
+            "evidence": "Hardware report signed by the node's Ed25519 device key."}
 
 
 class Booking(Base):
@@ -213,6 +243,7 @@ class Booking(Base):
     # the marketplace/investor numbers. Set automatically from PAYMENTS_MODE at insert.
     test = Column(Boolean, nullable=False,
                   default=lambda: os.getenv("PAYMENTS_MODE", "sandbox").lower() != "live")
+    is_demo = Column(Boolean, default=False, nullable=False, index=True)  # seeded demo booking
     created_at = Column(DateTime, default=_utcnow)
     released_at = Column(DateTime, nullable=True)
     refunded_at = Column(DateTime, nullable=True)
@@ -609,6 +640,44 @@ class ReputationEvent(Base):
     created_at = Column(DateTime, default=_utcnow)
 
 
+class RoutingDecision(Base):
+    """Why THIS node — recorded at decision time, append-only.
+
+    Every automated placement (/solve, /launch) writes one row with the full set of
+    eligible candidates, the factor scores, and the selection, so any booking can
+    answer "why did the platform pick this machine?" months later. It is the audit
+    trail a buyer or reviewer asks for, and the raw history a smarter pricing/routing
+    model needs. Rows are never updated except to link the resulting booking."""
+    __tablename__ = "routing_decisions"
+    id = Column(Integer, primary_key=True, index=True)
+    source = Column(String, nullable=False)                # solve | launch
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), index=True, nullable=True)
+    intent = Column(Text, nullable=False)                  # JSON: constraints as requested
+    candidates = Column(Text, nullable=False)              # JSON: every eligible node + factors
+    selected_spec_ids = Column(Text, nullable=False)       # JSON list of chosen spec ids
+    explanation = Column(Text, nullable=False)             # the sentence shown to the buyer
+    fulfilled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+
+
+def record_routing_decision(db: Session, source: str, user_id, intent: dict,
+                            candidates: list, selected_spec_ids: list,
+                            explanation: str, fulfilled: bool = True,
+                            booking_id: int = None) -> "RoutingDecision":
+    """Persist one placement decision. JSON-serialises Decimals safely."""
+    rd = RoutingDecision(
+        source=source, user_id=user_id, booking_id=booking_id,
+        intent=json.dumps(intent, default=_json_money),
+        candidates=json.dumps(candidates, default=_json_money),
+        selected_spec_ids=json.dumps(selected_spec_ids),
+        explanation=explanation, fulfilled=fulfilled)
+    db.add(rd)
+    db.commit()
+    db.refresh(rd)
+    return rd
+
+
 class MultiNodeJob(Base):
     """A fan-out job (render frames / transcode segments) assembled from N parts."""
     __tablename__ = "multinode_jobs"
@@ -761,13 +830,16 @@ def _ensure_columns():
     500s. This idempotently adds known-missing columns. Safe on SQLite and Postgres."""
     from sqlalchemy import inspect as _inspect, text as _text
     wanted = {
-        "bookings": [("test", "BOOLEAN NOT NULL DEFAULT true")],
+        "bookings": [("test", "BOOLEAN NOT NULL DEFAULT true"),
+                     ("is_demo", "BOOLEAN NOT NULL DEFAULT false")],
         "specs": [("min_price", "FLOAT"), ("max_price", "FLOAT"),
-                  ("auto_price", "BOOLEAN DEFAULT false"), ("public_id", "VARCHAR")],
+                  ("auto_price", "BOOLEAN DEFAULT false"), ("public_id", "VARCHAR"),
+                  ("is_demo", "BOOLEAN NOT NULL DEFAULT false")],
         "users": [("referral_code", "VARCHAR"), ("referred_by", "INTEGER"),
                   ("referral_rewarded", "BOOLEAN DEFAULT false"),
                   ("referral_signup_meta", "VARCHAR"),("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
-                  ("email_token_exp", "TIMESTAMP")],
+                  ("email_token_exp", "TIMESTAMP"),
+                  ("is_demo", "BOOLEAN NOT NULL DEFAULT false")],
         "platform": [("bookings_paused", "BOOLEAN DEFAULT false"),
                      ("pause_reason", "VARCHAR"), ("paused_at", "TIMESTAMP"),
                      ("landing_video_id", "VARCHAR"),

@@ -10,5 +10,16 @@ ExecStart=/opt/petabyte-agent/.venv/bin/python main.py
 Restart=always
 RestartSec=5
 
+# Hardening. The agent talks to the Docker daemon (effectively root-equivalent), so
+# it is not fully sandboxed, but these directives shrink the blast radius of a bug in
+# the agent itself without breaking container launch.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
 [Install]
 WantedBy=multi-user.target

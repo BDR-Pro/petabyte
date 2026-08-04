@@ -56,7 +56,7 @@ from db import (
     record_checkpoint, list_checkpoints, reschedule_task,
     get_or_create_task_enc_key,
     note_heartbeat, note_job_completed, note_job_failed, note_fraud,
-    compute_reputation, recent_rep_events,
+    compute_reputation, recent_rep_events, trust_level_for,
     set_idle_fallback, record_idle_report, idle_credited_total,
     add_payout_method, list_payout_methods, get_payout_method,
     request_payout, set_payout_status, list_payouts,
@@ -72,7 +72,7 @@ from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
                    GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
                    PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TEMPLATES_HTML,
-                   CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML)
+                   CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -125,6 +125,28 @@ CLOUD_REFERENCE = {
     "h100": 12.29, "h200": 14.00, "a100": 4.10, "l40": 1.80, "l4": 0.90,
     "a10": 1.30, "v100": 3.06, "t4": 0.53, "rtx 4090": 0.80, "4090": 0.80,
     "rtx 4080": 0.60, "rtx 3090": 0.55, "3090": 0.55, "rtx a6000": 1.60, "a6000": 1.60,
+}
+
+
+METRIC_DEFINITIONS = {
+    "gmv": "Gross merchandise value: sum of gross_amount over RELEASED (settled) "
+           "bookings in the window. Escrowed/refunded bookings are excluded.",
+    "platform_revenue": "Sum of platform_fee (the take rate) over released bookings.",
+    "seller_payouts": "Sum of seller_payout (gross minus fee) over released bookings.",
+    "effective_take_rate_pct": "platform_revenue / gmv, as a percent. Should track the "
+                               "configured PLATFORM_TAKE_RATE.",
+    "utilization_pct": "Busy units / total units across all listed specs.",
+    "available_gpu_hours": "Free units x each online node's rentable window — a capacity proxy.",
+    "booked_gpu_hours": "Sum of booked hours over released bookings.",
+    "buyer_savings_vs_cloud": "For each released booking on a GPU with a known cloud "
+                              "reference, (cloud_ref - price) x hours. No reference -> not counted.",
+    "completion_rate_pct": "completed / (completed + failed) over BUYER compute jobs "
+                           "(benchmark/test probes excluded).",
+    "median_time_to_start_s": "Median seconds from booking creation to the job task "
+                              "appearing — a startup-latency proxy.",
+    "repeat_buyers": "Buyers with more than one booking in the window.",
+    "contains_demo_data": "True when the numbers include seeded demo entities. Demo "
+                          "and real data are separable via scope=demo|real.",
 }
 
 
@@ -531,6 +553,20 @@ class TaskCreateModel(BaseModel):
     backup_enabled: bool = False
     backup_interval_s: int = 300        # snapshot cadence (recovery point)
     volume: Optional[str] = None        # logical data volume to back up
+
+    @field_validator("volume")
+    @classmethod
+    def _safe_volume(cls, v):
+        # This string is interpolated into filesystem paths and a `tar` command that
+        # runs AS ROOT on the seller's machine. Anything but a strict slug (no dots,
+        # no slashes) could traverse out of the intended volume tree. Reject early.
+        if v is None:
+            return v
+        import re as _re
+        if not _re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", v):
+            raise ValueError("volume must be a lowercase slug: [a-z0-9-], up to 63 chars, "
+                             "starting alphanumeric (no dots or slashes)")
+        return v
 
 
 class ProgressModel(BaseModel):
@@ -943,6 +979,11 @@ def status_page():
     """Plain service status — honest, generated from live heartbeats."""
     return HTMLResponse(STATUS_HTML)
 
+@app.get("/metrics", response_class=HTMLResponse)
+def metrics_page():
+    """Investor / operations metrics dashboard (data from /metrics/overview)."""
+    return HTMLResponse(METRICS_HTML)
+
 @app.get("/templates-catalog", response_class=HTMLResponse)
 @app.get("/catalog", response_class=HTMLResponse)
 def templates_page():
@@ -1104,8 +1145,8 @@ def public_spec_detail(public_id: str, db: Session = Depends(get_db)):
         "gpu_count": spec.gpu_count or 0, "vram_gb": spec.vram_gb or 0,
         "cpu": spec.cpu, "ram_gb": spec.ram,
         "price_per_hour": spec.price_per_hour, "cloud_reference": ref,
-        "savings_pct": (round((1 - spec.price_per_hour / ref) * 100)
-                        if ref and spec.price_per_hour < ref else None),
+        "savings_pct": (round((1 - float(spec.price_per_hour) / ref) * 100)
+                        if ref and float(spec.price_per_hour) < ref else None),
         "auto_price": bool(spec.auto_price),
         "region": spec.region, "region_verified": bool(spec.region_verified),
         "confidential": bool(spec.confidential),
@@ -1115,11 +1156,19 @@ def public_spec_detail(public_id: str, db: Session = Depends(get_db)):
         "jobs_completed": spec.jobs_completed, "jobs_failed": spec.jobs_failed,
         "success_rate": round(100.0 * spec.jobs_completed / total, 1) if total else None,
         "can_accept_paid_jobs": bool(owner and owner.can_accept_paid_jobs),
+        "trust": trust_level_for(spec),
         "verification": {
-            "hardware_attested": bool(spec.attested),
+            # Honest names: an agent signature proves a keyholder on the node
+            # claims this hardware — it is NOT vendor hardware attestation.
+            "agent_attested": bool(spec.attested),
             "method": "Ed25519-signed hardware report from the Petabyte agent",
+            "benchmark_verified": bool(spec.benchmark_tokens_sec),
             "region_verified": bool(spec.region_verified),
-            "confidential_computing": bool(spec.confidential),
+            "confidential_computing_pilot": bool(spec.confidential),
+            "hardware_attested": False,   # requires the real vendor TEE chain (stub.md #3)
+            "limits": "Agent attestation binds results to a device key; it cannot prove "
+                      "the silicon itself. Vendor TEE verification (NVIDIA NRAS / AMD "
+                      "SEV-SNP / Intel TDX) is not connected yet.",
         },
         "protection": {
             "escrow": "Funds are held in escrow for the rental and released on completion.",
@@ -1169,6 +1218,7 @@ def public_specs(db: Session = Depends(get_db),
                     "available_units": spec.available_units,
                     "total_units": spec.total_units,
                     "attested": bool(spec.attested),
+                    "trust": trust_level_for(spec),
                     "jobs_completed": spec.jobs_completed, "jobs_failed": spec.jobs_failed,
                     "success_rate": round(100.0 * spec.jobs_completed / total, 1) if total else None})
     keyfn = {"price": lambda x: x["price_per_hour"],
@@ -1782,6 +1832,9 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
         released = release_booking(db, task.booking_id)   # pay seller + platform
     if data.status == "completed":
         _advance_manifest(db, task, data.result or data.proof.get("output_hash"))
+    # NOTE: a failed job is NOT auto-refunded here — failed tasks are retryable
+    # (see /tasks/{id}/retry), which relies on the escrow being retained. Escrow is
+    # returned by the buyer cancel path and by the reaper when a node goes dead.
     return {"status": "ok", "task_id": task.id, "task_status": task.status,
             "output_hash": data.proof.get("output_hash"), "booking_released": released}
 
@@ -1858,6 +1911,9 @@ def list_specs(user: dict = Depends(get_current_user), db: Session = Depends(get
             "gpu_model": spec.gpu_model, "gpu_count": spec.gpu_count,
             "vram_gb": spec.vram_gb, "cpu": spec.cpu, "ram": spec.ram,
             "price_per_hour": spec.price_per_hour,
+            # Per-GPU-class cloud rate (None when no fair comparison exists) so the
+            # UI never divides a 4090 by an H100 price to invent a saving.
+            "cloud_reference": cloud_reference_for(spec.gpu_model),
             "available_units": spec.available_units,
             "reputation": owner.reputation,
             "confidential": bool(spec.confidential),
@@ -1867,6 +1923,7 @@ def list_specs(user: dict = Depends(get_current_user), db: Session = Depends(get
             "region_verified": bool(spec.region_verified),
             "benchmark_tokens_sec": spec.benchmark_tokens_sec,
             "reputation_score": compute_reputation(db, spec)["score"],
+            "trust": trust_level_for(spec),
         })
     out.sort(key=lambda x: x["price_per_hour"])
     return {"specs": out}
@@ -2164,9 +2221,32 @@ def marketplace_stats(db: Session = Depends(get_db)):
     jobs_completed = db.query(Task).filter(Task.status == "completed").count()
     gmv = db.query(func.coalesce(func.sum(Booking.gross_amount), 0.0)).filter(Booking.test == False).scalar() or 0.0  # noqa: E712 exclude sandbox
     plat = db.query(Platform).first()
+    demo_present = db.query(SellerSpec).filter(SellerSpec.is_demo == True).count() > 0  # noqa: E712
     return {"nodes_online": nodes_online, "specs_listed": specs_listed,
             "jobs_completed": jobs_completed, "gmv": round(float(gmv), 2),
-            "platform_revenue": round(plat.revenue, 2) if plat else 0.0}
+            "platform_revenue": round(plat.revenue, 2) if plat else 0.0,
+            "contains_demo_data": demo_present}
+
+
+@app.get("/metrics/overview", tags=["marketplace"])
+def metrics_overview(db: Session = Depends(get_db),
+                     scope: str = "all", since: Optional[str] = None,
+                     until: Optional[str] = None):
+    """Investor / operations metrics from real DB queries. `scope` = all|demo|real
+    keeps seeded demo data separate from real traction; the response states which
+    scope produced the numbers so the UI can badge demo data. Definitions:
+    /metrics/definitions and docs/METRIC_DEFINITIONS.md."""
+    from metrics import compute_metrics
+    if scope not in ("all", "demo", "real"):
+        raise HTTPException(status_code=400, detail="scope must be all|demo|real")
+    return compute_metrics(db, cloud_reference_for, scope=scope, since=since,
+                           until=until, default_reference=float(AWS_REFERENCE_PRICE))
+
+
+@app.get("/metrics/definitions", tags=["marketplace"])
+def metrics_definitions():
+    """Plain-language definition of every metric — no vanity numbers without context."""
+    return {"definitions": METRIC_DEFINITIONS}
 
 
 # ------------------- ADMIN (platform operators) -------------------
@@ -2770,6 +2850,71 @@ def admin_audit_log(limit: int = Query(100, ge=1, le=500),
                        for e in qy.limit(limit).all()]}
 
 
+@app.get("/admin/incidents", tags=["account"])
+def admin_incidents(stall_minutes: int = Query(30, ge=1, le=1440),
+                    limit: int = Query(100, ge=1, le=500),
+                    admin=Depends(require_admin), db: Session = Depends(get_db)):
+    """Operator incident view: transactions that failed or are stuck, and WHY.
+
+    Three classes an operator must be able to see at a glance:
+      * stalled bookings — money escrowed/active with no terminal state for a while
+        (a node that never finished, or a job that never got claimed);
+      * failed jobs — with the recorded reason and whether escrow was returned;
+      * failed payouts — money that could not be sent out.
+    Read-only; the fix actions live on the existing admin routes (delist, pause,
+    refund via reaper). This is the 'why is nothing settling' panel."""
+    from db import Booking, Task, Payout, SellerSpec
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=stall_minutes)
+
+    def _age_min(dt):
+        if not dt:
+            return None
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return round((now - dt).total_seconds() / 60, 1)
+
+    stalled = []
+    for b in (db.query(Booking)
+                .filter(Booking.status.in_(["escrowed", "active"]))
+                .order_by(Booking.id.desc()).limit(limit).all()):
+        created = b.created_at if not b.created_at or b.created_at.tzinfo else b.created_at.replace(tzinfo=timezone.utc)
+        if created and created < cutoff:
+            spec = db.query(SellerSpec).filter(SellerSpec.id == b.spec_id).first()
+            live = spec_is_live(spec) if spec else False
+            stalled.append({
+                "booking_id": b.id, "status": b.status,
+                "amount": b.gross_amount, "age_minutes": _age_min(b.created_at),
+                "spec_id": b.spec_id, "node_online": live,
+                "reason": ("node offline — reaper should fail over or refund"
+                           if not live else
+                           "job not completed yet — check the agent claimed it"),
+            })
+
+    failed_jobs = [{
+        "task_id": t.id, "task_type": t.task_type, "booking_id": t.booking_id,
+        "reason": (t.result or "job reported failed"),
+        "age_minutes": _age_min(t.completed_at or t.created_at),
+    } for t in (db.query(Task).filter(Task.status == "failed")
+                  .order_by(Task.id.desc()).limit(limit).all())]
+
+    failed_payouts = [{
+        "payout_id": p.id, "amount_usd": p.amount_usd, "kind": p.kind,
+        "status": p.status, "age_minutes": _age_min(p.created_at),
+        "reason": "provider send failed or reversed — funds returned to earnings",
+    } for p in (db.query(Payout).filter(Payout.status == "failed")
+                  .order_by(Payout.id.desc()).limit(limit).all())]
+
+    return {
+        "stall_minutes": stall_minutes,
+        "counts": {"stalled_bookings": len(stalled),
+                   "failed_jobs": len(failed_jobs),
+                   "failed_payouts": len(failed_payouts)},
+        "stalled_bookings": stalled,
+        "failed_jobs": failed_jobs,
+        "failed_payouts": failed_payouts,
+    }
+
+
 @app.get("/wallet/payouts")
 def get_payouts(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
@@ -3019,8 +3164,33 @@ def booking_status(booking_id: int, user: dict = Depends(get_current_user),
     b = db.query(Booking).filter(Booking.id == booking_id).first()
     if not b or not me or me.id not in (b.buyer_id, b.seller_id):
         raise HTTPException(status_code=404, detail="Booking not found")
+    from db import RoutingDecision
+    rd = db.query(RoutingDecision).filter(
+        RoutingDecision.booking_id == b.id).order_by(RoutingDecision.id.desc()).first()
     return {"booking_id": b.id, "status": b.status, "gross_amount": b.gross_amount,
-            "platform_fee": b.platform_fee, "seller_payout": b.seller_payout}
+            "platform_fee": b.platform_fee, "seller_payout": b.seller_payout,
+            "routing_explanation": rd.explanation if rd else None,
+            "routing_decision_id": rd.id if rd else None}
+
+
+@app.get("/routing/decisions/{decision_id}", tags=["compute"])
+def routing_decision_detail(decision_id: int, user: dict = Depends(get_current_user),
+                            db: Session = Depends(get_db)):
+    """The full audit record of one placement: the intent, every eligible candidate
+    with its factor scores, the selection, and the plain-language reason. Visible to
+    the buyer who triggered it (and admins)."""
+    from db import RoutingDecision
+    me = get_user_by_username(db, _username(user))
+    rd = db.query(RoutingDecision).filter(RoutingDecision.id == decision_id).first()
+    if not rd or not me or (rd.user_id != me.id and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="Decision not found")
+    return {"decision_id": rd.id, "source": rd.source,
+            "booking_id": rd.booking_id,
+            "intent": json.loads(rd.intent),
+            "candidates": json.loads(rd.candidates),
+            "selected_spec_ids": json.loads(rd.selected_spec_ids),
+            "explanation": rd.explanation, "fulfilled": rd.fulfilled,
+            "created_at": rd.created_at.isoformat() if rd.created_at else None}
 
 
 @app.post("/bookings/{booking_id}/release")
@@ -3221,10 +3391,20 @@ def solve_compute(intent: SolveModel, user: dict = Depends(get_current_user),
                   db: Session = Depends(get_db)):
     """AI Router: state intent, get a placement plan over verified inventory.
     The customer never picks a node — the router selects hardware, region,
-    provider, and redundancy to satisfy the constraints at the best blended cost."""
+    provider, and redundancy to satisfy the constraints at the best blended cost.
+    Every decision (inputs, every candidate's factor scores, the outcome) is
+    persisted so the placement can be audited later via /routing/decisions/{id}."""
+    from db import record_routing_decision
+    me = get_user_by_username(db, _username(user))
     plan = select_plan(db, intent.model_dump())
     if not plan["selected"]:
         raise HTTPException(status_code=409, detail="No verified node satisfies these constraints")
+    decision = record_routing_decision(
+        db, source="solve", user_id=me.id if me else None,
+        intent=intent.model_dump(), candidates=plan.pop("candidate_snapshot"),
+        selected_spec_ids=plan["selected_spec_ids"],
+        explanation=plan["explanation"], fulfilled=plan["fulfilled"])
+    plan["decision_id"] = decision.id
     return plan
 
 
@@ -3300,11 +3480,49 @@ def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
     if not candidates:
         raise HTTPException(status_code=409,
                             detail="No verified node can run this template right now")
-    spec = min(candidates, key=lambda s: s.price_per_hour)
+    # Deterministic: cheapest wins, equal prices break on the stable spec id — the
+    # same inventory must always produce the same placement (and the same audit row).
+    candidates.sort(key=lambda s: (s.price_per_hour, s.id))
+    spec = candidates[0]
+
+    # Human-readable "why this node", plus the audit snapshot of every candidate.
+    _total = (spec.jobs_completed or 0) + (spec.jobs_failed or 0)
+    _sr = round(100.0 * (spec.jobs_completed or 0) / _total, 1) if _total else None
+    if len(candidates) > 1:
+        _next = candidates[1]
+        _pct = round((1 - spec.price_per_hour / _next.price_per_hour) * 100) \
+            if _next.price_per_hour else 0
+        _vs = (f"costs {_pct}% less than the next eligible node "
+               f"(${spec.price_per_hour:.2f}/hr vs ${_next.price_per_hour:.2f}/hr)"
+               if _pct > 0 else
+               f"is the cheapest of {len(candidates)} eligible nodes at "
+               f"${spec.price_per_hour:.2f}/hr")
+    else:
+        _vs = "is the only verified node that can run this template right now"
+    routing_explanation = (
+        f"Selected {spec.gpu_model or 'CPU'} node {spec.public_id or spec.id} for "
+        f"'{data.template}' because it {_vs}; "
+        + (f"it has a {_sr}% successful-job rate over {_total} jobs."
+           if _sr is not None else "it has no completed-job history yet (new node)."))
 
     # Book + launch through the existing, tested handlers (escrow, capacity, task).
     booking = request_vm(RequestVMModel(spec_id=spec.id, hours=data.hours),
                          user=user, db=db, idempotency_key=None)
+
+    from db import record_routing_decision
+    _snapshot = [{"spec_id": s.id, "public_id": s.public_id, "gpu_model": s.gpu_model,
+                  "price_per_hour": s.price_per_hour,
+                  "success_rate": (round(100.0 * (s.jobs_completed or 0) /
+                                         ((s.jobs_completed or 0) + (s.jobs_failed or 0)), 1)
+                                   if ((s.jobs_completed or 0) + (s.jobs_failed or 0)) else None),
+                  "selected": s.id == spec.id} for s in candidates]
+    decision = record_routing_decision(
+        db, source="launch", user_id=buyer.id,
+        intent={"template": data.template, "hours": data.hours,
+                "region": data.region, "max_price_per_hour": data.max_price_per_hour,
+                "needs_gpu": needs_gpu},
+        candidates=_snapshot, selected_spec_ids=[spec.id],
+        explanation=routing_explanation, booking_id=booking["booking_id"])
     task = create_task_endpoint(
         TaskCreateModel(booking_id=booking["booking_id"], task_type="template",
                         template=data.template, template_params=data.template_params),
@@ -3320,6 +3538,8 @@ def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
         "gpu_model": spec.gpu_model, "region": spec.region,
         "price_per_hour": spec.price_per_hour, "hours": data.hours,
         "gross_amount": booking.get("gross_amount"), "status": vm.status,
+        "routing_explanation": routing_explanation,
+        "routing_decision_id": decision.id,
         "connect": f"once running, connect on port {port}" if port else "batch job — result via /tasks/{task_id}",
     }
 
@@ -3446,7 +3666,11 @@ def resolve_vm_route(vm_id: str, request: Request, db: Session = Depends(get_db)
     vm = get_vm_route(db, vm_id)
     if not vm or vm.status in ("stopped", "failed"):
         raise HTTPException(status_code=404, detail="No active route")
-    return {"vm_id": vm.id, "current_spec_id": vm.current_spec_id,
+    # node_id is the identity a hosting node registers its gateway control channel
+    # under — it IS the current spec id. The gateway reads `node_id`; we also keep
+    # `current_spec_id` for existing readers.
+    return {"vm_id": vm.id, "node_id": vm.current_spec_id,
+            "current_spec_id": vm.current_spec_id,
             "tunnel_port": vm.tunnel_port, "node_ip": vm.node_ip,
             "app_port": vm.app_port, "status": vm.status}
 
