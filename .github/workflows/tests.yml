@@ -28,6 +28,9 @@ jobs:
       - name: adversarial (money + races)
         working-directory: lumaris_api
         run: python adversarial_test.py
+      - name: stripe connect (offline, fake gateway)
+        working-directory: lumaris_api
+        run: python stripe_test.py
       - name: tunnel (NAT traversal + failover)
         working-directory: lumaris_gateway
         run: python tunnel_test.py
@@ -67,6 +70,10 @@ jobs:
       - name: adversarial — money conservation under real parallel writers
         working-directory: lumaris_api
         run: python adversarial_test.py
+
+      - name: stripe connect — full flow on Postgres (fake gateway)
+        working-directory: lumaris_api
+        run: python stripe_test.py
 
       - name: postgres-only — exact NUMERIC, advisory lock, true races
         working-directory: lumaris_api

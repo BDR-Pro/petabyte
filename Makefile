@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test test test-postgres install verify
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test test test-postgres install verify
 
 help:
 	@echo "Petabyte make targets:"
@@ -11,7 +11,9 @@ help:
 	@echo "  make demo-reset      Wipe and reseed the demo, then start the server"
 	@echo "  make demo-seed       Seed the demo only (no server)"
 	@echo "  make demo-test       Run the demo correctness/honesty test suite"
-	@echo "  make test            Run smoke + adversarial + gateway suites (SQLite)"
+	@echo "  make stripe-demo     Narrated Stripe Connect flow (test mode, fake gateway)"
+	@echo "  make stripe-test     Run the Stripe Connect test suite (54 offline assertions)"
+	@echo "  make test            Run smoke + adversarial + stripe + gateway suites (SQLite)"
 	@echo "  make test-postgres   Run the full suite against SQLite AND PostgreSQL"
 	@echo "  make install         Install Python dependencies"
 	@echo "  make verify          install + migrate check + full test + demo test"
@@ -31,6 +33,13 @@ demo-seed:
 
 demo-test:
 	cd $(API) && python3 demo_test.py
+
+# The deterministic Stripe Connect walkthrough (test mode, offline fake gateway).
+stripe-demo:
+	cd $(API) && python3 stripe_demo.py
+
+stripe-test:
+	cd $(API) && python3 stripe_test.py
 
 test:
 	cd $(API) && bash run_tests.sh
