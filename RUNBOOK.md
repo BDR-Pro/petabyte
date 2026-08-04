@@ -75,8 +75,10 @@ attest it, mint a key, start heartbeating). Then:
 systemctl status petabyte-agent
 journalctl -u petabyte-agent -f
 ```
-The GPU appears in `/marketplace` within a minute. Auto-update is enabled by default
-(6-hourly `petabyte-agent-update.timer`).
+The GPU appears in `/marketplace` within a minute. Auto-update is **off by default**
+because the update channel is not yet cryptographically signed (see
+`docs/PRODUCTION_GAPS.md`); opt in with `PETABYTE_AUTO_UPDATE=true` on the install
+command, or update manually with `petabyte update`.
 
 **Windows sellers:** either `irm https://yourdomain.com/install.ps1 | iex` (WSL2
 service) or the double-click desktop app (`desktop-app/` → `PetabyteAgent.exe`), where
