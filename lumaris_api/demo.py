@@ -106,7 +106,6 @@ def _login(client, user):
 def wipe(dbmod):
     """Drop and recreate the whole schema. Destructive by design — the demo DB is
     disposable. Refuses to run against a URL that looks like production."""
-    url = os.getenv("DATABASE_URL", "sqlite:///./dev.db")
     if os.getenv("ENVIRONMENT", "development").lower() == "production":
         raise DemoError("refusing to wipe: ENVIRONMENT=production")
     if dbmod.engine.dialect.name.startswith("postgres"):

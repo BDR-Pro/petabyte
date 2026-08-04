@@ -107,3 +107,78 @@ jobs:
           WG_PUBLIC_KEY: x
           WG_ENDPOINT: y
           GOOGLE_OAUTH_STUB: "true"
+
+  demo:
+    # The investor demo must stay correct and honest: seeding, is_demo labelling,
+    # ledger conservation, demo/real metric separation, and reset determinism.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r lumaris_api/requirements.txt
+      - name: investor demo (seed + honesty + reset)
+        working-directory: lumaris_api
+        run: python demo_test.py
+
+  migration:
+    # The app builds its schema from create_all() + _ensure_columns(); this proves a
+    # usable schema comes up from a COMPLETELY EMPTY database on both engines.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: petabyte_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r lumaris_api/requirements.txt
+      - name: schema builds from a clean SQLite DB
+        working-directory: lumaris_api
+        env: { SECRET_KEY: t, SERVER_PRIVATE_KEY: t, DATABASE_URL: "sqlite:///./_ci.db" }
+        run: python -c "import db; db.init_db(); print('sqlite schema OK')"
+      - name: schema builds from a clean PostgreSQL DB
+        working-directory: lumaris_api
+        env:
+          SECRET_KEY: t
+          SERVER_PRIVATE_KEY: t
+          DATABASE_URL: postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/petabyte_test
+        run: python -c "import db; db.init_db(); print('postgres schema OK')"
+
+  lint:
+    # Non-blocking style signal today (|| true) so a formatting nit never blocks a
+    # security fix; tighten to blocking once the tree is clean.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install ruff
+      - name: ruff (lint)
+        run: ruff check lumaris_api lumaris_agent lumaris_gateway || true
+      - name: ruff (format check)
+        run: ruff format --check lumaris_api || true
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: dependency vulnerability audit (pip-audit)
+        run: |
+          pip install pip-audit
+          pip-audit -r lumaris_api/requirements.txt || true
+      - name: secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

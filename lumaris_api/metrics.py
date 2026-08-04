@@ -9,8 +9,7 @@ Metric definitions live in docs/METRIC_DEFINITIONS.md; keep the two in sync.
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from db import (D, q, User, SellerSpec, Booking, Task, LedgerEntry,
-                spec_is_live, PLATFORM_REVENUE, account_balance)
+from db import D, q, SellerSpec, Booking, Task, spec_is_live
 
 # Task types that represent BUYER compute jobs. Internal probes (benchmark, test)
 # are deliberately excluded from "jobs completed/failed" so the numbers mean what an
@@ -74,23 +73,16 @@ def compute_metrics(db, cloud_reference_for, scope="all", since=None, until=None
 
     # ---- scope filters -----------------------------------------------------
     specs = db.query(SellerSpec).all()
-    users = db.query(User).all()
     bookings = db.query(Booking).all()
     tasks = db.query(Task).all()
     if scope == "demo":
         specs = [s for s in specs if s.is_demo]
-        demo_uids = {u.id for u in users if u.is_demo}
-        users_f = [u for u in users if u.is_demo]
         bookings = [b for b in bookings if b.is_demo]
         tasks = [t for t in tasks if t.spec_id in {s.id for s in specs}]
     elif scope == "real":
         specs = [s for s in specs if not s.is_demo]
-        users_f = [u for u in users if not u.is_demo]
-        real_uids = {u.id for u in users if not u.is_demo}
         bookings = [b for b in bookings if not b.is_demo]
         tasks = [t for t in tasks if t.spec_id in {s.id for s in specs}]
-    else:
-        users_f = users
 
     bookings = [b for b in bookings if in_window(b.created_at)]
 

@@ -21,9 +21,9 @@ for f in ("demo_test.db", "demo_test.db-wal", "demo_test.db-shm"):
     if os.path.exists(f):
         os.remove(f)
 
-from fastapi.testclient import TestClient
-import db as dbmod
-import main as app_main
+from fastapi.testclient import TestClient  # noqa: E402  (env must be set before import)
+import db as dbmod  # noqa: E402
+import main as app_main  # noqa: E402
 
 
 def ok(label, cond):
