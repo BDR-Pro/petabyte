@@ -764,7 +764,9 @@ async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await 
  document.getElementById('mnote').textContent=b.count?b.count+' GPUs match · "vs cloud" compares each GPU to the on-demand cloud rate for the SAME class':'No GPUs match these filters.';
  var tb=document.getElementById('mrows');if(!b.count){tb.innerHTML=pbEmpty(8,'No GPUs match','Widen your filters, or be the first to list one.','/install','List your GPU');return;}
  tb.innerHTML=b.specs.map(function(s){var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
-  var t=[];if(s.confidential)t.push('<span class="badge cc">conf</span>');if(s.region_verified)t.push('<span class="badge ok">region ✓</span>');
+  var t=[];if(s.trust)t.push('<span class="badge '+(s.trust.rank>=2?'ok':'')+'" title="'+s.trust.evidence+'">'+s.trust.label+'</span>');
+  if(s.confidential)t.push('<span class="badge cc" title="Confidential-computing pilot — vendor TEE verification not yet connected">CC pilot</span>');
+  if(s.region_verified)t.push('<span class="badge ok">region ✓</span>');
   var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
   var rep=(s.reputation_score!=null?s.reputation_score:'—')+(s.success_rate!=null?' <span class="mut" style="font-size:10px">('+s.success_rate+'%)</span>':'');
   var vram=s.vram_gb?((s.gpu_count>1?s.gpu_count+'× ':'')+s.vram_gb+'GB'):'—';
@@ -936,13 +938,13 @@ INVESTORS_HTML = _page("Petabyte — investors", """
     <div class="mini" style="text-align:end;line-height:1.9">petabyte.market<br><span style="color:var(--teal)">raising · pre-revenue</span></div>
   </div>
   <h1 style="font-size:clamp(30px,5.2vw,50px);margin:20px 0 12px;max-width:20ch">The routing layer for <span class="grad-teal">GPU compute</span>, priced like an energy market.</h1>
-  <p class="mut" style="font-size:16px;max-width:70ch">Petabyte aggregates underutilized GPU capacity from distributed providers and routes it to buyers at prices far below the hyperscalers — with confidential computing, escrow-protected settlement, and automated payout rails built in from day one.</p>
+  <p class="mut" style="font-size:16px;max-width:70ch">Petabyte aggregates underutilized GPU capacity from distributed providers and routes it to buyers below hyperscaler prices — with cryptographically verified hardware, container isolation, escrow-protected settlement, and a double-entry ledger. Real payment rails and vendor TEE attestation are on the roadmap, not yet live; we say exactly what is built and what is not.</p>
 </div></div>
 <div class="wrap" style="padding:26px 22px 8px"><div class="cols c2">
   <div class="card"><div class="lbl am">The problem</div>
     <p class="mut">GPU compute is expensive and scarce. Hyperscalers charge premium rates with limited high-end availability — while enormous capacity sits idle across smaller providers, with no efficient way to monetize it.</p></div>
   <div class="card"><div class="lbl">The solution</div>
-    <p class="mut">A decentralized marketplace that unlocks that hidden supply. Buyers get cheaper on-demand GPUs without lock-in, secured by micro-VM isolation and escrow. Providers turn idle hardware into revenue — automated payouts, idle-fallback so nothing sits unused.</p></div>
+    <p class="mut">A marketplace that unlocks that hidden supply. Buyers get cheaper on-demand GPUs without lock-in, secured today by hardened container isolation and escrow. Providers turn idle hardware into revenue with escrowed, ledger-tracked settlement. Stronger micro-VM/TEE isolation and idle-fallback are on the roadmap.</p></div>
 </div></div>
 <div class="wrap" style="padding:16px 22px 8px">
   <div class="panel" style="padding:22px 24px;border-inline-start:3px solid var(--teal);background:linear-gradient(100deg,rgba(79,214,201,.07),rgba(44,158,155,.03))">
@@ -951,24 +953,31 @@ INVESTORS_HTML = _page("Petabyte — investors", """
   </div>
 </div>
 <div class="wrap" style="padding:26px 22px 8px">
-  <div class="mini" style="margin-bottom:14px">Infrastructure — fully built</div>
+  <div class="mini" style="margin-bottom:14px">Infrastructure — built &amp; tested today</div>
   <div class="cols c4">
     <div class="card" style="padding:16px"><b class="teal" style="font-family:var(--disp);font-size:14px">Lumaris API</b><p class="mut" style="font-size:12.5px;margin-top:5px">Control plane &amp; job orchestration</p></div>
-    <div class="card" style="padding:16px"><b class="teal" style="font-family:var(--disp);font-size:14px">Confidential Compute</b><p class="mut" style="font-size:12.5px;margin-top:5px">Firecracker / QEMU micro-VM isolation</p></div>
-    <div class="card" style="padding:16px"><b class="teal" style="font-family:var(--disp);font-size:14px">Escrow &amp; Settlement</b><p class="mut" style="font-size:12.5px;margin-top:5px">Atomic, refund-on-reaper protection</p></div>
-    <div class="card" style="padding:16px"><b class="teal" style="font-family:var(--disp);font-size:14px">Payout Rails</b><p class="mut" style="font-size:12.5px;margin-top:5px">Automated provider settlement</p></div>
-    <div class="card" style="padding:16px"><b class="amber" style="font-family:var(--disp);font-size:14px">Render &amp; Transcode</b><p class="mut" style="font-size:12.5px;margin-top:5px">Fan-out / stitch pipelines</p></div>
-    <div class="card" style="padding:16px"><b class="amber" style="font-family:var(--disp);font-size:14px">AI Templates</b><p class="mut" style="font-size:12.5px;margin-top:5px">One-click vLLM, Ollama, ComfyUI</p></div>
+    <div class="card" style="padding:16px"><b class="teal" style="font-family:var(--disp);font-size:14px">Escrow &amp; Ledger</b><p class="mut" style="font-size:12.5px;margin-top:5px">Double-entry, exact-decimal, refund-on-reaper</p></div>
+    <div class="card" style="padding:16px"><b class="teal" style="font-family:var(--disp);font-size:14px">Explainable Routing</b><p class="mut" style="font-size:12.5px;margin-top:5px">Deterministic scoring + audit record</p></div>
+    <div class="card" style="padding:16px"><b class="teal" style="font-family:var(--disp);font-size:14px">Container Isolation</b><p class="mut" style="font-size:12.5px;margin-top:5px">cap-drop, no-net, read-only, no host fallback</p></div>
+    <div class="card" style="padding:16px"><b class="teal" style="font-family:var(--disp);font-size:14px">Agent Attestation</b><p class="mut" style="font-size:12.5px;margin-top:5px">Ed25519-signed hardware reports</p></div>
+    <div class="card" style="padding:16px"><b class="teal" style="font-family:var(--disp);font-size:14px">Render &amp; Transcode</b><p class="mut" style="font-size:12.5px;margin-top:5px">Fan-out / stitch pipelines</p></div>
+    <div class="card" style="padding:16px"><b class="teal" style="font-family:var(--disp);font-size:14px">AI Templates</b><p class="mut" style="font-size:12.5px;margin-top:5px">One-click vLLM, Ollama, ComfyUI</p></div>
+    <div class="card" style="padding:16px"><b class="teal" style="font-family:var(--disp);font-size:14px">Sandbox Ledger</b><p class="mut" style="font-size:12.5px;margin-top:5px">Payout state machine (sandbox by default)</p></div>
+  </div>
+  <div class="mini" style="margin:20px 0 14px">On the roadmap — <span class="mut">not yet live, and we don't claim otherwise</span></div>
+  <div class="cols c4">
+    <div class="card" style="padding:16px"><b class="amber" style="font-family:var(--disp);font-size:14px">Vendor TEE Attestation</b><p class="mut" style="font-size:12.5px;margin-top:5px">NVIDIA NRAS / AMD SEV-SNP (stub verifier today)</p></div>
+    <div class="card" style="padding:16px"><b class="amber" style="font-family:var(--disp);font-size:14px">Micro-VM Isolation</b><p class="mut" style="font-size:12.5px;margin-top:5px">Firecracker / QEMU + GPU passthrough</p></div>
+    <div class="card" style="padding:16px"><b class="amber" style="font-family:var(--disp);font-size:14px">Live Payment Rails</b><p class="mut" style="font-size:12.5px;margin-top:5px">Stripe in / provider payouts out (adapters written)</p></div>
     <div class="card" style="padding:16px"><b class="amber" style="font-family:var(--disp);font-size:14px">Idle Fallback</b><p class="mut" style="font-size:12.5px;margin-top:5px">Hard-preempt utilization capture</p></div>
-    <div class="card" style="padding:16px"><b class="amber" style="font-family:var(--disp);font-size:14px">Security Suite</b><p class="mut" style="font-size:12.5px;margin-top:5px">169-assertion test coverage</p></div>
   </div>
 </div>
 <div class="wrap" style="padding:22px 22px 8px">
   <div class="stats">
-    <div class="stat"><div class="n grad-teal">Live</div><div class="l">Core infra</div></div>
-    <div class="stat"><div class="n teal">169</div><div class="l">Security assertions</div></div>
-    <div class="stat"><div class="n teal">&lt;HS</div><div class="l">vs hyperscaler cost</div></div>
-    <div class="stat"><div class="n teal">2026</div><div class="l">First revenue</div></div>
+    <div class="stat"><div class="n grad-teal">Live</div><div class="l">Core marketplace infra</div></div>
+    <div class="stat"><div class="n teal">500+</div><div class="l">CI assertions, both DB engines</div></div>
+    <div class="stat"><div class="n teal">&lt;HS</div><div class="l">vs hyperscaler on-demand</div></div>
+    <div class="stat"><div class="n teal">Pre</div><div class="l">Revenue stage</div></div>
   </div>
 </div>
 <div class="wrap" style="padding:22px 22px 8px">
@@ -1732,8 +1741,8 @@ async function hosts(){var r=await fetch('/marketplace/specs?sort=price');var b=
     '<td data-l="$/hr"><div class="mono amber" style="font-weight:600">$'+s.price_per_hour.toFixed(2)+'</div>'+
       (s.auto_price?'<span class="badge cc" style="font-size:9px">auto</span>':'')+'</td>'+
     '<td class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
-    '<td data-l="Trust">'+(s.attested?'<span class="badge ok">verified</span>':'<span class="badge">unverified</span>')+
-      (s.confidential?' <span class="badge cc">CC</span>':'')+'</td>'+
+    '<td data-l="Trust">'+(s.trust?'<span class="badge '+(s.trust.rank>=2?'ok':'')+'" title="'+s.trust.evidence+'">'+s.trust.label+'</span>':(s.attested?'<span class="badge ok">verified</span>':'<span class="badge">unverified</span>'))+
+      (s.confidential?' <span class="badge cc" title="Confidential-computing pilot — vendor TEE verification not yet connected">CC pilot</span>':'')+'</td>'+
     '<td data-l="Region" class="mut mono" style="font-size:12px">'+(s.region||'—')+(s.region_verified?' <span class="teal">✓</span>':'')+'</td>'+
     '<td data-l="Reputation" class="mono" style="color:'+rc+'">'+(s.reputation_score!=null?s.reputation_score:'—')+
       '<div class="mini">'+(s.success_rate!=null?s.success_rate+'% ok':'no history')+'</div></td>'+
@@ -1836,8 +1845,8 @@ async function loadGpu(){
    '<div style="flex:1.6 1 380px;min-width:300px">'+
     '<h1 style="font-size:clamp(28px,4vw,40px);margin-bottom:8px">'+(s.gpu_count>1?s.gpu_count+'× ':'')+s.gpu_model+'</h1>'+
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px">'+status+
-      (s.verification.hardware_attested?'<span class="badge ok">Hardware verified</span>':'')+
-      (s.confidential?'<span class="badge cc">Confidential computing</span>':'')+
+      (s.trust?'<span class="badge '+(s.trust.rank>=2?'ok':'')+'" title="'+s.trust.evidence+'">'+s.trust.label+'</span>':'')+
+      (s.confidential?'<span class="badge cc" title="Confidential-computing pilot — vendor TEE verification not yet connected">CC pilot</span>':'')+
       (s.region_verified?'<span class="badge ok">Region verified</span>':'')+'</div>'+
     '<div class="card" style="margin-bottom:16px">'+
      '<div class="lbl">Specifications</div>'+
@@ -1858,8 +1867,9 @@ async function loadGpu(){
     '</div>'+
     '<div class="card">'+
      '<div class="lbl">What is actually verified</div>'+
-     '<p class="mut" style="font-size:13px;margin-bottom:8px">'+s.verification.method+'. The agent reports CPU, RAM, and GPU model, and signs the report with a key held on the machine — so the listing cannot be silently altered in transit.</p>'+
-     '<p class="mut" style="font-size:13px">'+(s.confidential?'This host reports support for confidential computing.':'This host does not advertise confidential computing.')+' Region is '+(s.region_verified?'checked against the host network address.':'self-reported by the host and not independently checked.')+'</p>'+
+     '<p class="mut" style="font-size:13px;margin-bottom:8px"><b>'+(s.trust?s.trust.label:'Self-reported')+':</b> '+(s.trust?s.trust.evidence:'')+' '+s.verification.method+'. The agent reports CPU, RAM, and GPU model, and signs the report with a key held on the machine — so the listing cannot be silently altered in transit.</p>'+
+     '<p class="mut" style="font-size:13px;margin-bottom:8px">'+(s.verification.limits||'')+'</p>'+
+     '<p class="mut" style="font-size:13px">'+(s.confidential?'This host reports support for confidential computing (pilot verifier — not vendor-attested).':'This host does not advertise confidential computing.')+' Region is '+(s.region_verified?'checked against the host network address.':'self-reported by the host and not independently checked.')+'</p>'+
     '</div>'+
    '</div>'+
    '<div style="flex:1 1 280px;min-width:260px;position:sticky;top:88px">'+
@@ -2085,7 +2095,7 @@ stat();setInterval(stat,15000);
 
 
 TEMPLATES_HTML = _page("Petabyte — templates",
-    desc="One-click templates: Jupyter, PyTorch, Ollama, vLLM, ComfyUI, Blender, game servers — or bring any Docker image.", path="/catalog", body="""
+    desc="One-click curated templates: Jupyter, PyTorch, Ollama, vLLM, ComfyUI, Blender, game servers — placed on the cheapest verified GPU that fits.", path="/catalog", body="""
 <div class="hero"><div class="wrap" style="padding:56px 24px 12px">
   <div class="eyebrow"><span class="dot"></span> one-click templates</div>
   <h1 style="font-size:clamp(32px,5vw,52px);margin:16px 0 12px" data-ar="اختر عبء عمل. اضغط تشغيل.">Pick a workload. <span class="grad">Press launch.</span></h1>
@@ -2104,10 +2114,10 @@ TEMPLATES_HTML = _page("Petabyte — templates",
   <div id="launchresult" style="display:none"></div>
 
   <div class="card" style="margin-top:22px">
-    <div class="lbl">Bring your own</div>
-    <h2 style="font-size:17px;margin-bottom:6px" data-ar="أي صورة Docker، عبر الواجهة البرمجية">Any Docker image, via the API</h2>
-    <p class="mut" style="font-size:13px;margin-bottom:10px" data-ar="القوالب وسيلة راحة، لا قيد. إن كانت لديك صورتك الخاصة، شغّلها مباشرةً.">Templates are a convenience, not a limit. If you have your own image, launch it directly.</p>
-    <div class="codeline"><code>curl -sX POST https://petabyte.market/api/v1/deployments -H "X-API-KEY: $KEY" -H "Content-Type: application/json" -d '{"image":"my/image:tag","hours":4}'</code>
+    <div class="lbl">Launch from the API</div>
+    <h2 style="font-size:17px;margin-bottom:6px" data-ar="شغّل أي قالب عبر الواجهة البرمجية">Launch any template via the API</h2>
+    <p class="mut" style="font-size:13px;margin-bottom:10px" data-ar="نشغّل حالياً قوالب مُدارة ومدقّقة فقط — لا صور عشوائية من المستخدم — لأن العبء يعمل على جهاز شخص آخر. صور المستخدم المخصّصة على خارطة الطريق.">Today we run <b>curated, audited templates only</b> — not arbitrary user images — because every workload runs on someone else's machine, and an unreviewed image is the host's risk. Custom images are on the roadmap behind stronger isolation.</p>
+    <div class="codeline"><code>curl -sX POST https://petabyte.market/api/v1/deployments -H "X-API-KEY: $KEY" -H "Content-Type: application/json" -d '{"template":"vllm","hours":4}'</code>
       <button class="copybtn" onclick="navigator.clipboard&amp;&amp;navigator.clipboard.writeText(this.previousElementSibling.textContent);this.textContent='copied'">copy</button></div>
     <p class="mut" style="font-size:12.5px;margin-top:10px">Full reference in the <a class="teal" href="/docs">API docs</a>.</p>
   </div>

@@ -67,14 +67,21 @@ cp "$APP/petabyte-agent.service" /etc/systemd/system/petabyte-agent.service
 systemctl daemon-reload
 systemctl enable --now petabyte-agent
 
-# auto-update: pull latest agent every 6h and restart if changed
-if [ -f "$APP/petabyte-agent-update.service" ]; then
+# Auto-update: OFF by default. The current update channel is NOT cryptographically
+# signed (see update.sh), so a compromised server or GitHub account could push code
+# that runs on this machine. Until release signing is in place, updating is opt-in:
+# set PETABYTE_AUTO_UPDATE=true to enable the 6-hourly timer.
+if [ "${PETABYTE_AUTO_UPDATE:-false}" = "true" ] && [ -f "$APP/petabyte-agent-update.service" ]; then
   chmod +x "$APP/update.sh" 2>/dev/null || true
   cp "$APP/petabyte-agent-update.service" /etc/systemd/system/petabyte-agent-update.service
   cp "$APP/petabyte-agent-update.timer" /etc/systemd/system/petabyte-agent-update.timer
   systemctl daemon-reload
   systemctl enable --now petabyte-agent-update.timer
-  echo "==> auto-update enabled (petabyte-agent-update.timer, every 6h)"
+  echo "==> auto-update ENABLED (petabyte-agent-update.timer, every 6h)."
+  echo "    WARNING: the update channel is not signed yet — see update.sh."
+else
+  echo "==> auto-update disabled (unsigned channel). Update manually with: petabyte update"
+  echo "    or re-run the installer with PETABYTE_AUTO_UPDATE=true to opt in."
 fi
 
 echo "✅ node online. logs: journalctl -u petabyte-agent -f"

@@ -445,6 +445,11 @@ c.post("/prove", headers=s5h, json={"spec_id":sid5,"attestation":at5,"signature"
 key5=c.post("/create_api_key", headers=s5h).json()["api_key"]
 c.post("/heartbeat", headers={"X-API-KEY":key5}, json={"spec_id":sid5})
 
+# --- TRUST LADDER: levels awarded only on evidence actually held ---
+_t5=[s for s in c.get("/specs", headers=b5h).json()["specs"] if s["spec_id"]==sid5][0]
+ok("attested-but-unbenchmarked node is agent_verified",
+   _t5["trust"]["level"]=="agent_verified" and _t5["trust"]["rank"]==1)
+
 def book5():
     return c.post("/request_vm", headers=b5h, json={"spec_id":sid5,"hours":1}).json()["booking_id"]
 
@@ -463,6 +468,16 @@ ok("benchmark job dispatched", bjob["task_type"]=="benchmark")
 bph={"task_id":bjob["task_id"],"output_hash":"bench","ts":int(time.time())}
 ok("signed benchmark result accepted", c.post("/jobs/benchmark_result", headers={"X-API-KEY":key5}, json={"spec_id":sid5,"tokens_sec":2350.5,"meta":{"model":"llama3-8b","sd_images_sec":4.2},"proof":bph,"signature":sign_proof(sk5,bph)}).status_code==200)
 ok("/specs surfaces tokens/sec", any(s["spec_id"]==sid5 and s["benchmark_tokens_sec"]==2350.5 for s in c.get("/specs", headers=b5h).json()["specs"]))
+# --- TRUST LADDER: a signed benchmark upgrades the level; TEE is never claimed ---
+_t5b=[s for s in c.get("/specs", headers=b5h).json()["specs"] if s["spec_id"]==sid5][0]
+ok("signed benchmark upgrades trust to benchmark_verified",
+   _t5b["trust"]["level"]=="benchmark_verified" and _t5b["trust"]["rank"]==2)
+_pub5=[s for s in c.get("/marketplace/specs").json()["specs"] if s["gpu_model"]=="H100" and s.get("trust",{}).get("level")=="benchmark_verified"]
+ok("marketplace surfaces the trust level publicly", len(_pub5)>=1)
+_det5=c.get(f"/marketplace/specs/{_pub5[0]['id']}").json() if _pub5 else {}
+ok("detail page never claims vendor hardware attestation (stub is not TEE)",
+   _det5.get("verification",{}).get("hardware_attested")==False and
+   _det5.get("verification",{}).get("agent_attested")==True)
 
 # --- #5 QUEUE PRIORITY ---
 lowb=book5(); highb=book5()
@@ -545,6 +560,12 @@ jB=c.get("/jobs/next", headers={"X-API-KEY":key6}).json()
 ok("backup config handed to agent", jB["task_id"]==tB and jB["backup_enabled"] is True and jB["backup_interval_s"]==120 and jB["volume"]=="world")
 ok("no restore on first run", jB["restore_from"] is None)
 ok("template image still present with backups", "minecraft" in jB["image"])
+# volume is interpolated into a root `tar` on the seller machine -> reject traversal
+_bkT=book6()
+ok("path-traversal volume rejected (../ escapes the volume tree)",
+   c.post("/create_task", headers=b6h, json={"booking_id":_bkT,"task_type":"template","template":"minecraft","backup_enabled":True,"volume":"../../etc/cron.d/x"}).status_code==422)
+ok("volume with slashes rejected",
+   c.post("/create_task", headers=b6h, json={"booking_id":_bkT,"task_type":"template","template":"minecraft","backup_enabled":True,"volume":"a/b"}).status_code==422)
 
 # agent records a SIGNED checkpoint
 cph={"task_id":tB,"output_hash":"ck1","ts":int(time.time())}
@@ -697,6 +718,19 @@ from db import (SessionLocal as _PDBS, pending_payouts as _pend, set_payout_stat
                 SellerPayoutMethod as _PM, Payout as _PO, PayoutSchedule as _PS,
                 run_due_schedules as _rds)
 from payout_providers import process_payouts as _procpay
+from payout_providers import screen as _screen, ScreeningUnavailable as _ScrErr
+# Sanctions/AML screen must FAIL CLOSED in live mode: no real screen wired -> raise,
+# never silently approve a real payout destination.
+ok("screen() passes in stub/sandbox mode", _screen("bank", "acct-123") is True)
+def _screen_live_fails_closed():
+    os.environ["PAYOUT_STUB"] = "false"
+    try:
+        _screen("bank", "acct-123"); return False
+    except _ScrErr:
+        return True
+    finally:
+        os.environ["PAYOUT_STUB"] = "true"
+ok("screen() fails closed in live mode with no provider wired", _screen_live_fails_closed())
 import notifications as _notif
 from datetime import datetime as _pdt, timezone as _ptz, timedelta as _ptd
 def _worker():
@@ -1242,7 +1276,8 @@ ok("browsable template catalog page exists", _cat_pg.status_code==200 and "tplgr
 ok("catalog has filter chips by workload kind", "Notebooks" in _cat_pg.text and "Game servers" in _cat_pg.text)
 ok("catalog is linked from the primary nav", '>Templates</a>' in c.get("/").text)
 ok("notebooks are their own category", _tpl["jupyter"]["kind"]=="notebook")
-ok("catalog tells you templates are not a limit (BYO docker image)", "Any Docker image" in _cat_pg.text)
+ok("catalog is honest about curated-templates-only (no arbitrary user images yet)",
+   "curated, audited templates only" in _cat_pg.text and "template" in _cat_pg.text)
 
 # --- ACTIONABLE ERRORS (item 16): never a bare status code ---
 _offline = c.post("/request_vm", headers=bh, json={"spec_id": 999999, "hours": 1})
@@ -1595,7 +1630,7 @@ pm=c.get("/marketplace/specs")
 ok("public /marketplace/specs works unauthenticated", pm.status_code==200 and "aws_reference" in pm.json())
 _pm=pm.json()
 ok("public /marketplace/specs lists attested nodes", _pm.get("count",0) > 0 and len(_pm["specs"])==_pm["count"])
-_allowed={"id","gpu_model","price_per_hour","cloud_reference","auto_price","region","region_verified","confidential","reputation_score","available_units","total_units","attested","cpu","ram_gb","gpu_count","vram_gb","jobs_completed","jobs_failed","success_rate"}
+_allowed={"id","gpu_model","price_per_hour","cloud_reference","auto_price","region","region_verified","confidential","reputation_score","available_units","total_units","attested","trust","cpu","ram_gb","gpu_count","vram_gb","jobs_completed","jobs_failed","success_rate"}
 _forbidden={"spec_id","user_id","owner","owner_id","username","email","host","ip","address","jti","seller_id"}
 ok("public listing id is an opaque handle, not an enumerable int",
    all(isinstance(_s.get("id"), str) and not str(_s.get("id")).isdigit() for _s in _pm["specs"]))

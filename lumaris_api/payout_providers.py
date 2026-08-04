@@ -15,12 +15,31 @@ Before ANY send: KYC on the seller + OFAC/sanctions screening on the destination
 import os
 
 
+class ScreeningUnavailable(Exception):
+    """Raised when live payouts are on but no real sanctions/AML screen is wired.
+    Fail CLOSED: never send money to an unscreened destination just because the
+    screen isn't configured."""
+
+
 def screen(method_kind: str, destination: str) -> bool:
-    """Sanctions/AML screen the destination. STUB passes; wire a real screen here."""
+    """Sanctions/AML screen the destination.
+
+    In stub mode (PAYOUT_STUB=true, the shipped default) this passes so the sandbox
+    ledger works without a compliance vendor. In LIVE mode it must call a real screen
+    (Chainalysis/TRM). Until one is wired, live mode FAILS CLOSED rather than silently
+    approving every destination — approving unscreened real payouts is a compliance
+    and money-laundering risk, not a convenience."""
     if os.getenv("PAYOUT_STUB", "").lower() == "true":
         return True
+    provider = os.getenv("SANCTIONS_SCREEN_PROVIDER", "").strip().lower()
+    if not provider:
+        raise ScreeningUnavailable(
+            "Live payouts require SANCTIONS_SCREEN_PROVIDER to be configured "
+            "(e.g. chainalysis/trm). Refusing to send unscreened funds.")
     # e.g. return chainalysis.screen(destination) / trm.screen(destination)
-    return True
+    raise ScreeningUnavailable(
+        f"Screening provider '{provider}' is named but not implemented; "
+        "refusing to send unscreened funds.")
 
 
 class PayoutProvider:

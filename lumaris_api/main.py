@@ -56,7 +56,7 @@ from db import (
     record_checkpoint, list_checkpoints, reschedule_task,
     get_or_create_task_enc_key,
     note_heartbeat, note_job_completed, note_job_failed, note_fraud,
-    compute_reputation, recent_rep_events,
+    compute_reputation, recent_rep_events, trust_level_for,
     set_idle_fallback, record_idle_report, idle_credited_total,
     add_payout_method, list_payout_methods, get_payout_method,
     request_payout, set_payout_status, list_payouts,
@@ -531,6 +531,20 @@ class TaskCreateModel(BaseModel):
     backup_enabled: bool = False
     backup_interval_s: int = 300        # snapshot cadence (recovery point)
     volume: Optional[str] = None        # logical data volume to back up
+
+    @field_validator("volume")
+    @classmethod
+    def _safe_volume(cls, v):
+        # This string is interpolated into filesystem paths and a `tar` command that
+        # runs AS ROOT on the seller's machine. Anything but a strict slug (no dots,
+        # no slashes) could traverse out of the intended volume tree. Reject early.
+        if v is None:
+            return v
+        import re as _re
+        if not _re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", v):
+            raise ValueError("volume must be a lowercase slug: [a-z0-9-], up to 63 chars, "
+                             "starting alphanumeric (no dots or slashes)")
+        return v
 
 
 class ProgressModel(BaseModel):
@@ -1104,8 +1118,8 @@ def public_spec_detail(public_id: str, db: Session = Depends(get_db)):
         "gpu_count": spec.gpu_count or 0, "vram_gb": spec.vram_gb or 0,
         "cpu": spec.cpu, "ram_gb": spec.ram,
         "price_per_hour": spec.price_per_hour, "cloud_reference": ref,
-        "savings_pct": (round((1 - spec.price_per_hour / ref) * 100)
-                        if ref and spec.price_per_hour < ref else None),
+        "savings_pct": (round((1 - float(spec.price_per_hour) / ref) * 100)
+                        if ref and float(spec.price_per_hour) < ref else None),
         "auto_price": bool(spec.auto_price),
         "region": spec.region, "region_verified": bool(spec.region_verified),
         "confidential": bool(spec.confidential),
@@ -1115,11 +1129,19 @@ def public_spec_detail(public_id: str, db: Session = Depends(get_db)):
         "jobs_completed": spec.jobs_completed, "jobs_failed": spec.jobs_failed,
         "success_rate": round(100.0 * spec.jobs_completed / total, 1) if total else None,
         "can_accept_paid_jobs": bool(owner and owner.can_accept_paid_jobs),
+        "trust": trust_level_for(spec),
         "verification": {
-            "hardware_attested": bool(spec.attested),
+            # Honest names: an agent signature proves a keyholder on the node
+            # claims this hardware — it is NOT vendor hardware attestation.
+            "agent_attested": bool(spec.attested),
             "method": "Ed25519-signed hardware report from the Petabyte agent",
+            "benchmark_verified": bool(spec.benchmark_tokens_sec),
             "region_verified": bool(spec.region_verified),
-            "confidential_computing": bool(spec.confidential),
+            "confidential_computing_pilot": bool(spec.confidential),
+            "hardware_attested": False,   # requires the real vendor TEE chain (stub.md #3)
+            "limits": "Agent attestation binds results to a device key; it cannot prove "
+                      "the silicon itself. Vendor TEE verification (NVIDIA NRAS / AMD "
+                      "SEV-SNP / Intel TDX) is not connected yet.",
         },
         "protection": {
             "escrow": "Funds are held in escrow for the rental and released on completion.",
@@ -1169,6 +1191,7 @@ def public_specs(db: Session = Depends(get_db),
                     "available_units": spec.available_units,
                     "total_units": spec.total_units,
                     "attested": bool(spec.attested),
+                    "trust": trust_level_for(spec),
                     "jobs_completed": spec.jobs_completed, "jobs_failed": spec.jobs_failed,
                     "success_rate": round(100.0 * spec.jobs_completed / total, 1) if total else None})
     keyfn = {"price": lambda x: x["price_per_hour"],
@@ -1870,6 +1893,7 @@ def list_specs(user: dict = Depends(get_current_user), db: Session = Depends(get
             "region_verified": bool(spec.region_verified),
             "benchmark_tokens_sec": spec.benchmark_tokens_sec,
             "reputation_score": compute_reputation(db, spec)["score"],
+            "trust": trust_level_for(spec),
         })
     out.sort(key=lambda x: x["price_per_hour"])
     return {"specs": out}
@@ -3524,7 +3548,11 @@ def resolve_vm_route(vm_id: str, request: Request, db: Session = Depends(get_db)
     vm = get_vm_route(db, vm_id)
     if not vm or vm.status in ("stopped", "failed"):
         raise HTTPException(status_code=404, detail="No active route")
-    return {"vm_id": vm.id, "current_spec_id": vm.current_spec_id,
+    # node_id is the identity a hosting node registers its gateway control channel
+    # under — it IS the current spec id. The gateway reads `node_id`; we also keep
+    # `current_spec_id` for existing readers.
+    return {"vm_id": vm.id, "node_id": vm.current_spec_id,
+            "current_spec_id": vm.current_spec_id,
             "tunnel_port": vm.tunnel_port, "node_ip": vm.node_ip,
             "app_port": vm.app_port, "status": vm.status}
 

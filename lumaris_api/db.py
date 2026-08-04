@@ -195,6 +195,32 @@ class SellerSpec(Base):
     tee_report = Column(Text, nullable=True)           # raw report (for buyer re-verify)
 
 
+def trust_level_for(spec: "SellerSpec") -> dict:
+    """The honest trust ladder for a listing. A level is awarded ONLY when its
+    technical requirement is actually satisfied by evidence we hold:
+
+      self_reported       registered via the API; nothing proven.
+      agent_verified      the node's agent signed a hardware report with its
+                          Ed25519 device key (/prove) — proves a keyholder on the
+                          node claims this hardware, NOT that the silicon is real.
+      benchmark_verified  agent_verified + a signed benchmark result exists, so
+                          throughput was measured, not declared.
+
+    'hardware_attested' (real vendor TEE chain: NVIDIA NRAS / AMD SEV-SNP / Intel
+    TDX) is deliberately NOT awardable today: the current verifier is a structural
+    stub (stub.md #3). spec.confidential therefore surfaces separately as
+    'cc_pilot' evidence and must never be marketed as hardware attestation."""
+    if not spec.attested:
+        return {"level": "self_reported", "rank": 0, "label": "Self-reported",
+                "evidence": "Listing details supplied by the seller; no proof held."}
+    if spec.benchmark_tokens_sec:
+        return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-verified",
+                "evidence": "Agent-signed hardware report + a signed benchmark "
+                            f"({round(spec.benchmark_tokens_sec)} tok/s) on record."}
+    return {"level": "agent_verified", "rank": 1, "label": "Agent-verified",
+            "evidence": "Hardware report signed by the node's Ed25519 device key."}
+
+
 class Booking(Base):
     __tablename__ = "bookings"
     id = Column(Integer, primary_key=True, index=True)
