@@ -143,6 +143,9 @@ class User(Base):
     referred_by = Column(Integer, ForeignKey("users.id"), nullable=True)    # who referred them
     referral_rewarded = Column(Boolean, default=False, nullable=False)      # did their qualifying event already pay out?
     referral_signup_meta = Column(String, nullable=True)                    # ip/dest at signup, for self-referral checks
+    # Seeded demo entity. NEVER shown as real traction: metrics separate demo from
+    # real, and the UI badges anything demo as "Demo data".
+    is_demo = Column(Boolean, default=False, nullable=False, index=True)
 
 
 class SellerSpec(Base):
@@ -193,6 +196,7 @@ class SellerSpec(Base):
     tee_vendor = Column(String, nullable=True)         # e.g. nvidia-h100-cc, amd-sev-snp
     tee_measurement = Column(String, nullable=True)    # attested enclave measurement
     tee_report = Column(Text, nullable=True)           # raw report (for buyer re-verify)
+    is_demo = Column(Boolean, default=False, nullable=False, index=True)  # seeded demo node
 
 
 def trust_level_for(spec: "SellerSpec") -> dict:
@@ -239,6 +243,7 @@ class Booking(Base):
     # the marketplace/investor numbers. Set automatically from PAYMENTS_MODE at insert.
     test = Column(Boolean, nullable=False,
                   default=lambda: os.getenv("PAYMENTS_MODE", "sandbox").lower() != "live")
+    is_demo = Column(Boolean, default=False, nullable=False, index=True)  # seeded demo booking
     created_at = Column(DateTime, default=_utcnow)
     released_at = Column(DateTime, nullable=True)
     refunded_at = Column(DateTime, nullable=True)
@@ -825,13 +830,16 @@ def _ensure_columns():
     500s. This idempotently adds known-missing columns. Safe on SQLite and Postgres."""
     from sqlalchemy import inspect as _inspect, text as _text
     wanted = {
-        "bookings": [("test", "BOOLEAN NOT NULL DEFAULT true")],
+        "bookings": [("test", "BOOLEAN NOT NULL DEFAULT true"),
+                     ("is_demo", "BOOLEAN NOT NULL DEFAULT false")],
         "specs": [("min_price", "FLOAT"), ("max_price", "FLOAT"),
-                  ("auto_price", "BOOLEAN DEFAULT false"), ("public_id", "VARCHAR")],
+                  ("auto_price", "BOOLEAN DEFAULT false"), ("public_id", "VARCHAR"),
+                  ("is_demo", "BOOLEAN NOT NULL DEFAULT false")],
         "users": [("referral_code", "VARCHAR"), ("referred_by", "INTEGER"),
                   ("referral_rewarded", "BOOLEAN DEFAULT false"),
                   ("referral_signup_meta", "VARCHAR"),("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
-                  ("email_token_exp", "TIMESTAMP")],
+                  ("email_token_exp", "TIMESTAMP"),
+                  ("is_demo", "BOOLEAN NOT NULL DEFAULT false")],
         "platform": [("bookings_paused", "BOOLEAN DEFAULT false"),
                      ("pause_reason", "VARCHAR"), ("paused_at", "TIMESTAMP"),
                      ("landing_video_id", "VARCHAR"),

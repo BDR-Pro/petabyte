@@ -72,7 +72,7 @@ from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
                    GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
                    PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TEMPLATES_HTML,
-                   CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML)
+                   CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -125,6 +125,28 @@ CLOUD_REFERENCE = {
     "h100": 12.29, "h200": 14.00, "a100": 4.10, "l40": 1.80, "l4": 0.90,
     "a10": 1.30, "v100": 3.06, "t4": 0.53, "rtx 4090": 0.80, "4090": 0.80,
     "rtx 4080": 0.60, "rtx 3090": 0.55, "3090": 0.55, "rtx a6000": 1.60, "a6000": 1.60,
+}
+
+
+METRIC_DEFINITIONS = {
+    "gmv": "Gross merchandise value: sum of gross_amount over RELEASED (settled) "
+           "bookings in the window. Escrowed/refunded bookings are excluded.",
+    "platform_revenue": "Sum of platform_fee (the take rate) over released bookings.",
+    "seller_payouts": "Sum of seller_payout (gross minus fee) over released bookings.",
+    "effective_take_rate_pct": "platform_revenue / gmv, as a percent. Should track the "
+                               "configured PLATFORM_TAKE_RATE.",
+    "utilization_pct": "Busy units / total units across all listed specs.",
+    "available_gpu_hours": "Free units x each online node's rentable window — a capacity proxy.",
+    "booked_gpu_hours": "Sum of booked hours over released bookings.",
+    "buyer_savings_vs_cloud": "For each released booking on a GPU with a known cloud "
+                              "reference, (cloud_ref - price) x hours. No reference -> not counted.",
+    "completion_rate_pct": "completed / (completed + failed) over BUYER compute jobs "
+                           "(benchmark/test probes excluded).",
+    "median_time_to_start_s": "Median seconds from booking creation to the job task "
+                              "appearing — a startup-latency proxy.",
+    "repeat_buyers": "Buyers with more than one booking in the window.",
+    "contains_demo_data": "True when the numbers include seeded demo entities. Demo "
+                          "and real data are separable via scope=demo|real.",
 }
 
 
@@ -956,6 +978,11 @@ def account_page():
 def status_page():
     """Plain service status — honest, generated from live heartbeats."""
     return HTMLResponse(STATUS_HTML)
+
+@app.get("/metrics", response_class=HTMLResponse)
+def metrics_page():
+    """Investor / operations metrics dashboard (data from /metrics/overview)."""
+    return HTMLResponse(METRICS_HTML)
 
 @app.get("/templates-catalog", response_class=HTMLResponse)
 @app.get("/catalog", response_class=HTMLResponse)
@@ -1805,6 +1832,9 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
         released = release_booking(db, task.booking_id)   # pay seller + platform
     if data.status == "completed":
         _advance_manifest(db, task, data.result or data.proof.get("output_hash"))
+    # NOTE: a failed job is NOT auto-refunded here — failed tasks are retryable
+    # (see /tasks/{id}/retry), which relies on the escrow being retained. Escrow is
+    # returned by the buyer cancel path and by the reaper when a node goes dead.
     return {"status": "ok", "task_id": task.id, "task_status": task.status,
             "output_hash": data.proof.get("output_hash"), "booking_released": released}
 
@@ -2191,9 +2221,32 @@ def marketplace_stats(db: Session = Depends(get_db)):
     jobs_completed = db.query(Task).filter(Task.status == "completed").count()
     gmv = db.query(func.coalesce(func.sum(Booking.gross_amount), 0.0)).filter(Booking.test == False).scalar() or 0.0  # noqa: E712 exclude sandbox
     plat = db.query(Platform).first()
+    demo_present = db.query(SellerSpec).filter(SellerSpec.is_demo == True).count() > 0  # noqa: E712
     return {"nodes_online": nodes_online, "specs_listed": specs_listed,
             "jobs_completed": jobs_completed, "gmv": round(float(gmv), 2),
-            "platform_revenue": round(plat.revenue, 2) if plat else 0.0}
+            "platform_revenue": round(plat.revenue, 2) if plat else 0.0,
+            "contains_demo_data": demo_present}
+
+
+@app.get("/metrics/overview", tags=["marketplace"])
+def metrics_overview(db: Session = Depends(get_db),
+                     scope: str = "all", since: Optional[str] = None,
+                     until: Optional[str] = None):
+    """Investor / operations metrics from real DB queries. `scope` = all|demo|real
+    keeps seeded demo data separate from real traction; the response states which
+    scope produced the numbers so the UI can badge demo data. Definitions:
+    /metrics/definitions and docs/METRIC_DEFINITIONS.md."""
+    from metrics import compute_metrics
+    if scope not in ("all", "demo", "real"):
+        raise HTTPException(status_code=400, detail="scope must be all|demo|real")
+    return compute_metrics(db, cloud_reference_for, scope=scope, since=since,
+                           until=until, default_reference=float(AWS_REFERENCE_PRICE))
+
+
+@app.get("/metrics/definitions", tags=["marketplace"])
+def metrics_definitions():
+    """Plain-language definition of every metric — no vanity numbers without context."""
+    return {"definitions": METRIC_DEFINITIONS}
 
 
 # ------------------- ADMIN (platform operators) -------------------

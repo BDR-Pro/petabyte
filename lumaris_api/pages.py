@@ -277,7 +277,7 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
 <div class="collapse navbar-collapse" id="pbnav">
 <div class="navlinks">
   <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
-  <a href="/install" data-ar="لمالكي كروت الرسومات">For GPU owners</a><a href="/security" data-ar="الأمان">Security</a><a href="/developers" data-ar="المطورون">Developers</a>
+  <a href="/metrics" data-ar="المقاييس">Metrics</a><a href="/install" data-ar="لمالكي كروت الرسومات">For GPU owners</a><a href="/security" data-ar="الأمان">Security</a><a href="/developers" data-ar="المطورون">Developers</a>
 </div>
 <div class="navcta">
   <a class="signin" id="adminlink" href="/admin" style="display:none">Admin</a>
@@ -731,7 +731,12 @@ MARKETPLACE_HTML = _page("Petabyte — marketplace",
   <div class="eyebrow"><span class="dot"></span> <span data-ar="المعروض المباشر">live inventory</span></div>
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px" data-ar="كروت الرسومات المتاحة">Available <span class="grad-teal">GPUs</span></h1>
   <p class="mut" id="mnote">Loading verified nodes…</p>
+  <div id="demobadge" style="display:none;margin-top:8px"><span class="badge cc" title="This marketplace contains seeded demonstration nodes, clearly labelled and never counted as real traction.">Demo data — includes simulated nodes</span></div>
 </div>
+<script>
+(async function(){try{var st=await (await fetch('/marketplace/stats')).json();
+  if(st.contains_demo_data)document.getElementById('demobadge').style.display='';}catch(e){}})();
+</script>
 <div class="wrap" style="padding:12px 22px 30px">
   <div class="panel filterbar" style="padding:16px 18px;margin-bottom:14px">
     <div class="field"><span data-ar="طراز الكرت">GPU model</span><input id="fgpu" placeholder="H100, 4090…" size="10" onkeydown="if(event.key==='Enter')load()"/></div>
@@ -2091,6 +2096,105 @@ async function stat(){
   srow('API',api_ok,detail)+srow('Marketplace',api_ok,nodes)+srow('Settlement',api_ok,api_ok?'operational':'degraded');
 }
 stat();setInterval(stat,15000);
+</script>""")
+
+
+METRICS_HTML = _page("Petabyte — marketplace metrics",
+    desc="Operations and investor metrics computed from real database queries: supply, utilization, GMV, take rate, buyer savings and job reliability. Demo data is clearly labelled.",
+    path="/metrics", body="""
+<div class="wrap" style="padding:52px 24px 6px">
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="مقاييس السوق">marketplace metrics</span></div>
+  <h1 style="font-size:clamp(28px,4.4vw,42px);margin:14px 0 8px">Marketplace &amp; unit economics</h1>
+  <p class="mut" style="max-width:70ch">Every number is computed live from the database — the ledger, bookings, specs and jobs. No hardcoded figures. Hover a metric for its definition.</p>
+  <div id="demobanner" style="display:none;margin-top:16px" class="card">
+    <b class="amber">Demo data</b> <span class="mut">— these figures include seeded, clearly-labelled demonstration entities, not real traction. Switch the scope to “Real only” to see production numbers.</span>
+  </div>
+  <div class="filterbar" style="margin-top:16px;gap:10px;align-items:flex-end">
+    <div class="field"><span>Scope</span>
+      <select id="mscope" onchange="loadMetrics()">
+        <option value="all">All (demo + real)</option>
+        <option value="demo">Demo only</option>
+        <option value="real">Real only</option>
+      </select></div>
+    <div class="field"><span>Since</span><input id="msince" type="date" onchange="loadMetrics()"/></div>
+    <div class="field"><span>Until</span><input id="muntil" type="date" onchange="loadMetrics()"/></div>
+    <button class="btn btn-ghost" onclick="document.getElementById('msince').value='';document.getElementById('muntil').value='';loadMetrics()">Clear dates</button>
+  </div>
+</div>
+
+<div class="wrap" style="padding:6px 24px 8px">
+  <div class="lbl" style="margin:14px 0 8px">Supply</div>
+  <div class="stats" id="grp_supply"></div>
+  <div class="lbl" style="margin:22px 0 8px">Demand &amp; reliability</div>
+  <div class="stats" id="grp_demand"></div>
+  <div class="lbl" style="margin:22px 0 8px">Unit economics</div>
+  <div class="stats" id="grp_econ"></div>
+</div>
+
+<div class="wrap" style="padding:8px 24px 10px"><div class="cols c2">
+  <div class="card"><div class="lbl">Supply by region</div><div id="by_region" style="margin-top:10px"></div></div>
+  <div class="card"><div class="lbl">Supply by hardware</div><div id="by_hw" style="margin-top:10px"></div></div>
+</div></div>
+
+<div class="wrap" style="padding:8px 24px 40px">
+  <div class="card" id="integritycard">
+    <div class="lbl">Integrity</div>
+    <p class="mut" id="integritytext" style="font-size:13px;margin-top:8px">—</p>
+  </div>
+  <p class="mini" style="margin-top:14px">Metric definitions: <a class="teal" href="/metrics/definitions">/metrics/definitions</a>. Take rate should equal the configured platform fee; the ledger must always balance.</p>
+</div>
+
+<script>
+var DEFS={};
+function tile(label,val,def){return '<div class="stat" title="'+(def||'').replace(/"/g,"&quot;")+'"><div class="n teal">'+val+'</div><div class="l">'+label+'</div></div>';}
+function money(n){return '$'+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function bars(obj){var e=Object.entries(obj||{});if(!e.length)return '<span class="mut mono" style="font-size:12px">none</span>';
+  var max=Math.max.apply(null,e.map(function(x){return x[1]}));
+  return e.sort(function(a,b){return b[1]-a[1]}).map(function(x){
+    var pct=max?Math.round(100*x[1]/max):0;
+    return '<div style="display:flex;align-items:center;gap:10px;padding:5px 0">'+
+      '<span class="mono" style="flex:1;font-size:12.5px">'+x[0]+'</span>'+
+      '<span style="flex:2;height:8px;background:var(--hair);border-radius:6px;overflow:hidden"><span style="display:block;height:100%;width:'+pct+'%;background:var(--teal)"></span></span>'+
+      '<span class="mono mut" style="width:28px;text-align:end;font-size:12px">'+x[1]+'</span></div>';
+  }).join('');}
+async function loadDefs(){try{DEFS=(await (await fetch('/metrics/definitions')).json()).definitions||{};}catch(e){}}
+async function loadMetrics(){
+  var scope=document.getElementById('mscope').value;
+  var since=document.getElementById('msince').value,until=document.getElementById('muntil').value;
+  var qs='scope='+scope+(since?'&since='+since:'')+(until?'&until='+until:'');
+  var m;try{m=await (await fetch('/metrics/overview?'+qs)).json();}catch(e){return;}
+  document.getElementById('demobanner').style.display=m.contains_demo_data?'':'none';
+  var s=m.supply,d=m.demand,e=m.economics,j=m.jobs;
+  document.getElementById('grp_supply').innerHTML=
+    tile('Registered nodes',s.registered,DEFS.contains_demo_data)+
+    tile('Online',s.online,'Nodes currently heartbeating')+
+    tile('Verified',s.verified,'Nodes with a signed hardware attestation')+
+    tile('Utilization',s.utilization_pct+'%',DEFS.utilization_pct)+
+    tile('Available GPU-hrs',s.available_gpu_hours,DEFS.available_gpu_hours)+
+    tile('Booked GPU-hrs',s.booked_gpu_hours,DEFS.booked_gpu_hours);
+  document.getElementById('grp_demand').innerHTML=
+    tile('Active buyers',d.active_buyers,'Distinct buyers with a booking in range')+
+    tile('Repeat buyers',d.repeat_buyers,DEFS.repeat_buyers)+
+    tile('Active sellers',d.active_sellers,'Sellers with a settled booking')+
+    tile('Jobs completed',j.completed,DEFS.completion_rate_pct)+
+    tile('Jobs failed',j.failed,'Buyer jobs that reported failure')+
+    tile('Completion rate',(j.completion_rate_pct==null?'—':j.completion_rate_pct+'%'),DEFS.completion_rate_pct);
+  document.getElementById('grp_econ').innerHTML=
+    tile('GMV',money(e.gmv),DEFS.gmv)+
+    tile('Platform revenue',money(e.platform_revenue),DEFS.platform_revenue)+
+    tile('Seller payouts',money(e.seller_payouts),DEFS.seller_payouts)+
+    tile('Effective take rate',e.effective_take_rate_pct+'%',DEFS.effective_take_rate_pct)+
+    tile('Avg $/hr',(e.avg_hourly_price==null?'—':money(e.avg_hourly_price)),'Mean listed hourly price of online nodes')+
+    tile('Buyer savings vs cloud',money(e.buyer_savings_vs_cloud),DEFS.buyer_savings_vs_cloud);
+  document.getElementById('by_region').innerHTML=bars(s.by_region);
+  document.getElementById('by_hw').innerHTML=bars(s.by_hardware);
+  var ok=m.integrity.ledger_balanced;
+  document.getElementById('integritytext').innerHTML=
+    (ok===true?'<b style="color:var(--pos)">Ledger balanced</b> — every transaction\\'s debits equal its credits and the books sum to zero.'
+      :ok===false?'<b style="color:var(--bad)">Ledger imbalance detected</b> — broken tx: '+JSON.stringify(m.integrity.broken_transactions)
+      :'Ledger check unavailable.');
+}
+loadDefs().then(loadMetrics);setInterval(loadMetrics,15000);
 </script>""")
 
 
