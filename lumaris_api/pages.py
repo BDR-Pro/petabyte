@@ -701,7 +701,7 @@ async function heroPreview(){
   }else{
     el.innerHTML=rows.map(function(s){
       var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
-      return '<a href="/gpu/'+s.spec_id+'" style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--hair)">'+
+      return '<a href="/gpu/'+s.id+'" style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--hair)">'+
        '<div style="flex:1;min-width:0">'+
         '<div style="font-family:var(--disp);font-weight:600;font-size:14px">'+(s.gpu_model||'CPU')+(s.vram_gb?' <span class="mut" style="font-weight:400">· '+s.vram_gb+'GB</span>':'')+'</div>'+
         '<div class="mini" style="margin-top:2px">'+(s.region||'unknown region')+' · '+(s.available_units>0?'<span class="teal">available now</span>':'busy')+'</div>'+
@@ -760,10 +760,10 @@ function qs(){var p=new URLSearchParams();var g=v('fgpu');if(g)p.set('gpu',g);va
  if(document.getElementById('fconf').checked)p.set('confidential','true');p.set('sort',document.getElementById('fsort').value);return p.toString();}
 function v(id){return (document.getElementById(id).value||'').trim();}
 function clearf(){['fgpu','fprice','fvram','fregion'].forEach(function(i){document.getElementById(i).value='';});document.getElementById('fconf').checked=false;load();}
-async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await r.json();var aws=b.aws_reference||12.29;
- document.getElementById('mnote').textContent=b.count?b.count+' GPUs match · reference cloud $'+aws+'/hr':'No GPUs match these filters.';
+async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await r.json();
+ document.getElementById('mnote').textContent=b.count?b.count+' GPUs match · "vs cloud" compares each GPU to the on-demand cloud rate for the SAME class':'No GPUs match these filters.';
  var tb=document.getElementById('mrows');if(!b.count){tb.innerHTML=pbEmpty(8,'No GPUs match','Widen your filters, or be the first to list one.','/install','List your GPU');return;}
- tb.innerHTML=b.specs.map(function(s){var save=Math.round((1-s.price_per_hour/aws)*100);
+ tb.innerHTML=b.specs.map(function(s){var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
   var t=[];if(s.confidential)t.push('<span class="badge cc">conf</span>');if(s.region_verified)t.push('<span class="badge ok">region ✓</span>');
   var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
   var rep=(s.reputation_score!=null?s.reputation_score:'—')+(s.success_rate!=null?' <span class="mut" style="font-size:10px">('+s.success_rate+'%)</span>':'');
@@ -1927,7 +1927,7 @@ async function prices(){
    '<td data-l="Cloud" class="mono mut">'+(s.cloud_reference?'$'+Number(s.cloud_reference).toFixed(2)+'/hr':'<span class="mini">no comparable rate</span>')+'</td>'+
    '<td data-l="You save" class="mono" style="color:var(--pos)">'+(save>0?save+'%':'—')+'</td>'+
    '<td class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td>'+
-   '<td><a class="btn btn-teal" style="padding:6px 14px;font-size:12px" href="/gpu/'+s.spec_id+'">View</a></td></tr>';}).join('');
+   '<td><a class="btn btn-teal" style="padding:6px 14px;font-size:12px" href="/gpu/'+s.id+'">View</a></td></tr>';}).join('');
 }
 prices();setInterval(prices,10000);
 </script>""")

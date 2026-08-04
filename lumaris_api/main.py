@@ -1858,6 +1858,9 @@ def list_specs(user: dict = Depends(get_current_user), db: Session = Depends(get
             "gpu_model": spec.gpu_model, "gpu_count": spec.gpu_count,
             "vram_gb": spec.vram_gb, "cpu": spec.cpu, "ram": spec.ram,
             "price_per_hour": spec.price_per_hour,
+            # Per-GPU-class cloud rate (None when no fair comparison exists) so the
+            # UI never divides a 4090 by an H100 price to invent a saving.
+            "cloud_reference": cloud_reference_for(spec.gpu_model),
             "available_units": spec.available_units,
             "reputation": owner.reputation,
             "confidential": bool(spec.confidential),
@@ -3019,8 +3022,33 @@ def booking_status(booking_id: int, user: dict = Depends(get_current_user),
     b = db.query(Booking).filter(Booking.id == booking_id).first()
     if not b or not me or me.id not in (b.buyer_id, b.seller_id):
         raise HTTPException(status_code=404, detail="Booking not found")
+    from db import RoutingDecision
+    rd = db.query(RoutingDecision).filter(
+        RoutingDecision.booking_id == b.id).order_by(RoutingDecision.id.desc()).first()
     return {"booking_id": b.id, "status": b.status, "gross_amount": b.gross_amount,
-            "platform_fee": b.platform_fee, "seller_payout": b.seller_payout}
+            "platform_fee": b.platform_fee, "seller_payout": b.seller_payout,
+            "routing_explanation": rd.explanation if rd else None,
+            "routing_decision_id": rd.id if rd else None}
+
+
+@app.get("/routing/decisions/{decision_id}", tags=["compute"])
+def routing_decision_detail(decision_id: int, user: dict = Depends(get_current_user),
+                            db: Session = Depends(get_db)):
+    """The full audit record of one placement: the intent, every eligible candidate
+    with its factor scores, the selection, and the plain-language reason. Visible to
+    the buyer who triggered it (and admins)."""
+    from db import RoutingDecision
+    me = get_user_by_username(db, _username(user))
+    rd = db.query(RoutingDecision).filter(RoutingDecision.id == decision_id).first()
+    if not rd or not me or (rd.user_id != me.id and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="Decision not found")
+    return {"decision_id": rd.id, "source": rd.source,
+            "booking_id": rd.booking_id,
+            "intent": json.loads(rd.intent),
+            "candidates": json.loads(rd.candidates),
+            "selected_spec_ids": json.loads(rd.selected_spec_ids),
+            "explanation": rd.explanation, "fulfilled": rd.fulfilled,
+            "created_at": rd.created_at.isoformat() if rd.created_at else None}
 
 
 @app.post("/bookings/{booking_id}/release")
@@ -3221,10 +3249,20 @@ def solve_compute(intent: SolveModel, user: dict = Depends(get_current_user),
                   db: Session = Depends(get_db)):
     """AI Router: state intent, get a placement plan over verified inventory.
     The customer never picks a node — the router selects hardware, region,
-    provider, and redundancy to satisfy the constraints at the best blended cost."""
+    provider, and redundancy to satisfy the constraints at the best blended cost.
+    Every decision (inputs, every candidate's factor scores, the outcome) is
+    persisted so the placement can be audited later via /routing/decisions/{id}."""
+    from db import record_routing_decision
+    me = get_user_by_username(db, _username(user))
     plan = select_plan(db, intent.model_dump())
     if not plan["selected"]:
         raise HTTPException(status_code=409, detail="No verified node satisfies these constraints")
+    decision = record_routing_decision(
+        db, source="solve", user_id=me.id if me else None,
+        intent=intent.model_dump(), candidates=plan.pop("candidate_snapshot"),
+        selected_spec_ids=plan["selected_spec_ids"],
+        explanation=plan["explanation"], fulfilled=plan["fulfilled"])
+    plan["decision_id"] = decision.id
     return plan
 
 
@@ -3300,11 +3338,49 @@ def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
     if not candidates:
         raise HTTPException(status_code=409,
                             detail="No verified node can run this template right now")
-    spec = min(candidates, key=lambda s: s.price_per_hour)
+    # Deterministic: cheapest wins, equal prices break on the stable spec id — the
+    # same inventory must always produce the same placement (and the same audit row).
+    candidates.sort(key=lambda s: (s.price_per_hour, s.id))
+    spec = candidates[0]
+
+    # Human-readable "why this node", plus the audit snapshot of every candidate.
+    _total = (spec.jobs_completed or 0) + (spec.jobs_failed or 0)
+    _sr = round(100.0 * (spec.jobs_completed or 0) / _total, 1) if _total else None
+    if len(candidates) > 1:
+        _next = candidates[1]
+        _pct = round((1 - spec.price_per_hour / _next.price_per_hour) * 100) \
+            if _next.price_per_hour else 0
+        _vs = (f"costs {_pct}% less than the next eligible node "
+               f"(${spec.price_per_hour:.2f}/hr vs ${_next.price_per_hour:.2f}/hr)"
+               if _pct > 0 else
+               f"is the cheapest of {len(candidates)} eligible nodes at "
+               f"${spec.price_per_hour:.2f}/hr")
+    else:
+        _vs = "is the only verified node that can run this template right now"
+    routing_explanation = (
+        f"Selected {spec.gpu_model or 'CPU'} node {spec.public_id or spec.id} for "
+        f"'{data.template}' because it {_vs}; "
+        + (f"it has a {_sr}% successful-job rate over {_total} jobs."
+           if _sr is not None else "it has no completed-job history yet (new node)."))
 
     # Book + launch through the existing, tested handlers (escrow, capacity, task).
     booking = request_vm(RequestVMModel(spec_id=spec.id, hours=data.hours),
                          user=user, db=db, idempotency_key=None)
+
+    from db import record_routing_decision
+    _snapshot = [{"spec_id": s.id, "public_id": s.public_id, "gpu_model": s.gpu_model,
+                  "price_per_hour": s.price_per_hour,
+                  "success_rate": (round(100.0 * (s.jobs_completed or 0) /
+                                         ((s.jobs_completed or 0) + (s.jobs_failed or 0)), 1)
+                                   if ((s.jobs_completed or 0) + (s.jobs_failed or 0)) else None),
+                  "selected": s.id == spec.id} for s in candidates]
+    decision = record_routing_decision(
+        db, source="launch", user_id=buyer.id,
+        intent={"template": data.template, "hours": data.hours,
+                "region": data.region, "max_price_per_hour": data.max_price_per_hour,
+                "needs_gpu": needs_gpu},
+        candidates=_snapshot, selected_spec_ids=[spec.id],
+        explanation=routing_explanation, booking_id=booking["booking_id"])
     task = create_task_endpoint(
         TaskCreateModel(booking_id=booking["booking_id"], task_type="template",
                         template=data.template, template_params=data.template_params),
@@ -3320,6 +3396,8 @@ def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
         "gpu_model": spec.gpu_model, "region": spec.region,
         "price_per_hour": spec.price_per_hour, "hours": data.hours,
         "gross_amount": booking.get("gross_amount"), "status": vm.status,
+        "routing_explanation": routing_explanation,
+        "routing_decision_id": decision.id,
         "connect": f"once running, connect on port {port}" if port else "batch job — result via /tasks/{task_id}",
     }
 

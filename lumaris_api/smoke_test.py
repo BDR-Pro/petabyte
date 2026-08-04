@@ -655,6 +655,24 @@ cheap=c.post("/solve", headers=rth, json={"workload":"inference","max_price_per_
 ok("router respects price ceiling", all(s["price_per_hour"]<=3.0 for s in cheap["selected"]))
 ok("router 409s when nothing fits", c.post("/solve", headers=rth, json={"min_vram":99999}).status_code==409)
 
+# ---- ROUTING DECISIONS: persisted, deterministic, explainable, owner-only ----
+plan2=c.post("/solve", headers=rth, json={"workload":"inference","redundancy":2}).json()
+ok("solve explains the selection in plain language",
+   "Selected" in plan.get("explanation","") and "because" in plan.get("explanation",""))
+ok("solve persists a decision id", isinstance(plan.get("decision_id"), int))
+ok("router is deterministic (same intent -> same selection)",
+   [s["spec_id"] for s in plan["selected"]]==[s["spec_id"] for s in plan2["selected"]])
+_rd=c.get(f"/routing/decisions/{plan['decision_id']}", headers=rth)
+ok("decision audit is readable by its buyer", _rd.status_code==200)
+_rdb=_rd.json()
+ok("decision audit stores every candidate with a score",
+   len(_rdb["candidates"])>=len(plan["selected"]) and all("score" in x for x in _rdb["candidates"]))
+ok("decision audit records exactly the selected nodes",
+   _rdb["selected_spec_ids"]==[s["spec_id"] for s in plan["selected"]])
+ok("decision audit stores the original intent", _rdb["intent"].get("redundancy")==2)
+ok("routing decision is owner-only",
+   c.get(f"/routing/decisions/{plan['decision_id']}", headers=hA).status_code==404)
+
 # ==== RENDER FARM (frame splitting across nodes) ====
 c.post("/register_user", json={"username":"renderbuyer","password":"hunter2-correct-horse"})
 rndh={"Authorization":f"Bearer {login('renderbuyer')}"}
@@ -1670,6 +1688,16 @@ _lr=c.post("/launch", headers=_lbh, json={"template":"minecraft","hours":1})
 ok("/launch auto-books + starts a template", _lr.status_code==200 and "task_id" in _lr.json() and _lr.json().get("port")==25565)
 ok("/launch unknown template -> 400", c.post("/launch", headers=_lbh, json={"template":"nope"}).status_code==400)
 ok("/launch requires auth", c.post("/launch", json={"template":"minecraft"}).status_code in (401,403))
+# --- /launch records WHY the node was picked, linked to the booking ---
+_lj=_lr.json()
+ok("/launch explains why the node was picked",
+   "Selected" in _lj.get("routing_explanation","") and "because" in _lj.get("routing_explanation",""))
+_ld=c.get(f"/routing/decisions/{_lj['routing_decision_id']}", headers=_lbh)
+ok("/launch decision audit is readable by the buyer", _ld.status_code==200)
+ok("/launch decision links the booking", _ld.json()["booking_id"]==_lj["booking_id"])
+_bk=c.get(f"/bookings/{_lj['booking_id']}", headers=_lbh).json()
+ok("booking carries its routing explanation",
+   _bk["routing_decision_id"]==_lj["routing_decision_id"] and "because" in (_bk["routing_explanation"] or ""))
 
 # --- VM routing + stable URL + failover (the Buyer/VM -> new node, same URL model) ---
 from datetime import datetime as _dt, timezone as _tz, timedelta as _td

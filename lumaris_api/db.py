@@ -609,6 +609,44 @@ class ReputationEvent(Base):
     created_at = Column(DateTime, default=_utcnow)
 
 
+class RoutingDecision(Base):
+    """Why THIS node — recorded at decision time, append-only.
+
+    Every automated placement (/solve, /launch) writes one row with the full set of
+    eligible candidates, the factor scores, and the selection, so any booking can
+    answer "why did the platform pick this machine?" months later. It is the audit
+    trail a buyer or reviewer asks for, and the raw history a smarter pricing/routing
+    model needs. Rows are never updated except to link the resulting booking."""
+    __tablename__ = "routing_decisions"
+    id = Column(Integer, primary_key=True, index=True)
+    source = Column(String, nullable=False)                # solve | launch
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), index=True, nullable=True)
+    intent = Column(Text, nullable=False)                  # JSON: constraints as requested
+    candidates = Column(Text, nullable=False)              # JSON: every eligible node + factors
+    selected_spec_ids = Column(Text, nullable=False)       # JSON list of chosen spec ids
+    explanation = Column(Text, nullable=False)             # the sentence shown to the buyer
+    fulfilled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+
+
+def record_routing_decision(db: Session, source: str, user_id, intent: dict,
+                            candidates: list, selected_spec_ids: list,
+                            explanation: str, fulfilled: bool = True,
+                            booking_id: int = None) -> "RoutingDecision":
+    """Persist one placement decision. JSON-serialises Decimals safely."""
+    rd = RoutingDecision(
+        source=source, user_id=user_id, booking_id=booking_id,
+        intent=json.dumps(intent, default=_json_money),
+        candidates=json.dumps(candidates, default=_json_money),
+        selected_spec_ids=json.dumps(selected_spec_ids),
+        explanation=explanation, fulfilled=fulfilled)
+    db.add(rd)
+    db.commit()
+    db.refresh(rd)
+    return rd
+
+
 class MultiNodeJob(Base):
     """A fan-out job (render frames / transcode segments) assembled from N parts."""
     __tablename__ = "multinode_jobs"
