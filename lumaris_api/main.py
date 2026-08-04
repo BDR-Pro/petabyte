@@ -66,6 +66,7 @@ from db import (
     all_segments_done, segment_output_refs, set_job_status, get_multinode_job,
     job_segments,
 )
+import db as dbmod
 from auth import create_access_token, verify_token
 from static_dashboard import DASHBOARD_HTML
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
@@ -3056,6 +3057,397 @@ async def payment_webhook(request: Request, db: Session = Depends(get_db)):
     if not credit_user_by_username(db, username, amount):
         raise HTTPException(status_code=404, detail="Unknown user")
     return {"status": "ok", "credited": amount, "user": username}
+
+
+# =====================================================================
+# Stripe Connect marketplace payments (real money; test mode first).
+# Endpoints are thin: all money logic + state machine live in stripe_connect.py.
+# Amounts are integer minor units and are ALWAYS computed server-side.
+# =====================================================================
+import stripe_connect as _sc
+from pricing import PricingConfig as _PricingConfig
+from stripe_gateway import get_gateway as _get_gateway
+
+
+def _ctx_view(db, tx, *, viewer=None, admin=False):
+    """Buyer/seller/admin-safe view of a compute transaction (no buyer PII to seller)."""
+    v = {"transaction_id": tx.public_id, "status": tx.status,
+         "reconciliation_status": tx.reconciliation_status, "currency": tx.currency,
+         "estimated_amount": tx.estimated_amount,
+         "authorization_amount": tx.authorization_amount,
+         "captured_amount": tx.captured_amount,
+         "platform_fee_amount": tx.platform_fee_amount,
+         "seller_net_amount": tx.seller_net_amount,
+         "refunded_amount": tx.refunded_amount,
+         "transferred_amount": tx.transferred_amount,
+         "reversed_amount": tx.reversed_amount,
+         "metering_seconds": tx.metering_seconds,
+         "spec_id": tx.spec_id, "created_at": tx.created_at.isoformat() if tx.created_at else None}
+    if admin:
+        v.update({"buyer_id": tx.buyer_id, "seller_id": tx.seller_id,
+                  "stripe_payment_intent_id": tx.stripe_payment_intent_id,
+                  "stripe_charge_id": tx.stripe_charge_id,
+                  "stripe_transfer_id": tx.stripe_transfer_id,
+                  "stripe_connected_account_id": tx.stripe_connected_account_id,
+                  "settlement_version": tx.settlement_version,
+                  "failure_reason": tx.failure_reason, "is_demo": tx.is_demo})
+    return v
+
+
+class SellerConnectModel(BaseModel):
+    country: Optional[str] = None
+    email: Optional[str] = None
+
+class OnboardingLinkModel(BaseModel):
+    return_url: Optional[str] = None
+    refresh_url: Optional[str] = None
+
+class QuoteModel(BaseModel):
+    spec_id: str                      # public handle
+    estimated_seconds: int = Field(..., ge=1, le=86400)
+
+class AuthorizeModel(BaseModel):
+    spec_id: str
+    estimated_seconds: int = Field(..., ge=1, le=86400)
+
+class MeterModel(BaseModel):
+    actual_seconds: int = Field(..., ge=0, le=86400)
+    source: str = "agent"
+
+class DispatchModel(BaseModel):
+    task_type: str = "notebook"
+    code: Optional[str] = None
+
+class RefundModel(BaseModel):
+    amount: Optional[int] = None      # minor units; None = full
+    reason: str = Field(..., min_length=3, max_length=200)
+
+
+def _admin_reason(reason: str):
+    if not reason or len(reason.strip()) < 3:
+        raise HTTPException(status_code=400, detail="a reason is required for this action")
+
+
+# ---------------- Seller: Stripe Connect onboarding ----------------
+@app.post("/payments/connect/account", tags=["payments"])
+def connect_create_account(data: SellerConnectModel,
+                           user: dict = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
+    """Create (or return) THIS seller's connected account. Idempotent — never creates
+    a second Stripe account, and a seller can only ever touch their own."""
+    me = get_user_by_username(db, _username(user))
+    ca = _sc.get_or_create_connected_account(db, me, country=data.country, email=data.email)
+    return {"connected_account_id": ca.stripe_account_id, "onboarding_state": ca.onboarding_state,
+            "payout_ready": ca.payout_ready()}
+
+@app.post("/payments/connect/onboarding-link", tags=["payments"])
+def connect_onboarding_link(data: OnboardingLinkModel,
+                            user: dict = Depends(get_current_user),
+                            db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    ca = _sc.get_or_create_connected_account(db, me)
+    base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/") or ""
+    url = _sc.create_onboarding_link(
+        db, ca,
+        refresh_url=data.refresh_url or f"{base}/seller/earnings?stripe=refresh",
+        return_url=data.return_url or f"{base}/seller/earnings?stripe=return")
+    return {"url": url}
+
+@app.post("/payments/connect/refresh", tags=["payments"])
+def connect_refresh(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Authoritative status pull from Stripe (never trust the return URL)."""
+    me = get_user_by_username(db, _username(user))
+    ca = db.query(dbmod.ConnectedAccount).filter(dbmod.ConnectedAccount.user_id == me.id).first()
+    if not ca:
+        raise HTTPException(status_code=404, detail="no connected account")
+    ca = _sc.refresh_connected_account(db, ca)
+    return connect_status(user, db)
+
+@app.get("/payments/connect/status", tags=["payments"])
+def connect_status(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    ca = db.query(dbmod.ConnectedAccount).filter(dbmod.ConnectedAccount.user_id == me.id).first()
+    if not ca:
+        return {"connected": False, "payout_ready": False, "onboarding_state": "none",
+                "why_blocked": "Connect a Stripe account to receive paid jobs."}
+    due = json.loads(ca.requirements_due or "[]")
+    reasons = []
+    if not ca.details_submitted: reasons.append("Finish Stripe onboarding.")
+    if not ca.charges_enabled: reasons.append("Charges capability not active yet.")
+    if not ca.payouts_enabled: reasons.append("Payouts capability not active yet.")
+    if due: reasons.append(f"Stripe needs: {', '.join(due[:5])}.")
+    if ca.disabled_reason: reasons.append(f"Account restricted: {ca.disabled_reason}.")
+    return {"connected": True, "connected_account_id": ca.stripe_account_id,
+            "onboarding_state": ca.onboarding_state, "payout_ready": ca.payout_ready(),
+            "details_submitted": ca.details_submitted,
+            "charges_enabled": ca.charges_enabled, "payouts_enabled": ca.payouts_enabled,
+            "transfers_capability": ca.transfers_capability,
+            "requirements_due": due,
+            "requirements_past_due": json.loads(ca.requirements_past_due or "[]"),
+            "disabled_reason": ca.disabled_reason, "country": ca.country,
+            "default_currency": ca.default_currency,
+            "last_synced_at": ca.last_synced_at.isoformat() if ca.last_synced_at else None,
+            "why_blocked": None if ca.payout_ready() else " ".join(reasons) or "Onboarding incomplete."}
+
+
+# ---------------- Buyer: quote + authorize + inspect ----------------
+def _spec_or_404(db, public_id):
+    from db import get_spec_by_public_id
+    spec = get_spec_by_public_id(db, public_id)
+    if not spec:
+        raise HTTPException(status_code=404, detail="GPU not found")
+    return spec
+
+@app.post("/payments/quote", tags=["payments"])
+def payments_quote(data: QuoteModel, user: dict = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """Server-side quote. The browser sends only a GPU id + desired seconds; every
+    amount is computed here from authoritative values."""
+    spec = _spec_or_404(db, data.spec_id)
+    q = _sc.quote(db, spec, data.estimated_seconds)
+    ready = _sc.seller_payout_ready(db, spec.user_id)
+    return {"currency": q["currency"], "price_per_hour_minor": q["price_per_hour_minor"],
+            "estimated_seconds": q["estimated_seconds"],
+            "estimated_compute_amount": q["estimated_compute_amount"],
+            "authorization_amount": q["authorization_amount"],
+            "seller_payout_ready": ready,
+            "note": "Final charge is based on ACTUAL metered usage; the authorization "
+                    "is the maximum hold, not a completed payment."}
+
+@app.post("/payments/authorize", tags=["payments"])
+def payments_authorize(data: AuthorizeModel, request: Request,
+                       user: dict = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    """Create the internal transaction + a manual-capture PaymentIntent. Returns only
+    the client secret and safe display info. Rate-limited."""
+    me = get_user_by_username(db, _username(user))
+    spec = _spec_or_404(db, data.spec_id)
+    try:
+        tx = _sc.authorize(db, me, spec, data.estimated_seconds)
+    except _sc.TransactionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    audit(db, "payment.authorize", actor=me.username, resource_type="compute_tx",
+          resource_id=tx.public_id, ip=_client_ip(request))
+    return {"transaction_id": tx.public_id, "client_secret": getattr(tx, "_client_secret", None),
+            "authorization_amount": tx.authorization_amount, "currency": tx.currency,
+            "status": tx.status,
+            "publishable_key": os.getenv("STRIPE_PUBLISHABLE_KEY", "")}
+
+@app.post("/payments/{public_id}/confirm", tags=["payments"])
+def payments_confirm(public_id: str, user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """Reconcile authorization server-side (verifies with Stripe). The authoritative
+    signal is the webhook; this lets the buyer poll without trusting the redirect."""
+    me = get_user_by_username(db, _username(user))
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx or tx.buyer_id != me.id:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    try:
+        _sc.mark_authorized(db, tx)
+    except _sc.TransactionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return _ctx_view(db, tx, viewer=me)
+
+@app.get("/payments/{public_id}", tags=["payments"])
+def payments_get(public_id: str, user: dict = Depends(get_current_user),
+                 db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx or (me.id not in (tx.buyer_id, tx.seller_id) and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="transaction not found")
+    return _ctx_view(db, tx, viewer=me, admin=_is_admin(me))
+
+@app.get("/payments/{public_id}/receipt", tags=["payments"])
+def payments_receipt(public_id: str, user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx or (me.id not in (tx.buyer_id, tx.seller_id) and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="transaction not found")
+    return {"transaction_id": tx.public_id, "status": tx.status, "currency": tx.currency,
+            "authorized_maximum": tx.authorization_amount,
+            "final_captured_amount": tx.captured_amount,
+            "refunded_amount": tx.refunded_amount,
+            "metered_seconds": tx.metering_seconds,
+            "is_completed_payment": tx.status in ("PAYMENT_CAPTURED", "SELLER_TRANSFERRED", "COMPLETED"),
+            "note": "The authorized maximum is a hold; you are charged only the final captured amount."}
+
+@app.post("/payments/{public_id}/cancel", tags=["payments"])
+def payments_cancel(public_id: str, request: Request,
+                    user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Buyer cancels before dispatch: void the authorization, release the GPU, charge $0."""
+    me = get_user_by_username(db, _username(user))
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx or tx.buyer_id != me.id:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    if tx.task_id:
+        raise HTTPException(status_code=409, detail="job already dispatched; cannot cancel")
+    _sc.cancel_authorization(db, tx, reason="buyer cancelled")
+    audit(db, "payment.cancel", actor=me.username, resource_type="compute_tx",
+          resource_id=tx.public_id, ip=_client_ip(request))
+    return _ctx_view(db, tx, viewer=me)
+
+
+# ---------------- Internal job/settlement ops (admin-gated in this build) ----------------
+# In production these are driven by the job orchestrator with a service credential; here
+# they require admin so the flow is testable and safe by default.
+def _admin_tx(db, public_id, admin):
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    return tx
+
+@app.post("/admin/payments/{public_id}/reserve", tags=["payments"])
+def admin_reserve(public_id: str, admin=Depends(require_admin), db: Session = Depends(get_db)):
+    tx = _admin_tx(db, public_id, admin)
+    try:
+        _sc.reserve_gpu(db, tx)
+    except _sc.TransactionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return _ctx_view(db, tx, admin=True)
+
+@app.post("/admin/payments/{public_id}/dispatch", tags=["payments"])
+def admin_dispatch(public_id: str, data: DispatchModel,
+                   admin=Depends(require_admin), db: Session = Depends(get_db)):
+    tx = _admin_tx(db, public_id, admin)
+    try:
+        _sc.dispatch_job(db, tx, task_type=data.task_type, code=data.code)
+    except _sc.TransactionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return _ctx_view(db, tx, admin=True)
+
+@app.post("/admin/payments/{public_id}/meter", tags=["payments"])
+def admin_meter(public_id: str, data: MeterModel,
+                admin=Depends(require_admin), db: Session = Depends(get_db)):
+    tx = _admin_tx(db, public_id, admin)
+    try:
+        _sc.record_metering(db, tx, actual_seconds=data.actual_seconds, source=data.source)
+    except _sc.TransactionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return _ctx_view(db, tx, admin=True)
+
+@app.post("/admin/payments/{public_id}/capture", tags=["payments"])
+def admin_capture(public_id: str, admin=Depends(require_admin), db: Session = Depends(get_db)):
+    tx = _admin_tx(db, public_id, admin)
+    try:
+        _sc.capture(db, tx)
+    except _sc.TransactionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return _ctx_view(db, tx, admin=True)
+
+@app.post("/admin/payments/{public_id}/transfer", tags=["payments"])
+def admin_transfer(public_id: str, admin=Depends(require_admin), db: Session = Depends(get_db)):
+    tx = _admin_tx(db, public_id, admin)
+    try:
+        _sc.transfer_to_seller(db, tx)
+    except _sc.TransactionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return _ctx_view(db, tx, admin=True)
+
+@app.post("/admin/payments/{public_id}/refund", tags=["payments"])
+def admin_refund(public_id: str, data: RefundModel, request: Request,
+                 admin=Depends(require_admin), db: Session = Depends(get_db)):
+    _admin_reason(data.reason)
+    tx = _admin_tx(db, public_id, admin)
+    try:
+        _sc.refund(db, tx, amount=data.amount, actor=admin.username, reason=data.reason)
+    except _sc.TransactionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    audit(db, "payment.refund", actor=admin.username, resource_type="compute_tx",
+          resource_id=tx.public_id, ip=_client_ip(request), detail=data.reason)
+    return _ctx_view(db, tx, admin=True)
+
+
+# ---------------- Admin financial dashboard ----------------
+@app.get("/admin/payments", tags=["payments"])
+def admin_payments_list(status: Optional[str] = None, limit: int = Query(100, le=500),
+                        admin=Depends(require_admin), db: Session = Depends(get_db)):
+    q = db.query(dbmod.ComputeTransaction).order_by(dbmod.ComputeTransaction.id.desc())
+    if status:
+        q = q.filter(dbmod.ComputeTransaction.status == status)
+    return {"transactions": [_ctx_view(db, t, admin=True) for t in q.limit(limit).all()]}
+
+@app.get("/admin/payments/{public_id}", tags=["payments"])
+def admin_payment_detail(public_id: str, admin=Depends(require_admin),
+                         db: Session = Depends(get_db)):
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    events = db.query(dbmod.ComputeTxEvent).filter(
+        dbmod.ComputeTxEvent.tx_id == tx.id).order_by(dbmod.ComputeTxEvent.id).all()
+    ops = db.query(dbmod.PaymentOperation).filter(dbmod.PaymentOperation.tx_id == tx.id).all()
+    setts = db.query(dbmod.Settlement).filter(dbmod.Settlement.tx_id == tx.id).all()
+    ledger = db.query(dbmod.LedgerEntry).filter(
+        dbmod.LedgerEntry.entry_type.like("compute_%")).all()
+    rel = [e for e in ledger]  # entries reference tx.public_id via tx; keep simple: show compute entries
+    return {"transaction": _ctx_view(db, tx, admin=True),
+            "pricing_snapshot": json.loads(tx.pricing_snapshot),
+            "state_history": [{"from": e.from_state, "to": e.to_state, "reason": e.reason,
+                               "actor": e.actor, "at": e.created_at.isoformat() if e.created_at else None}
+                              for e in events],
+            "operations": [{"type": o.op_type, "state": o.state, "key": o.internal_idempotency_key,
+                            "external_id": o.external_object_id, "attempts": o.attempt_count,
+                            "error": o.last_error} for o in ops],
+            "settlements": [{"version": s.version, "captured": s.captured_amount,
+                             "seller": s.seller_amount, "platform_fee": s.platform_fee,
+                             "refund": s.refund_amount} for s in setts]}
+
+@app.get("/admin/webhooks", tags=["payments"])
+def admin_webhooks(limit: int = Query(100, le=500), state: Optional[str] = None,
+                   admin=Depends(require_admin), db: Session = Depends(get_db)):
+    q = db.query(dbmod.StripeWebhookEvent).order_by(dbmod.StripeWebhookEvent.received_at.desc())
+    if state:
+        q = q.filter(dbmod.StripeWebhookEvent.processing_state == state)
+    return {"events": [{"id": e.stripe_event_id, "type": e.event_type,
+                        "state": e.processing_state, "attempts": e.attempt_count,
+                        "account": e.account_context, "error": e.error,
+                        "received_at": e.received_at.isoformat() if e.received_at else None}
+                       for e in q.limit(limit).all()]}
+
+
+# ---------------- Seller earnings (Stripe) ----------------
+@app.get("/seller/earnings/stripe", tags=["payments"])
+def seller_stripe_earnings(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    txs = db.query(dbmod.ComputeTransaction).filter(
+        dbmod.ComputeTransaction.seller_id == me.id).order_by(
+        dbmod.ComputeTransaction.id.desc()).limit(200).all()
+    ca = db.query(dbmod.ConnectedAccount).filter(dbmod.ConnectedAccount.user_id == me.id).first()
+    gross = sum(t.captured_amount for t in txs)
+    fee = sum(t.platform_fee_amount for t in txs)
+    net = sum(t.seller_net_amount for t in txs)
+    transferred = sum(t.transferred_amount for t in txs)
+    return {"currency": (ca.default_currency if ca else "usd"),
+            "gross_compute_minor": gross, "platform_commission_minor": fee,
+            "net_earnings_minor": net, "transferred_minor": transferred,
+            "transfers_pending_minor": net - transferred,
+            "payout_events": _sc.latest_payout_events(db, ca.stripe_account_id) if ca else [],
+            "jobs": [{"transaction_id": t.public_id, "status": t.status,
+                      "captured": t.captured_amount, "net": t.seller_net_amount,
+                      "transferred": t.transferred_amount,
+                      "stripe_transfer_id": t.stripe_transfer_id} for t in txs]}
+
+
+# ---------------- Stripe platform webhook ----------------
+@app.post("/webhooks/stripe")
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    """Authoritative async Stripe state. Verifies the signature over the RAW body,
+    stores the event, and processes it at most once. A bad signature is rejected; an
+    already-processed event returns 200 (idempotent)."""
+    raw = await request.body()
+    sig = request.headers.get("Stripe-Signature", "")
+    secret = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    if not secret:
+        raise HTTPException(status_code=503, detail="webhook secret not configured")
+    try:
+        event = _get_gateway().construct_event(raw, sig, secret)
+    except Exception:                                   # invalid signature / stale ts
+        raise HTTPException(status_code=400, detail="invalid signature")
+    try:
+        return _sc.process_webhook_event(db, event)
+    except Exception as e:                              # handler failure -> 500 so Stripe retries
+        logger.exception("stripe webhook handler failed: %s", event.get("type"))
+        raise HTTPException(status_code=500, detail="handler error")
 
 
 @app.get("/wallet", tags=["wallet"])
