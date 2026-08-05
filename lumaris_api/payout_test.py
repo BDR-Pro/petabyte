@@ -29,6 +29,13 @@ from payout_rails import (get_rail, PayoutRailType, RecipientType, CapabilitySta
 from stripe_gateway import FakeStripeGateway, set_gateway
 import stripe_connect as sc
 
+# Postgres persists between suites in CI (only the first suite drops the schema), and the
+# FakeStripeGateway restarts its deterministic acct_/pi_ counters each process — so start
+# from a clean schema to avoid colliding with a prior suite's connected accounts.
+if dbmod.engine.dialect.name.startswith("postgres"):
+    with dbmod.engine.begin() as _c:
+        _c.exec_driver_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+
 GW = set_gateway(FakeStripeGateway())
 dbmod.init_db()
 
