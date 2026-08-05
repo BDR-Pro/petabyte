@@ -1063,6 +1063,16 @@ ADMIN_HTML = _page("Petabyte — admin", """
     <p class="mini" style="margin-top:8px">Stalled = money escrowed/active with no terminal state. Failed jobs are retryable; the reaper fails over or refunds dead nodes.</p>
   </div>
 
+  <!-- STRIPE payments: compute transactions + money flow -->
+  <div class="wrap" style="padding:22px 22px 30px">
+    <div class="lbl" style="margin-bottom:12px">Compute transactions (Stripe) <span class="mut" id="pay_sub"></span></div>
+    <div class="panel" style="overflow:auto">
+      <table class="tbl"><thead><tr><th>Tx</th><th>Status</th><th>Recon</th><th>Auth</th><th>Captured</th><th>Fee</th><th>Seller net</th><th>Transferred</th><th>Refunded</th></tr></thead>
+      <tbody id="payrows"><tr><td colspan=9 class="mut mono" style="padding:18px;text-align:center">loading…</td></tr></tbody></table>
+    </div>
+    <p class="mini" style="margin-top:8px">Every amount is integer minor units. Buyer charge = platform fee + seller net; the Stripe processing fee is tracked separately.</p>
+  </div>
+
   <!-- LANDING PAGE settings: the admin-editable video -->
   <div class="wrap" style="padding:22px 22px 30px">
     <div class="lbl" style="margin-bottom:12px">Landing page</div>
@@ -1107,7 +1117,24 @@ async function boot(){
   document.getElementById('a_rev').textContent=money(o.platform_revenue);
   document.getElementById('a_pend').textContent=o.payouts_pending.count+' · '+money(o.payouts_pending.amount);
   document.getElementById('console').style.display='';
-  loadUsers();loadSpecs();loadPayouts();loadIncidents();loadVideo();
+  loadUsers();loadSpecs();loadPayouts();loadIncidents();loadPayments();loadVideo();
+}
+async function loadPayments(){
+  var r=await api('/admin/payments');var tb=document.getElementById('payrows');
+  if(!r.ok){tb.innerHTML='<tr><td colspan=9 class="mut mono" style="padding:18px;text-align:center">could not load</td></tr>';return;}
+  var m2=function(x){return '$'+(Number(x||0)/100).toFixed(2);};
+  var txs=r.body.transactions||[];
+  document.getElementById('pay_sub').textContent='· '+txs.length+' shown';
+  if(!txs.length){tb.innerHTML='<tr><td colspan=9 class="mut mono" style="padding:18px;text-align:center">No Stripe transactions yet.</td></tr>';return;}
+  tb.innerHTML=txs.map(function(t){return '<tr><td class="mono" style="font-size:11px">'+t.transaction_id+'</td>'+
+    '<td><span class="badge">'+t.status+'</span></td>'+
+    '<td class="mini">'+(t.reconciliation_status||'')+'</td>'+
+    '<td class="mono">'+m2(t.authorization_amount)+'</td>'+
+    '<td class="mono">'+m2(t.captured_amount)+'</td>'+
+    '<td class="mono">'+m2(t.platform_fee_amount)+'</td>'+
+    '<td class="mono teal">'+m2(t.seller_net_amount)+'</td>'+
+    '<td class="mono">'+m2(t.transferred_amount)+'</td>'+
+    '<td class="mono '+(t.refunded_amount?'amber':'')+'">'+m2(t.refunded_amount)+'</td></tr>';}).join('');
 }
 async function loadIncidents(){
   var r=await api('/admin/incidents');var tb=document.getElementById('incrows');
@@ -2117,6 +2144,76 @@ async function stat(){
   srow('API',api_ok,detail)+srow('Marketplace',api_ok,nodes)+srow('Settlement',api_ok,api_ok?'operational':'degraded');
 }
 stat();setInterval(stat,15000);
+</script>""")
+
+
+SELLER_EARNINGS_HTML = _page("Petabyte — seller earnings",
+    desc="Connect your Stripe account to receive payouts, and track compute earnings, commission, transfers and bank payouts.",
+    path="/seller/payouts", body="""
+<div class="wrap" style="padding:52px 24px 8px;max-width:900px">
+  <div class="eyebrow"><span class="dot"></span> seller earnings</div>
+  <h1 style="font-size:clamp(28px,4.4vw,42px);margin:14px 0 8px">Get paid for your compute</h1>
+  <p class="mut" id="signedout" style="display:none">Please <a class="teal" href="/login">sign in</a> to set up payouts.</p>
+
+  <div id="setup" style="display:none">
+    <div class="card" style="margin-top:16px">
+      <div class="lbl">Stripe payout account</div>
+      <div id="stripe_state" class="mut mono" style="padding:10px 0">Checking…</div>
+      <div id="stripe_why" class="mini" style="color:var(--warn);margin-bottom:10px"></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-teal" id="btn_connect" data-act="scConnect" style="display:none">Connect Stripe account</button>
+        <button class="btn btn-amber" id="btn_onboard" data-act="scOnboard" style="display:none">Continue Stripe onboarding →</button>
+        <button class="btn btn-ghost" id="btn_refresh" data-act="scRefresh" style="display:none">Refresh status</button>
+      </div>
+      <div id="stripe_detail" class="mini" style="margin-top:12px"></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="lbl">Earnings (Stripe compute jobs)</div>
+      <div class="stats" id="earn_stats" style="margin-top:10px"></div>
+      <p class="mini" style="margin-top:8px">A <b>transfer</b> moves funds to your Stripe balance; a <b>bank payout</b> is Stripe paying your bank on its own schedule — these are different events.</p>
+      <div class="panel" style="overflow:auto;margin-top:12px">
+        <table class="tbl"><thead><tr><th>Transaction</th><th>Status</th><th>Captured</th><th>Your net</th><th>Transferred</th></tr></thead>
+        <tbody id="earn_rows"><tr><td colspan=5 class="mut mono" style="padding:18px;text-align:center">loading…</td></tr></tbody></table>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+function m2(x){return '$'+(Number(x||0)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+async function scLoad(){
+  if(!authed()){document.getElementById('signedout').style.display='';return;}
+  document.getElementById('setup').style.display='';
+  var r=await api('/payments/connect/status');var st=r.body;
+  var el=document.getElementById('stripe_state'),why=document.getElementById('stripe_why');
+  var bC=document.getElementById('btn_connect'),bO=document.getElementById('btn_onboard'),bR=document.getElementById('btn_refresh');
+  bC.style.display=bO.style.display=bR.style.display='none';
+  if(!st.connected){el.textContent='Not connected.';why.textContent=st.why_blocked||'';bC.style.display='';}
+  else{
+    el.innerHTML='State: <b class="'+(st.payout_ready?'teal':'amber')+'">'+st.onboarding_state+'</b>'+(st.payout_ready?' — payouts enabled ✓':'');
+    why.textContent=st.payout_ready?'':(st.why_blocked||'');
+    bR.style.display='';
+    if(!st.payout_ready)bO.style.display='';
+    document.getElementById('stripe_detail').innerHTML=
+      'account '+(st.connected_account_id||'')+' · country '+(st.country||'?')+' · '+
+      'charges '+(st.charges_enabled?'✓':'✗')+' · payouts '+(st.payouts_enabled?'✓':'✗')+
+      ' · transfers '+(st.transfers_capability||'?')+
+      (st.requirements_due&&st.requirements_due.length?(' · needs: '+st.requirements_due.join(', ')):'');
+  }
+  var e=await api('/seller/earnings/stripe');var b=e.body;
+  document.getElementById('earn_stats').innerHTML=
+    '<div class="stat"><div class="n teal">'+m2(b.gross_compute_minor)+'</div><div class="l">Gross compute</div></div>'+
+    '<div class="stat"><div class="n">'+m2(b.platform_commission_minor)+'</div><div class="l">Petabyte commission</div></div>'+
+    '<div class="stat"><div class="n teal">'+m2(b.net_earnings_minor)+'</div><div class="l">Net earnings</div></div>'+
+    '<div class="stat"><div class="n">'+m2(b.transferred_minor)+'</div><div class="l">Transferred</div></div>'+
+    '<div class="stat"><div class="n amber">'+m2(b.transfers_pending_minor)+'</div><div class="l">Transfers pending</div></div>';
+  var tb=document.getElementById('earn_rows');var js=b.jobs||[];
+  tb.innerHTML=js.length?js.map(function(j){return '<tr><td class="mono">'+j.transaction_id+'</td><td><span class="badge">'+j.status+'</span></td><td class="mono">'+m2(j.captured)+'</td><td class="mono teal">'+m2(j.net)+'</td><td class="mono">'+m2(j.transferred)+(j.stripe_transfer_id?'':'')+'</td></tr>';}).join(''):'<tr><td colspan=5 class="mut mono" style="padding:18px;text-align:center">No paid jobs yet.</td></tr>';
+}
+async function scConnect(){var r=await api('/payments/connect/account',{method:'POST',body:'{}'});if(r.ok)scOnboard();else alert('Could not create account');}
+async function scOnboard(){var r=await api('/payments/connect/onboarding-link',{method:'POST',body:'{}'});if(r.ok&&r.body.url)location.href=r.body.url;else alert('Could not start onboarding');}
+async function scRefresh(){await api('/payments/connect/refresh',{method:'POST',body:'{}'});scLoad();}
+scLoad();
 </script>""")
 
 

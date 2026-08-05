@@ -1,6 +1,6 @@
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, DateTime, Text,
-    ForeignKey, UniqueConstraint, update, event, Numeric,
+    ForeignKey, UniqueConstraint, CheckConstraint, update, event, Numeric,
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
 from sqlalchemy.exc import IntegrityError
@@ -819,6 +819,166 @@ class IdempotencyRecord(Base):
     __table_args__ = (
         UniqueConstraint("key", "username", "endpoint", name="uq_idempotency"),
     )
+
+
+# ======================================================================
+# Stripe Connect marketplace payments.
+#
+# These layer REAL money (Stripe test/live) on top of the existing booking + job +
+# ledger primitives — they do not fork them. A ComputeTransaction wraps a Booking and
+# drives it through a PaymentIntent (manual capture) -> Transfer to the seller's
+# connected account, recording every money movement in the SAME double-entry ledger
+# (post()/LedgerEntry). Amounts here are INTEGER MINOR UNITS (e.g. cents), never float.
+# ======================================================================
+
+class ConnectedAccount(Base):
+    """A seller's Stripe Connect account + its cached readiness. Synced from Stripe
+    via account.updated and on-demand retrieve; never trusted from a return URL."""
+    __tablename__ = "connected_accounts"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, index=True, nullable=False)
+    stripe_account_id = Column(String, unique=True, index=True, nullable=False)
+    country = Column(String, nullable=True)
+    default_currency = Column(String, nullable=True)
+    onboarding_state = Column(String, default="created", nullable=False)  # created|onboarding|verifying|enabled|restricted|disabled
+    details_submitted = Column(Boolean, default=False, nullable=False)
+    charges_enabled = Column(Boolean, default=False, nullable=False)
+    payouts_enabled = Column(Boolean, default=False, nullable=False)
+    transfers_capability = Column(String, default="inactive")   # active|inactive|pending
+    card_payments_capability = Column(String, default="inactive")
+    requirements_due = Column(Text, nullable=True)              # JSON list
+    requirements_past_due = Column(Text, nullable=True)         # JSON list
+    disabled_reason = Column(String, nullable=True)
+    last_synced_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    def payout_ready(self) -> bool:
+        """A seller may take paid jobs only when Stripe can charge on the platform
+        AND transfer to this account. details_submitted alone is NOT enough."""
+        return bool(self.charges_enabled and self.payouts_enabled
+                    and self.transfers_capability == "active")
+
+
+class ComputeTransaction(Base):
+    """The authoritative money+lifecycle object for one paid compute job. Amounts are
+    integer minor units in `currency`. A frozen pricing snapshot means later price or
+    config changes never rewrite this transaction's history."""
+    __tablename__ = "compute_transactions"
+    id = Column(Integer, primary_key=True, index=True)
+    public_id = Column(String, unique=True, index=True, default=lambda: "ctx_" + _rand_vm_id())
+    buyer_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    seller_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    spec_id = Column(Integer, ForeignKey("specs.id"), index=True, nullable=False)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), index=True, nullable=True)
+    task_id = Column(Integer, ForeignKey("tasks.id"), index=True, nullable=True)
+    currency = Column(String, nullable=False, default="usd")
+    pricing_snapshot = Column(Text, nullable=False)             # frozen JSON, immutable
+    # integer minor units
+    estimated_amount = Column(Integer, nullable=False, default=0)
+    authorization_amount = Column(Integer, nullable=False, default=0)
+    captured_amount = Column(Integer, nullable=False, default=0)
+    platform_fee_amount = Column(Integer, nullable=False, default=0)
+    seller_net_amount = Column(Integer, nullable=False, default=0)
+    stripe_fee_amount = Column(Integer, nullable=False, default=0)
+    refunded_amount = Column(Integer, nullable=False, default=0)
+    transferred_amount = Column(Integer, nullable=False, default=0)
+    reversed_amount = Column(Integer, nullable=False, default=0)
+    status = Column(String, nullable=False, default="DRAFT", index=True)
+    reconciliation_status = Column(String, nullable=False, default="pending", index=True)
+    # Stripe identifiers
+    stripe_payment_intent_id = Column(String, unique=True, index=True, nullable=True)
+    stripe_charge_id = Column(String, index=True, nullable=True)
+    stripe_transfer_id = Column(String, index=True, nullable=True)
+    stripe_connected_account_id = Column(String, index=True, nullable=True)
+    settlement_version = Column(Integer, nullable=False, default=0)
+    metering_seconds = Column(Integer, nullable=True)
+    metering_source = Column(String, nullable=True)
+    failure_reason = Column(String, nullable=True)
+    is_demo = Column(Boolean, default=False, nullable=False, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+    __table_args__ = (
+        CheckConstraint("captured_amount >= 0 AND authorization_amount >= 0 "
+                        "AND platform_fee_amount >= 0 AND seller_net_amount >= 0 "
+                        "AND refunded_amount >= 0 AND transferred_amount >= 0",
+                        name="ck_ctx_nonneg"),
+    )
+
+
+class ComputeTxEvent(Base):
+    """Append-only state-transition history for a ComputeTransaction (admin audit)."""
+    __tablename__ = "compute_tx_events"
+    id = Column(Integer, primary_key=True, index=True)
+    tx_id = Column(Integer, ForeignKey("compute_transactions.id"), index=True, nullable=False)
+    from_state = Column(String, nullable=True)
+    to_state = Column(String, nullable=False)
+    reason = Column(String, nullable=True)
+    actor = Column(String, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+
+
+class PaymentOperation(Base):
+    """One idempotent money-moving operation against Stripe. Persisted BEFORE the
+    Stripe call so an uncertain network response is reconciled by retrieval, never by
+    blindly repeating the mutation."""
+    __tablename__ = "payment_operations"
+    id = Column(Integer, primary_key=True, index=True)
+    tx_id = Column(Integer, ForeignKey("compute_transactions.id"), index=True, nullable=False)
+    op_type = Column(String, nullable=False)                    # authorize|capture|transfer|refund|reversal|cancel
+    internal_idempotency_key = Column(String, unique=True, index=True, nullable=False)
+    stripe_idempotency_key = Column(String, nullable=True)
+    request_fingerprint = Column(String, nullable=True)
+    external_object_id = Column(String, index=True, nullable=True)
+    state = Column(String, nullable=False, default="pending")   # pending|succeeded|failed
+    attempt_count = Column(Integer, nullable=False, default=0)
+    last_error = Column(String, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class StripeWebhookEvent(Base):
+    """Every Stripe event we receive, processed at most once (generalizes the older
+    ProcessedWebhook, which stays for the legacy sandbox webhook)."""
+    __tablename__ = "stripe_webhook_events"
+    stripe_event_id = Column(String, primary_key=True, index=True)
+    event_type = Column(String, index=True, nullable=False)
+    account_context = Column(String, nullable=True)             # connected account id, if any
+    api_version = Column(String, nullable=True)
+    processing_state = Column(String, nullable=False, default="received")  # received|processed|failed
+    attempt_count = Column(Integer, nullable=False, default=0)
+    received_at = Column(DateTime, default=_utcnow, index=True)
+    processed_at = Column(DateTime, nullable=True)
+    error = Column(String, nullable=True)
+
+
+class Settlement(Base):
+    """Immutable, versioned settlement math for a transaction. A new version is written
+    (never edited) when a refund/reversal changes the picture."""
+    __tablename__ = "settlements"
+    id = Column(Integer, primary_key=True, index=True)
+    tx_id = Column(Integer, ForeignKey("compute_transactions.id"), index=True, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    captured_amount = Column(Integer, nullable=False, default=0)
+    seller_amount = Column(Integer, nullable=False, default=0)
+    platform_fee = Column(Integer, nullable=False, default=0)
+    stripe_fee = Column(Integer, nullable=False, default=0)
+    refund_amount = Column(Integer, nullable=False, default=0)
+    transfer_amount = Column(Integer, nullable=False, default=0)
+    transfer_reversal_amount = Column(Integer, nullable=False, default=0)
+    currency = Column(String, nullable=False, default="usd")
+    finalized_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+    __table_args__ = (
+        UniqueConstraint("tx_id", "version", name="uq_settlement_version"),
+    )
+
+
+# --- Stripe-Connect ledger account names (reuse the double-entry post()) ---
+def acct_stripe_receivable():   return "stripe:receivable"      # captured, held on platform
+def acct_seller_payable(uid):   return f"seller_payable:{uid}"  # owed to seller (net)
+def acct_stripe_fees():         return "stripe:fees"            # processing fees (platform cost)
+def acct_stripe_payouts():      return "external:stripe_transfers"  # money sent to connected accts
 
 
 # ------------------ Session plumbing ------------------

@@ -38,8 +38,9 @@ unset DATABASE_URL || true
 rm -f smoke.db* adv.db* ../lumaris_gateway/tunnel.db*
 run_suite "smoke (sqlite)"        python smoke_test.py
 run_suite "adversarial (sqlite)"  python adversarial_test.py
+run_suite "stripe connect (sqlite)" python stripe_test.py
 run_suite "tunnel (nat + failover)" bash -c "cd ../lumaris_gateway && python tunnel_test.py"
-rm -f smoke.db* adv.db* ../lumaris_gateway/tunnel.db*
+rm -f smoke.db* adv.db* stripe_test.db* ../lumaris_gateway/tunnel.db*
 
 # ---------------------------------------------------------------- Postgres
 if [[ "${1:-}" == "--postgres" ]]; then
@@ -63,6 +64,7 @@ if [[ "${1:-}" == "--postgres" ]]; then
 
   run_suite "smoke (postgres)"       python smoke_test.py
   run_suite "adversarial (postgres)" python adversarial_test.py
+  run_suite "stripe connect (postgres)" python stripe_test.py
   run_suite "postgres-only invariants (exact NUMERIC, advisory lock, real races)" \
             python postgres_test.py
 else
