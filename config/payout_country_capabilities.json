@@ -3,7 +3,7 @@
     "description": "Normalized seller-payout country capability dataset. The frontend and coverage script read THIS, never hardcoded country arrays. A row counts toward ACTIVE coverage ONLY when availability_status=active AND implementation_status=implemented AND provider_approval_required is satisfied (approved=true) AND not sanctioned.",
     "platform_country": "US",
     "verified_at": "2026-08-05",
-    "honesty_note": "Petabyte runs Stripe in TEST MODE with no approved live account. Therefore NO country is 'active' yet. Stripe Connect countries are 'implemented' but 'pending_provider_approval'. Do NOT advertise these as supported.",
+    "honesty_note": "The platform HAS an approved Stripe Connect account (owner-confirmed 2026-08-05), but the code still runs Stripe in TEST MODE and no country has been live end-to-end payout-verified yet. Therefore NO country is 'active' yet: Stripe Connect countries are 'implemented' and 'pending_provider_approval'. A row flips to approved=true + availability_status=active ONLY after a real end-to-end payout is verified for that country (see docs/PAYMENTS_AND_PAYOUTS_ROADMAP.md, Step 1). Do NOT advertise a country as supported before that.",
     "availability_status_values": [
       "active",
       "pending_provider_approval",

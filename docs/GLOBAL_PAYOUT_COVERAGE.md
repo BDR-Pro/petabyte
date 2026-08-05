@@ -9,12 +9,16 @@ dataset the routing engine and the CI coverage check read — there is no second
 prettier list. If a country is not in the dataset as `active`, it is not supported,
 full stop.
 
-> **Read this first.** Petabyte currently runs Stripe in **test mode** with **no
-> approved live Connect account**. Therefore **zero countries are `active`** right now.
-> The 46 Stripe Connect countries below are *implemented and sandbox-verified* but sit
-> in `pending_provider_approval` — the code path exists and is tested, but no real money
-> can move until Stripe approves Petabyte's live platform account. We do **not** count
-> these toward coverage, and we do **not** advertise them as supported.
+> **Read this first.** Petabyte **has an approved Stripe Connect account**
+> (owner-confirmed 2026-08-05), but the code still runs Stripe in **test mode** and **no
+> country has been live end-to-end payout-verified yet**. Therefore **zero countries are
+> `active`** right now. The 46 Stripe Connect countries below are *implemented and
+> sandbox-verified* and sit in `pending_provider_approval` — the code path exists and is
+> tested, and the account is approved, but a country only becomes `active` after a real
+> end-to-end payout is verified for it (see
+> [`PAYMENTS_AND_PAYOUTS_ROADMAP.md`](./PAYMENTS_AND_PAYOUTS_ROADMAP.md), Step 1). We do
+> **not** count these toward coverage, and we do **not** advertise them as supported,
+> until that verification happens.
 
 ---
 
