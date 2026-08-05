@@ -3312,6 +3312,41 @@ def payments_cancel(public_id: str, request: Request,
     return _ctx_view(db, tx, viewer=me)
 
 
+@app.post("/payments/{public_id}/reserve", tags=["payments"])
+def payments_reserve(public_id: str, user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """Buyer reserves the GPU for their OWN transaction — but ONLY after the card is
+    authorized. reserve_gpu requires PAYMENT_AUTHORIZED, so a job can never be reserved
+    (and thus never dispatched) without a verified Stripe authorization. This is the
+    Stripe-native replacement for wallet-funded booking: no free credit, no escrow."""
+    me = get_user_by_username(db, _username(user))
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx or tx.buyer_id != me.id:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    try:
+        _sc.reserve_gpu(db, tx)
+    except _sc.TransactionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return _ctx_view(db, tx, viewer=me)
+
+
+@app.post("/payments/{public_id}/dispatch", tags=["payments"])
+def payments_dispatch(public_id: str, data: DispatchModel,
+                      user: dict = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
+    """Buyer dispatches their OWN reserved job. dispatch_job re-verifies with Stripe that
+    the authorization still holds before any compute starts — no payment, no job."""
+    me = get_user_by_username(db, _username(user))
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx or tx.buyer_id != me.id:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    try:
+        _sc.dispatch_job(db, tx, task_type=data.task_type, code=data.code)
+    except _sc.TransactionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return _ctx_view(db, tx, viewer=me)
+
+
 # ---------------- Internal job/settlement ops (admin-gated in this build) ----------------
 # In production these are driven by the job orchestrator with a service credential; here
 # they require admin so the flow is testable and safe by default.

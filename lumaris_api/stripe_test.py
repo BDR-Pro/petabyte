@@ -182,6 +182,30 @@ ok("of two authorized buyers, exactly one reserves the last unit",
    win.status_code == 200 and lose.status_code == 409)
 
 
+# ============ BUYER-DRIVEN STRIPE-NATIVE FLOW (self-serve, no wallet) ============
+# The buyer drives the whole paid launch through Stripe with NO internal wallet:
+# authorize -> confirm -> reserve -> dispatch. A job can never be reserved/dispatched
+# without a verified Stripe authorization, and a buyer can only drive their OWN tx.
+reg("buyer2")
+spec_bd = make_online_spec("seller_a", price=2.50, units=1, gpu="A100")
+bdid = c.post("/payments/authorize", headers=login("buyer1"),
+              json={"spec_id": spec_bd, "estimated_seconds": 3600}).json()["transaction_id"]
+ok("buyer cannot reserve before the card is authorized (no free/wallet booking)",
+   c.post(f"/payments/{bdid}/reserve", headers=login("buyer1")).status_code == 409)
+GW.confirm_payment_intent(sc.get_tx_by_public_id(dbmod.SessionLocal(), bdid).stripe_payment_intent_id)
+c.post(f"/payments/{bdid}/confirm", headers=login("buyer1"))
+ok("a buyer cannot reserve another buyer's transaction",
+   c.post(f"/payments/{bdid}/reserve", headers=login("buyer2")).status_code == 404)
+rvb = c.post(f"/payments/{bdid}/reserve", headers=login("buyer1"))
+ok("buyer reserves their OWN authorized tx -> GPU_RESERVED",
+   rvb.status_code == 200 and rvb.json()["status"] == "GPU_RESERVED")
+ok("a buyer cannot dispatch another buyer's transaction",
+   c.post(f"/payments/{bdid}/dispatch", headers=login("buyer2"), json={"code": "x"}).status_code == 404)
+dpb = c.post(f"/payments/{bdid}/dispatch", headers=login("buyer1"), json={"code": "print(6*7)"})
+ok("buyer dispatches their OWN reserved job -> RUNNING (Stripe-verified, no wallet)",
+   dpb.status_code == 200 and dpb.json()["status"] == "RUNNING")
+
+
 # ============================ DISPATCH / METER ============================
 dp = c.post(f"/admin/payments/{txid}/dispatch", headers=admin, json={"code": "print(6*7)"}).json()
 ok("dispatch -> RUNNING with a task", dp["status"] == "RUNNING")
