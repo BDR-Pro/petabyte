@@ -101,21 +101,43 @@ def idem_key(op_type: str, tx: ComputeTransaction, version: int | None = None) -
     return f"{base}:{version}" if version is not None else base
 
 
-def _begin_op(db, tx, op_type: str, stripe_key: str) -> PaymentOperation | None:
-    """Claim an operation slot BEFORE calling Stripe. Returns the existing op if this
-    key was already used (idempotent replay); None-safe caller checks state."""
-    existing = db.query(PaymentOperation).filter(
-        PaymentOperation.internal_idempotency_key == stripe_key).first()
-    if existing:
-        existing.attempt_count += 1
-        db.add(existing); db.commit()
-        return existing
+def _begin_op(db, tx, op_type: str, stripe_key: str):
+    """ATOMICALLY claim an operation slot before calling Stripe. Returns (op, proceed).
+
+    `proceed` is True ONLY if THIS caller should perform the side effect (Stripe call +
+    ledger posting):
+      * the op row was newly created by us (we own it), or
+      * a prior attempt FAILED and we are legitimately retrying.
+    `proceed` is False when another worker is already mid-flight (state 'pending') or
+    the op already succeeded (idempotent replay). In both those cases the caller MUST
+    NOT repeat the money movement — this is what stops a concurrent second worker (or a
+    duplicate request/webhook) from double-posting the ledger.
+
+    Atomicity comes from the UNIQUE constraint on internal_idempotency_key: two workers
+    racing to INSERT the same key -> exactly one commit succeeds; the loser catches the
+    IntegrityError and reads the winner's row."""
+    from sqlalchemy.exc import IntegrityError
     op = PaymentOperation(tx_id=tx.id, op_type=op_type,
                           internal_idempotency_key=stripe_key,
                           stripe_idempotency_key=stripe_key,
                           state="pending", attempt_count=1)
-    db.add(op); db.commit(); db.refresh(op)
-    return op
+    db.add(op)
+    try:
+        db.commit(); db.refresh(op)
+        return op, True                          # we created it -> we own the side effect
+    except IntegrityError:
+        db.rollback()
+        existing = db.query(PaymentOperation).filter(
+            PaymentOperation.internal_idempotency_key == stripe_key).first()
+        if existing is None:
+            raise                                # not a uniqueness collision -> real error
+        if existing.state == "failed":
+            existing.state = "pending"; existing.attempt_count += 1
+            db.add(existing); db.commit()
+            return existing, True                # retry a prior failure -> proceed
+        existing.attempt_count += 1
+        db.add(existing); db.commit()
+        return existing, False                   # concurrent (pending) or succeeded -> do NOT repeat
 
 
 def _finish_op(db, op, *, state: str, external_id: str | None = None, error: str | None = None):
@@ -242,7 +264,7 @@ def authorize(db, buyer: User, spec: SellerSpec, estimated_seconds: int, *,
     db.add(tx); db.commit(); db.refresh(tx)
 
     key = idem_key("payment-intent", tx)
-    op = _begin_op(db, tx, "authorize", key)
+    op, _proceed = _begin_op(db, tx, "authorize", key)   # unique per tx -> always ours
     try:
         pi = get_gateway().create_payment_intent(
             amount=tx.authorization_amount, currency=tx.currency,
@@ -363,11 +385,13 @@ def capture(db, tx: ComputeTransaction) -> ComputeTransaction:
         return cancel_authorization(db, tx, reason="no billable usage")
 
     version = tx.settlement_version + 1
-    transition(db, tx, "PAYMENT_CAPTURE_PENDING", reason="capturing metered usage")
     key = idem_key("capture", tx, version)
-    op = _begin_op(db, tx, "capture", key)
-    if op.state == "succeeded" and tx.status == "PAYMENT_CAPTURED":
+    # Claim the slot FIRST (atomic). A concurrent/duplicate worker gets proceed=False
+    # and returns without a second capture or ledger posting.
+    op, proceed = _begin_op(db, tx, "capture", key)
+    if not proceed:
         return tx
+    transition(db, tx, "PAYMENT_CAPTURE_PENDING", reason="capturing metered usage")
     try:
         pi = get_gateway().capture_payment_intent(
             pi_id=tx.stripe_payment_intent_id,
@@ -415,11 +439,13 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
     if net > tx.captured_amount - tx.transferred_amount:
         raise TransactionError("transfer would exceed captured/available amount")
 
-    transition(db, tx, "SELLER_TRANSFER_PENDING", reason="creating transfer")
     key = idem_key("transfer", tx, tx.settlement_version)
-    op = _begin_op(db, tx, "transfer", key)
-    if op.external_object_id and tx.stripe_transfer_id:
+    # Claim the slot FIRST (atomic) — a concurrent/duplicate worker gets proceed=False
+    # and never creates a second transfer or ledger posting.
+    op, proceed = _begin_op(db, tx, "transfer", key)
+    if not proceed:
         return tx
+    transition(db, tx, "SELLER_TRANSFER_PENDING", reason="creating transfer")
     try:
         tr = get_gateway().create_transfer(
             amount=net, currency=tx.currency,
@@ -450,7 +476,9 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
 def cancel_authorization(db, tx: ComputeTransaction, *, reason: str = "cancelled") -> ComputeTransaction:
     """Job never ran (or zero usage): cancel the PI hold, release the GPU, charge $0."""
     key = idem_key("cancel", tx)
-    op = _begin_op(db, tx, "cancel", key)
+    op, proceed = _begin_op(db, tx, "cancel", key)
+    if not proceed:
+        return tx
     try:
         if tx.stripe_payment_intent_id:
             get_gateway().cancel_payment_intent(pi_id=tx.stripe_payment_intent_id,
@@ -499,7 +527,12 @@ def refund(db, tx: ComputeTransaction, *, amount: int = None, actor: str = "admi
                           "seller_net_amount": tx.seller_net_amount}, amount)
 
     rkey = idem_key("refund", tx, tx.settlement_version) + f":{amount}"
-    op = _begin_op(db, tx, "refund", rkey)
+    op, proceed = _begin_op(db, tx, "refund", rkey)
+    # A duplicate/concurrent identical refund (same settlement version + amount) does
+    # NOT re-increment refunded_amount or re-post the ledger — Stripe dedupes by the
+    # idempotency key, so our books must too.
+    if not proceed:
+        return tx
     try:
         rf = get_gateway().create_refund(payment_intent=tx.stripe_payment_intent_id,
                                          amount=amount,
@@ -524,7 +557,9 @@ def refund(db, tx: ComputeTransaction, *, amount: int = None, actor: str = "admi
     # If already transferred, claw the seller's share back via a transfer reversal.
     if tx.stripe_transfer_id and split["seller_reversal_amount"] > 0:
         revkey = idem_key("reversal", tx, tx.settlement_version) + f":{amount}"
-        rop = _begin_op(db, tx, "reversal", revkey)
+        rop, rproceed = _begin_op(db, tx, "reversal", revkey)
+        if not rproceed:
+            return tx    # duplicate/concurrent reversal already happened
         try:
             rev = get_gateway().create_transfer_reversal(
                 transfer_id=tx.stripe_transfer_id,
@@ -677,3 +712,65 @@ def latest_payout_events(db, connected_account_id: str, limit: int = 20):
         StripeWebhookEvent.received_at.desc()).limit(limit).all()
     return [{"event_id": r.stripe_event_id, "type": r.event_type,
              "at": r.received_at.isoformat() if r.received_at else None} for r in rows]
+
+
+# ----------------------------------------------------------------- reconciliation
+def reconcile_transaction(db, tx: ComputeTransaction, gateway=None) -> dict:
+    """Compare internal records against Stripe (or the fake gateway) + the ledger, and
+    return any mismatches. Detects: captured != PI amount_received, transferred !=
+    Stripe transfer amount, refunded != Stripe refund total, and captured !=
+    platform_fee + seller_net. Read-only; the source of truth for asserting the system
+    is consistent (make reconcile)."""
+    gw = gateway or get_gateway()
+    problems = []
+
+    # capture vs Stripe PaymentIntent
+    if tx.stripe_payment_intent_id and tx.captured_amount:
+        try:
+            pi = gw.retrieve_payment_intent(tx.stripe_payment_intent_id)
+            if int(pi.get("amount_received", 0)) != tx.captured_amount:
+                problems.append(f"captured {tx.captured_amount} != PI amount_received "
+                                f"{pi.get('amount_received')}")
+        except Exception as e:                          # noqa: BLE001
+            problems.append(f"could not retrieve PaymentIntent: {e}")
+
+    # money identity
+    if tx.captured_amount and tx.captured_amount != tx.platform_fee_amount + tx.seller_net_amount:
+        problems.append(f"captured {tx.captured_amount} != fee {tx.platform_fee_amount} "
+                        f"+ net {tx.seller_net_amount}")
+
+    # transfer vs Stripe transfer (net of reversals)
+    if tx.stripe_transfer_id:
+        tr = getattr(gw, "transfers", {}).get(tx.stripe_transfer_id) if hasattr(gw, "transfers") else None
+        if tr is not None:
+            net_on_stripe = tr["amount"] - tr.get("amount_reversed", 0)
+            expected = tx.transferred_amount - tx.reversed_amount
+            if net_on_stripe != expected:
+                problems.append(f"net transfer on Stripe {net_on_stripe} != internal "
+                                f"{expected}")
+
+    # bounds
+    if tx.refunded_amount > tx.captured_amount:
+        problems.append(f"refunded {tx.refunded_amount} > captured {tx.captured_amount}")
+    if tx.transferred_amount > tx.captured_amount:
+        problems.append(f"transferred {tx.transferred_amount} > captured {tx.captured_amount}")
+
+    return {"transaction_id": tx.public_id, "status": tx.status,
+            "reconciliation_status": tx.reconciliation_status,
+            "consistent": not problems, "problems": problems}
+
+
+def reconcile_all(db, gateway=None) -> dict:
+    """Reconcile every compute transaction + the ledger. Returns a summary suitable for
+    `make reconcile`; non-empty `mismatches` means STOP and investigate."""
+    txs = db.query(ComputeTransaction).all()
+    mismatches = []
+    for tx in txs:
+        r = reconcile_transaction(db, tx, gateway)
+        if not r["consistent"]:
+            mismatches.append(r)
+    from db import ledger_is_balanced
+    balanced, broken = ledger_is_balanced(db)
+    return {"transactions_checked": len(txs), "mismatches": mismatches,
+            "ledger_balanced": balanced, "broken_ledger_tx": broken,
+            "ok": (not mismatches) and balanced}

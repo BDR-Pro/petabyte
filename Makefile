@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test test test-postgres install verify
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile test test-postgres install verify
 
 help:
 	@echo "Petabyte make targets:"
@@ -12,7 +12,8 @@ help:
 	@echo "  make demo-seed       Seed the demo only (no server)"
 	@echo "  make demo-test       Run the demo correctness/honesty test suite"
 	@echo "  make stripe-demo     Narrated Stripe Connect flow (test mode, fake gateway)"
-	@echo "  make stripe-test     Run the Stripe Connect test suite (54 offline assertions)"
+	@echo "  make stripe-test     Run the Stripe Connect test suite (offline assertions)"
+	@echo "  make reconcile       Reconcile internal ledger + transactions vs Stripe (test mode)"
 	@echo "  make test            Run smoke + adversarial + stripe + gateway suites (SQLite)"
 	@echo "  make test-postgres   Run the full suite against SQLite AND PostgreSQL"
 	@echo "  make install         Install Python dependencies"
@@ -40,6 +41,10 @@ stripe-demo:
 
 stripe-test:
 	cd $(API) && python3 stripe_test.py
+
+# Financial reconciliation: internal ledger + ComputeTransactions vs Stripe (test mode).
+reconcile:
+	cd $(API) && python3 reconcile.py
 
 test:
 	cd $(API) && bash run_tests.sh

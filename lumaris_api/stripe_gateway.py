@@ -30,6 +30,38 @@ class StripeError(Exception):
     """Any gateway-level failure (maps real stripe.error.* + fake failures)."""
 
 
+class LiveModeForbidden(StripeError):
+    """A live Stripe key/mode was detected without an explicit, deliberate opt-in.
+    This is a blocking production-safety violation: the system refuses to move real
+    money by accident."""
+
+
+# --------------------------------------------------------------------------- test-mode guard
+def assert_test_mode(*, secret_key: str = None, publishable_key: str = None) -> None:
+    """Refuse LIVE Stripe keys/mode unless an operator explicitly opts in.
+
+    Enforces the single-source-of-truth rule: Stripe runs in TEST MODE only. A key
+    starting with `sk_live_` / `rk_live_` / `pk_live_` is a live key; detecting one is
+    a hard failure (`LiveModeForbidden`) — there is NO silent fallback to live.
+
+    The only escape hatch is a deliberate, loud production go-live: BOTH
+    `STRIPE_ALLOW_LIVE=true` AND `ENVIRONMENT=production` must be set. Anything else
+    (CI, tests, dev, staging) fails immediately on a live key."""
+    sk = secret_key if secret_key is not None else os.getenv("STRIPE_SECRET_KEY", "")
+    pk = publishable_key if publishable_key is not None else os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+    live_markers = ("sk_live_", "rk_live_", "pk_live_")
+    detected = [k[:8] + "…" for k in (sk, pk) if k and k.startswith(live_markers)]
+    if not detected:
+        return
+    allowed = (os.getenv("STRIPE_ALLOW_LIVE", "").lower() == "true"
+               and os.getenv("ENVIRONMENT", "").lower() == "production")
+    if not allowed:
+        raise LiveModeForbidden(
+            "LIVE Stripe key detected (" + ", ".join(detected) + "). This system is "
+            "TEST MODE ONLY. Refusing to run — no fallback to live. To deliberately go "
+            "live in production, set STRIPE_ALLOW_LIVE=true AND ENVIRONMENT=production.")
+
+
 # --------------------------------------------------------------------------- utils
 def _sig_header(payload: bytes, secret: str, ts: int | None = None) -> str:
     """Build a Stripe-Signature header (t=,v1=) the real verifier accepts."""
@@ -45,8 +77,11 @@ class RealStripeGateway:
 
     def __init__(self, api_key: str | None = None):
         import stripe
+        key = api_key or os.environ["STRIPE_SECRET_KEY"]
+        # Hard-fail on a live key before it can touch Stripe (no live fallback).
+        assert_test_mode(secret_key=key)
         self._stripe = stripe
-        stripe.api_key = api_key or os.environ["STRIPE_SECRET_KEY"]
+        stripe.api_key = key
         # Pin the API version so event shapes are stable across SDK upgrades.
         v = os.getenv("STRIPE_API_VERSION")
         if v:
@@ -323,15 +358,22 @@ _GATEWAY = None
 
 
 def get_gateway():
-    """Process-wide gateway. Chosen by STRIPE_GATEWAY, else by key shape."""
+    """Process-wide gateway, selected by STRIPE_GATEWAY ('real' or fake).
+
+    A live key is refused up front (`assert_test_mode`) so the system can never
+    silently fall back to live mode — even a misconfigured `STRIPE_GATEWAY=real`
+    with a live key hard-fails rather than moving real money."""
     global _GATEWAY
     if _GATEWAY is not None:
         return _GATEWAY
     mode = os.getenv("STRIPE_GATEWAY", "").strip().lower()
-    key = os.getenv("STRIPE_SECRET_KEY", "")
-    if mode == "real" or (mode == "" and key.startswith("sk_live_")):
+    # Enforce test mode regardless of which gateway is about to be selected.
+    assert_test_mode()
+    if mode == "real":
         _GATEWAY = RealStripeGateway()
     else:
+        # Default to the offline fake unless 'real' is explicitly requested. We never
+        # auto-select the live SDK from key shape — that was a silent live-mode path.
         _GATEWAY = FakeStripeGateway()
     return _GATEWAY
 

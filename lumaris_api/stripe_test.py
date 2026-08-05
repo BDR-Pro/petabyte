@@ -290,6 +290,59 @@ ok("partial refund refunds only the requested amount", pr["refunded_amount"] == 
 ok("admin refund requires a reason",
    c.post(f"/admin/payments/{tid_pr}/refund", headers=admin, json={"reason": ""}).status_code in (400, 422))
 
+# REGRESSION (defect B): a DUPLICATE identical partial refund must NOT double-count.
+# Previously refunded_amount went 100 -> 200 for a single Stripe refund.
+tid_dup = run_to_metered(3600)
+c.post(f"/admin/payments/{tid_dup}/capture", headers=admin)
+d1 = c.post(f"/admin/payments/{tid_dup}/refund", headers=admin, json={"amount": 100, "reason": "dup"}).json()
+d2 = c.post(f"/admin/payments/{tid_dup}/refund", headers=admin, json={"amount": 100, "reason": "dup"}).json()
+ok("duplicate identical partial refund is idempotent (no double-count)",
+   d1["refunded_amount"] == 100 and d2["refunded_amount"] == 100)
+_sdup = dbmod.SessionLocal()
+_txd = sc.get_tx_by_public_id(_sdup, tid_dup)
+_nref = _sdup.query(dbmod.LedgerEntry).filter(
+    dbmod.LedgerEntry.entry_type == "compute_refund",
+    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS,
+    dbmod.LedgerEntry.booking_id.is_(None)).count()
+_sdup.close()
+ok("duplicate refund posts the refund ledger leg only once",
+   len([r for r in GW.refunds.values() if r["payment_intent"] == _txd.stripe_payment_intent_id]) == 1)
+
+
+# ============================ STRIPE TEST-MODE ENFORCEMENT ============================
+# REGRESSION (defect A): a LIVE key must hard-fail; no silent fallback to live mode.
+from stripe_gateway import assert_test_mode, LiveModeForbidden
+ok("test-mode guard passes for a test key",
+   assert_test_mode(secret_key="sk_test_abc") is None)
+_blocked = False
+try:
+    assert_test_mode(secret_key="sk_live_ABCDEF1234567890")
+except LiveModeForbidden:
+    _blocked = True
+ok("test-mode guard HARD-FAILS on a live secret key", _blocked)
+_blocked_pk = False
+try:
+    assert_test_mode(secret_key="sk_test_ok", publishable_key="pk_live_XYZ")
+except LiveModeForbidden:
+    _blocked_pk = True
+ok("test-mode guard HARD-FAILS on a live publishable key", _blocked_pk)
+# only a deliberate, loud production opt-in permits a live key
+os.environ["STRIPE_ALLOW_LIVE"] = "true"; os.environ["ENVIRONMENT"] = "production"
+_allowed = True
+try:
+    assert_test_mode(secret_key="sk_live_ABCDEF1234567890")
+except LiveModeForbidden:
+    _allowed = False
+ok("live key allowed ONLY with ENVIRONMENT=production AND STRIPE_ALLOW_LIVE=true", _allowed)
+os.environ["ENVIRONMENT"] = "development"     # opt-in alone (no prod) is NOT enough
+_still_blocked = False
+try:
+    assert_test_mode(secret_key="sk_live_ABCDEF1234567890")
+except LiveModeForbidden:
+    _still_blocked = True
+ok("STRIPE_ALLOW_LIVE without ENVIRONMENT=production still blocks live", _still_blocked)
+os.environ.pop("STRIPE_ALLOW_LIVE", None)
+
 
 # ============================ WEBHOOKS ============================
 def post_webhook(event, secret=os.environ["STRIPE_WEBHOOK_SECRET"], ts=None):
@@ -367,6 +420,77 @@ ok("non-admin cannot list all payments", c.get("/admin/payments", headers=login(
 se = c.get("/seller/earnings/stripe", headers=login("seller_a")).json()
 ok("seller earnings show gross/commission/net + transfers",
    se["net_earnings_minor"] >= 0 and "transfers_pending_minor" in se)
+
+
+# ============================ CONCURRENCY (no double money movement) ============================
+from concurrent.futures import ThreadPoolExecutor
+# Capture the SAME transaction from many workers at once -> exactly one capture, one
+# ledger posting, correct amount. Guards: PaymentOperation unique key + FSM + status.
+tid_cc = run_to_metered(3600)
+def _cap(_):
+    # SQLite serialises writers ("database is locked"); the invariant (exactly-once
+    # money movement) is what we assert, not the per-call HTTP/exception outcome.
+    try:
+        return c.post(f"/admin/payments/{tid_cc}/capture", headers=admin).status_code
+    except Exception:
+        return "err"
+with ThreadPoolExecutor(max_workers=8) as ex:
+    codes = list(ex.map(_cap, range(8)))
+s = dbmod.SessionLocal()
+_txcc = sc.get_tx_by_public_id(s, tid_cc)
+def _legs_for(public_id, entry_type, account=None):
+    """Count ledger legs for ONE compute tx (scoped via LedgerTx.reference_id)."""
+    q = (s.query(dbmod.LedgerEntry)
+         .join(dbmod.LedgerTx, dbmod.LedgerEntry.tx_id == dbmod.LedgerTx.id)
+         .filter(dbmod.LedgerTx.reference_id == public_id,
+                 dbmod.LedgerEntry.entry_type == entry_type))
+    if account:
+        q = q.filter(dbmod.LedgerEntry.account == account)
+    return q.count()
+n_cap_legs = _legs_for(tid_cc, "compute_capture", dbmod.EXTERNAL_PAYMENTS)
+pi_cc = GW.payment_intents[_txcc.stripe_payment_intent_id]
+ok(f"concurrent capture charges once (captured={_txcc.captured_amount}, PI received={pi_cc['amount_received']})",
+   _txcc.captured_amount == 250 and pi_cc["amount_received"] == 250)
+ok(f"concurrent capture posts exactly one capture ledger leg (got {n_cap_legs})", n_cap_legs == 1)
+s.close()
+
+# Transfer the SAME captured transaction from many workers -> exactly one transfer.
+def _tr(_):
+    try:
+        return c.post(f"/admin/payments/{tid_cc}/transfer", headers=admin).status_code
+    except Exception:
+        return "err"
+with ThreadPoolExecutor(max_workers=8) as ex:
+    list(ex.map(_tr, range(8)))
+s = dbmod.SessionLocal()
+_txcc = sc.get_tx_by_public_id(s, tid_cc)
+n_tr_legs = (s.query(dbmod.LedgerEntry)
+             .join(dbmod.LedgerTx, dbmod.LedgerEntry.tx_id == dbmod.LedgerTx.id)
+             .filter(dbmod.LedgerTx.reference_id == tid_cc,
+                     dbmod.LedgerEntry.entry_type == "compute_transfer",
+                     dbmod.LedgerEntry.account == dbmod.acct_stripe_payouts()).count())
+n_tr_this = len([t for t in GW.transfers.values() if t["transfer_group"] == _txcc.public_id])
+ok(f"concurrent transfer moves money once (transferred={_txcc.transferred_amount})",
+   _txcc.stripe_transfer_id is not None and _txcc.transferred_amount == 225)
+ok(f"concurrent transfer created exactly one Stripe transfer for this tx (got {n_tr_this})", n_tr_this == 1)
+ok(f"concurrent transfer posts exactly one transfer ledger leg (got {n_tr_legs})", n_tr_legs == 1)
+s.close()
+
+
+# ============================ RECONCILIATION ============================
+s = dbmod.SessionLocal()
+rec = sc.reconcile_all(s, gateway=GW)
+ok(f"reconciliation: internal records match Stripe + ledger balances "
+   f"({rec['transactions_checked']} tx, {len(rec['mismatches'])} mismatches)",
+   rec["ok"] and rec["ledger_balanced"] and not rec["mismatches"])
+# reconcile MUST detect an injected divergence (tamper the captured amount)
+_bad = sc.get_tx_by_public_id(s, tid_cc)
+_orig = _bad.captured_amount
+_bad.captured_amount = _orig + 999; s.add(_bad); s.commit()
+rec2 = sc.reconcile_transaction(s, _bad, gateway=GW)
+ok("reconciliation DETECTS an internal/Stripe divergence", not rec2["consistent"] and rec2["problems"])
+_bad.captured_amount = _orig; s.add(_bad); s.commit()   # restore
+s.close()
 
 
 print(f"\n=== stripe: {PASSES} passed, {FAILS} failed ===")

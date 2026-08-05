@@ -262,6 +262,10 @@ def _assert_production_is_safe() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _assert_production_is_safe()
+    # Hard-fail at boot if a LIVE Stripe key is present without the deliberate
+    # production opt-in — no silent live mode, ever.
+    from stripe_gateway import assert_test_mode
+    assert_test_mode()
     task = None if REAPER_DISABLED else asyncio.create_task(_reaper_loop())
     yield
     if task:
