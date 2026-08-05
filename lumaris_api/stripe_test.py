@@ -326,22 +326,49 @@ try:
 except LiveModeForbidden:
     _blocked_pk = True
 ok("test-mode guard HARD-FAILS on a live publishable key", _blocked_pk)
-# only a deliberate, loud production opt-in permits a live key
+# a live key is permitted ONLY behind the loud triple opt-in.
 os.environ["STRIPE_ALLOW_LIVE"] = "true"; os.environ["ENVIRONMENT"] = "production"
+# two of three is NOT enough — PAYMENTS_LIVE_ENABLED must also be true (fail closed).
+_two_of_three_blocked = False
+try:
+    assert_test_mode(secret_key="sk_live_ABCDEF1234567890")
+except LiveModeForbidden:
+    _two_of_three_blocked = True
+ok("live key STILL blocked without PAYMENTS_LIVE_ENABLED (fail closed)", _two_of_three_blocked)
+os.environ["PAYMENTS_LIVE_ENABLED"] = "true"
 _allowed = True
 try:
     assert_test_mode(secret_key="sk_live_ABCDEF1234567890")
 except LiveModeForbidden:
     _allowed = False
-ok("live key allowed ONLY with ENVIRONMENT=production AND STRIPE_ALLOW_LIVE=true", _allowed)
+ok("live key allowed ONLY with PAYMENTS_LIVE_ENABLED + STRIPE_ALLOW_LIVE + ENVIRONMENT=production",
+   _allowed)
 os.environ["ENVIRONMENT"] = "development"     # opt-in alone (no prod) is NOT enough
 _still_blocked = False
 try:
     assert_test_mode(secret_key="sk_live_ABCDEF1234567890")
 except LiveModeForbidden:
     _still_blocked = True
-ok("STRIPE_ALLOW_LIVE without ENVIRONMENT=production still blocks live", _still_blocked)
+ok("opt-in flags without ENVIRONMENT=production still blocks live", _still_blocked)
 os.environ.pop("STRIPE_ALLOW_LIVE", None)
+os.environ.pop("PAYMENTS_LIVE_ENABLED", None)
+
+# test/live key MIXING is refused regardless of any opt-in
+_mixed = False
+try:
+    assert_test_mode(secret_key="sk_test_ok", publishable_key="pk_live_XYZ")
+except LiveModeForbidden:
+    _mixed = True
+ok("mixing a test secret key with a live publishable key is refused", _mixed)
+# a declared STRIPE_MODE must agree with the key prefixes
+os.environ["STRIPE_MODE"] = "test"
+_mode_mismatch = False
+try:
+    assert_test_mode(secret_key="sk_live_ABCDEF1234567890")
+except LiveModeForbidden:
+    _mode_mismatch = True
+ok("STRIPE_MODE=test with a live key is refused (mode/key mismatch)", _mode_mismatch)
+os.environ.pop("STRIPE_MODE", None)
 
 
 # ============================ WEBHOOKS ============================

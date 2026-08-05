@@ -258,6 +258,19 @@ def _assert_production_is_safe() -> None:
             + ", ".join(enabled)
             + ". Fix these or unset ENVIRONMENT=production.")
 
+    # Live payments require the FULL real configuration; fail safe otherwise. This is the
+    # "no half-configured live mode" gate: PAYMENTS_LIVE_ENABLED=true must come with real
+    # keys, a webhook secret, and the real gateway — never a fake fallback for money.
+    if os.getenv("PAYMENTS_LIVE_ENABLED", "").lower() == "true":
+        missing = [k for k in ("STRIPE_SECRET_KEY", "STRIPE_PUBLISHABLE_KEY",
+                               "STRIPE_WEBHOOK_SECRET") if not os.getenv(k)]
+        if os.getenv("STRIPE_GATEWAY", "").strip().lower() != "real":
+            missing.append("STRIPE_GATEWAY=real")
+        if missing:
+            raise RuntimeError(
+                "PAYMENTS_LIVE_ENABLED=true but live payments are not fully configured: "
+                "missing " + ", ".join(missing) + ". Refusing to start half-live.")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

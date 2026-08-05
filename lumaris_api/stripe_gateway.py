@@ -37,6 +37,17 @@ class LiveModeForbidden(StripeError):
 
 
 # --------------------------------------------------------------------------- test-mode guard
+def _key_mode(k: str) -> str | None:
+    """Return 'test'/'live' for a recognizable Stripe key, else None."""
+    if not k:
+        return None
+    if k.startswith(("sk_live_", "rk_live_", "pk_live_")):
+        return "live"
+    if k.startswith(("sk_test_", "rk_test_", "pk_test_")):
+        return "test"
+    return None
+
+
 def assert_test_mode(*, secret_key: str = None, publishable_key: str = None) -> None:
     """Refuse LIVE Stripe keys/mode unless an operator explicitly opts in.
 
@@ -44,22 +55,48 @@ def assert_test_mode(*, secret_key: str = None, publishable_key: str = None) -> 
     starting with `sk_live_` / `rk_live_` / `pk_live_` is a live key; detecting one is
     a hard failure (`LiveModeForbidden`) — there is NO silent fallback to live.
 
-    The only escape hatch is a deliberate, loud production go-live: BOTH
-    `STRIPE_ALLOW_LIVE=true` AND `ENVIRONMENT=production` must be set. Anything else
-    (CI, tests, dev, staging) fails immediately on a live key."""
+    Also enforced here (fail-closed, no silent misconfiguration):
+      * Test and live keys are NEVER mixed (secret + publishable must be the same mode).
+      * If STRIPE_MODE is declared, it must agree with the key prefixes.
+
+    The only escape hatch to run a live key is a deliberate, loud go-live: ALL of
+    `PAYMENTS_LIVE_ENABLED=true` AND `STRIPE_ALLOW_LIVE=true` AND
+    `ENVIRONMENT=production` must be set. Anything else (CI, tests, dev, staging) fails
+    immediately on a live key. Live mode cannot start while PAYMENTS_LIVE_ENABLED=false."""
     sk = secret_key if secret_key is not None else os.getenv("STRIPE_SECRET_KEY", "")
     pk = publishable_key if publishable_key is not None else os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+
+    # 1) Never mix test and live keys.
+    sk_mode, pk_mode = _key_mode(sk), _key_mode(pk)
+    if sk_mode and pk_mode and sk_mode != pk_mode:
+        raise LiveModeForbidden(
+            f"Stripe key mode mismatch: secret key is {sk_mode}, publishable key is "
+            f"{pk_mode}. Test and live keys must never be mixed. Refusing to run.")
+
+    # 2) An explicit STRIPE_MODE must match the configured keys.
+    declared = os.getenv("STRIPE_MODE", "").strip().lower()
+    if declared in ("test", "live"):
+        for k in (sk, pk):
+            m = _key_mode(k)
+            if m and m != declared:
+                raise LiveModeForbidden(
+                    f"STRIPE_MODE={declared} but a {m}-mode Stripe key is configured. "
+                    f"Refusing to run on a mode/key mismatch.")
+
+    # 3) Detect live keys; permit only behind the explicit, loud triple opt-in.
     live_markers = ("sk_live_", "rk_live_", "pk_live_")
     detected = [k[:8] + "…" for k in (sk, pk) if k and k.startswith(live_markers)]
     if not detected:
         return
-    allowed = (os.getenv("STRIPE_ALLOW_LIVE", "").lower() == "true"
+    allowed = (os.getenv("PAYMENTS_LIVE_ENABLED", "").lower() == "true"
+               and os.getenv("STRIPE_ALLOW_LIVE", "").lower() == "true"
                and os.getenv("ENVIRONMENT", "").lower() == "production")
     if not allowed:
         raise LiveModeForbidden(
             "LIVE Stripe key detected (" + ", ".join(detected) + "). This system is "
-            "TEST MODE ONLY. Refusing to run — no fallback to live. To deliberately go "
-            "live in production, set STRIPE_ALLOW_LIVE=true AND ENVIRONMENT=production.")
+            "TEST MODE ONLY by default. Refusing to run — no fallback to live. To go "
+            "live deliberately, set PAYMENTS_LIVE_ENABLED=true AND STRIPE_ALLOW_LIVE=true "
+            "AND ENVIRONMENT=production.")
 
 
 # --------------------------------------------------------------------------- utils
