@@ -37,6 +37,9 @@ jobs:
       - name: email (mailgun, offline unit)
         working-directory: lumaris_api
         run: python email_test.py
+      - name: matmul result validation (offline)
+        working-directory: lumaris_api
+        run: python matmul_validation_test.py
       - name: tunnel (NAT traversal + failover)
         working-directory: lumaris_gateway
         run: python tunnel_test.py
@@ -84,6 +87,10 @@ jobs:
       - name: payout routing — provider-neutral obligations + aggregation on Postgres
         working-directory: lumaris_api
         run: python payout_test.py
+
+      - name: matmul result validation (offline)
+        working-directory: lumaris_api
+        run: python matmul_validation_test.py
 
       - name: postgres-only — exact NUMERIC, advisory lock, true races
         working-directory: lumaris_api

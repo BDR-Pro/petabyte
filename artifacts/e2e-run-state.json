@@ -1,0 +1,37 @@
+{
+  "run_id": "e2e-20260805-213424",
+  "started_at": "2026-08-05T21:34:24Z",
+  "last_updated_at": "2026-08-05T21:45:00Z",
+  "git_commit_at_start": "4f85ad93197c909c3e763cd461b9863518e40356",
+  "git_branch": "claude/petabyte-funding-readiness-fun2q6",
+  "platform_release": "unknown (live site unreachable from this environment)",
+  "agent_release": "not installed (seller Droplet unreachable from this environment)",
+  "phase": "Phase 1 complete (baseline + audit + validator groundwork); Phases 2-9 BLOCKED_EXTERNAL",
+  "status": "BLOCKED_EXTERNAL",
+  "last_successful_checkpoint": "offline suite green incl. new matmul-validation (21 checks); reports + audit + validator written",
+  "current_transaction_id": null,
+  "current_job_id": null,
+  "attempt_count": 1,
+  "automated_tests": {
+    "offline_suites": "all passed (smoke, adversarial, stripe, payout, email, matmul-validation, tunnel)",
+    "matmul_validation_checks": "21 passed, 0 failed",
+    "live_e2e": "0 run (blocked)"
+  },
+  "work_done_in_repo": [
+    "docs/WORKLOAD_TEMPLATE_AUDIT.md — full template + task-type audit",
+    "docs/BUYER_SELLER_GPU_E2E_REPORT.md — morning summary + evidence + gap analysis",
+    "docs/OVERNIGHT_E2E_PROGRESS.md — restartable checkpoint log",
+    "lumaris_api/matmul_validation.py — pytorch-matmul-v1 result validator (offline, unit-tested; not yet live-wired)",
+    "lumaris_api/matmul_validation_test.py — 21 validator unit tests; wired into run_tests.sh + CI"
+  ],
+  "bugs_fixed": [],
+  "remaining_blockers": [
+    "Egress gateway returns HTTP 403 (policy denial) for https://petabyte.market — confirmed with the correct CA bundle, so it is a network policy denial, not a TLS error. The live site and public API cannot be reached from this Claude Code session.",
+    "TCP/22 (SSH) to buyer Droplet 137.184.198.133 and seller Droplet 165.22.236.63 times out; TCP/443 to those IPs is transparently intercepted by the Anthropic egress gateway (cert issuer 'Anthropic Egress Gateway ... CA') and returns 403. No direct path to either Droplet exists from this environment.",
+    "No SSH client is installed in this environment (`ssh` not on PATH) and no SSH private key is present. DEPLOY_SSH_KEY is a GitHub Actions secret and is not exposed to this session's environment.",
+    "No Stripe API keys present in this environment (STRIPE_SECRET_KEY/STRIPE_WEBHOOK_SECRET absent); Stripe API hosts are also behind the same denying egress gateway. Genuine Stripe test PaymentIntents/captures/transfers cannot be created from here.",
+    "No GPU/toolchain in this environment (nvidia-smi absent, torch not installed) — GPU workload execution cannot be validated locally."
+  ],
+  "required_user_action": "The live buyer→seller paid E2E must be driven from an environment that can (a) SSH into both Droplets using DEPLOY_SSH_KEY, (b) reach https://petabyte.market and the Stripe API over the network, and (c) has the Stripe TEST keys configured on the deployed platform. Options: run it from the buyer Droplet itself, from a GitHub Actions job that has DEPLOY_SSH_KEY + Stripe test secrets and open egress, or grant this session network egress + the SSH key. See docs/BUYER_SELLER_GPU_E2E_REPORT.md.",
+  "note": "This run performed all repository-side work that is possible without the live infrastructure (template audit, pipeline gap assessment, honest reporting). It intentionally created NO fake Stripe objects, NO fake GPU/job records, and NO fabricated screenshots or transfers. Status is BLOCKED_EXTERNAL, not SUCCEEDED, because the completion criteria have no live evidence."
+}
