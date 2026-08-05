@@ -1,0 +1,1618 @@
+{
+  "_meta": {
+    "description": "Normalized seller-payout country capability dataset. The frontend and coverage script read THIS, never hardcoded country arrays. A row counts toward ACTIVE coverage ONLY when availability_status=active AND implementation_status=implemented AND provider_approval_required is satisfied (approved=true) AND not sanctioned.",
+    "platform_country": "US",
+    "verified_at": "2026-08-05",
+    "honesty_note": "The platform HAS an approved Stripe Connect account (owner-confirmed 2026-08-05), but the code still runs Stripe in TEST MODE and no country has been live end-to-end payout-verified yet. Therefore NO country is 'active' yet: Stripe Connect countries are 'implemented' and 'pending_provider_approval'. A row flips to approved=true + availability_status=active ONLY after a real end-to-end payout is verified for that country (see docs/PAYMENTS_AND_PAYOUTS_ROADMAP.md, Step 1). Do NOT advertise a country as supported before that.",
+    "availability_status_values": [
+      "active",
+      "pending_provider_approval",
+      "preview",
+      "planned",
+      "unsupported",
+      "blocked"
+    ],
+    "implementation_status_values": [
+      "implemented",
+      "not_implemented"
+    ],
+    "sources": {
+      "stripe_connect": "https://docs.stripe.com/connect/cross-border-payouts (checked 2026-08-05; documented, not confirmed for Petabyte's account)",
+      "stripe_global_payouts": "https://docs.stripe.com/global-payouts (checked 2026-08-05)",
+      "ofac_sanctions": "https://ofac.treasury.gov/sanctions-programs-and-country-information (checked 2026-08-05)"
+    }
+  },
+  "sanctioned_blocked": [
+    "CU",
+    "IR",
+    "KP",
+    "SY",
+    "RU",
+    "BY"
+  ],
+  "countries": [
+    {
+      "country_code": "US",
+      "country_name": "United States",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "usd"
+      ],
+      "settlement_currencies": [
+        "usd"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": true,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "GB",
+      "country_name": "United Kingdom",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "gbp"
+      ],
+      "settlement_currencies": [
+        "gbp"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "CA",
+      "country_name": "Canada",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "cad"
+      ],
+      "settlement_currencies": [
+        "cad"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "AU",
+      "country_name": "Australia",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "aud"
+      ],
+      "settlement_currencies": [
+        "aud"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "NZ",
+      "country_name": "New Zealand",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "nzd"
+      ],
+      "settlement_currencies": [
+        "nzd"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "AT",
+      "country_name": "Austria",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "BE",
+      "country_name": "Belgium",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "BG",
+      "country_name": "Bulgaria",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "bgn"
+      ],
+      "settlement_currencies": [
+        "bgn"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "HR",
+      "country_name": "Croatia",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "CY",
+      "country_name": "Cyprus",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "CZ",
+      "country_name": "Czechia",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "czk"
+      ],
+      "settlement_currencies": [
+        "czk"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "DK",
+      "country_name": "Denmark",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "dkk"
+      ],
+      "settlement_currencies": [
+        "dkk"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "EE",
+      "country_name": "Estonia",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "FI",
+      "country_name": "Finland",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "FR",
+      "country_name": "France",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "DE",
+      "country_name": "Germany",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "GR",
+      "country_name": "Greece",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "HU",
+      "country_name": "Hungary",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "huf"
+      ],
+      "settlement_currencies": [
+        "huf"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "IE",
+      "country_name": "Ireland",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "IT",
+      "country_name": "Italy",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "LV",
+      "country_name": "Latvia",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "LT",
+      "country_name": "Lithuania",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "LU",
+      "country_name": "Luxembourg",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "MT",
+      "country_name": "Malta",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "NL",
+      "country_name": "Netherlands",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "NO",
+      "country_name": "Norway",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "nok"
+      ],
+      "settlement_currencies": [
+        "nok"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "PL",
+      "country_name": "Poland",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "pln"
+      ],
+      "settlement_currencies": [
+        "pln"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "PT",
+      "country_name": "Portugal",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "RO",
+      "country_name": "Romania",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "ron"
+      ],
+      "settlement_currencies": [
+        "ron"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "SK",
+      "country_name": "Slovakia",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "SI",
+      "country_name": "Slovenia",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "ES",
+      "country_name": "Spain",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "SE",
+      "country_name": "Sweden",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "sek"
+      ],
+      "settlement_currencies": [
+        "sek"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "CH",
+      "country_name": "Switzerland",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "chf"
+      ],
+      "settlement_currencies": [
+        "chf"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "LI",
+      "country_name": "Liechtenstein",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "eur"
+      ],
+      "settlement_currencies": [
+        "eur"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "GI",
+      "country_name": "Gibraltar",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "gbp"
+      ],
+      "settlement_currencies": [
+        "gbp"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "JP",
+      "country_name": "Japan",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "jpy"
+      ],
+      "settlement_currencies": [
+        "jpy"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "SG",
+      "country_name": "Singapore",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "sgd"
+      ],
+      "settlement_currencies": [
+        "sgd"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "HK",
+      "country_name": "Hong Kong",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "hkd"
+      ],
+      "settlement_currencies": [
+        "hkd"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "TH",
+      "country_name": "Thailand",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "thb"
+      ],
+      "settlement_currencies": [
+        "thb"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "MY",
+      "country_name": "Malaysia",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "myr"
+      ],
+      "settlement_currencies": [
+        "myr"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "AE",
+      "country_name": "United Arab Emirates",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "aed"
+      ],
+      "settlement_currencies": [
+        "aed"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "MX",
+      "country_name": "Mexico",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "mxn"
+      ],
+      "settlement_currencies": [
+        "mxn"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "BR",
+      "country_name": "Brazil",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "brl"
+      ],
+      "settlement_currencies": [
+        "brl"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "ID",
+      "country_name": "Indonesia",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "idr"
+      ],
+      "settlement_currencies": [
+        "idr"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "PH",
+      "country_name": "Philippines",
+      "provider": "stripe",
+      "product": "connect_express",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "php"
+      ],
+      "settlement_currencies": [
+        "php"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "2-7 business days (Stripe payout schedule)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "pending_provider_approval",
+      "implementation_status": "implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_connect",
+      "notes": "Connect adapter implemented + sandbox-verified; NOT active until Petabyte's live Stripe Connect account is approved."
+    },
+    {
+      "country_code": "NG",
+      "country_name": "Nigeria",
+      "provider": "stripe",
+      "product": "global_payouts",
+      "recipient_types": [
+        "individual",
+        "company"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": true,
+      "card_payout_supported": false,
+      "wallet_payout_supported": false,
+      "stablecoin_payout_supported": false,
+      "supported_currencies": [
+        "ngn"
+      ],
+      "settlement_currencies": [
+        "usd"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "unknown",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "planned",
+      "implementation_status": "not_implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_global_payouts",
+      "notes": "Global Payouts adapter NOT implemented and Petabyte NOT approved -> does not count."
+    },
+    {
+      "country_code": "KE",
+      "country_name": "Kenya",
+      "provider": "circle",
+      "product": "usdc_stablecoin",
+      "recipient_types": [
+        "individual"
+      ],
+      "platform_country": "US",
+      "bank_payout_supported": false,
+      "card_payout_supported": false,
+      "wallet_payout_supported": true,
+      "stablecoin_payout_supported": true,
+      "supported_currencies": [
+        "usdc"
+      ],
+      "settlement_currencies": [
+        "usdc"
+      ],
+      "minimum_amount_minor": 100,
+      "maximum_amount_minor": null,
+      "estimated_delivery": "minutes (on-chain)",
+      "kyc_required": true,
+      "tax_form_required": false,
+      "provider_approval_required": true,
+      "approved": false,
+      "availability_status": "planned",
+      "implementation_status": "not_implemented",
+      "verified_at": "2026-08-05",
+      "source_reference": "stripe_global_payouts",
+      "notes": "Stablecoin rail NOT implemented; seller consent + wallet screening required before it could ever count."
+    }
+  ]
+}

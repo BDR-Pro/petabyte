@@ -1,0 +1,19 @@
+# gitleaks configuration for the Petabyte repository.
+#
+# Extends the default ruleset and allowlists KNOWN-FAKE Stripe example keys that appear
+# in test assertions and documentation. These are NOT real credentials — the test-mode
+# guard (stripe_gateway.assert_test_mode) uses them to prove that live keys are refused
+# and that test/live keys are never mixed. Real Stripe keys never live in the repo:
+# STRIPE_SECRET_KEY / STRIPE_PUBLISHABLE_KEY / STRIPE_WEBHOOK_SECRET come from the
+# environment / GitHub Actions secrets only.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-fake Stripe example keys used in tests/docs (not real credentials)"
+regexTarget = "match"
+regexes = [
+  '''sk_live_ABCDEF1234567890''',
+  '''sk_test_ok''',
+  '''pk_live_XYZ''',
+]

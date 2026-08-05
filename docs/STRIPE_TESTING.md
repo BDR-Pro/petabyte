@@ -30,6 +30,39 @@ bash run_tests.sh --postgres          # full suite incl. stripe on SQLite + Post
 `stripe_test.py` uses `FakeStripeGateway` (deterministic, in-process) but verifies
 webhook signatures with the **real** Stripe verifier. CI runs it on both engines.
 
+### Test tiers (the repo's equivalent of pytest markers)
+
+This repo runs standalone test scripts, not pytest, so the unit/integration boundary is
+expressed by which script you run:
+
+| Tier | Command | Network / creds |
+|---|---|---|
+| `unit` (Stripe boundary mocked) | `python stripe_test.py` | none — `FakeStripeGateway` |
+| `stripe_test_mode` demo | `make stripe-demo` | none — fake gateway |
+| `integration` (`requires_stripe_credentials`) | `make stripe-integration` | **real** Stripe TEST keys |
+
+### Opt-in integration test — real Stripe TEST mode
+
+`stripe_integration_test.py` drives the **real** Stripe SDK with your TEST keys to prove
+the keys authenticate and that genuine test objects (`acct_`, `pi_`) are created — no
+fabricated IDs. It is safe by construction:
+
+- **Skips** (exit 0) when `STRIPE_SECRET_KEY` is unset — CI without secrets, forks, and
+  offline dev are unaffected.
+- **Refuses** (exit 1) any key that is not `sk_test_…`; `assert_test_mode()` is the
+  backstop. It never touches live mode.
+- Prints only object IDs, never key material.
+
+```
+# from the repository ROOT (the only Makefile lives there):
+export STRIPE_SECRET_KEY=sk_test_... STRIPE_PUBLISHABLE_KEY=pk_test_...
+make stripe-integration      # creates a real test acct_ + pi_, asserts idempotency
+```
+
+In CI this runs as the **`stripe-integration`** job, reading the repository secrets
+`STRIPE_SECRET_KEY` / `STRIPE_PUBLISHABLE_KEY` / `STRIPE_WEBHOOK_SECRET`. It self-skips
+when those secrets are absent (e.g. fork PRs), so it never blocks unrelated changes.
+
 ## Live-ish test mode with the Stripe CLI
 
 ```
@@ -44,13 +77,27 @@ uvicorn main:app --reload
 
 ### Test cards (Stripe test mode)
 
-| Card | Behavior |
-|---|---|
-| 4242 4242 4242 4242 | succeeds |
-| 4000 0025 0000 3155 | requires 3DS authentication |
-| 4000 0000 0000 9995 | declined (insufficient funds) |
+Development / test-mode only. **Verify every number against the current official Stripe
+docs before relying on it** — Stripe owns these and they can change. Never collect or
+display real card data.
 
-Any future expiry, any CVC, any ZIP.
+| Card | Scenario |
+|---|---|
+| 4242 4242 4242 4242 | payment succeeds |
+| 4000 0000 0000 0002 | generic decline |
+| 4000 0000 0000 9995 | declined — insufficient funds |
+| 4000 0000 0000 9987 | declined — lost card |
+| 4000 0000 0000 0069 | declined — expired card |
+| 4000 0000 0000 0127 | declined — incorrect CVC |
+| 4000 0000 0000 0119 | declined — processing error |
+| 4000 0025 0000 3155 | requires 3DS authentication (then succeeds) |
+| 4000 0084 0000 1629 | 3DS authentication required, then **declined** |
+| 4000 0027 6000 3184 | 3DS authentication required (challenge) |
+
+Any future expiry, any CVC, any ZIP. Flow coverage exercised by the suites and the
+demo: **authorization** (manual-capture PaymentIntent), **partial capture** (capture to
+metered usage), **PaymentIntent cancellation**, **refund**, and (where supported)
+**dispute** simulation via `stripe trigger charge.dispute.created`.
 
 ### Test seller onboarding
 

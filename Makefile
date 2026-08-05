@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile test test-postgres install verify
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile payout-test payout-coverage test test-postgres install verify
 
 help:
 	@echo "Petabyte make targets:"
@@ -13,8 +13,11 @@ help:
 	@echo "  make demo-test       Run the demo correctness/honesty test suite"
 	@echo "  make stripe-demo     Narrated Stripe Connect flow (test mode, fake gateway)"
 	@echo "  make stripe-test     Run the Stripe Connect test suite (offline assertions)"
+	@echo "  make stripe-integration  Real Stripe TEST-mode integration (needs sk_test_; skips otherwise)"
 	@echo "  make reconcile       Reconcile internal ledger + transactions vs Stripe (test mode)"
-	@echo "  make test            Run smoke + adversarial + stripe + gateway suites (SQLite)"
+	@echo "  make payout-test     Run the provider-neutral global payout routing suite"
+	@echo "  make payout-coverage Print the honest seller-payout country coverage (fails <100)"
+	@echo "  make test            Run smoke + adversarial + stripe + payout + gateway suites (SQLite)"
 	@echo "  make test-postgres   Run the full suite against SQLite AND PostgreSQL"
 	@echo "  make install         Install Python dependencies"
 	@echo "  make verify          install + migrate check + full test + demo test"
@@ -42,9 +45,23 @@ stripe-demo:
 stripe-test:
 	cd $(API) && python3 stripe_test.py
 
+# Opt-in integration test against REAL Stripe TEST mode (needs sk_test_/pk_test_).
+# Skips cleanly when no STRIPE_SECRET_KEY is set. NEVER runs on a live key.
+stripe-integration:
+	cd $(API) && python3 stripe_integration_test.py
+
 # Financial reconciliation: internal ledger + ComputeTransactions vs Stripe (test mode).
 reconcile:
 	cd $(API) && python3 reconcile.py
+
+# Provider-neutral payout routing/aggregation suite (offline, deterministic).
+payout-test:
+	cd $(API) && python3 payout_test.py
+
+# Honest seller-payout country coverage. Exits non-zero while below the 100-country
+# target — coverage grows ONLY via real provider approvals + implemented rails.
+payout-coverage:
+	python3 scripts/verify_payout_country_coverage.py
 
 test:
 	cd $(API) && bash run_tests.sh

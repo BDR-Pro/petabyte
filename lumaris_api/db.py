@@ -17,6 +17,16 @@ import string
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./dev.db")
+
+
+def payments_mode() -> str:
+    """Current money mode: 'LIVE' only when live payments are explicitly enabled,
+    else 'TEST'. Stamped (immutably) on every financial record so test and live money
+    can never be mixed or counted together. Authoritative live gate lives in
+    stripe_gateway.assert_test_mode; this only chooses the label."""
+    return "LIVE" if os.getenv("PAYMENTS_LIVE_ENABLED", "").lower() == "true" else "TEST"
+
+
 # ---------------------------------------------------------------------------
 # Money.
 # Money is NEVER a float. 0.1 + 0.2 != 0.3 in binary floating point, and a
@@ -896,6 +906,9 @@ class ComputeTransaction(Base):
     metering_source = Column(String, nullable=True)
     failure_reason = Column(String, nullable=True)
     is_demo = Column(Boolean, default=False, nullable=False, index=True)
+    # TEST vs LIVE money, stamped at creation and IMMUTABLE thereafter (see the
+    # before_update guard). Test and live records must never mix or be summed together.
+    mode = Column(String, nullable=False, default=payments_mode, index=True)
     created_at = Column(DateTime, default=_utcnow, index=True)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
     __table_args__ = (
@@ -981,6 +994,184 @@ def acct_stripe_fees():         return "stripe:fees"            # processing fee
 def acct_stripe_payouts():      return "external:stripe_transfers"  # money sent to connected accts
 
 
+# ======================================================================
+# Provider-neutral global payout layer.
+#
+# Job settlement produces an immutable PayoutObligation (what Petabyte owes a seller);
+# a separate routing/aggregation layer selects a rail and creates a PayoutBatch that
+# may cover many obligations. The obligation NEVER changes because the rail changes,
+# and one obligation can never be paid by two batches (guarded). Amounts are integer
+# minor units.
+# ======================================================================
+
+class PayoutObligation(Base):
+    """Immutable record of net earnings Petabyte owes a seller for settled compute.
+    Created at settlement; provider-neutral; survives provider changes/failures."""
+    __tablename__ = "payout_obligations"
+    id = Column(Integer, primary_key=True, index=True)
+    public_id = Column(String, unique=True, index=True, default=lambda: "obl_" + _rand_vm_id())
+    seller_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    compute_tx_id = Column(Integer, ForeignKey("compute_transactions.id"), index=True, nullable=True)
+    currency = Column(String, nullable=False, default="usd")
+    gross_amount_minor = Column(Integer, nullable=False, default=0)     # seller gross (== compute seller_net)
+    commission_minor = Column(Integer, nullable=False, default=0)       # platform commission (already taken upstream)
+    adjustments_minor = Column(Integer, nullable=False, default=0)
+    withholding_minor = Column(Integer, nullable=False, default=0)
+    net_amount_minor = Column(Integer, nullable=False, default=0)       # what a batch will pay
+    country = Column(String, nullable=True)
+    available_at = Column(DateTime, nullable=True)                      # after the risk hold
+    risk_hold_until = Column(DateTime, nullable=True)
+    compliance_status = Column(String, nullable=False, default="NOT_STARTED")
+    state = Column(String, nullable=False, default="accrued", index=True)  # accrued|available|batched|paid|reversed|failed
+    batch_id = Column(Integer, ForeignKey("payout_batches.id"), index=True, nullable=True)
+    pricing_snapshot = Column(Text, nullable=True)
+    is_demo = Column(Boolean, default=False, nullable=False)
+    mode = Column(String, nullable=False, default=payments_mode, index=True)  # TEST|LIVE, immutable
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    __table_args__ = (
+        CheckConstraint("net_amount_minor >= 0 AND gross_amount_minor >= 0",
+                        name="ck_obligation_nonneg"),
+        # One settlement -> at most one obligation. The SELECT-then-INSERT in
+        # create_payout_obligation races under concurrent settlement workers; this DB
+        # constraint is the real guarantee. NULL compute_tx_id (standalone/manual
+        # obligations) is exempt — SQL treats NULLs as distinct.
+        UniqueConstraint("compute_tx_id", name="uq_obligation_compute_tx"),
+    )
+
+
+class PayoutBatch(Base):
+    """One external payout that may cover MANY obligations (small-payment aggregation).
+    Bound to exactly one rail + idempotency key."""
+    __tablename__ = "payout_batches"
+    id = Column(Integer, primary_key=True, index=True)
+    public_id = Column(String, unique=True, index=True, default=lambda: "pob_" + _rand_vm_id())
+    seller_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    rail_type = Column(String, nullable=False)
+    provider = Column(String, nullable=True)
+    source_currency = Column(String, nullable=False, default="usd")
+    destination_currency = Column(String, nullable=True)
+    total_amount_minor = Column(Integer, nullable=False, default=0)
+    provider_fee_minor = Column(Integer, nullable=False, default=0)
+    fx_rate = Column(Float, nullable=True)
+    external_id = Column(String, index=True, nullable=True)
+    # created|sent|paid|failed|aborted|reversed|needs_reconciliation.
+    # TERMINAL (obligations released, never an idempotent replay): failed, aborted.
+    state = Column(String, nullable=False, default="created", index=True)
+    idempotency_key = Column(String, unique=True, index=True, nullable=False)
+    routing_explanation = Column(Text, nullable=True)
+    failure_reason = Column(String, nullable=True)
+    mode = Column(String, nullable=False, default=payments_mode, index=True)  # TEST|LIVE, immutable
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class ComplianceDecision(Base):
+    """A screening/compliance decision for a seller (or a specific payout). A payout
+    must not execute unless an APPROVED, current decision exists."""
+    __tablename__ = "compliance_decisions"
+    id = Column(Integer, primary_key=True, index=True)
+    seller_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    screening_type = Column(String, nullable=False)      # identity|sanctions|country|wallet|tax|risk
+    provider = Column(String, nullable=True)
+    decision = Column(String, nullable=False, default="NOT_STARTED")  # NOT_STARTED|INFORMATION_REQUIRED|UNDER_REVIEW|APPROVED|RESTRICTED|REJECTED|RESCREEN_REQUIRED
+    reference = Column(String, nullable=True)
+    checked_at = Column(DateTime, default=_utcnow)
+    expires_at = Column(DateTime, nullable=True)
+
+
+class PayoutMethodRail(Base):
+    """A seller's chosen payout method on a specific rail (bank vs stablecoin shown
+    separately). Distinct from the legacy SellerPayoutMethod (wallet-era)."""
+    __tablename__ = "payout_method_rails"
+    id = Column(Integer, primary_key=True, index=True)
+    seller_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    rail_type = Column(String, nullable=False)
+    method_type = Column(String, nullable=False)         # bank|stablecoin
+    currency = Column(String, nullable=True)
+    masked_destination = Column(String, nullable=True)
+    wallet_network = Column(String, nullable=True)
+    verification_state = Column(String, nullable=False, default="unverified")
+    active = Column(Boolean, default=False, nullable=False)
+    consented_at = Column(DateTime, nullable=True)       # required for stablecoin
+    provider_reference = Column(String, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+    disabled_at = Column(DateTime, nullable=True)
+
+
+def create_payout_obligation(db: Session, *, seller_id: int, compute_tx_id: int,
+                             currency: str, net_amount_minor: int, country: str = None,
+                             commission_minor: int = 0, pricing_snapshot: str = None,
+                             risk_hold_until=None, is_demo: bool = False,
+                             mode: str = None) -> "PayoutObligation":
+    """Create the immutable obligation from a settled compute transaction. Idempotent
+    per compute_tx_id: one settlement -> one obligation. `mode` MUST be the originating
+    transaction's mode (tx.mode) so reconciling an old TEST tx after go-live cannot mint
+    a LIVE obligation; when omitted it falls back to the current payments_mode()."""
+    existing = db.query(PayoutObligation).filter(
+        PayoutObligation.compute_tx_id == compute_tx_id).first()
+    if existing:
+        return existing
+    obl = PayoutObligation(
+        seller_id=seller_id, compute_tx_id=compute_tx_id, currency=currency,
+        gross_amount_minor=net_amount_minor, net_amount_minor=net_amount_minor,
+        commission_minor=commission_minor, country=country,
+        pricing_snapshot=pricing_snapshot, risk_hold_until=risk_hold_until,
+        available_at=risk_hold_until or _utcnow(),
+        state="available" if risk_hold_until is None else "accrued", is_demo=is_demo,
+        mode=(mode or payments_mode()))
+    db.add(obl); db.commit(); db.refresh(obl)
+    return obl
+
+
+def promote_due_obligations(db: Session, seller_id: int = None) -> int:
+    """Move accrued obligations whose risk hold has elapsed (available_at <= now) to
+    'available' so they become batchable automatically. Returns the count promoted.
+    Idempotent; safe to call on every read or from a scheduler."""
+    q = (update(PayoutObligation)
+         .where(PayoutObligation.state == "accrued",
+                PayoutObligation.batch_id.is_(None),
+                PayoutObligation.available_at.isnot(None),
+                PayoutObligation.available_at <= _utcnow())
+         .values(state="available"))
+    if seller_id is not None:
+        q = q.where(PayoutObligation.seller_id == seller_id)
+    res = db.execute(q)
+    db.commit()
+    return res.rowcount or 0
+
+
+def available_obligations(db: Session, seller_id: int, currency: str = None,
+                          mode: str = None):
+    """Obligations ready to be batched (available, not yet in a batch). Accrued
+    obligations past their risk hold are promoted first so the hold expires on its own.
+    A `mode` (TEST|LIVE) filter keeps test and live obligations in separate batches."""
+    promote_due_obligations(db, seller_id)
+    q = db.query(PayoutObligation).filter(
+        PayoutObligation.seller_id == seller_id,
+        PayoutObligation.state == "available",
+        PayoutObligation.batch_id.is_(None))
+    if currency:
+        q = q.filter(PayoutObligation.currency == currency)
+    if mode:
+        q = q.filter(PayoutObligation.mode == mode)
+    return q.all()
+
+
+# --- Immutability guard: a financial record's TEST/LIVE mode can never change ---
+def _forbid_mode_change(mapper, connection, target):
+    from sqlalchemy import inspect as _sa_inspect
+    hist = _sa_inspect(target).attrs.mode.history
+    if hist.deleted and hist.added and hist.deleted[0] is not None \
+            and hist.deleted[0] != hist.added[0]:
+        raise ValueError(
+            f"{type(target).__name__}.mode is immutable "
+            f"({hist.deleted[0]} -> {hist.added[0]}); test and live money must never "
+            f"be reclassified.")
+
+for _mode_cls in (ComputeTransaction, PayoutObligation, PayoutBatch):
+    event.listen(_mode_cls, "before_update", _forbid_mode_change, propagate=True)
+
+
 # ------------------ Session plumbing ------------------
 
 def _ensure_columns():
@@ -1007,6 +1198,9 @@ def _ensure_columns():
         "ledger": [("tx_id", "INTEGER"), ("direction", "VARCHAR")],
         "vm_routes": [("hourly_rate", "FLOAT DEFAULT 0"), ("started_at", "TIMESTAMP"),
                       ("paid_until", "TIMESTAMP"), ("stopped_at", "TIMESTAMP")],
+        "compute_transactions": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
+        "payout_obligations": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
+        "payout_batches": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
     }
     try:
         insp = _inspect(engine)
