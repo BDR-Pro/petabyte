@@ -108,6 +108,16 @@ def _sig_header(payload: bytes, secret: str, ts: int | None = None) -> str:
     return f"t={ts},v1={v1}"
 
 
+def _sobj(obj) -> dict:
+    """Serialize a Stripe SDK object to a plain (recursively-plain) dict.
+
+    dict(stripe_object) is NOT safe on the current SDK — StripeObject is no longer a
+    dict subclass, so dict() falls back to sequence iteration and raises KeyError: 0.
+    The SDK's own JSON form (str(obj) -> json) is the reliable path, and is exactly what
+    construct_event() already uses."""
+    return json.loads(str(obj))
+
+
 # --------------------------------------------------------------------------- real
 class RealStripeGateway:
     """Official SDK. Kept intentionally thin; the business logic lives in the service."""
@@ -135,20 +145,20 @@ class RealStripeGateway:
             capabilities={"card_payments": {"requested": True},
                           "transfers": {"requested": True}},
             metadata=metadata, idempotency_key=idempotency_key)
-        return dict(acct)
+        return _sobj(acct)
 
     def create_account_link(self, *, account_id: str, refresh_url: str,
                             return_url: str) -> dict:
         link = self._stripe.AccountLink.create(
             account=account_id, refresh_url=refresh_url, return_url=return_url,
             type="account_onboarding")
-        return dict(link)
+        return _sobj(link)
 
     def retrieve_account(self, account_id: str) -> dict:
-        return dict(self._stripe.Account.retrieve(account_id))
+        return _sobj(self._stripe.Account.retrieve(account_id))
 
     def create_login_link(self, account_id: str) -> dict:
-        return dict(self._stripe.Account.create_login_link(account_id))
+        return _sobj(self._stripe.Account.create_login_link(account_id))
 
     # ---- PaymentIntents (manual capture, separate charges & transfers) ----
     def create_payment_intent(self, *, amount: int, currency: str, metadata: dict,
@@ -159,20 +169,20 @@ class RealStripeGateway:
             metadata=metadata, transfer_group=transfer_group,
             automatic_payment_methods={"enabled": True},
             idempotency_key=idempotency_key)
-        return dict(pi)
+        return _sobj(pi)
 
     def retrieve_payment_intent(self, pi_id: str) -> dict:
-        return dict(self._stripe.PaymentIntent.retrieve(pi_id))
+        return _sobj(self._stripe.PaymentIntent.retrieve(pi_id))
 
     def capture_payment_intent(self, *, pi_id: str, amount_to_capture: int,
                                idempotency_key: str) -> dict:
         pi = self._stripe.PaymentIntent.capture(
             pi_id, amount_to_capture=amount_to_capture,
             idempotency_key=idempotency_key)
-        return dict(pi)
+        return _sobj(pi)
 
     def cancel_payment_intent(self, *, pi_id: str, idempotency_key: str) -> dict:
-        return dict(self._stripe.PaymentIntent.cancel(pi_id, idempotency_key=idempotency_key))
+        return _sobj(self._stripe.PaymentIntent.cancel(pi_id, idempotency_key=idempotency_key))
 
     # ---- Transfers / refunds / reversals ----
     def create_transfer(self, *, amount: int, currency: str, destination: str,
@@ -183,17 +193,17 @@ class RealStripeGateway:
                   idempotency_key=idempotency_key)
         if source_transaction:
             kw["source_transaction"] = source_transaction
-        return dict(self._stripe.Transfer.create(**kw))
+        return _sobj(self._stripe.Transfer.create(**kw))
 
     def create_refund(self, *, payment_intent: str, amount: int, metadata: dict,
                       idempotency_key: str) -> dict:
-        return dict(self._stripe.Refund.create(
+        return _sobj(self._stripe.Refund.create(
             payment_intent=payment_intent, amount=amount, metadata=metadata,
             idempotency_key=idempotency_key))
 
     def create_transfer_reversal(self, *, transfer_id: str, amount: int,
                                  metadata: dict, idempotency_key: str) -> dict:
-        return dict(self._stripe.Transfer.create_reversal(
+        return _sobj(self._stripe.Transfer.create_reversal(
             transfer_id, amount=amount, metadata=metadata,
             idempotency_key=idempotency_key))
 
