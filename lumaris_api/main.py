@@ -1128,6 +1128,10 @@ _STATIC_ALLOW = {
     "petabyte-logo.png": "image/png",
     "petabyte-mark-180.png": "image/png",
     "favicon.png": "image/png",
+    # BIMI brand indicator (SVG Tiny PS). Referenced by the default._bimi TXT record so
+    # mailbox providers can show the Petabyte mark as the sender avatar. See
+    # docs/EMAIL_BIMI_SETUP.md.
+    "petabyte-bimi.svg": "image/svg+xml",
 }
 
 @app.get("/static/{fname}")
