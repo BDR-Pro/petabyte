@@ -558,17 +558,10 @@ s.close()
 # ============ RESERVE / DISPATCH: crash compensation + stale-op recovery ============
 import datetime as _dtm
 
-def _auth_confirm_tx(spec_pub):
-    a = c.post("/payments/authorize", headers=login("buyer1"),
-               json={"spec_id": spec_pub, "estimated_seconds": 3600}).json()
-    pid = sc.get_tx_by_public_id(dbmod.SessionLocal(), a["transaction_id"]).stripe_payment_intent_id
-    GW.confirm_payment_intent(pid)
-    c.post(f"/payments/{a['transaction_id']}/confirm", headers=login("buyer1"))
-    return a["transaction_id"]
-
 # (6a) a dispatch that fails mid-way is surfaced, leaves NO orphan task, and can retry.
+# (reuses the existing _auth_confirm helper; patch + session cleaned up in finally.)
 spec_cr = make_online_spec("seller_a", price=2.50, units=2, gpu="L4")
-crid = _auth_confirm_tx(spec_cr)
+crid = _auth_confirm(spec_cr)
 c.post(f"/payments/{crid}/reserve", headers=login("buyer1"))          # -> GPU_RESERVED
 _orig_ct = sc.create_task
 _ctc = {"n": 0}
@@ -578,14 +571,17 @@ def _ct_fail_once(db, booking, *a, **k):
         raise RuntimeError("simulated task-create DB failure")
     return _orig_ct(db, booking, *a, **k)
 sc.create_task = _ct_fail_once
-s = dbmod.SessionLocal(); _tx = sc.get_tx_by_public_id(s, crid)
+s = dbmod.SessionLocal()
 _disp_failed = False
 try:
-    sc.dispatch_job(s, _tx, task_type="notebook", code="print(1)")
-except sc.TransactionError:
-    _disp_failed = True
-s.close()
-sc.create_task = _orig_ct
+    _tx = sc.get_tx_by_public_id(s, crid)
+    try:
+        sc.dispatch_job(s, _tx, task_type="notebook", code="print(1)")
+    except sc.TransactionError:
+        _disp_failed = True         # expected; unexpected errors still propagate
+finally:
+    sc.create_task = _orig_ct       # restore the patch no matter what
+    s.close()                       # and always close the session
 ok("a mid-way dispatch failure is surfaced, not silently swallowed", _disp_failed)
 s = dbmod.SessionLocal(); _tx = sc.get_tx_by_public_id(s, crid)
 ok("failed dispatch leaves NO task (orphan cleaned) and tx stays GPU_RESERVED",
@@ -597,7 +593,7 @@ s.close()
 
 # (6b) a STALE 'pending' reserve op (crashed prior attempt) is recovered on retry.
 spec_st = make_online_spec("seller_a", price=2.50, units=1, gpu="T4")
-stid = _auth_confirm_tx(spec_st)
+stid = _auth_confirm(spec_st)
 s = dbmod.SessionLocal(); _txs = sc.get_tx_by_public_id(s, stid)
 _rk = sc.idem_key("reserve", _txs)
 s.add(dbmod.PaymentOperation(tx_id=_txs.id, op_type="reserve", internal_idempotency_key=_rk,
@@ -610,6 +606,36 @@ _res = sc.reserve_gpu(s, _txs)
 ok("a STALE pending reserve op is recovered and the reservation completes",
    _res.status == "GPU_RESERVED")
 s.close()
+
+# (6c) ATOMIC stale reclaim: two callers observing the SAME stale pending op — only one
+# wins. Proves the conditional UPDATE (WHERE state='pending' AND attempt_count=<seen>)
+# that _begin_op relies on, so two concurrent retries can't both get proceed=True.
+spec_at = make_online_spec("seller_a", price=2.50, units=1, gpu="A10")
+atid = _auth_confirm(spec_at)
+s = dbmod.SessionLocal(); _txa = sc.get_tx_by_public_id(s, atid)
+_ak = sc.idem_key("reserve", _txa)
+s.add(dbmod.PaymentOperation(tx_id=_txa.id, op_type="reserve", internal_idempotency_key=_ak,
+      stripe_idempotency_key=_ak, state="pending", attempt_count=1)); s.commit()
+_opid = s.query(dbmod.PaymentOperation).filter(
+    dbmod.PaymentOperation.internal_idempotency_key == _ak).first().id
+s.close()
+# two independent sessions both observe attempt_count == 1, then both try to claim.
+sA = dbmod.SessionLocal(); sB = dbmod.SessionLocal()
+seenA = sA.get(dbmod.PaymentOperation, _opid).attempt_count
+seenB = sB.get(dbmod.PaymentOperation, _opid).attempt_count
+rA = sA.execute(dbmod.update(dbmod.PaymentOperation)
+                .where(dbmod.PaymentOperation.id == _opid,
+                       dbmod.PaymentOperation.state == "pending",
+                       dbmod.PaymentOperation.attempt_count == seenA)
+                .values(attempt_count=seenA + 1)); sA.commit()
+rB = sB.execute(dbmod.update(dbmod.PaymentOperation)
+                .where(dbmod.PaymentOperation.id == _opid,
+                       dbmod.PaymentOperation.state == "pending",
+                       dbmod.PaymentOperation.attempt_count == seenB)
+                .values(attempt_count=seenB + 1)); sB.commit()
+ok("atomic stale-op reclaim: exactly ONE of two same-attempt claims wins",
+   [rA.rowcount == 1, rB.rowcount == 1].count(True) == 1)
+sA.close(); sB.close()
 
 
 print(f"\n=== stripe: {PASSES} passed, {FAILS} failed ===")

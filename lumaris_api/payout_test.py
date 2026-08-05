@@ -449,6 +449,15 @@ ok("batch below threshold after partial claim is ABORTED, not sent",
 oa_row = s.get(dbmod.PayoutObligation, oa)
 ok("aborted batch releases its claimed obligations back to available",
    oa_row.state == "available" and oa_row.batch_id is None)
+# an ABORTED batch is TERMINAL: a later run must NOT replay it — it creates a NEW batch.
+_aborted_id, _aborted_key = pb.id, pb.idempotency_key
+s.execute(dbmod.update(dbmod.PayoutObligation).where(dbmod.PayoutObligation.id == obb)
+          .values(state="available", batch_id=None)); s.commit()   # release B too
+nb = routing.create_and_send_batch(s, dbmod.get_user_by_id(s, sid_p), currency="usd")
+ok("an aborted batch is NOT replayed; a new payable batch is created with a different "
+   "id + idempotency key",
+   nb is not None and nb.id != _aborted_id and nb.idempotency_key != _aborted_key
+   and nb.state == "paid")
 s.close()
 
 # ================= (5) failed batch is terminal; retry uses a NEW key =================
@@ -476,6 +485,69 @@ try:
     ok("the retry batch succeeds and is paid", b2.state == "paid")
 finally:
     _rail.send_payout = _origsend
+s.close()
+
+# ================= (round 3 / fix 5) reconciled obligation keeps the tx's ORIGINAL mode ===
+sid_tm = mk_seller("cr_txmode", "US")
+txm = mk_captured_tx(sid_tm, 400)            # tx.mode defaults to TEST at creation
+s = dbmod.SessionLocal()
+_opm2 = dbmod.payments_mode
+dbmod.payments_mode = lambda: "LIVE"         # app switched to LIVE AFTER the TEST tx
+try:
+    sc.reconcile_captured_without_obligations(s)
+finally:
+    dbmod.payments_mode = _opm2
+om = s.query(dbmod.PayoutObligation).filter(dbmod.PayoutObligation.compute_tx_id == txm).first()
+ok("a reconciled obligation keeps the tx's ORIGINAL mode (TEST), not the current LIVE mode",
+   om is not None and om.mode == "TEST")
+s.close()
+
+# ================= (round 3 / fix 6) transfer requires OWNING the obligation ==============
+# missing obligation (repair patched to a no-op) -> fail closed, no transfer.
+sid_mo = mk_seller("cr_missing", "US")
+txmo = mk_captured_tx(sid_mo, 500)
+s = dbmod.SessionLocal()
+_oe = sc._ensure_payout_obligation
+sc._ensure_payout_obligation = lambda db, tx: None
+_mo_refused = False
+try:
+    sc.transfer_to_seller(s, s.get(dbmod.ComputeTransaction, txmo))
+except sc.TransactionError:
+    _mo_refused = True
+finally:
+    sc._ensure_payout_obligation = _oe
+ok("missing obligation -> transfer fails closed (no ownership)",
+   _mo_refused and s.get(dbmod.ComputeTransaction, txmo).stripe_transfer_id is None)
+s.close()
+
+# incompatible obligation states -> fail closed, no transfer.
+for _bad in ("failed", "reversed", "batched", "paid"):
+    sid_bs = mk_seller(f"cr_bad_{_bad}", "US")
+    txbs = mk_captured_tx(sid_bs, 500)
+    add_obligation(sid_bs, 500, compute_tx_id=txbs, state=_bad)
+    s = dbmod.SessionLocal()
+    _ref = False
+    try:
+        sc.transfer_to_seller(s, s.get(dbmod.ComputeTransaction, txbs))
+    except sc.TransactionError:
+        _ref = True
+    ok(f"transfer fails closed when the obligation is '{_bad}'",
+       _ref and s.get(dbmod.ComputeTransaction, txbs).stripe_transfer_id is None)
+    s.close()
+
+# successful claim -> obligation 'paid', exactly ONE transfer.
+sid_ok = mk_seller("cr_owned", "US")
+txok = mk_captured_tx(sid_ok, 900)
+add_obligation(sid_ok, 900, compute_tx_id=txok, state="available")
+s = dbmod.SessionLocal()
+sc.transfer_to_seller(s, s.get(dbmod.ComputeTransaction, txok))
+_ook = s.query(dbmod.PayoutObligation).filter(dbmod.PayoutObligation.compute_tx_id == txok).first()
+_txok = s.get(dbmod.ComputeTransaction, txok)
+ok("successful claim transitions the obligation to paid and records a transfer",
+   _ook.state == "paid" and _txok.stripe_transfer_id is not None)
+ok("exactly one Stripe transfer is created for the owned obligation",
+   len([t for t in GW.transfers.values()
+        if t.get("metadata", {}).get("petabyte_tx") == _txok.public_id]) == 1)
 s.close()
 
 # restore the real loader

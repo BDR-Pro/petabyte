@@ -30,7 +30,7 @@ from db import (post, DEBIT, CREDIT, EXTERNAL_PAYMENTS, PLATFORM_REVENUE,
                 ConnectedAccount, ComputeTransaction, ComputeTxEvent,
                 PaymentOperation, StripeWebhookEvent, Settlement,
                 SellerSpec, Booking, User, spec_is_live, try_reserve_unit,
-                release_unit, create_task, get_user_by_id)
+                release_unit, create_task, get_user_by_id, update)
 from pricing import PricingConfig, price_per_hour_to_minor, estimate, settle, refund_split
 from stripe_gateway import get_gateway, StripeError
 
@@ -152,9 +152,19 @@ def _begin_op(db, tx, op_type: str, stripe_key: str, *, stale_after_s: int | Non
                 if _upd.tzinfo is None:
                     _upd = _upd.replace(tzinfo=timezone.utc)
                 if (_now() - _upd).total_seconds() > stale_after_s:
-                    existing.state = "pending"; existing.attempt_count += 1
-                    db.add(existing); db.commit()
-                    return existing, True         # crashed mid-flight -> recover/retry
+                    # ATOMIC reclaim: a read-then-write here would let two concurrent
+                    # retries both pass the staleness check and both proceed. Instead,
+                    # claim the row with a conditional UPDATE matching the SAME row, still
+                    # 'pending' and the SAME attempt_count. Only the caller whose UPDATE
+                    # affects exactly one row wins; the loser gets proceed=False.
+                    _seen = existing.attempt_count
+                    res = db.execute(update(PaymentOperation)
+                                     .where(PaymentOperation.id == existing.id,
+                                            PaymentOperation.state == "pending",
+                                            PaymentOperation.attempt_count == _seen)
+                                     .values(attempt_count=_seen + 1))
+                    db.commit(); db.refresh(existing)
+                    return existing, (res.rowcount == 1)
         existing.attempt_count += 1
         db.add(existing); db.commit()
         return existing, False                   # concurrent (pending) or succeeded -> do NOT repeat
@@ -357,18 +367,26 @@ def reserve_gpu(db, tx: ComputeTransaction) -> ComputeTransaction:
         db.add(tx); db.commit()
     except Exception as e:
         db.rollback()
-        if booking is not None and booking.id is not None:
-            try:
-                db.delete(booking); db.commit()
-            except Exception:
-                db.rollback()
+        # Compensate best-effort, each step independent so one failure can't skip the
+        # rest. Release capacity FIRST (most important). Any read of booking.id can raise
+        # ObjectDeletedError on a rolled-back instance, so it lives inside the delete try.
         try:
-            release_unit(db, tx.spec_id)         # give the reserved unit back
+            release_unit(db, tx.spec_id)          # ALWAYS return the reserved unit
         except Exception:
             db.rollback()
-        _finish_op(db, op, state="failed", error=str(e))
-        logger.error("reserve_gpu failed for tx %s after reserving capacity; compensated "
-                     "(released unit, removed orphan booking)", tx.public_id, exc_info=True)
+            logger.error("reserve_gpu: release_unit failed for tx %s", tx.public_id,
+                         exc_info=True)
+        try:
+            if booking is not None:
+                db.delete(booking); db.commit()   # booking.id access is inside this try
+        except Exception:
+            db.rollback()
+        try:
+            _finish_op(db, op, state="failed", error=str(e))   # ALWAYS mark op failed
+        except Exception:
+            db.rollback()
+        logger.error("reserve_gpu failed for tx %s after reserving capacity; compensated",
+                     tx.public_id, exc_info=True)
         raise TransactionError(f"reserve failed: {e}")
     _finish_op(db, op, state="succeeded", external_id=str(booking.id))
     return transition(db, tx, "GPU_RESERVED", reason=f"unit reserved (booking {booking.id})")
@@ -402,14 +420,20 @@ def dispatch_job(db, tx: ComputeTransaction, *, task_type: str = "notebook",
         db.add(tx); db.commit()
     except Exception as e:
         db.rollback()
-        if task is not None and getattr(task, "id", None) is not None:
-            try:
+        # Mark the op failed FIRST so a retry is never blocked by an orphan-cleanup error;
+        # then best-effort delete the orphan task (its .id read is inside the try, as a
+        # rolled-back instance can raise ObjectDeletedError).
+        try:
+            _finish_op(db, op, state="failed", error=str(e))
+        except Exception:
+            db.rollback()
+        try:
+            if task is not None:
                 db.delete(task); db.commit()
-            except Exception:
-                db.rollback()
-        _finish_op(db, op, state="failed", error=str(e))
-        logger.error("dispatch_job failed for tx %s; compensated (removed orphan task)",
-                     tx.public_id, exc_info=True)
+        except Exception:
+            db.rollback()
+        logger.error("dispatch_job failed for tx %s; compensated (op failed, orphan task "
+                     "cleaned best-effort)", tx.public_id, exc_info=True)
         raise TransactionError(f"dispatch failed: {e}")
     _finish_op(db, op, state="succeeded", external_id=str(task.id))
     transition(db, tx, "DISPATCHING", reason=f"task {task.id} created")
@@ -520,7 +544,8 @@ def _ensure_payout_obligation(db, tx: ComputeTransaction):
         db, seller_id=tx.seller_id, compute_tx_id=tx.id, currency=tx.currency,
         net_amount_minor=tx.seller_net_amount, commission_minor=tx.platform_fee_amount,
         country=(acct.country if acct else None), risk_hold_until=hold_until,
-        pricing_snapshot=tx.pricing_snapshot, is_demo=tx.is_demo)
+        pricing_snapshot=tx.pricing_snapshot, is_demo=tx.is_demo,
+        mode=tx.mode)   # keep the obligation in the ORIGINATING tx's money mode
 
 
 def reconcile_captured_without_obligations(db, *, limit: int = 500) -> int:
@@ -585,18 +610,26 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
     # BEFORE the Stripe call. This closes the check-to-use window: the batch layer only
     # ever claims 'available', so once we own it as 'transferring' no batch can pay it —
     # and a crash between the transfer and the paid-mark still leaves it non-batchable.
-    db.execute(_dbm.update(_dbm.PayoutObligation)
+    claim = db.execute(_dbm.update(_dbm.PayoutObligation)
                .where(_dbm.PayoutObligation.compute_tx_id == tx.id,
                       _dbm.PayoutObligation.state.in_(["accrued", "available", "reconciling"]))
                .values(state="transferring"))
     db.commit()
+    claimed_one = (claim.rowcount == 1)
     _obl = db.query(_dbm.PayoutObligation).filter(
         _dbm.PayoutObligation.compute_tx_id == tx.id).first()
-    if _obl is not None and _obl.state in ("batched", "paid"):
-        # The batch layer already owns/paid it (or a prior direct transfer completed).
+    # OWNERSHIP REQUIRED before any Stripe call. Proceed ONLY if we just claimed the
+    # obligation (rowcount 1) OR it is already 'transferring' (a prior attempt of THIS
+    # transfer owns it; the op slot below serializes concurrent/idempotent callers).
+    # Fail CLOSED for a missing obligation or any incompatible state (batched/paid/
+    # reversed/failed) — never transfer an earning this path does not own.
+    if _obl is None:
         raise TransactionError(
-            f"earning already handled elsewhere (obligation {_obl.public_id} is "
-            f"{_obl.state}); refusing a second transfer")
+            f"no payout obligation for tx {tx.public_id}; refusing transfer (fail closed)")
+    if not claimed_one and _obl.state != "transferring":
+        raise TransactionError(
+            f"obligation {_obl.public_id} is {_obl.state}; this transfer does not own it "
+            f"— refusing (fail closed)")
 
     key = idem_key("transfer", tx, tx.settlement_version)
     # Claim the op slot too (atomic) — a concurrent/duplicate worker gets proceed=False

@@ -1054,7 +1054,9 @@ class PayoutBatch(Base):
     provider_fee_minor = Column(Integer, nullable=False, default=0)
     fx_rate = Column(Float, nullable=True)
     external_id = Column(String, index=True, nullable=True)
-    state = Column(String, nullable=False, default="created", index=True)  # created|sent|paid|failed|reversed
+    # created|sent|paid|failed|aborted|reversed|needs_reconciliation.
+    # TERMINAL (obligations released, never an idempotent replay): failed, aborted.
+    state = Column(String, nullable=False, default="created", index=True)
     idempotency_key = Column(String, unique=True, index=True, nullable=False)
     routing_explanation = Column(Text, nullable=True)
     failure_reason = Column(String, nullable=True)
@@ -1099,9 +1101,12 @@ class PayoutMethodRail(Base):
 def create_payout_obligation(db: Session, *, seller_id: int, compute_tx_id: int,
                              currency: str, net_amount_minor: int, country: str = None,
                              commission_minor: int = 0, pricing_snapshot: str = None,
-                             risk_hold_until=None, is_demo: bool = False) -> "PayoutObligation":
+                             risk_hold_until=None, is_demo: bool = False,
+                             mode: str = None) -> "PayoutObligation":
     """Create the immutable obligation from a settled compute transaction. Idempotent
-    per compute_tx_id: one settlement -> one obligation."""
+    per compute_tx_id: one settlement -> one obligation. `mode` MUST be the originating
+    transaction's mode (tx.mode) so reconciling an old TEST tx after go-live cannot mint
+    a LIVE obligation; when omitted it falls back to the current payments_mode()."""
     existing = db.query(PayoutObligation).filter(
         PayoutObligation.compute_tx_id == compute_tx_id).first()
     if existing:
@@ -1112,7 +1117,8 @@ def create_payout_obligation(db: Session, *, seller_id: int, compute_tx_id: int,
         commission_minor=commission_minor, country=country,
         pricing_snapshot=pricing_snapshot, risk_hold_until=risk_hold_until,
         available_at=risk_hold_until or _utcnow(),
-        state="available" if risk_hold_until is None else "accrued", is_demo=is_demo)
+        state="available" if risk_hold_until is None else "accrued", is_demo=is_demo,
+        mode=(mode or payments_mode()))
     db.add(obl); db.commit(); db.refresh(obl)
     return obl
 

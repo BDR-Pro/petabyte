@@ -21,11 +21,10 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 import db as dbmod
-from db import (PayoutObligation, PayoutBatch, ComplianceDecision, PayoutMethodRail,
-                get_user_by_id)
+from db import (PayoutObligation, PayoutBatch, ComplianceDecision, PayoutMethodRail)
 import payout_capabilities as cap
-from payout_rails import (PayoutRailType, RecipientType, get_rail, CapabilityStatus,
-                          NotImplementedRail, PayoutRailError, PayoutRailUnknownState)
+from payout_rails import (PayoutRailType, get_rail, NotImplementedRail, PayoutRailError,
+                          PayoutRailUnknownState)
 
 logger = logging.getLogger(__name__)
 
@@ -190,11 +189,18 @@ def create_and_send_batch(db, seller, *, currency: str = "usd",
     # idempotent replay, or the released earnings could be aggregated elsewhere while this
     # code hands back a dead batch. Only a non-failed prior batch is a true replay. A
     # legitimate retry re-claims and gets a NEW attempt key so Stripe sees a new request.
-    prior = db.query(PayoutBatch).filter(PayoutBatch.idempotency_key.like(base + "%")).all()
-    live = [b for b in prior if b.state != "failed"]
+    # 'failed' AND 'aborted' are BOTH terminal: their obligations were released, so the
+    # batch no longer owns anything and must never be returned as a live idempotent
+    # replay. Only a non-terminal prior batch is a true replay. Order deterministically
+    # (by id) so live[0] is stable, and count both terminal states toward the attempt no.
+    _TERMINAL = ("failed", "aborted")
+    prior = (db.query(PayoutBatch)
+             .filter(PayoutBatch.idempotency_key.like(base + "%"))
+             .order_by(PayoutBatch.id).all())
+    live = [b for b in prior if b.state not in _TERMINAL]
     if live:
         return live[0]
-    attempt = sum(1 for b in prior if b.state == "failed")
+    attempt = sum(1 for b in prior if b.state in _TERMINAL)
     key = base if attempt == 0 else f"{base}:r{attempt}"
 
     batch = PayoutBatch(seller_id=seller.id, rail_type=rt.value, provider=rt.value.split("_")[0],
@@ -340,9 +346,13 @@ def seller_balances(db, seller_id: int) -> dict:
     Aggregated in SQL (GROUP BY) rather than loading every obligation into Python."""
     buckets = {"accrued": 0, "available": 0, "batched": 0, "transferring": 0,
                "reconciling": 0, "paid": 0, "reversed": 0, "failed": 0}
+    # Scope to the CURRENT payment mode so TEST funds are never shown as LIVE batchable
+    # earnings (and vice-versa) — the same mode create_and_send_batch aggregates by.
+    mode = dbmod.payments_mode()
     rows = (db.query(PayoutObligation.state,
                      func.coalesce(func.sum(PayoutObligation.net_amount_minor), 0))
-            .filter(PayoutObligation.seller_id == seller_id)
+            .filter(PayoutObligation.seller_id == seller_id,
+                    PayoutObligation.mode == mode)
             .group_by(PayoutObligation.state).all())
     for state, total in rows:
         buckets[state] = buckets.get(state, 0) + int(total or 0)
