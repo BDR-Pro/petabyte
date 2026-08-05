@@ -181,9 +181,18 @@ ok("all three obligations attached to the one batch and marked paid",
    len(paid) == 3 and all(o.state == "paid" for o in paid))
 ok("exactly one Stripe transfer created for the batch",
    len([t for t in GW.transfers.values() if t.get("metadata", {}).get("seller_id") == str(sid2)]) == 1)
+ok("batch + its obligations are stamped TEST mode",
+   batch.mode == "TEST" and all(o.mode == "TEST" for o in paid))
 # a re-run does not create a second batch or double-pay (no available obligations left)
 again = routing.create_and_send_batch(s, dbmod.get_user_by_id(s, sid2), currency="usd")
 ok("re-running aggregation does not double-pay (nothing available)", again is None)
+# TEST/LIVE mode is immutable — test and live money can never be reclassified/merged
+_immut = False
+try:
+    batch.mode = "LIVE"; s.commit()
+except Exception:
+    s.rollback(); _immut = True
+ok("financial-record mode is immutable (test/live cannot be reclassified)", _immut)
 s.close()
 
 # one obligation can never belong to two batches (claim guard)

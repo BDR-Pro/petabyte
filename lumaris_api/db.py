@@ -17,6 +17,16 @@ import string
 
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./dev.db")
+
+
+def payments_mode() -> str:
+    """Current money mode: 'LIVE' only when live payments are explicitly enabled,
+    else 'TEST'. Stamped (immutably) on every financial record so test and live money
+    can never be mixed or counted together. Authoritative live gate lives in
+    stripe_gateway.assert_test_mode; this only chooses the label."""
+    return "LIVE" if os.getenv("PAYMENTS_LIVE_ENABLED", "").lower() == "true" else "TEST"
+
+
 # ---------------------------------------------------------------------------
 # Money.
 # Money is NEVER a float. 0.1 + 0.2 != 0.3 in binary floating point, and a
@@ -896,6 +906,9 @@ class ComputeTransaction(Base):
     metering_source = Column(String, nullable=True)
     failure_reason = Column(String, nullable=True)
     is_demo = Column(Boolean, default=False, nullable=False, index=True)
+    # TEST vs LIVE money, stamped at creation and IMMUTABLE thereafter (see the
+    # before_update guard). Test and live records must never mix or be summed together.
+    mode = Column(String, nullable=False, default=payments_mode, index=True)
     created_at = Column(DateTime, default=_utcnow, index=True)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
     __table_args__ = (
@@ -1013,6 +1026,7 @@ class PayoutObligation(Base):
     batch_id = Column(Integer, ForeignKey("payout_batches.id"), index=True, nullable=True)
     pricing_snapshot = Column(Text, nullable=True)
     is_demo = Column(Boolean, default=False, nullable=False)
+    mode = Column(String, nullable=False, default=payments_mode, index=True)  # TEST|LIVE, immutable
     created_at = Column(DateTime, default=_utcnow, index=True)
     __table_args__ = (
         CheckConstraint("net_amount_minor >= 0 AND gross_amount_minor >= 0",
@@ -1039,6 +1053,7 @@ class PayoutBatch(Base):
     idempotency_key = Column(String, unique=True, index=True, nullable=False)
     routing_explanation = Column(Text, nullable=True)
     failure_reason = Column(String, nullable=True)
+    mode = Column(String, nullable=False, default=payments_mode, index=True)  # TEST|LIVE, immutable
     created_at = Column(DateTime, default=_utcnow, index=True)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -1108,6 +1123,21 @@ def available_obligations(db: Session, seller_id: int, currency: str = None):
     return q.all()
 
 
+# --- Immutability guard: a financial record's TEST/LIVE mode can never change ---
+def _forbid_mode_change(mapper, connection, target):
+    from sqlalchemy import inspect as _sa_inspect
+    hist = _sa_inspect(target).attrs.mode.history
+    if hist.deleted and hist.added and hist.deleted[0] is not None \
+            and hist.deleted[0] != hist.added[0]:
+        raise ValueError(
+            f"{type(target).__name__}.mode is immutable "
+            f"({hist.deleted[0]} -> {hist.added[0]}); test and live money must never "
+            f"be reclassified.")
+
+for _mode_cls in (ComputeTransaction, PayoutObligation, PayoutBatch):
+    event.listen(_mode_cls, "before_update", _forbid_mode_change, propagate=True)
+
+
 # ------------------ Session plumbing ------------------
 
 def _ensure_columns():
@@ -1134,6 +1164,9 @@ def _ensure_columns():
         "ledger": [("tx_id", "INTEGER"), ("direction", "VARCHAR")],
         "vm_routes": [("hourly_rate", "FLOAT DEFAULT 0"), ("started_at", "TIMESTAMP"),
                       ("paid_until", "TIMESTAMP"), ("stopped_at", "TIMESTAMP")],
+        "compute_transactions": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
+        "payout_obligations": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
+        "payout_batches": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
     }
     try:
         insp = _inspect(engine)
