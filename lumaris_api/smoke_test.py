@@ -1627,6 +1627,7 @@ ok("install.sh served by API", c.get("/install.sh").status_code==200 and "petaby
 ok("install.ps1 served by API", c.get("/install.ps1").status_code==200)
 ok("installers are key-based (no creds)", "PETABYTE_API_KEY" in c.get("/install.sh").text and "PETABYTE_PASS" not in c.get("/install.sh").text)
 _lg=c.get("/static/petabyte-logo.png"); ok("brand logo served", _lg.status_code==200 and _lg.headers.get("content-type")=="image/png")
+_bm=c.get("/static/petabyte-bimi.svg"); ok("BIMI mark served (svg tiny-ps)", _bm.status_code==200 and _bm.headers.get("content-type")=="image/svg+xml" and b"baseProfile=\"tiny-ps\"" in _bm.content)
 ok("favicon served", c.get("/favicon.ico").status_code==200)
 ok("static route rejects non-whitelisted name", c.get("/static/../main.py").status_code==404 and c.get("/static/secret.txt").status_code==404)
 ok("landing references brand logo", "/static/petabyte-logo.png" in c.get("/").text)
