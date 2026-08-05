@@ -1134,9 +1134,11 @@ def promote_due_obligations(db: Session, seller_id: int = None) -> int:
     return res.rowcount or 0
 
 
-def available_obligations(db: Session, seller_id: int, currency: str = None):
+def available_obligations(db: Session, seller_id: int, currency: str = None,
+                          mode: str = None):
     """Obligations ready to be batched (available, not yet in a batch). Accrued
-    obligations past their risk hold are promoted first so the hold expires on its own."""
+    obligations past their risk hold are promoted first so the hold expires on its own.
+    A `mode` (TEST|LIVE) filter keeps test and live obligations in separate batches."""
     promote_due_obligations(db, seller_id)
     q = db.query(PayoutObligation).filter(
         PayoutObligation.seller_id == seller_id,
@@ -1144,6 +1146,8 @@ def available_obligations(db: Session, seller_id: int, currency: str = None):
         PayoutObligation.batch_id.is_(None))
     if currency:
         q = q.filter(PayoutObligation.currency == currency)
+    if mode:
+        q = q.filter(PayoutObligation.mode == mode)
     return q.all()
 
 

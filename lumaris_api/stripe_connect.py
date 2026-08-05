@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 # Anti-account-takeover / chargeback cooling-off before a captured earning is payable.
 PAYOUT_COOLING_OFF_H = int(os.getenv("PAYOUT_COOLING_OFF_H", "24") or "24")
 
+# A 'pending' reserve/dispatch op older than this is treated as crashed and recoverable.
+_OP_STALE_S = 300
+
 
 class TransactionError(Exception):
     """Any business-rule violation in the payment flow (maps to 4xx)."""
@@ -107,17 +110,19 @@ def idem_key(op_type: str, tx: ComputeTransaction, version: int | None = None) -
     return f"{base}:{version}" if version is not None else base
 
 
-def _begin_op(db, tx, op_type: str, stripe_key: str):
+def _begin_op(db, tx, op_type: str, stripe_key: str, *, stale_after_s: int | None = None):
     """ATOMICALLY claim an operation slot before calling Stripe. Returns (op, proceed).
 
     `proceed` is True ONLY if THIS caller should perform the side effect (Stripe call +
     ledger posting):
       * the op row was newly created by us (we own it), or
-      * a prior attempt FAILED and we are legitimately retrying.
-    `proceed` is False when another worker is already mid-flight (state 'pending') or
-    the op already succeeded (idempotent replay). In both those cases the caller MUST
-    NOT repeat the money movement — this is what stops a concurrent second worker (or a
-    duplicate request/webhook) from double-posting the ledger.
+      * a prior attempt FAILED and we are legitimately retrying, or
+      * (opt-in) a prior 'pending' op is STALE beyond stale_after_s — the previous worker
+        crashed mid-flight and never finished. Only non-money local ops (reserve/dispatch,
+        which are compensated on failure) pass stale_after_s; money ops leave it None so a
+        genuinely in-flight transfer/capture is never double-run.
+    `proceed` is False when another worker is already mid-flight (fresh 'pending') or the
+    op already succeeded (idempotent replay).
 
     Atomicity comes from the UNIQUE constraint on internal_idempotency_key: two workers
     racing to INSERT the same key -> exactly one commit succeeds; the loser catches the
@@ -141,6 +146,15 @@ def _begin_op(db, tx, op_type: str, stripe_key: str):
             existing.state = "pending"; existing.attempt_count += 1
             db.add(existing); db.commit()
             return existing, True                # retry a prior failure -> proceed
+        if existing.state == "pending" and stale_after_s is not None:
+            _upd = existing.updated_at or existing.created_at
+            if _upd is not None:
+                if _upd.tzinfo is None:
+                    _upd = _upd.replace(tzinfo=timezone.utc)
+                if (_now() - _upd).total_seconds() > stale_after_s:
+                    existing.state = "pending"; existing.attempt_count += 1
+                    db.add(existing); db.commit()
+                    return existing, True         # crashed mid-flight -> recover/retry
         existing.attempt_count += 1
         db.add(existing); db.commit()
         return existing, False                   # concurrent (pending) or succeeded -> do NOT repeat
@@ -317,7 +331,8 @@ def reserve_gpu(db, tx: ComputeTransaction) -> ComputeTransaction:
     # would otherwise each pass the status check and each reserve a unit + create a
     # booking. The loser gets proceed=False and returns the current state — one booking,
     # one unit, ever.
-    op, proceed = _begin_op(db, tx, "reserve", idem_key("reserve", tx))
+    op, proceed = _begin_op(db, tx, "reserve", idem_key("reserve", tx),
+                            stale_after_s=_OP_STALE_S)
     if not proceed:
         db.refresh(tx)
         return tx
@@ -325,18 +340,38 @@ def reserve_gpu(db, tx: ComputeTransaction) -> ComputeTransaction:
         _finish_op(db, op, state="failed", error="no capacity")
         transition(db, tx, "RESERVATION_FAILED", reason="no capacity (lost the race)")
         raise TransactionError("no capacity")
-    from decimal import Decimal
-    b = Booking(buyer_id=tx.buyer_id, seller_id=tx.seller_id, spec_id=tx.spec_id,
-                hours=max(1, (json.loads(tx.pricing_snapshot).get("max_duration_s", 3600)) // 3600),
-                price_per_hour=spec.price_per_hour,
-                gross_amount=Decimal(tx.authorization_amount) / 100,
-                platform_fee=Decimal(0), seller_payout=Decimal(0),
-                status="stripe_reserved")   # NOT escrowed/active -> internal release_booking no-ops
-    db.add(b); db.commit(); db.refresh(b)
-    tx.booking_id = b.id
-    db.add(tx); db.commit()
-    _finish_op(db, op, state="succeeded", external_id=str(b.id))
-    return transition(db, tx, "GPU_RESERVED", reason=f"unit reserved (booking {b.id})")
+    # Capacity is now held. Any failure past this point must COMPENSATE (release the unit,
+    # drop a half-created booking) and mark the op failed, so a retry starts clean and no
+    # orphaned Booking / stuck unit is left behind.
+    booking = None
+    try:
+        from decimal import Decimal
+        booking = Booking(buyer_id=tx.buyer_id, seller_id=tx.seller_id, spec_id=tx.spec_id,
+                    hours=max(1, (json.loads(tx.pricing_snapshot).get("max_duration_s", 3600)) // 3600),
+                    price_per_hour=spec.price_per_hour,
+                    gross_amount=Decimal(tx.authorization_amount) / 100,
+                    platform_fee=Decimal(0), seller_payout=Decimal(0),
+                    status="stripe_reserved")   # NOT escrowed/active -> internal release_booking no-ops
+        db.add(booking); db.commit(); db.refresh(booking)
+        tx.booking_id = booking.id
+        db.add(tx); db.commit()
+    except Exception as e:
+        db.rollback()
+        if booking is not None and booking.id is not None:
+            try:
+                db.delete(booking); db.commit()
+            except Exception:
+                db.rollback()
+        try:
+            release_unit(db, tx.spec_id)         # give the reserved unit back
+        except Exception:
+            db.rollback()
+        _finish_op(db, op, state="failed", error=str(e))
+        logger.error("reserve_gpu failed for tx %s after reserving capacity; compensated "
+                     "(released unit, removed orphan booking)", tx.public_id, exc_info=True)
+        raise TransactionError(f"reserve failed: {e}")
+    _finish_op(db, op, state="succeeded", external_id=str(booking.id))
+    return transition(db, tx, "GPU_RESERVED", reason=f"unit reserved (booking {booking.id})")
 
 
 def dispatch_job(db, tx: ComputeTransaction, *, task_type: str = "notebook",
@@ -353,14 +388,29 @@ def dispatch_job(db, tx: ComputeTransaction, *, task_type: str = "notebook",
         raise TransactionError("authorization no longer valid; refusing to dispatch")
     # Atomically CLAIM dispatch so two parallel requests for the SAME tx create at most
     # one task (the tx.task_id check above is not atomic on its own).
-    op, proceed = _begin_op(db, tx, "dispatch", idem_key("dispatch", tx))
+    op, proceed = _begin_op(db, tx, "dispatch", idem_key("dispatch", tx),
+                            stale_after_s=_OP_STALE_S)
     if not proceed:
         db.refresh(tx)
         return tx
-    booking = db.query(Booking).filter(Booking.id == tx.booking_id).first()
-    task = create_task(db, booking, task_type, code=code)
-    tx.task_id = task.id
-    db.add(tx); db.commit()
+    # Compensate a partial dispatch (orphan Task) on failure so a retry starts clean.
+    task = None
+    try:
+        booking = db.query(Booking).filter(Booking.id == tx.booking_id).first()
+        task = create_task(db, booking, task_type, code=code)
+        tx.task_id = task.id
+        db.add(tx); db.commit()
+    except Exception as e:
+        db.rollback()
+        if task is not None and getattr(task, "id", None) is not None:
+            try:
+                db.delete(task); db.commit()
+            except Exception:
+                db.rollback()
+        _finish_op(db, op, state="failed", error=str(e))
+        logger.error("dispatch_job failed for tx %s; compensated (removed orphan task)",
+                     tx.public_id, exc_info=True)
+        raise TransactionError(f"dispatch failed: {e}")
     _finish_op(db, op, state="succeeded", external_id=str(task.id))
     transition(db, tx, "DISPATCHING", reason=f"task {task.id} created")
     return transition(db, tx, "RUNNING", reason="job running")
@@ -443,29 +493,61 @@ def capture(db, tx: ComputeTransaction) -> ComputeTransaction:
        description="captured actual compute usage", entry_type="compute_capture")
     transition(db, tx, "PAYMENT_CAPTURED", reason=f"captured {captured}")
     # Provider-neutral: settlement produces an IMMUTABLE payout obligation (what we owe
-    # the seller). The routing/aggregation layer decides the rail later; this record is
-    # independent of any provider. Idempotent per compute_tx; additive (never fails capture).
+    # the seller). Idempotent per compute_tx; additive (never fails capture). If it fails
+    # here the tx is still PAYMENT_CAPTURED, so it is REPAIRABLE:
+    # reconcile_captured_without_obligations() (and transfer_to_seller) recreate it.
     try:
-        import db as _dbm
-        acct = db.query(_dbm.ConnectedAccount).filter(
-            _dbm.ConnectedAccount.user_id == tx.seller_id).first()
-        # Apply the risk-hold cooling-off: the obligation is 'accrued' until this
-        # deadline, then auto-promotes to 'available' (so a batch cannot pay it early).
-        hold_until = (_now() + timedelta(hours=PAYOUT_COOLING_OFF_H)
-                      if PAYOUT_COOLING_OFF_H > 0 else None)
-        _dbm.create_payout_obligation(
-            db, seller_id=tx.seller_id, compute_tx_id=tx.id, currency=tx.currency,
-            net_amount_minor=tx.seller_net_amount, commission_minor=tx.platform_fee_amount,
-            country=(acct.country if acct else None), risk_hold_until=hold_until,
-            pricing_snapshot=tx.pricing_snapshot, is_demo=tx.is_demo)
-    except Exception:                                   # obligation is additive; never fail capture
-        # But NEVER silently: the buyer was charged; a missing payable must be visible to
-        # reconciliation, or the seller's earning is invisibly lost.
+        _ensure_payout_obligation(db, tx)
+    except Exception:
         db.rollback()
         logger.error("payout obligation creation FAILED for captured tx %s (seller %s, "
-                     "net %s %s); reconcile manually", tx.public_id, tx.seller_id,
-                     tx.seller_net_amount, tx.currency, exc_info=True)
+                     "net %s %s); will be repaired by reconciliation", tx.public_id,
+                     tx.seller_id, tx.seller_net_amount, tx.currency, exc_info=True)
     return tx
+
+
+def _ensure_payout_obligation(db, tx: ComputeTransaction):
+    """Idempotently create the provider-neutral payout obligation for a captured tx
+    (one per compute_tx_id, enforced by a DB unique constraint). Applies the risk-hold
+    cooling-off. Raises on failure so the caller can decide (capture logs + repairs
+    later; reconciliation retries)."""
+    import db as _dbm
+    acct = db.query(_dbm.ConnectedAccount).filter(
+        _dbm.ConnectedAccount.user_id == tx.seller_id).first()
+    hold_until = (_now() + timedelta(hours=PAYOUT_COOLING_OFF_H)
+                  if PAYOUT_COOLING_OFF_H > 0 else None)
+    return _dbm.create_payout_obligation(
+        db, seller_id=tx.seller_id, compute_tx_id=tx.id, currency=tx.currency,
+        net_amount_minor=tx.seller_net_amount, commission_minor=tx.platform_fee_amount,
+        country=(acct.country if acct else None), risk_hold_until=hold_until,
+        pricing_snapshot=tx.pricing_snapshot, is_demo=tx.is_demo)
+
+
+def reconcile_captured_without_obligations(db, *, limit: int = 500) -> int:
+    """Repair captured (or later) transactions that have NO payout obligation — e.g. the
+    obligation insert failed after PAYMENT_CAPTURED persisted. Idempotent (create is
+    per-compute_tx); returns how many were created. Safe to run from a reaper/cron."""
+    import db as _dbm
+    settled = ("PAYMENT_CAPTURED", "SELLER_TRANSFER_PENDING", "SELLER_TRANSFERRED",
+               "COMPLETED", "TRANSFER_FAILED")
+    rows = (db.query(ComputeTransaction)
+            .outerjoin(_dbm.PayoutObligation,
+                       _dbm.PayoutObligation.compute_tx_id == ComputeTransaction.id)
+            .filter(ComputeTransaction.status.in_(settled),
+                    ComputeTransaction.seller_net_amount > 0,
+                    _dbm.PayoutObligation.id.is_(None))
+            .limit(limit).all())
+    n = 0
+    for tx in rows:
+        try:
+            _ensure_payout_obligation(db, tx); n += 1
+        except Exception:
+            db.rollback()
+            logger.error("reconcile: could not create obligation for tx %s",
+                         tx.public_id, exc_info=True)
+    if n:
+        logger.info("reconcile: created %d missing payout obligation(s)", n)
+    return n
 
 
 # ----------------------------------------------------------------- transfer
@@ -479,17 +561,7 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
         return tx
     if tx.status not in ("PAYMENT_CAPTURED", "TRANSFER_FAILED"):
         raise TransactionError(f"cannot transfer from {tx.status}")
-    # Cross-path anti-double-pay, fail CLOSED: if the provider-neutral batch layer already
-    # claimed or paid this earning's obligation, the direct transfer MUST NOT fire a
-    # second payment. A DB error here must PROPAGATE (never be swallowed into "no
-    # obligation found") — a safety guard that fails open is not a guard.
     import db as _dbm
-    _obl = db.query(_dbm.PayoutObligation).filter(
-        _dbm.PayoutObligation.compute_tx_id == tx.id).first()
-    if _obl is not None and _obl.state in ("batched", "paid"):
-        raise TransactionError(
-            f"earning already handled by payout batch (obligation {_obl.public_id} "
-            f"is {_obl.state}); refusing a second transfer")
     net = tx.seller_net_amount
     # never transfer more than captured, more than settled, or a second time
     if net <= 0:
@@ -497,8 +569,37 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
     if net > tx.captured_amount - tx.transferred_amount:
         raise TransactionError("transfer would exceed captured/available amount")
 
+    # Repair-on-read: a tx captured before its obligation was created has none. Create it
+    # now (idempotent) so the earning is recorded and can be marked paid below.
+    if not db.query(_dbm.PayoutObligation).filter(
+            _dbm.PayoutObligation.compute_tx_id == tx.id).first():
+        try:
+            _ensure_payout_obligation(db, tx)
+        except Exception:
+            db.rollback()
+            logger.error("transfer: could not ensure obligation for tx %s (continuing; "
+                         "reconciliation will repair)", tx.public_id, exc_info=True)
+
+    # ATOMIC cross-path claim, fail CLOSED. Move the obligation accrued/available/
+    # reconciling -> 'transferring' (a dedicated NON-BATCHABLE state) in one UPDATE,
+    # BEFORE the Stripe call. This closes the check-to-use window: the batch layer only
+    # ever claims 'available', so once we own it as 'transferring' no batch can pay it —
+    # and a crash between the transfer and the paid-mark still leaves it non-batchable.
+    db.execute(_dbm.update(_dbm.PayoutObligation)
+               .where(_dbm.PayoutObligation.compute_tx_id == tx.id,
+                      _dbm.PayoutObligation.state.in_(["accrued", "available", "reconciling"]))
+               .values(state="transferring"))
+    db.commit()
+    _obl = db.query(_dbm.PayoutObligation).filter(
+        _dbm.PayoutObligation.compute_tx_id == tx.id).first()
+    if _obl is not None and _obl.state in ("batched", "paid"):
+        # The batch layer already owns/paid it (or a prior direct transfer completed).
+        raise TransactionError(
+            f"earning already handled elsewhere (obligation {_obl.public_id} is "
+            f"{_obl.state}); refusing a second transfer")
+
     key = idem_key("transfer", tx, tx.settlement_version)
-    # Claim the slot FIRST (atomic) — a concurrent/duplicate worker gets proceed=False
+    # Claim the op slot too (atomic) — a concurrent/duplicate worker gets proceed=False
     # and never creates a second transfer or ledger posting.
     op, proceed = _begin_op(db, tx, "transfer", key)
     if not proceed:
@@ -512,7 +613,16 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
             metadata={"petabyte_tx": tx.public_id, "seller_id": str(tx.seller_id)},
             idempotency_key=key)
     except StripeError as e:
+        # UNKNOWN outcome (timeout/network): the transfer MAY have gone through. Do NOT
+        # release the obligation — keep it claimed as 'reconciling' (non-batchable) so a
+        # batch can never pay it, and flag the tx for reconciliation. A retry re-uses the
+        # same idempotency key, which Stripe deduplicates.
         _finish_op(db, op, state="failed", error=str(e))
+        db.execute(_dbm.update(_dbm.PayoutObligation)
+                   .where(_dbm.PayoutObligation.compute_tx_id == tx.id,
+                          _dbm.PayoutObligation.state == "transferring")
+                   .values(state="reconciling"))
+        tx.reconciliation_status = "needs_review"; db.add(tx); db.commit()
         transition(db, tx, "TRANSFER_FAILED", reason=str(e))
         raise TransactionError(f"transfer failed: {e}")
     tx.stripe_transfer_id = tr["id"]
@@ -527,25 +637,20 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
     transition(db, tx, "SELLER_TRANSFERRED", reason=f"transfer {tr['id']}")
     tx.reconciliation_status = "reconciled"
     db.add(tx); db.commit()
-    # Mark the linked provider-neutral obligation PAID so the aggregation/batch layer can
-    # never pay the same earning a second time (one obligation -> one payment). It cannot
-    # be 'batched' here — the fail-closed guard above refuses that — so target
-    # accrued/available only (marking a batch-owned obligation paid would double-pay).
+    # Stripe definitively confirmed: obligation 'transferring' -> 'paid'.
     try:
-        import db as _dbm
         db.execute(_dbm.update(_dbm.PayoutObligation)
                    .where(_dbm.PayoutObligation.compute_tx_id == tx.id,
-                          _dbm.PayoutObligation.state.in_(["accrued", "available"]))
+                          _dbm.PayoutObligation.state.in_(["transferring", "accrued", "available"]))
                    .values(state="paid"))
         db.commit()
     except Exception:
-        # The transfer already SUCCEEDED and committed. If the obligation can't be marked
-        # paid, a later batch could pay it again — flag for reconciliation, loudly; never
-        # swallow silently.
+        # Transfer already succeeded + committed. The obligation is still 'transferring'
+        # (non-batchable), so no double-pay is possible; flag for reconciliation, loudly.
         db.rollback()
         tx.reconciliation_status = "needs_review"; db.add(tx); db.commit()
-        logger.error("transfer %s succeeded but obligation update FAILED for tx %s; "
-                     "flagged for reconciliation to prevent a duplicate payout",
+        logger.error("transfer %s succeeded but obligation paid-mark FAILED for tx %s; "
+                     "obligation left non-batchable ('transferring') for reconciliation",
                      tx.stripe_transfer_id, tx.public_id, exc_info=True)
     return transition(db, tx, "COMPLETED", reason="settled end to end")
 

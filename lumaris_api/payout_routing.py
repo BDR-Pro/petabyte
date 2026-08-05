@@ -165,7 +165,10 @@ def create_and_send_batch(db, seller, *, currency: str = "usd",
     """Aggregate a seller's AVAILABLE obligations into one batch on the selected rail,
     then (optionally) execute it. Returns the batch, or None if below threshold / no
     obligations. One obligation is included in at most one batch."""
-    obligations = dbmod.available_obligations(db, seller.id, currency)
+    # Resolve the payment MODE exactly once and use it end to end: obligation filter,
+    # batch.mode, and rail execution. TEST and LIVE money never mix in a batch.
+    mode = dbmod.payments_mode()
+    obligations = dbmod.available_obligations(db, seller.id, currency, mode=mode)
     if not obligations:
         return None
     total = sum(o.net_amount_minor for o in obligations)
@@ -178,19 +181,25 @@ def create_and_send_batch(db, seller, *, currency: str = "usd",
         raise RoutingError(decision["explanation"])
     rt = decision["rail_type"]
 
-    # Deterministic idempotency key over the exact requested obligation set, but
-    # FIXED-WIDTH: a raw comma-join grows with the obligation count and blows past
-    # Stripe's 255-char idempotency limit. Hash the id list, keep a readable prefix.
+    # Deterministic idempotency key over the exact requested obligation set + mode, but
+    # FIXED-WIDTH (hash) so hundreds of ids can't exceed Stripe's 255-char limit.
     obl_ids = sorted(o.id for o in obligations)
     digest = hashlib.sha256(",".join(map(str, obl_ids)).encode()).hexdigest()[:32]
-    key = f"petabyte:batch:{seller.id}:{currency}:{digest}"
-    existing = db.query(PayoutBatch).filter(PayoutBatch.idempotency_key == key).first()
-    if existing:
-        return existing
+    base = f"petabyte:batch:{seller.id}:{currency}:{mode}:{digest}"
+    # A 'failed' batch is TERMINAL (its obligations were released) — NEVER return it as an
+    # idempotent replay, or the released earnings could be aggregated elsewhere while this
+    # code hands back a dead batch. Only a non-failed prior batch is a true replay. A
+    # legitimate retry re-claims and gets a NEW attempt key so Stripe sees a new request.
+    prior = db.query(PayoutBatch).filter(PayoutBatch.idempotency_key.like(base + "%")).all()
+    live = [b for b in prior if b.state != "failed"]
+    if live:
+        return live[0]
+    attempt = sum(1 for b in prior if b.state == "failed")
+    key = base if attempt == 0 else f"{base}:r{attempt}"
 
     batch = PayoutBatch(seller_id=seller.id, rail_type=rt.value, provider=rt.value.split("_")[0],
                         source_currency=currency, destination_currency=currency,
-                        total_amount_minor=total, idempotency_key=key,
+                        total_amount_minor=total, idempotency_key=key, mode=mode,
                         routing_explanation=decision["explanation"], state="created")
     db.add(batch)
     try:
@@ -204,13 +213,14 @@ def create_and_send_batch(db, seller, *, currency: str = "usd",
             return existing
         raise
     db.refresh(batch)
-    # claim the obligations for THIS batch (guard: only ones still unbatched+available)
+    # claim obligations for THIS batch: only still-available, same mode, unbatched.
     claimed = []
     for o in obligations:
         res = db.execute(dbmod.update(PayoutObligation)
                          .where(PayoutObligation.id == o.id,
                                 PayoutObligation.batch_id.is_(None),
-                                PayoutObligation.state == "available")
+                                PayoutObligation.state == "available",
+                                PayoutObligation.mode == mode)
                          .values(batch_id=batch.id, state="batched"))
         if res.rowcount == 1:
             claimed.append(o.id)
@@ -218,13 +228,33 @@ def create_and_send_batch(db, seller, *, currency: str = "usd",
         batch.state = "failed"; batch.failure_reason = "no obligations could be claimed"
         db.add(batch); db.commit()
         return batch
-    # RECOMPUTE the batch total from what we ACTUALLY claimed. A concurrent batch can
-    # win a subset of the obligations, so the pre-claim `total` can overstate what this
-    # batch owns; sending it would over-transfer and double-pay the lost obligations.
+    # RECOMPUTE the total from what we ACTUALLY claimed (a concurrent batch may have won a
+    # subset); persist before any send so we can never over-transfer.
     claimed_set = set(claimed)
     claimed_total = sum(o.net_amount_minor for o in obligations if o.id in claimed_set)
     batch.total_amount_minor = claimed_total
     db.add(batch); db.commit()
+
+    # REVALIDATE eligibility against claimed_total BEFORE sending. If a concurrent claim
+    # dropped us below the threshold or the rail's minimum/eligibility, release the
+    # claimed obligations and abort WITHOUT calling the rail.
+    ineligible = None
+    if claimed_total < max(min_threshold_minor, 0):
+        ineligible = (f"claimed_total {claimed_total} below threshold {min_threshold_minor} "
+                      f"after concurrent claim")
+    else:
+        recheck = select_rail(db, seller, amount_minor=claimed_total, currency=currency,
+                              consent_stablecoin=consent_stablecoin)
+        if recheck["blocked"] or recheck["rail_type"] != rt:
+            ineligible = (f"rail no longer eligible at claimed_total {claimed_total}: "
+                          f"{recheck['explanation']}")
+    if ineligible:
+        db.execute(dbmod.update(PayoutObligation)
+                   .where(PayoutObligation.batch_id == batch.id)
+                   .values(batch_id=None, state="available"))
+        batch.state = "aborted"; batch.failure_reason = ineligible[:300]
+        db.add(batch); db.commit()
+        return batch
 
     if not execute:
         return batch
@@ -308,17 +338,20 @@ class _BatchObligation:
 def seller_balances(db, seller_id: int) -> dict:
     """Pending / available / in-transit / paid / failed, in minor units, for the UI.
     Aggregated in SQL (GROUP BY) rather than loading every obligation into Python."""
-    buckets = {"accrued": 0, "available": 0, "batched": 0, "paid": 0, "reversed": 0, "failed": 0}
+    buckets = {"accrued": 0, "available": 0, "batched": 0, "transferring": 0,
+               "reconciling": 0, "paid": 0, "reversed": 0, "failed": 0}
     rows = (db.query(PayoutObligation.state,
                      func.coalesce(func.sum(PayoutObligation.net_amount_minor), 0))
             .filter(PayoutObligation.seller_id == seller_id)
             .group_by(PayoutObligation.state).all())
     for state, total in rows:
-        buckets[state] = int(total or 0)
+        buckets[state] = buckets.get(state, 0) + int(total or 0)
     return {
         "pending_minor": buckets["accrued"],          # in risk hold
         "available_minor": buckets["available"],
-        "in_transit_minor": buckets["batched"],
+        # claimed by a batch or a direct transfer, or awaiting provider reconciliation:
+        # all NON-batchable and in-flight.
+        "in_transit_minor": buckets["batched"] + buckets["transferring"] + buckets["reconciling"],
         "paid_minor": buckets["paid"],
         "reversed_minor": buckets["reversed"],
         "failed_minor": buckets["failed"],

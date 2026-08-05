@@ -202,13 +202,28 @@ jobs:
       - name: seller-payout country coverage (target 100 — honest shortfall expected)
         run: |
           set +e
-          python scripts/verify_payout_country_coverage.py --target 100
+          out=$(python scripts/verify_payout_country_coverage.py --target 100 2>&1)
           code=$?
-          if [ "$code" -eq 0 ] || [ "$code" -eq 1 ]; then
-            echo "coverage exit=$code (0=met, 1=expected honest shortfall) — OK"
-            exit 0
-          fi
-          echo "coverage VERIFIER ERROR exit=$code (malformed dataset / regression)"
+          echo "$out"
+          {
+            echo "## Seller-payout country coverage"
+            echo ""
+            echo '```'
+            echo "$out"
+            echo '```'
+            if [ "$code" -eq 0 ]; then
+              echo "**Result:** target met (exit 0)."
+            elif [ "$code" -eq 1 ]; then
+              echo "**Result:** EXPECTED coverage shortfall (exit 1)."
+              echo "Coverage grows only via real provider approvals + implemented rails."
+              echo "This job is intentionally kept **green** while the number is honestly"
+              echo "below target — the shortfall is the truth, not a build failure."
+            else
+              echo "**Result:** ❌ VERIFIER ERROR (exit $code) — failing the job."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          # exit 1 (expected shortfall) stays green ON PURPOSE; any other non-zero fails.
+          if [ "$code" -eq 0 ] || [ "$code" -eq 1 ]; then exit 0; fi
           exit 1
 
   lint:

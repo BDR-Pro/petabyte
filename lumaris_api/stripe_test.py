@@ -555,6 +555,63 @@ _bad.captured_amount = _orig; s.add(_bad); s.commit()   # restore
 s.close()
 
 
+# ============ RESERVE / DISPATCH: crash compensation + stale-op recovery ============
+import datetime as _dtm
+
+def _auth_confirm_tx(spec_pub):
+    a = c.post("/payments/authorize", headers=login("buyer1"),
+               json={"spec_id": spec_pub, "estimated_seconds": 3600}).json()
+    pid = sc.get_tx_by_public_id(dbmod.SessionLocal(), a["transaction_id"]).stripe_payment_intent_id
+    GW.confirm_payment_intent(pid)
+    c.post(f"/payments/{a['transaction_id']}/confirm", headers=login("buyer1"))
+    return a["transaction_id"]
+
+# (6a) a dispatch that fails mid-way is surfaced, leaves NO orphan task, and can retry.
+spec_cr = make_online_spec("seller_a", price=2.50, units=2, gpu="L4")
+crid = _auth_confirm_tx(spec_cr)
+c.post(f"/payments/{crid}/reserve", headers=login("buyer1"))          # -> GPU_RESERVED
+_orig_ct = sc.create_task
+_ctc = {"n": 0}
+def _ct_fail_once(db, booking, *a, **k):
+    if _ctc["n"] == 0:
+        _ctc["n"] += 1
+        raise RuntimeError("simulated task-create DB failure")
+    return _orig_ct(db, booking, *a, **k)
+sc.create_task = _ct_fail_once
+s = dbmod.SessionLocal(); _tx = sc.get_tx_by_public_id(s, crid)
+_disp_failed = False
+try:
+    sc.dispatch_job(s, _tx, task_type="notebook", code="print(1)")
+except sc.TransactionError:
+    _disp_failed = True
+s.close()
+sc.create_task = _orig_ct
+ok("a mid-way dispatch failure is surfaced, not silently swallowed", _disp_failed)
+s = dbmod.SessionLocal(); _tx = sc.get_tx_by_public_id(s, crid)
+ok("failed dispatch leaves NO task (orphan cleaned) and tx stays GPU_RESERVED",
+   _tx.task_id is None and _tx.status == "GPU_RESERVED")
+_r2 = sc.dispatch_job(s, _tx, task_type="notebook", code="print(2)")
+ok("dispatch retry after a compensated failure succeeds (op was marked failed)",
+   _r2.status == "RUNNING" and _r2.task_id is not None)
+s.close()
+
+# (6b) a STALE 'pending' reserve op (crashed prior attempt) is recovered on retry.
+spec_st = make_online_spec("seller_a", price=2.50, units=1, gpu="T4")
+stid = _auth_confirm_tx(spec_st)
+s = dbmod.SessionLocal(); _txs = sc.get_tx_by_public_id(s, stid)
+_rk = sc.idem_key("reserve", _txs)
+s.add(dbmod.PaymentOperation(tx_id=_txs.id, op_type="reserve", internal_idempotency_key=_rk,
+      stripe_idempotency_key=_rk, state="pending", attempt_count=1)); s.commit()
+_old = _dtm.datetime.now(_dtm.timezone.utc) - _dtm.timedelta(seconds=sc._OP_STALE_S + 60)
+s.execute(dbmod.update(dbmod.PaymentOperation)
+          .where(dbmod.PaymentOperation.internal_idempotency_key == _rk)
+          .values(updated_at=_old, created_at=_old)); s.commit()
+_res = sc.reserve_gpu(s, _txs)
+ok("a STALE pending reserve op is recovered and the reservation completes",
+   _res.status == "GPU_RESERVED")
+s.close()
+
+
 print(f"\n=== stripe: {PASSES} passed, {FAILS} failed ===")
 for f in ("stripe_test.db", "stripe_test.db-wal", "stripe_test.db-shm"):
     if os.path.exists(f):
