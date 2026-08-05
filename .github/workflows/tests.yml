@@ -167,6 +167,25 @@ jobs:
           DATABASE_URL: postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/petabyte_test
         run: python -c "import db; db.init_db(); print('postgres schema OK')"
 
+  stripe-integration:
+    # Real Stripe TEST-mode integration. Proves the configured keys authenticate and
+    # create GENUINE test objects (acct_/pi_). The script self-skips (exit 0) when the
+    # secrets are absent (fork PRs, or before secrets are set), so it never blocks
+    # unrelated changes; it REFUSES any non-sk_test_ key. It never touches live mode.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r lumaris_api/requirements.txt
+      - name: stripe integration (real test mode; skips without secrets)
+        working-directory: lumaris_api
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+        run: python stripe_integration_test.py
+
   payout-coverage:
     # Honest seller-payout country coverage. The script EXITS NON-ZERO until we reach
     # 100 genuinely verified + implemented + approved + active countries. Today that is

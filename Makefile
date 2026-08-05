@@ -13,6 +13,7 @@ help:
 	@echo "  make demo-test       Run the demo correctness/honesty test suite"
 	@echo "  make stripe-demo     Narrated Stripe Connect flow (test mode, fake gateway)"
 	@echo "  make stripe-test     Run the Stripe Connect test suite (offline assertions)"
+	@echo "  make stripe-integration  Real Stripe TEST-mode integration (needs sk_test_; skips otherwise)"
 	@echo "  make reconcile       Reconcile internal ledger + transactions vs Stripe (test mode)"
 	@echo "  make payout-test     Run the provider-neutral global payout routing suite"
 	@echo "  make payout-coverage Print the honest seller-payout country coverage (fails <100)"
@@ -43,6 +44,11 @@ stripe-demo:
 
 stripe-test:
 	cd $(API) && python3 stripe_test.py
+
+# Opt-in integration test against REAL Stripe TEST mode (needs sk_test_/pk_test_).
+# Skips cleanly when no STRIPE_SECRET_KEY is set. NEVER runs on a live key.
+stripe-integration:
+	cd $(API) && python3 stripe_integration_test.py
 
 # Financial reconciliation: internal ledger + ComputeTransactions vs Stripe (test mode).
 reconcile:
