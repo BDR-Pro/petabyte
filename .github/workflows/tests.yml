@@ -31,6 +31,9 @@ jobs:
       - name: stripe connect (offline, fake gateway)
         working-directory: lumaris_api
         run: python stripe_test.py
+      - name: payout routing (provider-neutral, offline)
+        working-directory: lumaris_api
+        run: python payout_test.py
       - name: tunnel (NAT traversal + failover)
         working-directory: lumaris_gateway
         run: python tunnel_test.py
@@ -74,6 +77,10 @@ jobs:
       - name: stripe connect — full flow on Postgres (fake gateway)
         working-directory: lumaris_api
         run: python stripe_test.py
+
+      - name: payout routing — provider-neutral obligations + aggregation on Postgres
+        working-directory: lumaris_api
+        run: python payout_test.py
 
       - name: postgres-only — exact NUMERIC, advisory lock, true races
         working-directory: lumaris_api
@@ -159,6 +166,23 @@ jobs:
           SERVER_PRIVATE_KEY: t
           DATABASE_URL: postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/petabyte_test
         run: python -c "import db; db.init_db(); print('postgres schema OK')"
+
+  payout-coverage:
+    # Honest seller-payout country coverage. The script EXITS NON-ZERO until we reach
+    # 100 genuinely verified + implemented + approved + active countries. Today that is
+    # 0/100 by design: coverage grows only through real provider approvals and shipped
+    # rail adapters, never by editing the dataset. This runs as a visible tracking
+    # signal (continue-on-error) rather than a hard gate, so it can't be "passed" by
+    # faking data — the red status is the truth until real reach exists.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r lumaris_api/requirements.txt
+      - name: seller-payout country coverage (target 100 — honest shortfall expected)
+        continue-on-error: true
+        run: python scripts/verify_payout_country_coverage.py --target 100
 
   lint:
     # Non-blocking style signal today (|| true) so a formatting nit never blocks a

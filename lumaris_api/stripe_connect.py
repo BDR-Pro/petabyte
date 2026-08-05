@@ -418,7 +418,22 @@ def capture(db, tx: ComputeTransaction) -> ComputeTransaction:
         (acct_seller_payable(tx.seller_id), CREDIT, tx.seller_net_amount, tx.seller_id),
     ], reference_id=tx.public_id,
        description="captured actual compute usage", entry_type="compute_capture")
-    return transition(db, tx, "PAYMENT_CAPTURED", reason=f"captured {captured}")
+    transition(db, tx, "PAYMENT_CAPTURED", reason=f"captured {captured}")
+    # Provider-neutral: settlement produces an IMMUTABLE payout obligation (what we owe
+    # the seller). The routing/aggregation layer decides the rail later; this record is
+    # independent of any provider. Idempotent per compute_tx; additive (never fails capture).
+    try:
+        import db as _dbm
+        acct = db.query(_dbm.ConnectedAccount).filter(
+            _dbm.ConnectedAccount.user_id == tx.seller_id).first()
+        _dbm.create_payout_obligation(
+            db, seller_id=tx.seller_id, compute_tx_id=tx.id, currency=tx.currency,
+            net_amount_minor=tx.seller_net_amount, commission_minor=tx.platform_fee_amount,
+            country=(acct.country if acct else None),
+            pricing_snapshot=tx.pricing_snapshot, is_demo=tx.is_demo)
+    except Exception:                                   # obligation is additive; never fail capture
+        db.rollback()
+    return tx
 
 
 # ----------------------------------------------------------------- transfer
@@ -432,6 +447,18 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
         return tx
     if tx.status not in ("PAYMENT_CAPTURED", "TRANSFER_FAILED"):
         raise TransactionError(f"cannot transfer from {tx.status}")
+    # Cross-path anti-double-pay: if the provider-neutral batch layer already claimed or
+    # paid this earning's obligation, the direct transfer MUST NOT fire a second payment.
+    try:
+        import db as _dbm
+        _obl = db.query(_dbm.PayoutObligation).filter(
+            _dbm.PayoutObligation.compute_tx_id == tx.id).first()
+    except Exception:
+        _obl = None
+    if _obl is not None and _obl.state in ("batched", "paid"):
+        raise TransactionError(
+            f"earning already handled by payout batch (obligation {_obl.public_id} "
+            f"is {_obl.state}); refusing a second transfer")
     net = tx.seller_net_amount
     # never transfer more than captured, more than settled, or a second time
     if net <= 0:
@@ -469,6 +496,17 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
     transition(db, tx, "SELLER_TRANSFERRED", reason=f"transfer {tr['id']}")
     tx.reconciliation_status = "reconciled"
     db.add(tx); db.commit()
+    # Mark the linked provider-neutral obligation PAID so the aggregation/batch layer
+    # can never pay the same earning a second time (one obligation -> one payment).
+    try:
+        import db as _dbm
+        db.execute(_dbm.update(_dbm.PayoutObligation)
+                   .where(_dbm.PayoutObligation.compute_tx_id == tx.id,
+                          _dbm.PayoutObligation.state.in_(["accrued", "available", "batched"]))
+                   .values(state="paid"))
+        db.commit()
+    except Exception:
+        db.rollback()
     return transition(db, tx, "COMPLETED", reason="settled end to end")
 
 

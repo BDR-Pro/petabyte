@@ -39,8 +39,17 @@ rm -f smoke.db* adv.db* ../lumaris_gateway/tunnel.db*
 run_suite "smoke (sqlite)"        python smoke_test.py
 run_suite "adversarial (sqlite)"  python adversarial_test.py
 run_suite "stripe connect (sqlite)" python stripe_test.py
+run_suite "payout routing (sqlite)" python payout_test.py
 run_suite "tunnel (nat + failover)" bash -c "cd ../lumaris_gateway && python tunnel_test.py"
-rm -f smoke.db* adv.db* stripe_test.db* ../lumaris_gateway/tunnel.db*
+rm -f smoke.db* adv.db* stripe_test.db* payout_test.db* ../lumaris_gateway/tunnel.db*
+
+# Informational: honest seller-payout country coverage. This deliberately reports a
+# SHORTFALL (0/100) today and is NOT a gate — coverage grows only through real provider
+# approvals + implemented rails, never by editing the dataset. Printed so the number
+# stays visible on every run; its non-zero exit is swallowed on purpose.
+echo ""
+echo "${BOLD}--- seller-payout country coverage (informational) ---${OFF}"
+python ../scripts/verify_payout_country_coverage.py || true
 
 # ---------------------------------------------------------------- Postgres
 if [[ "${1:-}" == "--postgres" ]]; then
@@ -65,6 +74,7 @@ if [[ "${1:-}" == "--postgres" ]]; then
   run_suite "smoke (postgres)"       python smoke_test.py
   run_suite "adversarial (postgres)" python adversarial_test.py
   run_suite "stripe connect (postgres)" python stripe_test.py
+  run_suite "payout routing (postgres)" python payout_test.py
   run_suite "postgres-only invariants (exact NUMERIC, advisory lock, real races)" \
             python postgres_test.py
 else

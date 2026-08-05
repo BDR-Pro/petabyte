@@ -981,6 +981,133 @@ def acct_stripe_fees():         return "stripe:fees"            # processing fee
 def acct_stripe_payouts():      return "external:stripe_transfers"  # money sent to connected accts
 
 
+# ======================================================================
+# Provider-neutral global payout layer.
+#
+# Job settlement produces an immutable PayoutObligation (what Petabyte owes a seller);
+# a separate routing/aggregation layer selects a rail and creates a PayoutBatch that
+# may cover many obligations. The obligation NEVER changes because the rail changes,
+# and one obligation can never be paid by two batches (guarded). Amounts are integer
+# minor units.
+# ======================================================================
+
+class PayoutObligation(Base):
+    """Immutable record of net earnings Petabyte owes a seller for settled compute.
+    Created at settlement; provider-neutral; survives provider changes/failures."""
+    __tablename__ = "payout_obligations"
+    id = Column(Integer, primary_key=True, index=True)
+    public_id = Column(String, unique=True, index=True, default=lambda: "obl_" + _rand_vm_id())
+    seller_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    compute_tx_id = Column(Integer, ForeignKey("compute_transactions.id"), index=True, nullable=True)
+    currency = Column(String, nullable=False, default="usd")
+    gross_amount_minor = Column(Integer, nullable=False, default=0)     # seller gross (== compute seller_net)
+    commission_minor = Column(Integer, nullable=False, default=0)       # platform commission (already taken upstream)
+    adjustments_minor = Column(Integer, nullable=False, default=0)
+    withholding_minor = Column(Integer, nullable=False, default=0)
+    net_amount_minor = Column(Integer, nullable=False, default=0)       # what a batch will pay
+    country = Column(String, nullable=True)
+    available_at = Column(DateTime, nullable=True)                      # after the risk hold
+    risk_hold_until = Column(DateTime, nullable=True)
+    compliance_status = Column(String, nullable=False, default="NOT_STARTED")
+    state = Column(String, nullable=False, default="accrued", index=True)  # accrued|available|batched|paid|reversed|failed
+    batch_id = Column(Integer, ForeignKey("payout_batches.id"), index=True, nullable=True)
+    pricing_snapshot = Column(Text, nullable=True)
+    is_demo = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    __table_args__ = (
+        CheckConstraint("net_amount_minor >= 0 AND gross_amount_minor >= 0",
+                        name="ck_obligation_nonneg"),
+    )
+
+
+class PayoutBatch(Base):
+    """One external payout that may cover MANY obligations (small-payment aggregation).
+    Bound to exactly one rail + idempotency key."""
+    __tablename__ = "payout_batches"
+    id = Column(Integer, primary_key=True, index=True)
+    public_id = Column(String, unique=True, index=True, default=lambda: "pob_" + _rand_vm_id())
+    seller_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    rail_type = Column(String, nullable=False)
+    provider = Column(String, nullable=True)
+    source_currency = Column(String, nullable=False, default="usd")
+    destination_currency = Column(String, nullable=True)
+    total_amount_minor = Column(Integer, nullable=False, default=0)
+    provider_fee_minor = Column(Integer, nullable=False, default=0)
+    fx_rate = Column(Float, nullable=True)
+    external_id = Column(String, index=True, nullable=True)
+    state = Column(String, nullable=False, default="created", index=True)  # created|sent|paid|failed|reversed
+    idempotency_key = Column(String, unique=True, index=True, nullable=False)
+    routing_explanation = Column(Text, nullable=True)
+    failure_reason = Column(String, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class ComplianceDecision(Base):
+    """A screening/compliance decision for a seller (or a specific payout). A payout
+    must not execute unless an APPROVED, current decision exists."""
+    __tablename__ = "compliance_decisions"
+    id = Column(Integer, primary_key=True, index=True)
+    seller_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    screening_type = Column(String, nullable=False)      # identity|sanctions|country|wallet|tax|risk
+    provider = Column(String, nullable=True)
+    decision = Column(String, nullable=False, default="NOT_STARTED")  # NOT_STARTED|INFORMATION_REQUIRED|UNDER_REVIEW|APPROVED|RESTRICTED|REJECTED|RESCREEN_REQUIRED
+    reference = Column(String, nullable=True)
+    checked_at = Column(DateTime, default=_utcnow)
+    expires_at = Column(DateTime, nullable=True)
+
+
+class PayoutMethodRail(Base):
+    """A seller's chosen payout method on a specific rail (bank vs stablecoin shown
+    separately). Distinct from the legacy SellerPayoutMethod (wallet-era)."""
+    __tablename__ = "payout_method_rails"
+    id = Column(Integer, primary_key=True, index=True)
+    seller_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    rail_type = Column(String, nullable=False)
+    method_type = Column(String, nullable=False)         # bank|stablecoin
+    currency = Column(String, nullable=True)
+    masked_destination = Column(String, nullable=True)
+    wallet_network = Column(String, nullable=True)
+    verification_state = Column(String, nullable=False, default="unverified")
+    active = Column(Boolean, default=False, nullable=False)
+    consented_at = Column(DateTime, nullable=True)       # required for stablecoin
+    provider_reference = Column(String, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+    disabled_at = Column(DateTime, nullable=True)
+
+
+def create_payout_obligation(db: Session, *, seller_id: int, compute_tx_id: int,
+                             currency: str, net_amount_minor: int, country: str = None,
+                             commission_minor: int = 0, pricing_snapshot: str = None,
+                             risk_hold_until=None, is_demo: bool = False) -> "PayoutObligation":
+    """Create the immutable obligation from a settled compute transaction. Idempotent
+    per compute_tx_id: one settlement -> one obligation."""
+    existing = db.query(PayoutObligation).filter(
+        PayoutObligation.compute_tx_id == compute_tx_id).first()
+    if existing:
+        return existing
+    obl = PayoutObligation(
+        seller_id=seller_id, compute_tx_id=compute_tx_id, currency=currency,
+        gross_amount_minor=net_amount_minor, net_amount_minor=net_amount_minor,
+        commission_minor=commission_minor, country=country,
+        pricing_snapshot=pricing_snapshot, risk_hold_until=risk_hold_until,
+        available_at=risk_hold_until or _utcnow(),
+        state="available" if risk_hold_until is None else "accrued", is_demo=is_demo)
+    db.add(obl); db.commit(); db.refresh(obl)
+    return obl
+
+
+def available_obligations(db: Session, seller_id: int, currency: str = None):
+    """Obligations ready to be batched (available, not yet in a batch)."""
+    q = db.query(PayoutObligation).filter(
+        PayoutObligation.seller_id == seller_id,
+        PayoutObligation.state == "available",
+        PayoutObligation.batch_id.is_(None))
+    if currency:
+        q = q.filter(PayoutObligation.currency == currency)
+    return q.all()
+
+
 # ------------------ Session plumbing ------------------
 
 def _ensure_columns():
