@@ -34,6 +34,9 @@ jobs:
       - name: payout routing (provider-neutral, offline)
         working-directory: lumaris_api
         run: python payout_test.py
+      - name: email (mailgun, offline unit)
+        working-directory: lumaris_api
+        run: python email_test.py
       - name: tunnel (NAT traversal + failover)
         working-directory: lumaris_gateway
         run: python tunnel_test.py
@@ -185,6 +188,23 @@ jobs:
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
         run: python stripe_integration_test.py
+
+  email-integration:
+    # Sends a REAL transactional email via the Mailgun HTTP API to prove end-to-end
+    # delivery (DKIM/SPF, HTML + text). The script self-skips (exit 0) when the secret is
+    # absent (fork PRs, or before the secret is set), so it never blocks unrelated changes.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r lumaris_api/requirements.txt
+      - name: mailgun real send (skips without secret)
+        working-directory: lumaris_api
+        env:
+          MAILGUN_API_KEY: ${{ secrets.MAILGUN_API_KEY }}
+          MAILGUN_DOMAIN: petabyte.market
+        run: python email_integration_test.py
 
   payout-coverage:
     # Honest seller-payout country coverage. The script EXITS NON-ZERO until we reach

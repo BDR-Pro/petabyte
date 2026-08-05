@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile payout-test payout-coverage test test-postgres install verify
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile payout-test payout-coverage email-test email-integration stripe-integration test test-postgres install verify
 
 help:
 	@echo "Petabyte make targets:"
@@ -14,6 +14,8 @@ help:
 	@echo "  make stripe-demo     Narrated Stripe Connect flow (test mode, fake gateway)"
 	@echo "  make stripe-test     Run the Stripe Connect test suite (offline assertions)"
 	@echo "  make stripe-integration  Real Stripe TEST-mode integration (needs sk_test_; skips otherwise)"
+	@echo "  make email-test      Run the Mailgun email suite (offline, mocked)"
+	@echo "  make email-integration  Send a REAL Mailgun email (needs MAILGUN_API_KEY; skips otherwise)"
 	@echo "  make reconcile       Reconcile internal ledger + transactions vs Stripe (test mode)"
 	@echo "  make payout-test     Run the provider-neutral global payout routing suite"
 	@echo "  make payout-coverage Print the honest seller-payout country coverage (fails <100)"
@@ -49,6 +51,14 @@ stripe-test:
 # Skips cleanly when no STRIPE_SECRET_KEY is set. NEVER runs on a live key.
 stripe-integration:
 	cd $(API) && python3 stripe_integration_test.py
+
+# Mailgun transactional email: offline unit suite, and an opt-in real send.
+email-test:
+	cd $(API) && python3 email_test.py
+
+# Sends a REAL email via Mailgun (needs MAILGUN_API_KEY + MAILGUN_DOMAIN). Skips otherwise.
+email-integration:
+	cd $(API) && python3 email_integration_test.py
 
 # Financial reconciliation: internal ledger + ComputeTransactions vs Stripe (test mode).
 reconcile:
