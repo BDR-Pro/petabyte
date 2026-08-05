@@ -13,15 +13,25 @@ Guarantees:
 """
 from __future__ import annotations
 
-import json
+import hashlib
+import logging
 from datetime import datetime, timezone
+
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 
 import db as dbmod
 from db import (PayoutObligation, PayoutBatch, ComplianceDecision, PayoutMethodRail,
                 get_user_by_id)
 import payout_capabilities as cap
 from payout_rails import (PayoutRailType, RecipientType, get_rail, CapabilityStatus,
-                          NotImplementedRail, PayoutRailError)
+                          NotImplementedRail, PayoutRailError, PayoutRailUnknownState)
+
+logger = logging.getLogger(__name__)
+
+# Rail send outcomes that mean the money has actually settled to the seller (vs merely
+# accepted/queued). Only these move obligations to 'paid'.
+_SETTLED_STATUSES = {"paid", "succeeded", "confirmed"}
 
 # Preference order (task's example priority). Stablecoin is gated on consent below.
 RAIL_PRIORITY = [
@@ -40,6 +50,14 @@ class RoutingError(Exception):
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _seller_country(db, seller_id: int):
+    """The seller's authoritative payout jurisdiction lives on their ConnectedAccount
+    (User has no country column). Returns None when unknown -> select_rail fails closed."""
+    ca = (db.query(dbmod.ConnectedAccount)
+          .filter(dbmod.ConnectedAccount.user_id == seller_id).first())
+    return getattr(ca, "country", None) if ca else None
 
 
 def compliance_ok(db, seller_id: int) -> tuple[bool, str]:
@@ -67,8 +85,18 @@ def select_rail(db, seller, *, amount_minor: int, currency: str,
     """Pick the rail for this seller/amount/currency and explain why. Returns a dict
     with rail_type (or None), status, explanation, and blocked reason if any."""
     country = (getattr(seller, "payout_country", None)
-               or getattr(seller, "country", None) or "US")
+               or getattr(seller, "country", None)
+               or _seller_country(db, seller.id))
     recipient_type = (getattr(seller, "recipient_type", None) or "individual")
+
+    # 0) FAIL CLOSED on an unknown country. Defaulting to "US" would let a seller with
+    # no recorded jurisdiction bypass the sanctions block (the check would never see
+    # their real country). No verified country -> no payout.
+    if not country:
+        return {"rail_type": None, "status": "blocked",
+                "explanation": ("Seller has no recorded payout country; blocked until a "
+                                "verified country is on file (fail closed)."),
+                "blocked": True}
 
     # 1) hard blocks first
     if cap.is_sanctioned(country):
@@ -150,9 +178,12 @@ def create_and_send_batch(db, seller, *, currency: str = "usd",
         raise RoutingError(decision["explanation"])
     rt = decision["rail_type"]
 
-    # deterministic idempotency key over the exact obligation set
+    # Deterministic idempotency key over the exact requested obligation set, but
+    # FIXED-WIDTH: a raw comma-join grows with the obligation count and blows past
+    # Stripe's 255-char idempotency limit. Hash the id list, keep a readable prefix.
     obl_ids = sorted(o.id for o in obligations)
-    key = f"petabyte:batch:{seller.id}:{currency}:" + ",".join(map(str, obl_ids))
+    digest = hashlib.sha256(",".join(map(str, obl_ids)).encode()).hexdigest()[:32]
+    key = f"petabyte:batch:{seller.id}:{currency}:{digest}"
     existing = db.query(PayoutBatch).filter(PayoutBatch.idempotency_key == key).first()
     if existing:
         return existing
@@ -161,7 +192,18 @@ def create_and_send_batch(db, seller, *, currency: str = "usd",
                         source_currency=currency, destination_currency=currency,
                         total_amount_minor=total, idempotency_key=key,
                         routing_explanation=decision["explanation"], state="created")
-    db.add(batch); db.commit(); db.refresh(batch)
+    db.add(batch)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Concurrent creator won the unique idempotency_key. Return their batch rather
+        # than creating a duplicate / erroring.
+        db.rollback()
+        existing = db.query(PayoutBatch).filter(PayoutBatch.idempotency_key == key).first()
+        if existing:
+            return existing
+        raise
+    db.refresh(batch)
     # claim the obligations for THIS batch (guard: only ones still unbatched+available)
     claimed = []
     for o in obligations:
@@ -172,11 +214,17 @@ def create_and_send_batch(db, seller, *, currency: str = "usd",
                          .values(batch_id=batch.id, state="batched"))
         if res.rowcount == 1:
             claimed.append(o.id)
-    db.commit()
     if not claimed:
         batch.state = "failed"; batch.failure_reason = "no obligations could be claimed"
         db.add(batch); db.commit()
         return batch
+    # RECOMPUTE the batch total from what we ACTUALLY claimed. A concurrent batch can
+    # win a subset of the obligations, so the pre-claim `total` can overstate what this
+    # batch owns; sending it would over-transfer and double-pay the lost obligations.
+    claimed_set = set(claimed)
+    claimed_total = sum(o.net_amount_minor for o in obligations if o.id in claimed_set)
+    batch.total_amount_minor = claimed_total
+    db.add(batch); db.commit()
 
     if not execute:
         return batch
@@ -185,34 +233,65 @@ def create_and_send_batch(db, seller, *, currency: str = "usd",
 
 
 def execute_batch(db, batch: PayoutBatch) -> PayoutBatch:
-    """Send a created batch via its rail. Idempotent: an already-sent batch is not
-    re-sent. On rail failure the batch is marked failed and its obligations released
-    back to 'available' for a later retry (never lost)."""
+    """Send a created batch via its rail. Idempotent: an already-sent/paid batch is not
+    re-sent. Failure handling is outcome-aware:
+
+      * NotImplementedRail / definite PayoutRailError (pre-flight, no money moved):
+        release the obligations back to 'available' for a later retry.
+      * PayoutRailUnknownState (timeout/network — the send MAY have succeeded): DO NOT
+        release. Keep the obligations claimed to this batch and mark it
+        'needs_reconciliation'; a retry of the SAME idempotency key is deduped by the
+        provider, whereas a different batch would double-pay.
+    """
     if batch.state in ("sent", "paid"):
         return batch
-    seller = get_user_by_id(db, batch.seller_id)
     rail = get_rail(PayoutRailType(batch.rail_type))
-    # a lightweight obligation-like carrier for the rail
     carrier = _BatchObligation(batch)
     try:
         ext = rail.send_payout(db, carrier, batch.idempotency_key)
-    except (NotImplementedRail, PayoutRailError) as e:
-        batch.state = "failed"; batch.failure_reason = str(e)[:300]
+    except PayoutRailUnknownState as e:
+        # Ambiguous: money may or may not have moved. Preserve for reconciliation; never
+        # release the obligations (that is how the same earnings get paid twice).
+        batch.state = "needs_reconciliation"; batch.failure_reason = str(e)[:300]
         db.add(batch); db.commit()
-        # release obligations for retry on another rail
+        logger.error("payout batch %s outcome UNKNOWN; left claimed for reconciliation: %s",
+                     batch.public_id, e)
+        return batch
+    except (NotImplementedRail, PayoutRailError) as e:
+        # Deterministic failure, no money moved -> safe to release for another attempt.
+        batch.state = "failed"; batch.failure_reason = str(e)[:300]
         db.execute(dbmod.update(PayoutObligation)
                    .where(PayoutObligation.batch_id == batch.id)
                    .values(batch_id=None, state="available"))
-        db.commit()
+        db.add(batch); db.commit()
         return batch
     batch.external_id = ext.external_id
     batch.provider_fee_minor = ext.raw.get("provider_fee_minor", 0) if isinstance(ext.raw, dict) else 0
-    batch.state = "sent"
+    settled = (ext.status or "").lower() in _SETTLED_STATUSES
+    # Batch + obligation state move together in ONE transaction: a crash can never leave
+    # the batch advanced while its obligations lag (or vice-versa). Obligations become
+    # 'paid' ONLY when the rail reports settlement; otherwise they stay 'batched'
+    # (in-transit) until confirm_batch() runs on provider confirmation.
+    batch.state = "paid" if settled else "sent"
+    db.execute(dbmod.update(PayoutObligation)
+               .where(PayoutObligation.batch_id == batch.id)
+               .values(state="paid" if settled else "batched"))
     db.add(batch); db.commit()
+    return batch
+
+
+def confirm_batch(db, batch: PayoutBatch) -> PayoutBatch:
+    """Mark a 'sent' batch (and its obligations) 'paid' once the provider confirms
+    settlement (webhook / reconciliation). Idempotent; a single transaction."""
+    if batch.state == "paid":
+        return batch
+    if batch.state != "sent":
+        raise RoutingError(f"cannot confirm batch in state {batch.state}")
+    batch.state = "paid"
     db.execute(dbmod.update(PayoutObligation)
                .where(PayoutObligation.batch_id == batch.id)
                .values(state="paid"))
-    db.commit()
+    db.add(batch); db.commit()
     return batch
 
 
@@ -227,11 +306,15 @@ class _BatchObligation:
 
 
 def seller_balances(db, seller_id: int) -> dict:
-    """Pending / available / in-transit / paid / failed, in minor units, for the UI."""
-    rows = db.query(PayoutObligation).filter(PayoutObligation.seller_id == seller_id).all()
+    """Pending / available / in-transit / paid / failed, in minor units, for the UI.
+    Aggregated in SQL (GROUP BY) rather than loading every obligation into Python."""
     buckets = {"accrued": 0, "available": 0, "batched": 0, "paid": 0, "reversed": 0, "failed": 0}
-    for o in rows:
-        buckets[o.state] = buckets.get(o.state, 0) + o.net_amount_minor
+    rows = (db.query(PayoutObligation.state,
+                     func.coalesce(func.sum(PayoutObligation.net_amount_minor), 0))
+            .filter(PayoutObligation.seller_id == seller_id)
+            .group_by(PayoutObligation.state).all())
+    for state, total in rows:
+        buckets[state] = int(total or 0)
     return {
         "pending_minor": buckets["accrued"],          # in risk hold
         "available_minor": buckets["available"],

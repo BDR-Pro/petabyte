@@ -1031,6 +1031,11 @@ class PayoutObligation(Base):
     __table_args__ = (
         CheckConstraint("net_amount_minor >= 0 AND gross_amount_minor >= 0",
                         name="ck_obligation_nonneg"),
+        # One settlement -> at most one obligation. The SELECT-then-INSERT in
+        # create_payout_obligation races under concurrent settlement workers; this DB
+        # constraint is the real guarantee. NULL compute_tx_id (standalone/manual
+        # obligations) is exempt — SQL treats NULLs as distinct.
+        UniqueConstraint("compute_tx_id", name="uq_obligation_compute_tx"),
     )
 
 
@@ -1112,8 +1117,27 @@ def create_payout_obligation(db: Session, *, seller_id: int, compute_tx_id: int,
     return obl
 
 
+def promote_due_obligations(db: Session, seller_id: int = None) -> int:
+    """Move accrued obligations whose risk hold has elapsed (available_at <= now) to
+    'available' so they become batchable automatically. Returns the count promoted.
+    Idempotent; safe to call on every read or from a scheduler."""
+    q = (update(PayoutObligation)
+         .where(PayoutObligation.state == "accrued",
+                PayoutObligation.batch_id.is_(None),
+                PayoutObligation.available_at.isnot(None),
+                PayoutObligation.available_at <= _utcnow())
+         .values(state="available"))
+    if seller_id is not None:
+        q = q.where(PayoutObligation.seller_id == seller_id)
+    res = db.execute(q)
+    db.commit()
+    return res.rowcount or 0
+
+
 def available_obligations(db: Session, seller_id: int, currency: str = None):
-    """Obligations ready to be batched (available, not yet in a batch)."""
+    """Obligations ready to be batched (available, not yet in a batch). Accrued
+    obligations past their risk hold are promoted first so the hold expires on its own."""
+    promote_due_obligations(db, seller_id)
     q = db.query(PayoutObligation).filter(
         PayoutObligation.seller_id == seller_id,
         PayoutObligation.state == "available",

@@ -174,7 +174,8 @@ bals = routing.seller_balances(s, sid2)
 ok("seller balances show available earnings", bals["available_minor"] == 1000)
 batch = routing.create_and_send_batch(s, dbmod.get_user_by_id(s, sid2),
                                       currency="usd", min_threshold_minor=500)
-ok("aggregation creates ONE batch covering many obligations", batch is not None and batch.state == "sent")
+ok("aggregation creates ONE batch covering many obligations",
+   batch is not None and batch.state == "paid")   # Connect transfer settles synchronously
 ok("batch total reconciles to the sum of its obligations", batch.total_amount_minor == 1000)
 paid = s.query(dbmod.PayoutObligation).filter(dbmod.PayoutObligation.batch_id == batch.id).all()
 ok("all three obligations attached to the one batch and marked paid",
@@ -242,6 +243,57 @@ s = dbmod.SessionLocal()
 b = routing.create_and_send_batch(s, dbmod.get_user_by_id(s, sid4),
                                   currency="usd", min_threshold_minor=1000)
 ok("below the minimum threshold, no payout batch is created", b is None)
+s.close()
+
+# ---------------- CodeRabbit regression fixes ----------------
+# (a) unknown seller country FAILS CLOSED (never defaults to US, never bypasses sanctions)
+s = dbmod.SessionLocal()
+_nocc = dbmod.create_user(s, "payout_nocountry", "pw-correct-horse-xyz")
+dbmod.set_role(s, "payout_nocountry", "seller"); s.commit()
+approve_sanctions(_nocc.id)
+_ncid = _nocc.id; s.close()
+dec_nc2 = routing.select_rail(dbmod.SessionLocal(), _seller(_ncid), amount_minor=500, currency="usd")
+ok("unknown seller country fails closed (no default to US)",
+   dec_nc2["blocked"] and "no recorded payout country" in dec_nc2["explanation"])
+
+# (b) enum hardening: an invalid recipient_type yields UNSUPPORTED, never a crash
+capbad = get_rail(PayoutRailType.STRIPE_CONNECT).get_country_capability("US", "not_a_type", "usd")
+ok("invalid recipient_type -> UNSUPPORTED (no exception)",
+   capbad.status == CapabilityStatus.UNSUPPORTED and not capbad.usable)
+
+# (c) accrued obligations auto-promote to available after available_at
+sid_h = mk_seller("payout_hold", "US"); approve_sanctions(sid_h)
+s = dbmod.SessionLocal()
+past = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=1)
+s.add(dbmod.PayoutObligation(seller_id=sid_h, currency="usd", gross_amount_minor=600,
+    net_amount_minor=600, state="accrued", available_at=past)); s.commit()
+avail = dbmod.available_obligations(s, sid_h, "usd")
+ok("accrued obligation past its hold auto-promotes to available",
+   len(avail) == 1 and avail[0].state == "available")
+s.close()
+
+# (d) an UNKNOWN provider outcome (timeout) is preserved for reconciliation, NOT released
+sid_u = mk_seller("payout_unknown", "US"); approve_sanctions(sid_u)
+add_obligation(sid_u, 700)
+s = dbmod.SessionLocal()
+from stripe_gateway import StripeError as _SE
+_orig_ct = GW.create_transfer
+def _boom(*a, **k):
+    raise _SE("simulated network timeout")
+GW.create_transfer = _boom
+try:
+    bu = routing.create_and_send_batch(s, dbmod.get_user_by_id(s, sid_u), currency="usd")
+finally:
+    GW.create_transfer = _orig_ct
+ok("unknown provider outcome marks batch needs_reconciliation (not failed/released)",
+   bu is not None and bu.state == "needs_reconciliation")
+held = s.query(dbmod.PayoutObligation).filter(dbmod.PayoutObligation.seller_id == sid_u).all()
+ok("obligations stay claimed (batched) on unknown outcome — never released to available",
+   all(o.state == "batched" and o.batch_id == bu.id for o in held))
+# a retry re-sends the SAME batch (same idempotency key), not a new one -> no double-pay
+again_u = routing.create_and_send_batch(s, dbmod.get_user_by_id(s, sid_u), currency="usd")
+ok("no new batch is created for obligations already claimed by a needs_reconciliation batch",
+   again_u is None)
 s.close()
 
 # restore the real loader

@@ -21,8 +21,9 @@ Design rules enforced here:
 from __future__ import annotations
 
 import json
+import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from db import (post, DEBIT, CREDIT, EXTERNAL_PAYMENTS, PLATFORM_REVENUE,
                 acct_seller_payable, acct_stripe_payouts,
@@ -32,6 +33,11 @@ from db import (post, DEBIT, CREDIT, EXTERNAL_PAYMENTS, PLATFORM_REVENUE,
                 release_unit, create_task, get_user_by_id)
 from pricing import PricingConfig, price_per_hour_to_minor, estimate, settle, refund_split
 from stripe_gateway import get_gateway, StripeError
+
+logger = logging.getLogger(__name__)
+
+# Anti-account-takeover / chargeback cooling-off before a captured earning is payable.
+PAYOUT_COOLING_OFF_H = int(os.getenv("PAYOUT_COOLING_OFF_H", "24") or "24")
 
 
 class TransactionError(Exception):
@@ -426,13 +432,22 @@ def capture(db, tx: ComputeTransaction) -> ComputeTransaction:
         import db as _dbm
         acct = db.query(_dbm.ConnectedAccount).filter(
             _dbm.ConnectedAccount.user_id == tx.seller_id).first()
+        # Apply the risk-hold cooling-off: the obligation is 'accrued' until this
+        # deadline, then auto-promotes to 'available' (so a batch cannot pay it early).
+        hold_until = (_now() + timedelta(hours=PAYOUT_COOLING_OFF_H)
+                      if PAYOUT_COOLING_OFF_H > 0 else None)
         _dbm.create_payout_obligation(
             db, seller_id=tx.seller_id, compute_tx_id=tx.id, currency=tx.currency,
             net_amount_minor=tx.seller_net_amount, commission_minor=tx.platform_fee_amount,
-            country=(acct.country if acct else None),
+            country=(acct.country if acct else None), risk_hold_until=hold_until,
             pricing_snapshot=tx.pricing_snapshot, is_demo=tx.is_demo)
     except Exception:                                   # obligation is additive; never fail capture
+        # But NEVER silently: the buyer was charged; a missing payable must be visible to
+        # reconciliation, or the seller's earning is invisibly lost.
         db.rollback()
+        logger.error("payout obligation creation FAILED for captured tx %s (seller %s, "
+                     "net %s %s); reconcile manually", tx.public_id, tx.seller_id,
+                     tx.seller_net_amount, tx.currency, exc_info=True)
     return tx
 
 
@@ -447,14 +462,13 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
         return tx
     if tx.status not in ("PAYMENT_CAPTURED", "TRANSFER_FAILED"):
         raise TransactionError(f"cannot transfer from {tx.status}")
-    # Cross-path anti-double-pay: if the provider-neutral batch layer already claimed or
-    # paid this earning's obligation, the direct transfer MUST NOT fire a second payment.
-    try:
-        import db as _dbm
-        _obl = db.query(_dbm.PayoutObligation).filter(
-            _dbm.PayoutObligation.compute_tx_id == tx.id).first()
-    except Exception:
-        _obl = None
+    # Cross-path anti-double-pay, fail CLOSED: if the provider-neutral batch layer already
+    # claimed or paid this earning's obligation, the direct transfer MUST NOT fire a
+    # second payment. A DB error here must PROPAGATE (never be swallowed into "no
+    # obligation found") — a safety guard that fails open is not a guard.
+    import db as _dbm
+    _obl = db.query(_dbm.PayoutObligation).filter(
+        _dbm.PayoutObligation.compute_tx_id == tx.id).first()
     if _obl is not None and _obl.state in ("batched", "paid"):
         raise TransactionError(
             f"earning already handled by payout batch (obligation {_obl.public_id} "
@@ -496,17 +510,26 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
     transition(db, tx, "SELLER_TRANSFERRED", reason=f"transfer {tr['id']}")
     tx.reconciliation_status = "reconciled"
     db.add(tx); db.commit()
-    # Mark the linked provider-neutral obligation PAID so the aggregation/batch layer
-    # can never pay the same earning a second time (one obligation -> one payment).
+    # Mark the linked provider-neutral obligation PAID so the aggregation/batch layer can
+    # never pay the same earning a second time (one obligation -> one payment). It cannot
+    # be 'batched' here — the fail-closed guard above refuses that — so target
+    # accrued/available only (marking a batch-owned obligation paid would double-pay).
     try:
         import db as _dbm
         db.execute(_dbm.update(_dbm.PayoutObligation)
                    .where(_dbm.PayoutObligation.compute_tx_id == tx.id,
-                          _dbm.PayoutObligation.state.in_(["accrued", "available", "batched"]))
+                          _dbm.PayoutObligation.state.in_(["accrued", "available"]))
                    .values(state="paid"))
         db.commit()
     except Exception:
+        # The transfer already SUCCEEDED and committed. If the obligation can't be marked
+        # paid, a later batch could pay it again — flag for reconciliation, loudly; never
+        # swallow silently.
         db.rollback()
+        tx.reconciliation_status = "needs_review"; db.add(tx); db.commit()
+        logger.error("transfer %s succeeded but obligation update FAILED for tx %s; "
+                     "flagged for reconciliation to prevent a duplicate payout",
+                     tx.stripe_transfer_id, tx.public_id, exc_info=True)
     return transition(db, tx, "COMPLETED", reason="settled end to end")
 
 

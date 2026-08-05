@@ -90,6 +90,33 @@ class NotImplementedRail(PayoutRailError):
     """Raised by an adapter that has no working provider integration yet."""
 
 
+class PayoutRailUnknownState(PayoutRailError):
+    """The send may or may not have moved money (timeout / network error). The caller
+    MUST NOT release the obligations back to 'available' — that would let the same
+    earnings join a different batch and be paid twice. Keep them claimed and reconcile
+    against the provider (a retry of the SAME idempotency key is safe)."""
+
+
+def _as_recipient(recipient_type):
+    """Parse a recipient-type value defensively; return None (not raise) on unknown."""
+    if isinstance(recipient_type, RecipientType):
+        return recipient_type
+    try:
+        return RecipientType(recipient_type)
+    except ValueError:
+        return None
+
+
+def _as_status(value) -> CapabilityStatus:
+    """Parse a capability status defensively; unknown values fall back to UNSUPPORTED."""
+    if isinstance(value, CapabilityStatus):
+        return value
+    try:
+        return CapabilityStatus(value)
+    except ValueError:
+        return CapabilityStatus.UNSUPPORTED
+
+
 # --------------------------------------------------------------------------- rails
 class PayoutRail:
     """Base class. Adapters override the methods they genuinely implement."""
@@ -113,17 +140,21 @@ class StripeConnectPayoutRail(PayoutRail):
 
     def get_country_capability(self, country_code, recipient_type, currency):
         import payout_capabilities as cap
-        rt = recipient_type.value if isinstance(recipient_type, RecipientType) else recipient_type
-        rows = [r for r in cap.capabilities_for(country_code, rt, currency)
-                if r["provider"] == "stripe" and r["product"].startswith("connect")]
+        rec = _as_recipient(recipient_type)
+        if rec is None:
+            return PayoutCapability(self.rail_type, country_code, RecipientType.INDIVIDUAL,
+                                    currency, CapabilityStatus.UNSUPPORTED,
+                                    reason=f"unknown recipient_type {recipient_type!r}")
+        rows = [r for r in cap.capabilities_for(country_code, rec.value, currency)
+                if r.get("provider") == "stripe" and str(r.get("product", "")).startswith("connect")]
         if not rows:
-            return PayoutCapability(self.rail_type, country_code, RecipientType(rt), currency,
+            return PayoutCapability(self.rail_type, country_code, rec, currency,
                                     CapabilityStatus.UNSUPPORTED, reason="no Connect row for country")
         r = rows[0]
-        status = (CapabilityStatus.ACTIVE if r["is_active"]
-                  else CapabilityStatus(r["availability_status"]))
+        status = (CapabilityStatus.ACTIVE if r.get("is_active")
+                  else _as_status(r.get("availability_status")))
         return PayoutCapability(
-            self.rail_type, country_code, RecipientType(rt), currency, status,
+            self.rail_type, country_code, rec, currency, status,
             bank=r.get("bank_payout_supported", False),
             stablecoin=r.get("stablecoin_payout_supported", False),
             min_amount_minor=r.get("minimum_amount_minor", 0),
@@ -141,19 +172,28 @@ class StripeConnectPayoutRail(PayoutRail):
         seller_ca = db.query(dbmod.ConnectedAccount).filter(
             dbmod.ConnectedAccount.user_id == obligation.seller_id).first()
         if not seller_ca or not seller_ca.payout_ready():
+            # Pre-flight, deterministic failure: no money moved -> safe for the caller
+            # to release the obligations and retry once the seller is onboarded.
             raise PayoutRailError("seller connected account not payout-ready")
+        batch_ref = getattr(obligation, "batch_id", None) or obligation.id
         try:
             tr = get_gateway().create_transfer(
                 amount=obligation.net_amount_minor, currency=obligation.currency,
                 destination=seller_ca.stripe_account_id,
-                transfer_group=f"batch:{obligation.batch_id or obligation.id}",
+                transfer_group=f"batch:{batch_ref}",
                 source_transaction=None,
-                metadata={"petabyte_obligation": str(obligation.id),
+                metadata={"petabyte_batch": str(batch_ref),
                           "seller_id": str(obligation.seller_id)},
                 idempotency_key=idempotency_key)
         except StripeError as e:
-            raise PayoutRailError(f"stripe transfer failed: {e}")
-        return ExternalPayout(self.rail_type, tr["id"], "sent",
+            # The transfer MAY have been created before the error surfaced. Do not let
+            # the caller release/re-route these funds; a retry of THIS batch (same
+            # idempotency key) is deduplicated by Stripe, a different batch is not.
+            raise PayoutRailUnknownState(f"stripe transfer outcome unknown: {e}")
+        # A Connect transfer settles synchronously into the seller's Stripe balance, so
+        # the platform's obligation is discharged now (the seller's later bank payout is
+        # a separate, Stripe-side event).
+        return ExternalPayout(self.rail_type, tr["id"], "paid",
                               obligation.net_amount_minor, raw=tr)
 
 
@@ -163,8 +203,8 @@ class _UnimplementedRail(PayoutRail):
     _label = "rail"
 
     def get_country_capability(self, country_code, recipient_type, currency):
-        rt = recipient_type if isinstance(recipient_type, RecipientType) else RecipientType(recipient_type)
-        return PayoutCapability(self.rail_type, country_code, rt, currency,
+        rec = _as_recipient(recipient_type) or RecipientType.INDIVIDUAL
+        return PayoutCapability(self.rail_type, country_code, rec, currency,
                                 CapabilityStatus.NOT_IMPLEMENTED,
                                 reason=f"{self._label} adapter not implemented / not approved")
 
@@ -196,9 +236,9 @@ class ManualReviewPayoutRail(PayoutRail):
     rail_type = PayoutRailType.MANUAL_REVIEW
 
     def get_country_capability(self, country_code, recipient_type, currency):
-        rt = recipient_type if isinstance(recipient_type, RecipientType) else RecipientType(recipient_type)
+        rec = _as_recipient(recipient_type) or RecipientType.INDIVIDUAL
         # Manual review is a fallback, not verified per-country coverage.
-        return PayoutCapability(self.rail_type, country_code, rt, currency,
+        return PayoutCapability(self.rail_type, country_code, rec, currency,
                                 CapabilityStatus.PLANNED,
                                 reason="manual operator payout; last resort, not automated coverage")
 
