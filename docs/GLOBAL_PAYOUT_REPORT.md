@@ -74,7 +74,10 @@ approvals and shipped adapters.
 
 ## What was NOT built (stated so no one assumes it exists)
 
-- **No live provider approval.** Stripe is in test mode; 0 countries active.
+- **No live end-to-end verification.** The Stripe **platform account is approved with
+  Connect enabled** (owner-confirmed), but the code still runs in test mode and **no
+  country has had a live payout verified**, so 0 countries are `active`. (Approval
+  states are defined in `GLOBAL_PAYOUT_COVERAGE.md`.)
 - **No implemented non-Connect rail.** Global Payouts, Stripe stablecoin, and Circle
   USDC are stubs that refuse to send.
 - **No tax computation/filing.** Fields to hold the data exist; the 1099/1042-S/DAC7 and

@@ -58,5 +58,15 @@ def main():
     return 0
 
 
+EXIT_OK = 0          # target met
+EXIT_SHORTFALL = 1   # EXPECTED honest shortfall (informational; not a verifier failure)
+EXIT_ERROR = 2       # unexpected failure: malformed dataset, import error, regression
+
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception as e:                       # distinguish a real failure from a shortfall
+        print(f"\nVERIFIER ERROR (exit {EXIT_ERROR}): {e}", file=sys.stderr)
+        sys.exit(EXIT_ERROR)

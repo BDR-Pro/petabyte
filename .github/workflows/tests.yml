@@ -200,8 +200,16 @@ jobs:
         with: { python-version: "3.12" }
       - run: pip install -r lumaris_api/requirements.txt
       - name: seller-payout country coverage (target 100 — honest shortfall expected)
-        continue-on-error: true
-        run: python scripts/verify_payout_country_coverage.py --target 100
+        run: |
+          set +e
+          python scripts/verify_payout_country_coverage.py --target 100
+          code=$?
+          if [ "$code" -eq 0 ] || [ "$code" -eq 1 ]; then
+            echo "coverage exit=$code (0=met, 1=expected honest shortfall) — OK"
+            exit 0
+          fi
+          echo "coverage VERIFIER ERROR exit=$code (malformed dataset / regression)"
+          exit 1
 
   lint:
     # Non-blocking style signal today (|| true) so a formatting nit never blocks a

@@ -54,7 +54,7 @@ fabricated IDs. It is safe by construction:
 - Prints only object IDs, never key material.
 
 ```
-cd lumaris_api
+# from the repository ROOT (the only Makefile lives there):
 export STRIPE_SECRET_KEY=sk_test_... STRIPE_PUBLISHABLE_KEY=pk_test_...
 make stripe-integration      # creates a real test acct_ + pi_, asserts idempotency
 ```
@@ -91,7 +91,7 @@ display real card data.
 | 4000 0000 0000 0127 | declined — incorrect CVC |
 | 4000 0000 0000 0119 | declined — processing error |
 | 4000 0025 0000 3155 | requires 3DS authentication (then succeeds) |
-| 4000 0000 0000 3220 | 3DS authentication required, then **fails** |
+| 4000 0084 0000 1629 | 3DS authentication required, then **declined** |
 | 4000 0027 6000 3184 | 3DS authentication required (challenge) |
 
 Any future expiry, any CVC, any ZIP. Flow coverage exercised by the suites and the

@@ -32,9 +32,17 @@ import stripe_connect as sc
 # Postgres persists between suites in CI (only the first suite drops the schema), and the
 # FakeStripeGateway restarts its deterministic acct_/pi_ counters each process — so start
 # from a clean schema to avoid colliding with a prior suite's connected accounts.
+# GUARDED: only ever wipe a dedicated *petabyte_test database (or an explicit opt-in), so
+# pointing DATABASE_URL at a real DB can never drop its public schema.
 if dbmod.engine.dialect.name.startswith("postgres"):
-    with dbmod.engine.begin() as _c:
-        _c.exec_driver_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    _dbname = (dbmod.engine.url.database or "")
+    if _dbname.endswith("petabyte_test") or os.getenv("PAYOUT_TEST_ALLOW_DROP") == "true":
+        with dbmod.engine.begin() as _c:
+            _c.exec_driver_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    else:
+        raise SystemExit(f"payout_test refuses to reset schema on non-test database "
+                         f"{_dbname!r}; use a *petabyte_test DB or set "
+                         f"PAYOUT_TEST_ALLOW_DROP=true")
 
 GW = set_gateway(FakeStripeGateway())
 dbmod.init_db()
@@ -122,14 +130,15 @@ dec = routing.select_rail(dbmod.SessionLocal(), _seller(sid), amount_minor=500, 
 ok("routing FAILS CLOSED without a compliance decision", dec["blocked"] and "Compliance" in dec["explanation"])
 approve_sanctions(sid)
 
-# make the US Connect row ACTIVE for THIS test run by marking the dataset row approved
-# (in-memory override so we can exercise routing; the on-disk dataset is unchanged).
-_ds = cap.load_dataset()
+# make the US Connect row ACTIVE for THIS test run by marking the dataset row approved.
+# DEEP-COPY first so we never mutate the lru_cached dataset object (that would corrupt
+# the shared cache for every other caller); the on-disk dataset is untouched.
+import copy as _copy
+_ds = _copy.deepcopy(cap.load_dataset())
 for row in _ds["countries"]:
     if row["country_code"] == "US" and row["provider"] == "stripe":
         row["approved"] = True; row["availability_status"] = "active"
-cap._load.cache_clear() if hasattr(cap._load, "cache_clear") else None
-# re-point the loader at our mutated dict
+# re-point the loader at our private, mutated copy
 cap._MUT = _ds
 _orig_load = cap.load_dataset
 cap.load_dataset = lambda path=None: cap._MUT

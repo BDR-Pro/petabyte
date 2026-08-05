@@ -32,7 +32,9 @@ def _load(path: str) -> dict:
 
 
 def load_dataset(path: str = None) -> dict:
-    return _load(path or os.getenv("PAYOUT_CAPABILITIES_PATH", _DEFAULT_PATH))
+    # A blank PAYOUT_CAPABILITIES_PATH (as shipped in template.env) must fall back to the
+    # default, not open("") — chain with `or` so empty strings are ignored too.
+    return _load(path or os.getenv("PAYOUT_CAPABILITIES_PATH") or _DEFAULT_PATH)
 
 
 def sanctioned_countries(path: str = None) -> set:

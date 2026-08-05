@@ -49,7 +49,16 @@ rm -f smoke.db* adv.db* stripe_test.db* payout_test.db* ../lumaris_gateway/tunne
 # stays visible on every run; its non-zero exit is swallowed on purpose.
 echo ""
 echo "${BOLD}--- seller-payout country coverage (informational) ---${OFF}"
-python ../scripts/verify_payout_country_coverage.py || true
+set +e
+python ../scripts/verify_payout_country_coverage.py
+_cov=$?
+set -e
+if [[ $_cov -eq 0 || $_cov -eq 1 ]]; then
+  echo "coverage check exit=$_cov (0=target met, 1=expected honest shortfall)"
+else
+  echo "${RED}coverage VERIFIER ERROR (exit=$_cov) — malformed dataset / regression${OFF}"
+  fail=1
+fi
 
 # ---------------------------------------------------------------- Postgres
 if [[ "${1:-}" == "--postgres" ]]; then

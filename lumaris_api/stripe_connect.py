@@ -313,7 +313,16 @@ def reserve_gpu(db, tx: ComputeTransaction) -> ComputeTransaction:
     if not spec or not spec_is_live(spec):
         transition(db, tx, "RESERVATION_FAILED", reason="GPU offline at reservation")
         raise TransactionError("GPU went offline")
+    # Atomically CLAIM the reserve op FIRST. Two stale/parallel requests for the SAME tx
+    # would otherwise each pass the status check and each reserve a unit + create a
+    # booking. The loser gets proceed=False and returns the current state — one booking,
+    # one unit, ever.
+    op, proceed = _begin_op(db, tx, "reserve", idem_key("reserve", tx))
+    if not proceed:
+        db.refresh(tx)
+        return tx
     if not try_reserve_unit(db, tx.spec_id):
+        _finish_op(db, op, state="failed", error="no capacity")
         transition(db, tx, "RESERVATION_FAILED", reason="no capacity (lost the race)")
         raise TransactionError("no capacity")
     from decimal import Decimal
@@ -326,6 +335,7 @@ def reserve_gpu(db, tx: ComputeTransaction) -> ComputeTransaction:
     db.add(b); db.commit(); db.refresh(b)
     tx.booking_id = b.id
     db.add(tx); db.commit()
+    _finish_op(db, op, state="succeeded", external_id=str(b.id))
     return transition(db, tx, "GPU_RESERVED", reason=f"unit reserved (booking {b.id})")
 
 
@@ -341,10 +351,17 @@ def dispatch_job(db, tx: ComputeTransaction, *, task_type: str = "notebook",
     pi = get_gateway().retrieve_payment_intent(tx.stripe_payment_intent_id)
     if pi["status"] != "requires_capture":
         raise TransactionError("authorization no longer valid; refusing to dispatch")
+    # Atomically CLAIM dispatch so two parallel requests for the SAME tx create at most
+    # one task (the tx.task_id check above is not atomic on its own).
+    op, proceed = _begin_op(db, tx, "dispatch", idem_key("dispatch", tx))
+    if not proceed:
+        db.refresh(tx)
+        return tx
     booking = db.query(Booking).filter(Booking.id == tx.booking_id).first()
     task = create_task(db, booking, task_type, code=code)
     tx.task_id = task.id
     db.add(tx); db.commit()
+    _finish_op(db, op, state="succeeded", external_id=str(task.id))
     transition(db, tx, "DISPATCHING", reason=f"task {task.id} created")
     return transition(db, tx, "RUNNING", reason="job running")
 

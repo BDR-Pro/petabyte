@@ -394,6 +394,17 @@ except LiveModeForbidden:
 ok("STRIPE_MODE=test with a live key is refused (mode/key mismatch)", _mode_mismatch)
 os.environ.pop("STRIPE_MODE", None)
 
+# PAYMENTS_LIVE_ENABLED=true with TEST keys is refused — never label test money as live
+os.environ["PAYMENTS_LIVE_ENABLED"] = "true"
+_livecred_blocked = False
+try:
+    assert_test_mode(secret_key="sk_test_abc", publishable_key="pk_test_abc")
+except LiveModeForbidden:
+    _livecred_blocked = True
+ok("PAYMENTS_LIVE_ENABLED=true with TEST keys is refused (requires live creds)",
+   _livecred_blocked)
+os.environ.pop("PAYMENTS_LIVE_ENABLED", None)
+
 
 # ============================ WEBHOOKS ============================
 def post_webhook(event, secret=os.environ["STRIPE_WEBHOOK_SECRET"], ts=None):

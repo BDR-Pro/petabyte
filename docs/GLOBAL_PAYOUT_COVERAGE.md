@@ -22,6 +22,23 @@ full stop.
 
 ---
 
+## Approval states (these are distinct — don't collapse them)
+
+"Approved" is ambiguous, so the docs track four separate states and their current value:
+
+| State | Meaning | Current value |
+|---|---|---|
+| Platform-account approval | Petabyte's Stripe platform account exists & is approved | **Yes** (owner-confirmed 2026-08-05) |
+| Live Connect enablement | Connect enabled on that account | **Yes** (owner-confirmed) |
+| Country/rail approval | a given country/rail is approved for our account | per-row `approved` flag (see dataset) |
+| Live end-to-end verification | a real payout was verified for that country | **None yet** — code runs in Stripe test mode |
+
+A country is `active` only when country/rail approval **and** live end-to-end
+verification are both true. Platform-account approval alone does **not** make any country
+active — which is why the number below is 0.
+
+---
+
 ## The one number that matters
 
 | Metric | Value |

@@ -83,6 +83,16 @@ def assert_test_mode(*, secret_key: str = None, publishable_key: str = None) -> 
                     f"STRIPE_MODE={declared} but a {m}-mode Stripe key is configured. "
                     f"Refusing to run on a mode/key mismatch.")
 
+    # 2b) If live money is enabled, the keys MUST actually be live keys. Otherwise test
+    # transactions would be recorded as LIVE financial records (payments_mode() labels
+    # by the flag). Refuse the half-configured "live label on test money" state.
+    if os.getenv("PAYMENTS_LIVE_ENABLED", "").lower() == "true":
+        if sk_mode != "live" or (pk and pk_mode != "live"):
+            raise LiveModeForbidden(
+                "PAYMENTS_LIVE_ENABLED=true requires LIVE Stripe keys "
+                "(sk_live_/pk_live_). Refusing to record test transactions as live "
+                "money — supply live credentials or set PAYMENTS_LIVE_ENABLED=false.")
+
     # 3) Detect live keys; permit only behind the explicit, loud triple opt-in.
     live_markers = ("sk_live_", "rk_live_", "pk_live_")
     detected = [k[:8] + "…" for k in (sk, pk) if k and k.startswith(live_markers)]
