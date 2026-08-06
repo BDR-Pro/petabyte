@@ -1,0 +1,991 @@
+_meta:
+  generated_by: scripts/build_config_manifest.py
+  source_of_truth: GitHub Variables (non-sensitive) + GitHub Secrets (credentials)
+  note: Secrets never carry a real default. Re-run the builder after adding an env var.
+variables:
+  ADMIN_USERS:
+    required: false
+    default: info@petabyte.market
+    scope:
+    - platform
+    description: Comma-separated admin usernames/emails.
+  ALLOWED_ORIGINS:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: "CORS origins \u2014 empty (same-origin) is the safe default; never '*' in prod."
+    format: csv_or_empty
+  AUTO_SETTLE_ON_RESULT:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  AWS_REFERENCE_PRICE:
+    required: false
+    default: '12.29'
+    scope:
+    - platform
+    description: ''
+    format: float
+  AWS_REGION:
+    required: false
+    default: us-east-1
+    scope:
+    - platform
+    description: ''
+  BACKUP_RESCHEDULE_GRACE_S:
+    required: false
+    default: '900'
+    scope:
+    - platform
+    description: ''
+  BASE_DOMAIN:
+    required: false
+    default: petabyte.market
+    scope:
+    - platform
+    description: Public application domain.
+    format: hostname
+    aka: APP_DOMAIN
+  BIND:
+    required: false
+    default: 127.0.0.1:8000
+    scope:
+    - platform
+    description: gunicorn bind address; keep 127.0.0.1 behind nginx (never public).
+  CAL_BOOKING_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  CIRCLE_API:
+    required: false
+    default: https://api.circle.com/v1
+    scope:
+    - platform
+    description: ''
+  DEFAULT_LANDING_VIDEO_ID:
+    required: false
+    default: UUSWYaxboDA
+    scope:
+    - platform
+    description: ''
+  EMAIL_FROM:
+    required: false
+    default: no-reply@petabyte.market
+    scope:
+    - platform
+    description: ''
+  EMAIL_PROVIDER:
+    required: false
+    default: mailgun
+    scope:
+    - platform
+    description: Notification email provider.
+    allowed:
+    - mailgun
+    - ses
+    - sendgrid
+    - postmark
+  EMAIL_TOKEN_TTL_MIN:
+    required: false
+    default: '15'
+    scope:
+    - platform
+    description: ''
+    format: int
+  ENABLE_ELASTIC:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: 'Enable the Elastic logging stack (deploy/monitoring). (reserved: standardized in GitHub
+      config).'
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  ENABLE_GRAFANA:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: 'Enable Grafana dashboards. (reserved: standardized in GitHub config).'
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  ENABLE_OTEL:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: 'Enable OpenTelemetry tracing. (reserved: standardized in GitHub config).'
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  ENABLE_PROMETHEUS:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: 'Enable Prometheus metrics scraping. (reserved: standardized in GitHub config).'
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  ENABLE_SENTRY:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: 'Enable Sentry error reporting (also needs SENTRY_DSN). (reserved: standardized in GitHub
+      config).'
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  ENVIRONMENT:
+    required: false
+    default: development
+    scope:
+    - platform
+    description: Application environment. In production the app REFUSES to boot with any stub on.
+    allowed:
+    - development
+    - test
+    - staging
+    - production
+    aka: APP_ENV
+    production_notes: Must be 'production' in prod; never leave stubs enabled.
+  GEOIP_DB:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  GEOIP_STUB:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: GeoIP stub.
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  GOOGLE_OAUTH_STUB:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: "Google sign-in stub \u2014 MUST be false in production."
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  GOOGLE_REDIRECT_URI:
+    required: false
+    default: https://petabyte.market/auth/google/callback
+    scope:
+    - platform
+    description: Google OAuth redirect URI.
+    format: url
+  GPU_COUNT:
+    required: false
+    default: '1'
+    scope:
+    - gpu
+    description: Manual GPU count override.
+    format: int
+  GPU_METRICS_INTERVAL:
+    required: false
+    default: '10'
+    scope:
+    - gpu
+    description: 'Seconds between GPU metrics samples (agent/telemetry). (reserved: standardized in GitHub
+      config).'
+    format: int
+  GPU_MODEL:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: Manual GPU model override when nvidia-smi is absent.
+  HEARTBEAT_INTERVAL:
+    required: false
+    default: '15'
+    scope:
+    - gpu
+    description: Seconds between node heartbeats (a.k.a. GPU_HEARTBEAT_INTERVAL).
+    format: int
+  HEARTBEAT_TIMEOUT_S:
+    required: false
+    default: '60'
+    scope:
+    - platform
+    description: Seconds before a silent node is reaped.
+    format: int
+  IDLE_MINING:
+    required: false
+    default: 'false'
+    scope:
+    - gpu
+    description: Enable idle NiceHash mining when no paid job is running.
+    format: bool
+  JOB_POLL_INTERVAL:
+    required: false
+    default: '5'
+    scope:
+    - gpu
+    description: Seconds between /jobs/next polls.
+    format: int
+  LEGACY_KEYS_FULL_ACCESS:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: "Legacy scopeless-key escape hatch \u2014 MUST be false in production."
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  LOG_LEVEL:
+    required: false
+    default: info
+    scope:
+    - platform
+    description: Log verbosity.
+    allowed:
+    - debug
+    - info
+    - warning
+    - error
+    - critical
+    - DEBUG
+    - INFO
+    - WARNING
+    - ERROR
+    - CRITICAL
+  MAILCHIMP_AUDIENCE_ID:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  MAILGUN_DOMAIN:
+    required: false
+    default: petabyte.market
+    scope:
+    - platform
+    description: ''
+  MAILGUN_NEWSLETTER_DOMAIN:
+    required: false
+    default: news.petabyte.market
+    scope:
+    - platform
+    description: Mailgun sending subdomain for the newsletter (e.g. news.petabyte.market). Reuses MAILGUN_API_KEY.
+    format: hostname
+  MAX_CONCURRENT_GPU_JOBS:
+    required: false
+    default: '1'
+    scope:
+    - gpu
+    description: 'Max concurrent paid jobs per GPU node (must stay bounded). (reserved: standardized in
+      GitHub config).'
+    format: int
+  MAX_HOURS:
+    required: false
+    default: '24'
+    scope:
+    - gpu
+    description: Max rentable hours offered.
+    format: int
+  MIN_REPUTATION:
+    required: false
+    default: '50'
+    scope:
+    - platform
+    description: ''
+    format: int
+  NB_CELL_TIMEOUT:
+    required: false
+    default: '120'
+    scope:
+    - gpu
+    description: Per-cell notebook timeout (s).
+    format: int
+  NB_MAX_OUTPUT:
+    required: false
+    default: '1000000'
+    scope:
+    - gpu
+    description: Max notebook output bytes.
+    format: int
+  NB_TIMEOUT:
+    required: false
+    default: '600'
+    scope:
+    - gpu
+    description: "Notebook job hard timeout (s) \u2014 must stay bounded."
+    format: int
+  NEWSLETTER_FROM:
+    required: false
+    default: updates@petabyte.market
+    scope:
+    - platform
+    description: From address campaigns are sent as (e.g. updates@petabyte.market).
+    format: email_or_empty
+  NEWSLETTER_LIST_ADDRESS:
+    required: false
+    default: newsletter@news.petabyte.market
+    scope:
+    - platform
+    description: Mailgun mailing-list address signups are added to (e.g. newsletter@news.petabyte.market).
+    format: email_or_empty
+  NEWSLETTER_PROVIDER:
+    required: false
+    default: mailgun
+    scope:
+    - platform
+    description: Newsletter backend. 'mailgun' adds signups to a Mailgun mailing list; 'mailchimp' uses
+      the legacy audience; 'none' shows the honest 'not wired up' message.
+    allowed:
+    - mailgun
+    - mailchimp
+    - none
+  NEWSLETTER_REPLY_TO:
+    required: false
+    default: info@petabyte.market
+    scope:
+    - platform
+    description: Reply-To for campaigns; a Mailgun Route forwards replies here (e.g. info@petabyte.market).
+    format: email_or_empty
+  NICEHASH_ADDRESS:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: NiceHash payout address for idle mining (shared across nodes).
+  NICEHASH_API:
+    required: false
+    default: https://api2.nicehash.com
+    scope:
+    - platform
+    description: ''
+  NICEHASH_IMAGE:
+    required: false
+    default: nicehash/nicehashminer:latest
+    scope:
+    - gpu
+    description: Docker image for the idle NiceHash miner.
+  NICEHASH_STUB:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: NiceHash stub.
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  NICEHASH_TAKE_RATE:
+    required: false
+    default: '0.10'
+    scope:
+    - platform
+    description: Platform commission on idle-mining revenue (idle_reconcile tool).
+    format: float
+  NOTIFY_STUB:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: "Email/notify stub \u2014 false to actually send."
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  PAYMENTS_LIVE_ENABLED:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: MASTER live-money switch. Must be false unless deliberately going live.
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+    production_notes: Live requires PAYMENTS_LIVE_ENABLED=true AND STRIPE_ALLOW_LIVE=true AND ENVIRONMENT=production
+      AND live keys.
+  PAYMENTS_MODE:
+    required: false
+    default: sandbox
+    scope:
+    - platform
+    description: Payment mode label.
+    allowed:
+    - sandbox
+    - test
+    - live
+  PAYOUT_CAPABILITIES_PATH:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  PAYOUT_COOLING_OFF_H:
+    required: false
+    default: '24'
+    scope:
+    - platform
+    description: ''
+    format: int
+  PAYOUT_HOLD_DAYS:
+    required: false
+    default: '14'
+    scope:
+    - platform
+    description: Earnings risk-hold before biweekly payout.
+    format: int
+  PAYOUT_HOLD_ON_REPORT:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  PAYOUT_STUB:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: Payout provider stub.
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  PETABYTE_API_URL:
+    required: true
+    default: https://petabyte.market
+    scope:
+    - gpu
+    description: Public Petabyte API base URL the agent talks to.
+    format: url
+  PETABYTE_SPEC_ID:
+    required: true
+    default: null
+    scope:
+    - gpu
+    description: The spec id this node serves.
+    format: int
+  PETABYTE_UPDATE_INTERVAL_S:
+    required: false
+    default: '3600'
+    scope:
+    - gpu
+    description: Agent self-update check interval (s).
+    format: int
+  PETABYTE_UPDATE_REPO:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: Agent self-update source repo (optional).
+  PLATFORM_AUTH_MARGIN_BPS:
+    required: false
+    default: '2000'
+    scope:
+    - platform
+    description: ''
+  PLATFORM_COMMISSION_BPS:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  PLATFORM_CURRENCY:
+    required: false
+    default: usd
+    scope:
+    - platform
+    description: Platform settlement currency.
+    aka: DEFAULT_CURRENCY
+  PLATFORM_DEFAULT_COUNTRY:
+    required: false
+    default: US
+    scope:
+    - platform
+    description: ''
+  PLATFORM_FIXED_FEE_MINOR:
+    required: false
+    default: '0'
+    scope:
+    - platform
+    description: ''
+  PLATFORM_MAX_DURATION_S:
+    required: false
+    default: '86400'
+    scope:
+    - platform
+    description: ''
+  PLATFORM_MIN_CHARGE_MINOR:
+    required: false
+    default: '50'
+    scope:
+    - platform
+    description: ''
+  PLATFORM_TAKE_RATE:
+    required: false
+    default: '0.10'
+    scope:
+    - platform
+    description: ''
+    format: float
+  PRICE_PER_HOUR:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: Seller's offered price per GPU-hour (USD).
+    format: float
+  PROVIDER:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: Provider/node display name (defaults to the machine hostname).
+  PUBLIC_BASE_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: Public base URL for building share/reset links.
+    format: url_or_empty
+    aka: APP_URL
+  REAPER_DISABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: 'Keep true: the dedicated reaper service does the reaping.'
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  REAPER_INTERVAL_S:
+    required: false
+    default: '20'
+    scope:
+    - platform
+    description: ''
+    format: int
+  REFERRAL_MONTHLY_CAP:
+    required: false
+    default: '25'
+    scope:
+    - platform
+    description: ''
+  REFERRAL_REWARD_USD:
+    required: false
+    default: '20'
+    scope:
+    - platform
+    description: ''
+  S3_BUCKET:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  S3_ENDPOINT:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  S3_REGION:
+    required: false
+    default: us-east-1
+    scope:
+    - platform
+    description: ''
+  S3_SSE:
+    required: false
+    default: AES256
+    scope:
+    - platform
+    description: ''
+  S3_STUB:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: S3 stub.
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  SANCTIONS_SCREEN_PROVIDER:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  SANDBOX_IMAGE:
+    required: false
+    default: python:3.12-slim
+    scope:
+    - gpu
+    description: Container image for the notebook sandbox.
+  SELLER_AUDIT_SAMPLE_RATE:
+    required: false
+    default: '0.25'
+    scope:
+    - platform
+    description: ''
+    format: float
+  SELLER_FRAUD_PENALTY:
+    required: false
+    default: '40'
+    scope:
+    - platform
+    description: ''
+    format: int
+  STRIPE_ALLOW_LIVE:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: Second live gate; live keys refused unless true.
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  STRIPE_API_VERSION:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  STRIPE_GATEWAY:
+    required: false
+    default: fake
+    scope:
+    - platform
+    description: '''real'' uses the Stripe SDK; anything else = in-process fake (tests only).'
+    allowed:
+    - fake
+    - real
+  STRIPE_MODE:
+    required: false
+    default: test
+    scope:
+    - platform
+    description: Declared Stripe mode; must match key prefixes.
+    allowed:
+    - test
+    - live
+  TEE_MEASUREMENT_ALLOWLIST:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  TREMENDOUS_API:
+    required: false
+    default: https://api.tremendous.com/api/v2
+    scope:
+    - platform
+    description: ''
+  TRUSTED_PROXIES:
+    required: false
+    default: 127.0.0.1,::1
+    scope:
+    - platform
+    description: "Reverse-proxy IPs trusted for X-Forwarded-For \u2014 never widen to spoofable."
+  UNITS:
+    required: false
+    default: '1'
+    scope:
+    - gpu
+    description: Identical rentable units on this node.
+    format: int
+  USDC_CHAIN:
+    required: false
+    default: MATIC
+    scope:
+    - platform
+    description: ''
+  VRAM_GB:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: Manual VRAM override (GB).
+    format: int
+  WALLET_MAX_TOPUP_MINOR:
+    required: false
+    default: '500000'
+    scope:
+    - platform
+    description: ''
+    format: int
+  WALLET_MIN_TOPUP_MINOR:
+    required: false
+    default: '500'
+    scope:
+    - platform
+    description: ''
+    format: int
+  WEB_CONCURRENCY:
+    required: false
+    default: '2'
+    scope:
+    - platform
+    description: ''
+  WG_APPLY:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: Apply WireGuard config.
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  WG_ENDPOINT:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  WG_INTERFACE:
+    required: false
+    default: wg0
+    scope:
+    - platform
+    description: ''
+  WG_PUBLIC_KEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+secrets:
+  AWS_ACCESS_KEY_ID:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  AWS_SECRET_ACCESS_KEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  CAL_WEBHOOK_SECRET:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  CIRCLE_API_KEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  CIRCLE_WALLET_ID:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  DATABASE_URL:
+    required: true
+    default: null
+    scope:
+    - platform
+    description: SQLAlchemy database URL (Postgres in prod).
+    format: url
+  DEPLOY_SSH_KEY:
+    required: true
+    default: null
+    scope:
+    - deployment
+    description: Private SSH key GitHub Actions uses to deploy to the server.
+  DROPLET_HOST:
+    required: true
+    default: null
+    scope:
+    - deployment
+    description: Deploy target host (IP/DNS).
+  DROPLET_USER:
+    required: true
+    default: null
+    scope:
+    - deployment
+    description: Deploy SSH user.
+  GATEWAY_TOKEN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  GOOGLE_CLIENT_ID:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  GOOGLE_CLIENT_SECRET:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  MAILCHIMP_API_KEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  MAILGUN_API_KEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  NICEHASH_API_KEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  NICEHASH_API_SECRET:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  NICEHASH_ORG_ID:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  PAYMENT_WEBHOOK_SECRET:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  PETABYTE_AGENT_KEY:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: Path to the node's Ed25519 signing key (attestation + signed results).
+  PETABYTE_API_JWT:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: Seller JWT (owner of the spec) used during node attestation/enrollment.
+  PETABYTE_API_KEY:
+    required: true
+    default: null
+    scope:
+    - gpu
+    description: Encrypted node API key (X-API-KEY) minted at /create_api_key.
+  POSTMARK_TOKEN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  SECRET_KEY:
+    required: true
+    default: null
+    scope:
+    - platform
+    description: ''
+  SENDGRID_API_KEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  SENTRY_DSN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  SERVER_PRIVATE_KEY:
+    required: true
+    default: null
+    scope:
+    - platform
+    description: ''
+  STRIPE_API_KEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  STRIPE_PUBLISHABLE_KEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  STRIPE_SECRET_KEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  STRIPE_WEBHOOK_SECRET:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  TEE_TRUSTED_ROOT:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  TREMENDOUS_API_KEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  TREMENDOUS_FUNDING_ID:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  TREMENDOUS_PRODUCT_ID:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''

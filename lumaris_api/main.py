@@ -96,10 +96,18 @@ PAYMENTS_MODE = os.getenv("PAYMENTS_MODE", "sandbox").lower()      # sandbox|liv
 # fits both calendars. Left blank, we fall back to "we'll email you within a day".
 CAL_BOOKING_URL = os.getenv("CAL_BOOKING_URL", "").strip()
 
-# Mailchimp newsletter. Set these once from your Mailchimp account (Account -> Extras ->
-# API keys, and Audience -> Settings for the audience/list ID). The API key ends with a
-# datacenter suffix like "-us21"; we use that suffix for the API host. Left blank, the
-# newsletter form degrades to a mailto link so it still does something honest.
+# Newsletter. NEWSLETTER_PROVIDER selects the backend:
+#   mailgun   -> add the signup to a Mailgun mailing list on the news. sending subdomain
+#                (reuses MAILGUN_API_KEY; From/Reply-To are set on the list in Mailgun).
+#   mailchimp -> legacy Mailchimp audience (MAILCHIMP_API_KEY + MAILCHIMP_AUDIENCE_ID).
+#   none/blank -> the form returns an honest "not wired up yet" message (no dead POST).
+NEWSLETTER_PROVIDER = os.getenv("NEWSLETTER_PROVIDER", "mailgun").strip().lower()
+MAILGUN_NEWSLETTER_DOMAIN = os.getenv("MAILGUN_NEWSLETTER_DOMAIN", "").strip()
+NEWSLETTER_LIST_ADDRESS = os.getenv("NEWSLETTER_LIST_ADDRESS", "").strip()
+NEWSLETTER_FROM = os.getenv("NEWSLETTER_FROM", "").strip()
+NEWSLETTER_REPLY_TO = os.getenv("NEWSLETTER_REPLY_TO", "").strip()
+# Legacy Mailchimp (only used when NEWSLETTER_PROVIDER=mailchimp). The API key ends with a
+# datacenter suffix like "-us21"; we use that suffix for the API host.
 MAILCHIMP_API_KEY = os.getenv("MAILCHIMP_API_KEY", "").strip()
 MAILCHIMP_AUDIENCE_ID = os.getenv("MAILCHIMP_AUDIENCE_ID", "").strip()
 # Fallback video shown until an admin sets one in the panel (your Short's ID).
@@ -3019,12 +3027,35 @@ def my_referral(request: Request, me=Depends(get_current_user), db: Session = De
     }
 
 
-@app.post("/newsletter/subscribe", tags=["marketing"])
-def newsletter_subscribe(body: NewsletterModel, request: Request):
-    """Add an email to the Mailchimp audience.
+def _newsletter_subscribe_mailgun(email: str):
+    """Add an email to the Mailgun mailing list on the news. sending subdomain.
 
-    Public + IP-rate-limited. If Mailchimp isn't configured yet, we say so honestly
-    rather than pretend it worked."""
+    Reuses MAILGUN_API_KEY (the same transactional key). The list's From/Reply-To are set
+    on the list in Mailgun; replies are forwarded to info@ by a Mailgun Route. The API key
+    is never logged."""
+    api_key = os.getenv("MAILGUN_API_KEY", "").strip()
+    if not (api_key and NEWSLETTER_LIST_ADDRESS):
+        raise HTTPException(status_code=503, detail={
+            "code": "NEWSLETTER_UNCONFIGURED",
+            "message": "The newsletter isn't wired up yet. Email info@petabyte.market to "
+                       "be added."})
+    from email_service import MAILGUN_API_BASE
+    url = f"{MAILGUN_API_BASE}/v3/lists/{NEWSLETTER_LIST_ADDRESS}/members"
+    import httpx
+    r = httpx.post(url, auth=("api", api_key), timeout=10,
+                   data={"address": email, "subscribed": "yes", "upsert": "yes"})
+    if r.status_code in (200, 201):
+        return {"ok": True, "message": "You're subscribed. Thanks!"}
+    # Mailgun returns 400 "Address already exists" when re-adding; that's success to a user.
+    if r.status_code == 400 and "already exists" in (r.text or "").lower():
+        return {"ok": True, "message": "You're already on the list."}
+    logger.warning("mailgun newsletter subscribe failed: %s %s", r.status_code, (r.text or "")[:200])
+    raise HTTPException(status_code=502, detail={"code": "NEWSLETTER_FAILED",
+        "message": "Couldn't subscribe you just now. Please try again later."})
+
+
+def _newsletter_subscribe_mailchimp(email: str):
+    """Legacy Mailchimp audience path (NEWSLETTER_PROVIDER=mailchimp)."""
     if not (MAILCHIMP_API_KEY and MAILCHIMP_AUDIENCE_ID):
         raise HTTPException(status_code=503, detail={
             "code": "NEWSLETTER_UNCONFIGURED",
@@ -3036,22 +3067,38 @@ def newsletter_subscribe(body: NewsletterModel, request: Request):
     dc = MAILCHIMP_API_KEY.rsplit("-", 1)[-1]     # e.g. us21
     url = (f"https://{dc}.api.mailchimp.com/3.0/lists/"
            f"{MAILCHIMP_AUDIENCE_ID}/members")
+    import httpx
+    r = httpx.post(url, auth=("anystring", MAILCHIMP_API_KEY), timeout=10,
+                   json={"email_address": email, "status": "subscribed"})
+    if r.status_code in (200, 201):
+        return {"ok": True, "message": "You're subscribed. Thanks!"}
+    if r.status_code == 400 and "Member Exists" in r.text:
+        return {"ok": True, "message": "You're already on the list."}
+    logger.warning("mailchimp subscribe failed: %s %s", r.status_code, r.text[:200])
+    raise HTTPException(status_code=502, detail={"code": "NEWSLETTER_FAILED",
+        "message": "Couldn't subscribe you just now. Please try again later."})
+
+
+@app.post("/newsletter/subscribe", tags=["marketing"])
+def newsletter_subscribe(body: NewsletterModel, request: Request):
+    """Add an email to the configured newsletter (Mailgun mailing list by default).
+
+    Public + IP-rate-limited. If the newsletter isn't configured yet, we say so honestly
+    rather than pretend it worked."""
+    provider = NEWSLETTER_PROVIDER or "none"
     try:
-        import httpx
-        r = httpx.post(url, auth=("anystring", MAILCHIMP_API_KEY), timeout=10,
-                       json={"email_address": body.email, "status": "subscribed"})
-        if r.status_code in (200, 201):
-            return {"ok": True, "message": "You're subscribed. Thanks!"}
-        # already a member is a success from the user's point of view
-        if r.status_code == 400 and "Member Exists" in r.text:
-            return {"ok": True, "message": "You're already on the list."}
-        logger.warning("mailchimp subscribe failed: %s %s", r.status_code, r.text[:200])
-        raise HTTPException(status_code=502, detail={"code": "NEWSLETTER_FAILED",
-            "message": "Couldn't subscribe you just now. Please try again later."})
+        if provider == "mailgun":
+            return _newsletter_subscribe_mailgun(body.email)
+        if provider == "mailchimp":
+            return _newsletter_subscribe_mailchimp(body.email)
+        raise HTTPException(status_code=503, detail={
+            "code": "NEWSLETTER_UNCONFIGURED",
+            "message": "The newsletter isn't wired up yet. Email info@petabyte.market to "
+                       "be added."})
     except HTTPException:
         raise
     except Exception:
-        logger.exception("mailchimp subscribe error")
+        logger.exception("newsletter subscribe error (provider=%s)", provider)
         raise HTTPException(status_code=502, detail={"code": "NEWSLETTER_FAILED",
             "message": "Couldn't reach the newsletter service. Please try again later."})
 

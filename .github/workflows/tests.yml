@@ -120,6 +120,33 @@ jobs:
         #   * 50 threads racing one wallet -> exactly the right number win
         run: python postgres_test.py
 
+  config:
+    # GitHub-config source of truth: manifest freshness, the validator (defaults,
+    # formats, test/live separation, fail-closed secrets), the deploy-env generator's
+    # scope isolation (a GPU node NEVER receives platform secrets), drift, and docs
+    # freshness. All offline — no DB, no network.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pyyaml cryptography
+      - name: config toolchain tests
+        working-directory: lumaris_api
+        run: python config_test.py
+      - name: configuration drift (manifest / code / workflows / template.env in sync)
+        run: python scripts/check_configuration_drift.py
+      - name: manifest is up to date (re-generate → no diff)
+        run: |
+          python scripts/build_config_manifest.py
+          git diff --exit-code config/github_configuration_manifest.yaml \
+            || { echo "::error::manifest is stale — run scripts/build_config_manifest.py and commit"; exit 1; }
+      - name: docs are up to date (re-generate → no diff)
+        run: |
+          python scripts/generate_config_docs.py
+          git diff --exit-code docs/GITHUB_CONFIGURATION_REFERENCE.md docs/GITHUB_MANUAL_SETUP_CHECKLIST.md \
+            || { echo "::error::config docs are stale — run scripts/generate_config_docs.py and commit"; exit 1; }
+
   frontend:
     # A broken <script> still returns HTTP 200. Python tests cannot see it.
     # Parse the JS of every rendered page with a real JS engine, and check that
