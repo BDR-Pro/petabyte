@@ -42,6 +42,10 @@ run_suite "stripe connect (sqlite)" python stripe_test.py
 run_suite "payout routing (sqlite)" python payout_test.py
 run_suite "email (mailgun, offline)" python email_test.py
 run_suite "matmul result validation (offline)" python matmul_validation_test.py
+run_suite "account (reset + cal webhook + demo notify)" python account_test.py
+run_suite "wallet (add funds via stripe checkout)" python wallet_test.py
+run_suite "seller integrity audits (anti-fraud)" python seller_audit_test.py
+run_suite "quorum verification (redundant re-execution)" python quorum_test.py
 run_suite "tunnel (nat + failover)" bash -c "cd ../lumaris_gateway && python tunnel_test.py"
 rm -f smoke.db* adv.db* stripe_test.db* payout_test.db* ../lumaris_gateway/tunnel.db*
 

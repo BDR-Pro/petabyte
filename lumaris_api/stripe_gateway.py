@@ -194,6 +194,23 @@ class RealStripeGateway:
     def cancel_payment_intent(self, *, pi_id: str, idempotency_key: str) -> dict:
         return _sobj(self._stripe.PaymentIntent.cancel(pi_id, idempotency_key=idempotency_key))
 
+    # ---- Checkout Sessions (hosted card page for wallet top-ups) ----
+    def create_checkout_session(self, *, amount: int, currency: str, metadata: dict,
+                                success_url: str, cancel_url: str, idempotency_key: str,
+                                product_name: str = "Petabyte wallet top-up") -> dict:
+        sess = self._stripe.checkout.Session.create(
+            mode="payment",
+            line_items=[{"price_data": {"currency": currency, "unit_amount": amount,
+                                        "product_data": {"name": product_name}},
+                         "quantity": 1}],
+            metadata=metadata, payment_intent_data={"metadata": metadata},
+            success_url=success_url, cancel_url=cancel_url,
+            idempotency_key=idempotency_key)
+        return _sobj(sess)
+
+    def retrieve_checkout_session(self, session_id: str) -> dict:
+        return _sobj(self._stripe.checkout.Session.retrieve(session_id))
+
     # ---- Transfers / refunds / reversals ----
     def create_transfer(self, *, amount: int, currency: str, destination: str,
                         transfer_group: str, source_transaction: str | None,
@@ -239,6 +256,7 @@ class FakeStripeGateway:
         self.transfers: dict[str, dict] = {}
         self.refunds: dict[str, dict] = {}
         self.reversals: dict[str, dict] = {}
+        self.checkout_sessions: dict[str, dict] = {}
         self._idem: dict[str, dict] = {}       # idempotency_key -> object
         self._n = 0
 
@@ -272,6 +290,37 @@ class FakeStripeGateway:
     def create_account_link(self, *, account_id, refresh_url, return_url):
         return {"object": "account_link", "url": f"https://connect.stripe.test/setup/{account_id}",
                 "expires_at": int(time.time()) + 300, "created": int(time.time())}
+
+    # ---- Checkout Sessions (wallet top-up hosted card page) ----
+    def create_checkout_session(self, *, amount, currency, metadata, success_url,
+                                cancel_url, idempotency_key,
+                                product_name="Petabyte wallet top-up"):
+        def _make():
+            sid = self._id("cs")
+            sess = {"id": sid, "object": "checkout.session", "mode": "payment",
+                    "amount_total": amount, "currency": currency, "metadata": metadata,
+                    "payment_status": "unpaid", "status": "open",
+                    "url": f"https://checkout.stripe.test/{sid}",
+                    "success_url": success_url, "cancel_url": cancel_url,
+                    "payment_intent": None}
+            self.checkout_sessions[sid] = sess
+            return sess
+        return self._idempotent(idempotency_key, _make)
+
+    def retrieve_checkout_session(self, session_id):
+        if session_id not in self.checkout_sessions:
+            raise StripeError(f"no such checkout.session {session_id}")
+        return self.checkout_sessions[session_id]
+
+    # test helper: simulate the buyer completing the hosted card page -> paid
+    def complete_checkout_session(self, session_id: str, *, fail: bool = False):
+        s = self.checkout_sessions[session_id]
+        if fail:
+            s["payment_status"] = "unpaid"; s["status"] = "expired"
+            return s
+        s["payment_status"] = "paid"; s["status"] = "complete"
+        s["payment_intent"] = self._id("pi")
+        return s
 
     def retrieve_account(self, account_id):
         if account_id not in self.accounts:

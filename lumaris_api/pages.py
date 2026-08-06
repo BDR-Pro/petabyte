@@ -1218,6 +1218,10 @@ LOGIN_HTML = _page("Petabyte — sign in", """
     </button>
     <p id="err" class="mut" style="display:none;color:var(--bad);margin-top:12px;font-size:13px"></p>
 
+    <p id="forgotrow" style="text-align:right;margin-top:10px;font-size:12px">
+      <a class="teal" href="#" onclick="forgot();return false" id="forgotlink">Forgot password?</a>
+    </p>
+
     <div style="display:flex;align-items:center;gap:10px;margin:18px 0">
       <div style="flex:1;height:1px;background:var(--line)"></div>
       <span class="mini">or</span>
@@ -1246,7 +1250,18 @@ function toggleMode(){
   document.getElementById('p').setAttribute('autocomplete', reg ? 'new-password' : 'current-password');
   document.getElementById('err').style.display='none';
 }
-function fail(m){var e=document.getElementById('err');e.textContent=m;e.style.display='';}
+function fail(m){var e=document.getElementById('err');e.textContent=m;e.style.color='var(--bad)';e.style.display='';}
+function info(m){var e=document.getElementById('err');e.textContent=m;e.style.color='var(--mut)';e.style.display='';}
+async function forgot(){
+  var id=document.getElementById('u').value.trim();
+  if(!id){ id=(prompt("Enter your account email or username to reset your password:")||"").trim(); }
+  if(!id){ return; }
+  try{
+    await fetch('/password/forgot',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({identifier:id})});
+  }catch(e){}
+  info("If an account matches, we've emailed a password reset link. Check your inbox.");
+}
 async function login(u,p){
   var r = await fetch('/login', {method:'POST',
     headers:{'Content-Type':'application/x-www-form-urlencoded'},
@@ -1277,6 +1292,54 @@ async function go(){
     if(!t){fail(mode==="register"?"Account created — but sign-in failed. Try signing in.":"Wrong username or password."); return;}
     localStorage.setItem('pb_token', t);document.documentElement.setAttribute('data-auth','in');
     location.href='/app';
+  }catch(e){fail("Network error — check your connection and try again.");}
+}
+</script>""")
+
+
+RESET_HTML = _page("Petabyte — reset password", """
+<div class="wrap" style="max-width:440px;padding:60px 22px 40px">
+  <div class="eyebrow"><span class="dot"></span> <span>account</span></div>
+  <h1 style="font-size:clamp(28px,5vw,36px);margin:16px 0 6px">Choose a new password</h1>
+  <p class="mut">Enter a new password for your Petabyte account.</p>
+
+  <div class="card" style="margin-top:20px" id="form">
+    <label class="mini" style="display:block;margin-bottom:6px">New password</label>
+    <input id="p1" type="password" placeholder="new password (8+ characters)" style="width:100%" autocomplete="new-password"/>
+    <label class="mini" style="display:block;margin:14px 0 6px">Confirm password</label>
+    <input id="p2" type="password" placeholder="re-enter new password" style="width:100%" autocomplete="new-password"
+           onkeydown="if(event.key==='Enter')reset()"/>
+    <button class="btn-amber" style="width:100%;justify-content:center;margin-top:18px" onclick="reset()">
+      <span>Update password</span>
+    </button>
+    <p id="err" class="mut" style="display:none;color:var(--bad);margin-top:12px;font-size:13px"></p>
+  </div>
+
+  <div class="card" style="margin-top:20px;display:none" id="done">
+    <p style="margin:0">Your password has been updated.</p>
+    <a class="btn btn-amber" style="width:100%;justify-content:center;margin-top:16px" href="/login">Sign in</a>
+  </div>
+</div>
+<script>
+function tok(){ return new URLSearchParams(location.search).get('token')||''; }
+function fail(m){var e=document.getElementById('err');e.textContent=m;e.style.display='';}
+async function reset(){
+  var p1=document.getElementById('p1').value, p2=document.getElementById('p2').value;
+  if(p1.length<8){fail("Password must be at least 8 characters."); return;}
+  if(p1!==p2){fail("Passwords do not match."); return;}
+  var t=tok();
+  if(!t){fail("This reset link is missing its token. Request a new link from the sign-in page."); return;}
+  document.getElementById('err').style.display='none';
+  try{
+    var r=await fetch('/password/reset',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token:t,new_password:p1})});
+    if(r.ok){
+      document.getElementById('form').style.display='none';
+      document.getElementById('done').style.display='';
+      return;
+    }
+    var b={};try{b=await r.json()}catch(e){}
+    fail((typeof b.detail==='string'?b.detail:null)||"This reset link is invalid or has expired.");
   }catch(e){fail("Network error — check your connection and try again.");}
 }
 </script>""")
@@ -1517,6 +1580,8 @@ async function boot(){
   document.getElementById('njobs').textContent=u.bookings;
   document.getElementById('wbal').textContent=money(u.balance);
   document.getElementById('wearn').textContent=money(u.earnings);
+  if(new URLSearchParams(location.search).get('funded')==='1'){
+    wmsg('Payment received — your balance updates as soon as Stripe confirms.');}
   loadNodes();loadJobs();loadKeys();loadMethods();loadTemplates();loadVMs();loadEarnings();loadOnboarding();loadDiagnostics();loadBurn();loadEmail();loadNotifs();setInterval(loadBurn,20000);
 }
 async function loadVMs(){var r=await api('/vm');if(!r.ok)return;var vms=r.body.vms||[];
@@ -1591,9 +1656,14 @@ async function mkkey(){var lb=document.getElementById('klabel').value;var q=new 
   el.textContent=r.ok?('Copy now — shown once:\\n\\n'+r.body.api_key):'Could not create key.';loadKeys();}
 async function rvkey(j){await api('/keys/'+j+'/revoke',{method:'POST'});loadKeys();}
 async function deposit(){var a=parseFloat(document.getElementById('amt').value||'0');
-  var r=await api('/deposit',{method:'POST',body:JSON.stringify({amount:a})});
-  if(r.ok){document.getElementById('bal').textContent=money(r.body.balance);document.getElementById('wbal').textContent=money(r.body.balance);wmsg('Added '+money(a)+' (sandbox credit).');}
-  else if(r.status===403){wmsg('Live mode: deposits go through checkout, not here.');}else{wmsg('Could not add funds.');}}
+  if(!(a>0)){wmsg('Enter an amount.');return;}
+  // Open Stripe's hosted card page for a wallet top-up (test or live per config).
+  var r=await api('/wallet/topup',{method:'POST',body:JSON.stringify({amount_minor:Math.round(a*100)})});
+  if(r.ok && r.body.checkout_url){
+    wmsg((r.body.test_mode?'Test mode — ':'')+'Redirecting to secure Stripe checkout…');
+    location.href=r.body.checkout_url;
+  } else if(r.status===400){ wmsg((r.body&&r.body.detail)?r.body.detail:'Enter a valid amount.'); }
+  else { wmsg('Could not start checkout — please try again.'); }}
 async function withdraw(){var a=parseFloat(document.getElementById('amt').value||'0');
   var r=await api('/wallet/withdraw',{method:'POST',body:JSON.stringify({amount:a})});
   wmsg(r.ok?('Withdrawal of '+money(a)+' requested.'):(r.body&&r.body.detail?r.body.detail:'Add a payout method first.'));loadMethods();}

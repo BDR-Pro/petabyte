@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile payout-test payout-coverage email-test email-integration stripe-integration test test-postgres install verify
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile payout-test payout-coverage email-test email-integration stripe-integration local-e2e test test-postgres install verify
 
 help:
 	@echo "Petabyte make targets:"
@@ -16,6 +16,7 @@ help:
 	@echo "  make stripe-integration  Real Stripe TEST-mode integration (needs sk_test_; skips otherwise)"
 	@echo "  make email-test      Run the Mailgun email suite (offline, mocked)"
 	@echo "  make email-integration  Send a REAL Mailgun email (needs MAILGUN_API_KEY; skips otherwise)"
+	@echo "  make local-e2e       Run the whole platform locally + a buyer/seller/admin flow (offline)"
 	@echo "  make reconcile       Reconcile internal ledger + transactions vs Stripe (test mode)"
 	@echo "  make payout-test     Run the provider-neutral global payout routing suite"
 	@echo "  make payout-coverage Print the honest seller-payout country coverage (fails <100)"
@@ -51,6 +52,11 @@ stripe-test:
 # Skips cleanly when no STRIPE_SECRET_KEY is set. NEVER runs on a live key.
 stripe-integration:
 	cd $(API) && python3 stripe_integration_test.py
+
+# Full buyer->seller->settlement flow against a locally-run server (fake Stripe
+# gateway, SQLite, no GPU). Traces bugs; exits non-zero if any step misbehaves.
+local-e2e:
+	python3 scripts/e2e/local_e2e.py
 
 # Mailgun transactional email: offline unit suite, and an opt-in real send.
 email-test:

@@ -366,3 +366,39 @@ def seller_balances(db, seller_id: int) -> dict:
         "reversed_minor": buckets["reversed"],
         "failed_minor": buckets["failed"],
     }
+
+
+def run_scheduled_payouts(db, *, currency: str = "usd", min_threshold_minor: int = 0,
+                          consent_stablecoin: bool = False, execute: bool = True) -> list:
+    """The biweekly payout run. For every seller with matured, available earnings (past
+    the risk hold and NOT under an open report/payout hold), aggregate ALL of them into
+    ONE payout and send it. Returns the PayoutBatch objects created.
+
+    This is what turns "hold each job's earnings for 14 days, then pay the accumulated
+    total once" into a single scheduled action. Idempotent per obligation set (a re-run
+    on the same day returns the same live batch, never a second payout)."""
+    mode = dbmod.payments_mode()
+    dbmod.promote_due_obligations(db)          # mature everything due (hold-aware)
+    seller_ids = [r[0] for r in (db.query(PayoutObligation.seller_id)
+                  .filter(PayoutObligation.state == "available",
+                          PayoutObligation.batch_id.is_(None),
+                          PayoutObligation.mode == mode)
+                  .distinct().all())]
+    batches = []
+    for sid in seller_ids:
+        if dbmod.payout_hold_active(db, sid):   # belt-and-suspenders (promote already skips)
+            continue
+        seller = dbmod.get_user_by_id(db, sid)
+        if not seller:
+            continue
+        try:
+            b = create_and_send_batch(db, seller, currency=currency,
+                                      min_threshold_minor=min_threshold_minor,
+                                      consent_stablecoin=consent_stablecoin, execute=execute)
+            if b is not None:
+                batches.append(b)
+        except RoutingError as e:
+            logger.warning("scheduled payout skipped seller %s: %s", sid, e)
+    logger.info("scheduled payouts: %d batch(es) across %d seller(s) with available earnings",
+                len(batches), len(seller_ids))
+    return batches

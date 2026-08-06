@@ -368,6 +368,25 @@ class TestWorkload(Base):
     completed_at = Column(DateTime, nullable=True)
 
 
+class QuorumCheck(Base):
+    """Redundant re-execution: the SAME deterministic challenge is dispatched to several
+    independent sellers and their results are compared. Honest sellers agree; a seller who
+    fakes/corrupts the result diverges and is flagged. Used for deterministic workloads
+    the platform can't cheaply compute itself (seller agreement is the oracle)."""
+    __tablename__ = "quorum_checks"
+    id = Column(Integer, primary_key=True, index=True)
+    public_id = Column(String, unique=True, index=True, default=lambda: "qrm_" + _rand_vm_id())
+    size = Column(Integer, nullable=False)
+    seed = Column(Integer, nullable=False)
+    nonce = Column(String, nullable=False)
+    min_agree = Column(Integer, nullable=False, default=2)
+    status = Column(String, nullable=False, default="open", index=True)  # open|AGREED|DIVERGENT|INCONCLUSIVE
+    agreed_hash = Column(String, nullable=True)
+    submissions = Column(Text, nullable=False, default="{}")  # JSON {seller_id: {task_id, hash}}
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    finalized_at = Column(DateTime, nullable=True)
+
+
 class Organization(Base):
     """Enterprise/lab account with a shared wallet and optional budget cap."""
     __tablename__ = "orgs"
@@ -1098,6 +1117,50 @@ class PayoutMethodRail(Base):
     disabled_at = Column(DateTime, nullable=True)
 
 
+class WalletTopup(Base):
+    """A buyer 'Add funds' via Stripe Checkout (hosted card page). The wallet is credited
+    when the session is paid (checkout.session.completed webhook, or the sandbox
+    simulate-pay). Stamped with the money mode (TEST|LIVE) so demo top-ups can never be
+    counted as live funds."""
+    __tablename__ = "wallet_topups"
+    id = Column(Integer, primary_key=True, index=True)
+    public_id = Column(String, unique=True, index=True, default=lambda: "wtu_" + _rand_vm_id())
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    amount_minor = Column(Integer, nullable=False)
+    currency = Column(String, nullable=False, default="usd")
+    stripe_session_id = Column(String, unique=True, index=True, nullable=True)
+    stripe_payment_intent_id = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="pending", index=True)  # pending|paid|failed|expired
+    mode = Column(String, nullable=False, default=payments_mode, index=True)  # TEST|LIVE, immutable
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    credited_at = Column(DateTime, nullable=True)
+    __table_args__ = (
+        CheckConstraint("amount_minor > 0", name="ck_topup_amount_pos"),
+    )
+
+
+def get_topup_by_session(db: Session, session_id: str) -> "WalletTopup":
+    return db.query(WalletTopup).filter(
+        WalletTopup.stripe_session_id == session_id).first()
+
+
+def mark_topup_paid_and_credit(db: Session, topup: "WalletTopup", *,
+                               payment_intent_id: str = None) -> bool:
+    """Credit the buyer's wallet exactly once for a paid top-up. Idempotent: a second
+    call (duplicate webhook / retry) returns False and never double-credits."""
+    if topup.status == "paid":
+        return False
+    topup.status = "paid"
+    topup.credited_at = _utcnow()
+    if payment_intent_id:
+        topup.stripe_payment_intent_id = payment_intent_id
+    user = db.query(User).filter(User.id == topup.user_id).first()
+    if user:
+        deposit(db, user, topup.amount_minor / 100.0)   # minor -> major (2-dp currencies)
+    db.add(topup); db.commit()
+    return True
+
+
 def create_payout_obligation(db: Session, *, seller_id: int, compute_tx_id: int,
                              currency: str, net_amount_minor: int, country: str = None,
                              commission_minor: int = 0, pricing_snapshot: str = None,
@@ -1123,10 +1186,61 @@ def create_payout_obligation(db: Session, *, seller_id: int, compute_tx_id: int,
     return obl
 
 
+# A seller under one of these risk decisions has their payouts HELD: matured earnings
+# do not become batchable until an admin clears the review. (Separate from the sanctions
+# gate in payout_routing.compliance_ok.)
+_PAYOUT_HOLD_DECISIONS = ("UNDER_REVIEW", "RESTRICTED", "INFORMATION_REQUIRED")
+
+
+def payout_hold_active(db: Session, seller_id: int) -> bool:
+    """True if the seller's LATEST 'risk' compliance decision is an active hold (e.g. an
+    open report under review). While held, their earnings stay 'accrued' past the risk
+    hold and are never batched — the money waits until an admin releases it."""
+    d = (db.query(ComplianceDecision)
+         .filter(ComplianceDecision.seller_id == seller_id,
+                 ComplianceDecision.screening_type == "risk")
+         .order_by(ComplianceDecision.id.desc()).first())
+    return bool(d and d.decision in _PAYOUT_HOLD_DECISIONS)
+
+
+def _held_seller_ids(db: Session) -> set:
+    """Sellers whose LATEST 'risk' decision is an active payout hold."""
+    rows = (db.query(ComplianceDecision.seller_id, ComplianceDecision.decision)
+            .filter(ComplianceDecision.screening_type == "risk")
+            .order_by(ComplianceDecision.seller_id, ComplianceDecision.id.desc()).all())
+    latest, held = set(), set()
+    for sid, dec in rows:
+        if sid in latest:
+            continue
+        latest.add(sid)
+        if dec in _PAYOUT_HOLD_DECISIONS:
+            held.add(sid)
+    return held
+
+
+def place_payout_hold(db: Session, seller_id: int, reason: str = "under review"):
+    """Put a seller's payouts on hold pending review (e.g. after a report). Recorded as a
+    'risk' ComplianceDecision so it sits in the same audited decision log."""
+    d = ComplianceDecision(seller_id=seller_id, screening_type="risk",
+                           decision="UNDER_REVIEW", reference=(reason or "")[:200])
+    db.add(d); db.commit(); db.refresh(d)
+    return d
+
+
+def clear_payout_hold(db: Session, seller_id: int, note: str = "cleared"):
+    """Release a payout hold after review; matured earnings become batchable again."""
+    d = ComplianceDecision(seller_id=seller_id, screening_type="risk",
+                           decision="APPROVED", reference=(note or "")[:200])
+    db.add(d); db.commit(); db.refresh(d)
+    return d
+
+
 def promote_due_obligations(db: Session, seller_id: int = None) -> int:
     """Move accrued obligations whose risk hold has elapsed (available_at <= now) to
     'available' so they become batchable automatically. Returns the count promoted.
-    Idempotent; safe to call on every read or from a scheduler."""
+    Sellers under an active payout hold (open report/review) are SKIPPED — their money
+    stays held past the risk window until an admin clears it. Idempotent; safe to call
+    on every read or from a scheduler."""
     q = (update(PayoutObligation)
          .where(PayoutObligation.state == "accrued",
                 PayoutObligation.batch_id.is_(None),
@@ -1134,7 +1248,13 @@ def promote_due_obligations(db: Session, seller_id: int = None) -> int:
                 PayoutObligation.available_at <= _utcnow())
          .values(state="available"))
     if seller_id is not None:
+        if payout_hold_active(db, seller_id):
+            return 0
         q = q.where(PayoutObligation.seller_id == seller_id)
+    else:
+        held = _held_seller_ids(db)
+        if held:
+            q = q.where(PayoutObligation.seller_id.notin_(held))
     res = db.execute(q)
     db.commit()
     return res.rowcount or 0
@@ -1168,7 +1288,7 @@ def _forbid_mode_change(mapper, connection, target):
             f"({hist.deleted[0]} -> {hist.added[0]}); test and live money must never "
             f"be reclassified.")
 
-for _mode_cls in (ComputeTransaction, PayoutObligation, PayoutBatch):
+for _mode_cls in (ComputeTransaction, PayoutObligation, PayoutBatch, WalletTopup):
     event.listen(_mode_cls, "before_update", _forbid_mode_change, propagate=True)
 
 

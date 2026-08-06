@@ -454,6 +454,35 @@ def record_metering(db, tx: ComputeTransaction, *, actual_seconds: int,
     return transition(db, tx, "METERING_FINALIZED", reason=f"metered {secs}s from {source}")
 
 
+def settle_after_result(db, tx: ComputeTransaction, *, metered_seconds: int,
+                        source: str = "platform") -> str:
+    """Orchestrator bridge: after a VALID, completed job, finalize metering and CAPTURE
+    the buyer's payment.
+
+    The seller is NOT paid here. Capture records the seller's net as a HELD payout
+    obligation (risk hold = PAYOUT_HOLD_DAYS, default 14 days) so a dispute/report can
+    be reviewed first; the held earnings are then paid on the biweekly batch run
+    (payout_routing.run_scheduled_payouts) once the hold elapses. This is the
+    "charge the buyer now, pay the seller on a schedule" model — the tx's terminal
+    buyer-side state is PAYMENT_CAPTURED; the seller payout is tracked by the obligation
+    lifecycle (accrued -> available -> batched -> paid).
+
+    Money moves ONLY through the same audited functions the admin endpoints use
+    (record_metering -> capture). Every step is FSM-guarded and idempotent, so a re-run,
+    a concurrent admin action, or a duplicate result never double-charges. Best-effort.
+    Returns the final tx status."""
+    secs = max(1, int(metered_seconds))
+    try:
+        if tx.status in ("RUNNING", "DISPATCHING"):
+            record_metering(db, tx, actual_seconds=secs, source=source)
+        if tx.status in ("METERING_FINALIZED", "CAPTURE_FAILED", "JOB_FAILED"):
+            capture(db, tx)     # creates the HELD payout obligation; does not transfer
+    except TransactionError as e:
+        logger.warning("auto-settle halted for tx %s at status=%s: %s",
+                       tx.public_id, tx.status, e)
+    return tx.status
+
+
 # ----------------------------------------------------------------- capture
 def _write_settlement(db, tx, s: dict, version: int) -> Settlement:
     st = Settlement(tx_id=tx.id, version=version, currency=tx.currency,
@@ -538,8 +567,17 @@ def _ensure_payout_obligation(db, tx: ComputeTransaction):
     import db as _dbm
     acct = db.query(_dbm.ConnectedAccount).filter(
         _dbm.ConnectedAccount.user_id == tx.seller_id).first()
-    hold_until = (_now() + timedelta(hours=PAYOUT_COOLING_OFF_H)
-                  if PAYOUT_COOLING_OFF_H > 0 else None)
+    # Earnings risk hold: seller net is withheld for PAYOUT_HOLD_DAYS (default 14) so a
+    # dispute/report can be reviewed before the money leaves. Take the MAX of the earnings
+    # hold and any newly-added-destination cooling-off. 0 days disables the earnings hold.
+    hold_days = int(os.getenv("PAYOUT_HOLD_DAYS", "14"))
+    hold = None
+    if hold_days > 0:
+        hold = _now() + timedelta(days=hold_days)
+    if PAYOUT_COOLING_OFF_H > 0:
+        cool = _now() + timedelta(hours=PAYOUT_COOLING_OFF_H)
+        hold = cool if hold is None else max(hold, cool)
+    hold_until = hold
     return _dbm.create_payout_obligation(
         db, seller_id=tx.seller_id, compute_tx_id=tx.id, currency=tx.currency,
         net_amount_minor=tx.seller_net_amount, commission_minor=tx.platform_fee_amount,
@@ -858,6 +896,13 @@ def _handle_event(db, event: dict):
             ConnectedAccount.stripe_account_id == obj.get("id")).first()
         if ca:
             _sync_from_stripe(db, ca, obj)
+        return
+
+    if etype == "checkout.session.completed":
+        # Buyer finished the hosted card page for an 'Add funds' top-up -> credit the
+        # wallet (idempotent; a duplicate event is a no-op).
+        import wallet_funding
+        wallet_funding.credit_from_session(db, obj)
         return
 
     if etype in ("payment_intent.amount_capturable_updated", "payment_intent.succeeded"):

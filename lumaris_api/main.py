@@ -74,7 +74,7 @@ from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
                    PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TEMPLATES_HTML,
                    CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML,
-                   SELLER_EARNINGS_HTML)
+                   SELLER_EARNINGS_HTML, RESET_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -841,24 +841,45 @@ def _email_booking_link(lead):
         logger.exception("failed to email booking link to lead %s", lead.public_id)
 
 
+def _email_admins(db, subject: str, body: str) -> None:
+    """Email every address named in ADMIN_USERS (e.g. info@petabyte.market) directly.
+
+    This does not depend on an admin having a User row — the founder inbox is
+    configuration, so a demo lead / booking always reaches it. Best-effort; also
+    records an in-app notification for any admin User that matches."""
+    from notify_providers import get_email_provider
+    provider = get_email_provider()
+    for addr in _admin_allowlist():
+        if "@" not in addr:
+            continue
+        try:
+            provider.send(addr, subject, body)
+        except Exception:
+            logger.exception("failed to email admin address")
+
+
 def _notify_founder_of_lead(db, lead):
     """Tell the founder a demand signal just arrived.
 
-    Routed to any admin account so it shows up in the same notifications panel as
-    everything else. Best-effort: a failure here must never lose the lead, which is
-    already committed."""
+    Two channels, both best-effort (a failure must never lose the lead, which is
+    already committed): (1) an in-app notification for every admin User, and (2) a
+    direct email to the configured ADMIN_USERS inbox (info@petabyte.market), so the
+    founder is notified even if info@ has no User row."""
+    who = lead.organization or lead.name
+    subject = f"Demo request from {who}"
+    body = (f"{lead.name} ({lead.email}) — role: {lead.role or 'n/a'}, "
+            f"org: {lead.organization or 'n/a'}. Workload: {lead.workload or 'n/a'}. "
+            f"Ref {lead.public_id}.")
     try:
         from db import User
-        admins = db.query(User).filter(User.role == "admin").all()
-        who = lead.organization or lead.name
-        for a in admins:
-            notifications.notify(
-                db, a.id, "demo.requested",
-                subject=f"Demo request from {who}",
-                body=f"{lead.name} ({lead.email}) — role: {lead.role or 'n/a'}. "
-                     f"Ref {lead.public_id}.")
+        for a in db.query(User).filter(User.role == "admin").all():
+            notifications.notify(db, a.id, "demo.requested", subject=subject, body=body)
     except Exception:
-        logger.exception("failed to notify founder of demo lead %s", lead.public_id)
+        logger.exception("failed to notify admin users of demo lead %s", lead.public_id)
+    try:
+        _email_admins(db, subject, body)
+    except Exception:
+        logger.exception("failed to email ADMIN_USERS of demo lead %s", lead.public_id)
 
 
 def _require_seller(db: Session, user: dict):
@@ -1495,6 +1516,105 @@ def change_role(data: RoleModel, user: dict = Depends(get_current_user),
     return {"status": "ok", "msg": f"Role changed to {new_role}"}
 
 
+# ------------------- PASSWORD RESET -------------------
+# Self-service reset. A signed, short-lived token carries the username plus a
+# fingerprint of the CURRENT password hash ('pv'); once the password changes the
+# fingerprint changes, so a used (or stale) link stops working — single-use-ish
+# without a new table. Google-only accounts have no usable password to reset.
+PWRESET_TTL_MIN = 30
+
+
+class ForgotPasswordModel(BaseModel):
+    identifier: str          # username OR email
+
+
+class ResetPasswordModel(BaseModel):
+    token: str
+    new_password: str
+
+
+def _pw_fingerprint(user) -> str:
+    import hashlib
+    return hashlib.sha256((user.password or "").encode()).hexdigest()[:16]
+
+
+def _pwreset_token(user) -> str:
+    return create_access_token(
+        {"sub": user.username, "purpose": "pwreset", "pv": _pw_fingerprint(user)},
+        expires_delta=timedelta(minutes=PWRESET_TTL_MIN))
+
+
+def _find_user_by_identifier(db, identifier: str):
+    from db import User
+    ident = (identifier or "").strip()
+    if not ident:
+        return None
+    u = get_user_by_username(db, ident)
+    if u:
+        return u
+    return db.query(User).filter(User.email.isnot(None),
+                                 func.lower(User.email) == ident.lower()).first()
+
+
+@app.post("/password/forgot", tags=["account"])
+def password_forgot(body: ForgotPasswordModel, request: Request, db: Session = Depends(get_db)):
+    """Start a password reset. ALWAYS returns the same message (no account
+    enumeration). If the identifier matches an account WITH an email, a branded
+    reset link is emailed via Mailgun. Rate-limited by IP."""
+    generic = {"ok": True,
+               "message": "If an account matches, we've emailed a password reset link."}
+    ip = _client_ip(request) or "?"
+    if _rl_blocked(f"pwforgot:{ip}", 10, 3600):
+        return generic          # silently absorb abuse; never reveal anything
+    user = _find_user_by_identifier(db, body.identifier)
+    if user and user.email:
+        try:
+            base = (os.getenv("PUBLIC_BASE_URL") or str(request.base_url)).rstrip("/")
+            reset_url = f"{base}/reset?token={_pwreset_token(user)}"
+            from email_service import get_email_service, EmailError, EmailConfigError
+            try:
+                get_email_service().send_password_reset(
+                    user.email, reset_url=reset_url, ttl_minutes=PWRESET_TTL_MIN)
+            except EmailConfigError:
+                logger.warning("password reset requested but email is not configured; link not sent")
+            except EmailError:
+                logger.exception("password reset email send failed")
+            audit(db, "password.reset_requested", actor=user.username,
+                  resource_type="user", resource_id=user.username, ip=ip)
+        except Exception:
+            logger.exception("password reset flow error")
+    return generic
+
+
+@app.post("/password/reset", tags=["account"])
+def password_reset(body: ResetPasswordModel, request: Request, db: Session = Depends(get_db)):
+    """Complete a password reset with a token from the emailed link."""
+    from db import hash_password
+    if len((body.new_password or "")) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters.")
+    try:
+        payload = verify_token(body.token)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired.")
+    if payload.get("purpose") != "pwreset":
+        raise HTTPException(status_code=400, detail="This reset link is invalid.")
+    user = get_user_by_username(db, payload.get("sub", ""))
+    if not user or payload.get("pv") != _pw_fingerprint(user):
+        raise HTTPException(status_code=400,
+                            detail="This reset link has already been used or is no longer valid.")
+    user.password = hash_password(body.new_password)
+    db.commit()
+    audit(db, "password.reset", actor=user.username, resource_type="user",
+          resource_id=user.username, ip=_client_ip(request))
+    return {"ok": True, "message": "Password updated. You can now sign in."}
+
+
+@app.get("/reset", response_class=HTMLResponse)
+@app.get("/reset-password", response_class=HTMLResponse)
+def reset_password_page():
+    return RESET_HTML
+
+
 # ------------------- SELLER -------------------
 
 @app.post("/register_specs", tags=["seller"])
@@ -1803,6 +1923,53 @@ def jobs_next(agent=Depends(api_key_user), db: Session = Depends(get_db)):
             "cpu": task.cpu, "ram": task.ram, "cuda": task.cuda}
 
 
+def _observed_seconds(task) -> int:
+    """Platform-observed wall-clock for a task (dispatch -> result), server-side and
+    not a seller/browser value. Capped later by the pricing snapshot's max duration."""
+    ca = getattr(task, "created_at", None)
+    if ca is None:
+        return 1
+    if ca.tzinfo is None:
+        ca = ca.replace(tzinfo=timezone.utc)
+    return max(1, int((datetime.now(timezone.utc) - ca).total_seconds()))
+
+
+def _auto_settle_compute_tx(db, task):
+    """Bridge a completed, signature-verified job to Stripe settlement
+    (meter -> capture -> transfer). Returns the resulting compute-tx status, or None
+    when the task isn't tied to a paid ComputeTransaction (legacy/unpaid path).
+
+    Guards:
+      * opt-out via AUTO_SETTLE_ON_RESULT=false (settlement then stays admin-driven);
+      * FAIL CLOSED for templates whose correctness needs manifest validation that is
+        not yet carried in the result payload (e.g. pytorch-matmul-v1) — never auto-pay
+        a result we cannot validate;
+      * everything downstream is idempotent + FSM-guarded, so a duplicate result or a
+        concurrent admin action can't double-charge or double-pay.
+    """
+    if os.getenv("AUTO_SETTLE_ON_RESULT", "true").lower() != "true":
+        return None
+    from db import ComputeTransaction
+    tx = db.query(ComputeTransaction).filter(ComputeTransaction.task_id == task.id).first()
+    if not tx:
+        return None                      # legacy booking / unpaid diagnostic job
+    if (getattr(task, "template", "") or "") == "pytorch-matmul-v1":
+        # The matmul manifest isn't part of JobResultModel yet, so we can't run
+        # matmul_validation here. Fail closed: leave capture/transfer to the admin
+        # path rather than pay on an unvalidated numeric result.
+        logger.info("tx %s: %s completed but manifest validation isn't wired; "
+                    "leaving settlement to the admin path (fail-closed)",
+                    tx.public_id, task.template)
+        return tx.status
+    try:
+        return _sc.settle_after_result(db, tx, metered_seconds=_observed_seconds(task),
+                                       source="platform")
+    except Exception:
+        logger.exception("auto-settle error for tx %s (job completed; retry via admin)",
+                         tx.public_id)
+        return tx.status
+
+
 @app.post("/jobs/result")
 def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
                 db: Session = Depends(get_db)):
@@ -1820,13 +1987,16 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
     try:
         verify_signed_proof(spec.attest_pubkey, data.proof, data.signature)
     except ValueError as e:
-        penalize_user(db, agent, 40)            # forged/expired proof is severe
-        note_fraud(db, spec, "invalid result signature")
+        # A forged/expired signature is unforgeable-by-accident -> hard fraud: penalize,
+        # record fraud, AND freeze payouts pending review (money can't leave while we check).
+        import seller_audit
         if task.task_type == "test":
             tw = get_testworkload_by_task(db, task.id)
             if tw:
                 record_test_result(db, tw, "<invalid-signature>")
         submit_task_result(db, task, None, "failed")
+        seller_audit.freeze_for_fraud(db, spec, "invalid result signature",
+                                      seller_id=agent.id)
         raise HTTPException(status_code=401, detail=f"Invalid proof: {e}")
 
     # 2) Known-answer test workloads: compare to the expected hash, update reputation.
@@ -1836,6 +2006,19 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
             raise HTTPException(status_code=404, detail="Test record missing")
         passed = record_test_result(db, tw, data.proof["output_hash"])
         submit_task_result(db, task, None, "completed" if passed else "failed")
+        # Failing a PLATFORM audit (server-seeded, unannounced) is strong evidence the
+        # seller isn't really computing on the claimed GPU -> freeze payouts for review.
+        # (A seller's own manual self-test failing just costs reputation, not a freeze.)
+        if not passed and getattr(tw, "trigger", "manual") == "audit":
+            import seller_audit
+            seller_audit.freeze_for_fraud(db, spec, "failed platform integrity audit",
+                                          seller_id=agent.id, penalty=0)
+        # Quorum replica: record this seller's result; the cross-seller comparison (not
+        # the known answer) decides — divergence from the majority freezes the diverging
+        # seller, and a no-majority split holds everyone for review.
+        if getattr(tw, "trigger", "manual") == "quorum":
+            import quorum
+            quorum.record_submission(db, task.id, data.proof.get("output_hash"))
         return {"status": "ok", "task_id": task.id, "test_passed": passed,
                 "reputation": agent.reputation,
                 "can_accept_paid_jobs": agent.can_accept_paid_jobs}
@@ -1858,14 +2041,20 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
         note_job_failed(db, spec, "job reported failed")
     released = False
     if data.status == "completed" and task.booking_id:
-        released = release_booking(db, task.booking_id)   # pay seller + platform
+        released = release_booking(db, task.booking_id)   # pay seller + platform (legacy)
+    compute_tx_status = None
     if data.status == "completed":
         _advance_manifest(db, task, data.result or data.proof.get("output_hash"))
+        # Orchestrator bridge: a completed, signature-verified job for a Stripe-native
+        # ComputeTransaction now finalizes metering + capture + seller transfer, instead
+        # of waiting for a manual admin call. Fail-closed + idempotent (see below).
+        compute_tx_status = _auto_settle_compute_tx(db, task)
     # NOTE: a failed job is NOT auto-refunded here — failed tasks are retryable
     # (see /tasks/{id}/retry), which relies on the escrow being retained. Escrow is
     # returned by the buyer cancel path and by the reaper when a node goes dead.
     return {"status": "ok", "task_id": task.id, "task_status": task.status,
-            "output_hash": data.proof.get("output_hash"), "booking_released": released}
+            "output_hash": data.proof.get("output_hash"), "booking_released": released,
+            "compute_tx_status": compute_tx_status}
 
 
 @app.post("/dispatch_test")
@@ -2412,6 +2601,138 @@ def admin_delist_spec(spec_id: int, me=Depends(require_admin), db: Session = Dep
     return {"status": "ok", "spec_id": spec_id, "new_status": "offline"}
 
 
+# ------------------- REPORTS + PAYOUT HOLDS + BIWEEKLY PAYOUT RUN -------------------
+# Seller earnings are held for PAYOUT_HOLD_DAYS (default 14) before they can be paid, so
+# a dispute/report has a review window; matured earnings are then paid on the biweekly
+# batch run. A report can place a seller's payouts on hold beyond the window until an
+# admin clears it.
+
+class ReportSellerModel(BaseModel):
+    seller: str = Field(..., description="seller username or a GPU public_id")
+    reason: str = Field(..., min_length=3, max_length=500)
+
+
+def _resolve_seller(db, ident: str):
+    u = get_user_by_username(db, ident)
+    if u:
+        return u
+    from db import get_spec_by_public_id
+    spec = get_spec_by_public_id(db, ident)
+    return get_user_by_id(db, spec.user_id) if spec else None
+
+
+@app.post("/report/seller", tags=["marketplace"])
+def report_seller(data: ReportSellerModel, request: Request,
+                  user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Report a seller (abuse, non-delivery, bad result). It's recorded, the founder
+    inbox is notified, and — if PAYOUT_HOLD_ON_REPORT is on (default) — the seller's
+    payouts are placed on hold pending review so nothing is disbursed while we check.
+    The 14-day earnings hold already buys a review window; a report can extend it."""
+    ip = _client_ip(request) or "?"
+    if _rl_blocked(f"report:{ip}", 20, 3600):
+        return {"ok": True, "message": "Thanks — your report was received."}
+    seller = _resolve_seller(db, data.seller.strip())
+    if not seller:
+        raise HTTPException(status_code=404, detail="seller not found")
+    reporter = get_user_by_username(db, _username(user))
+    held = False
+    if os.getenv("PAYOUT_HOLD_ON_REPORT", "true").lower() == "true":
+        from db import place_payout_hold
+        place_payout_hold(db, seller.id,
+                          reason=f"reported by {reporter.username if reporter else '?'}")
+        held = True
+    audit(db, "seller.reported", actor=(reporter.username if reporter else None),
+          resource_type="user", resource_id=seller.username, ip=ip,
+          detail={"reason": data.reason[:200], "payout_held": held})
+    try:
+        _email_admins(db, f"Seller reported: {seller.username}",
+                      f"{seller.username} was reported by "
+                      f"{reporter.username if reporter else 'a user'}.\n"
+                      f"Reason: {data.reason[:300]}\nPayouts held pending review: {held}.")
+    except Exception:
+        logger.exception("failed to notify admins of seller report")
+    return {"ok": True, "payout_held": held,
+            "message": "Thanks — your report was received and is under review."}
+
+
+class PayoutHoldModel(BaseModel):
+    reason: str = Field("under review", max_length=200)
+
+
+@app.post("/admin/sellers/{username}/payout-hold", tags=["payments"])
+def admin_payout_hold(username: str, data: PayoutHoldModel,
+                      me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Hold a seller's payouts (their matured earnings stay pending, unbatched)."""
+    seller = get_user_by_username(db, username)
+    if not seller:
+        raise HTTPException(status_code=404, detail="seller not found")
+    from db import place_payout_hold
+    place_payout_hold(db, seller.id, reason=data.reason)
+    audit(db, "payout.hold", actor=me.username,
+          resource_type="user", resource_id=username, detail={"reason": data.reason[:200]})
+    return {"ok": True, "username": username, "payout_hold": True}
+
+
+@app.post("/admin/sellers/{username}/payout-release", tags=["payments"])
+def admin_payout_release(username: str, me=Depends(require_admin),
+                         db: Session = Depends(get_db)):
+    """Release a payout hold after review; matured earnings become batchable again."""
+    seller = get_user_by_username(db, username)
+    if not seller:
+        raise HTTPException(status_code=404, detail="seller not found")
+    from db import clear_payout_hold
+    clear_payout_hold(db, seller.id)
+    audit(db, "payout.release", actor=me.username,
+          resource_type="user", resource_id=username)
+    return {"ok": True, "username": username, "payout_hold": False}
+
+
+@app.post("/admin/payouts/run", tags=["payments"])
+def admin_run_payouts(me=Depends(require_admin), db: Session = Depends(get_db),
+                      min_threshold_minor: int = 0, execute: bool = True):
+    """Run the biweekly payout batch: for every seller with matured earnings (past the
+    14-day hold and not under a report hold), aggregate ALL of them into ONE payout and
+    send it. Idempotent — a re-run the same day never double-pays. Schedule this every
+    two weeks (see docs/PAYOUT_HOLD_AND_SCHEDULE.md)."""
+    import payout_routing as pr
+    batches = pr.run_scheduled_payouts(db, min_threshold_minor=min_threshold_minor,
+                                       execute=execute)
+    return {"ok": True, "count": len(batches),
+            "batches": [{"public_id": b.public_id, "seller_id": b.seller_id,
+                         "total_minor": b.total_amount_minor, "state": b.state,
+                         "rail": b.rail_type} for b in batches]}
+
+
+@app.post("/admin/audits/run", tags=["seller"])
+def admin_run_audits(me=Depends(require_admin), db: Session = Depends(get_db),
+                     difficulty: str = "easy", sample_rate: float = Query(None, ge=0, le=1)):
+    """Randomly spot-check live sellers with server-seeded known-answer challenges
+    (proof of continuous honest compute). A seller who isn't really running work on the
+    claimed GPU fails the challenge in /jobs/result — dropping reputation and, on a
+    failed audit, freezing their payouts. Schedule this periodically (cron)."""
+    import seller_audit
+    dispatched = seller_audit.run_spot_checks(db, difficulty=difficulty, sample_rate=sample_rate)
+    return {"ok": True, "dispatched": len(dispatched), "audits": dispatched}
+
+
+@app.post("/admin/quorum/run", tags=["seller"])
+def admin_run_quorum(me=Depends(require_admin), db: Session = Depends(get_db),
+                     replicas: int = Query(3, ge=2, le=10), difficulty: str = "easy"):
+    """Open a quorum check: dispatch the SAME deterministic challenge to several distinct
+    live sellers and compare their results. A seller whose result diverges from the
+    majority is frozen for fraud; a no-majority split holds all participants for review.
+    Returns the check + the replica tasks each seller must run."""
+    import quorum
+    chk = quorum.run_quorum_audit(db, replicas=replicas, difficulty=difficulty)
+    if chk is None:
+        raise HTTPException(status_code=409,
+                            detail="not enough distinct live sellers for a quorum (need >= 2)")
+    import json as _json
+    subs = _json.loads(chk.submissions or "{}")
+    return {"ok": True, "quorum_id": chk.public_id, "status": chk.status,
+            "min_agree": chk.min_agree,
+            "replicas": [{"seller_id": int(sid), "task_id": r["task_id"]}
+                         for sid, r in subs.items()]}
 
 
 # ------------------- IDLE FALLBACK (earn when unrented) -------------------
@@ -2773,6 +3094,45 @@ def request_demo(body: DemoRequestModel, request: Request, db: Session = Depends
             "reference": lead.public_id}
 
 
+@app.post("/webhooks/cal", tags=["marketing"])
+async def cal_webhook(request: Request, db: Session = Depends(get_db)):
+    """Cal.com booking webhook. When someone books a demo slot, notify the founder
+    inbox (ADMIN_USERS, e.g. info@petabyte.market) that a demo was booked — Cal
+    sends the attendee/host confirmation itself; this is our own record + alert.
+
+    Point a Cal.com webhook (trigger BOOKING_CREATED) at
+    https://petabyte.market/webhooks/cal. If CAL_WEBHOOK_SECRET is set it is
+    HMAC-verified; unset = accept (best-effort for first setup)."""
+    raw = await request.body()
+    secret = os.getenv("CAL_WEBHOOK_SECRET", "").strip()
+    if secret:
+        sig = request.headers.get("X-Cal-Signature-256", "")
+        if not verify_webhook_signature(secret, raw, sig):
+            raise HTTPException(status_code=401, detail="invalid signature")
+    try:
+        payload = json.loads(raw or b"{}")
+    except Exception:
+        payload = {}
+    trigger = str(payload.get("triggerEvent") or payload.get("event") or "").upper()
+    if "BOOKING" in trigger and "CANCEL" not in trigger and "REJECT" not in trigger:
+        p = payload.get("payload") or payload
+        atts = p.get("attendees") if isinstance(p.get("attendees"), list) else []
+        who = "Someone"
+        if atts:
+            a0 = atts[0] or {}
+            who = f"{a0.get('name', '')} <{a0.get('email', '')}>".strip() or who
+        when = p.get("startTime") or p.get("start") or ""
+        title = p.get("title") or "Demo"
+        body = f"{who} booked '{title}'" + (f" for {when}" if when else "") + "."
+        try:
+            _email_admins(db, "New demo booked", body)
+        except Exception:
+            logger.exception("failed to email admins of cal booking")
+        audit(db, "demo.booked", actor_type="system", resource_type="cal_booking",
+              resource_id=str(p.get("uid") or p.get("bookingId") or p.get("id") or "")[:64])
+    return {"ok": True}
+
+
 @app.get("/admin/demo-requests", tags=["marketing"])
 def list_demo_requests(user: dict = Depends(get_current_user),
                        db: Session = Depends(get_db)):
@@ -3059,6 +3419,61 @@ def deposit_funds(data: DepositModel, user: dict = Depends(get_current_user),
     return {"status": "ok", "balance": balance}
 
 
+class TopupModel(BaseModel):
+    amount_minor: int = Field(..., ge=1, description="amount to add, in minor units (cents)")
+
+
+@app.post("/wallet/topup", tags=["wallet"])
+def wallet_topup(data: TopupModel, request: Request,
+                 user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Add funds: open Stripe's hosted card page for a wallet top-up and return the
+    checkout URL to redirect the buyer to. Works in demo (TEST) and LIVE mode depending
+    on the configured Stripe keys; the response carries `mode`/`test_mode` so the UI can
+    badge it. The balance is credited when the payment completes (webhook)."""
+    import wallet_funding as wf
+    me = get_user_by_username(db, _username(user))
+    base = (os.getenv("PUBLIC_BASE_URL") or str(request.base_url)).rstrip("/")
+    try:
+        return wf.start_topup(db, me, amount_minor=data.amount_minor,
+                              success_url=f"{base}/account?funded=1",
+                              cancel_url=f"{base}/account?funded=0")
+    except wf.WalletError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/wallet/topup/{topup_id}", tags=["wallet"])
+def wallet_topup_status(topup_id: str, user: dict = Depends(get_current_user),
+                        db: Session = Depends(get_db)):
+    from db import WalletTopup
+    me = get_user_by_username(db, _username(user))
+    t = db.query(WalletTopup).filter(WalletTopup.public_id == topup_id,
+                                     WalletTopup.user_id == me.id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="top-up not found")
+    return {"topup_id": t.public_id, "status": t.status, "amount_minor": t.amount_minor,
+            "currency": t.currency, "mode": t.mode, "credited": t.status == "paid"}
+
+
+@app.post("/wallet/topup/{topup_id}/simulate-pay", tags=["wallet"])
+def wallet_topup_simulate(topup_id: str, user: dict = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    """SANDBOX/TEST ONLY: complete the hosted card page against the in-process fake
+    gateway and credit the wallet (offline demo / CI). 404 in real Stripe mode."""
+    import wallet_funding as wf
+    from db import WalletTopup
+    me = get_user_by_username(db, _username(user))
+    t = db.query(WalletTopup).filter(WalletTopup.public_id == topup_id,
+                                     WalletTopup.user_id == me.id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="top-up not found")
+    try:
+        wf.simulate_pay(db, t)
+    except wf.WalletError:
+        raise HTTPException(status_code=404, detail="not found")
+    db.refresh(t)
+    return {"ok": True, "status": t.status, "credited": t.status == "paid"}
+
+
 @app.post("/webhooks/payment")
 async def payment_webhook(request: Request, db: Session = Depends(get_db)):
     """Credit a buyer's balance from a verified payment event (idempotent).
@@ -3275,6 +3690,28 @@ def payments_confirm(public_id: str, user: dict = Depends(get_current_user),
     except _sc.TransactionError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return _ctx_view(db, tx, viewer=me)
+
+
+@app.post("/payments/{public_id}/simulate-card", tags=["payments"])
+def payments_simulate_card(public_id: str, user: dict = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
+    """SANDBOX/TEST ONLY — stands in for the client-side Stripe.js card confirmation
+    when running against the in-process fake gateway (offline end-to-end tests).
+    Moves the manual-capture PaymentIntent to 'requires_capture'. Returns 404 in
+    real Stripe mode, so it is inert in production (no live PI can be confirmed here)."""
+    from stripe_gateway import get_gateway, FakeStripeGateway
+    gw = get_gateway()
+    if not isinstance(gw, FakeStripeGateway):
+        raise HTTPException(status_code=404, detail="not found")
+    me = get_user_by_username(db, _username(user))
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx or tx.buyer_id != me.id:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    if not tx.stripe_payment_intent_id:
+        raise HTTPException(status_code=409, detail="no payment intent on this transaction")
+    gw.confirm_payment_intent(tx.stripe_payment_intent_id)
+    return {"ok": True, "status": "requires_capture",
+            "note": "sandbox card confirmation (fake gateway only)"}
 
 @app.get("/payments/{public_id}", tags=["payments"])
 def payments_get(public_id: str, user: dict = Depends(get_current_user),
