@@ -456,25 +456,27 @@ def record_metering(db, tx: ComputeTransaction, *, actual_seconds: int,
 
 def settle_after_result(db, tx: ComputeTransaction, *, metered_seconds: int,
                         source: str = "platform") -> str:
-    """Orchestrator bridge: after a VALID, completed job, finalize metering and drive
-    capture + seller transfer in one go.
+    """Orchestrator bridge: after a VALID, completed job, finalize metering and CAPTURE
+    the buyer's payment.
 
-    Money still moves ONLY through the same audited functions the admin endpoints use
-    (record_metering -> capture -> transfer_to_seller); this just chains them on job
-    completion instead of requiring a manual admin call. Every step is guarded by the
-    FSM and is idempotent, so a re-run, a concurrent admin action, or a duplicate
-    result never double-charges or double-pays. Best-effort: if a step can't proceed
-    (e.g. seller not payout-ready), it stops and leaves the tx in a repairable state
-    (the seller payable is retained) for the admin/reconcile path. Returns the final
-    tx status."""
+    The seller is NOT paid here. Capture records the seller's net as a HELD payout
+    obligation (risk hold = PAYOUT_HOLD_DAYS, default 14 days) so a dispute/report can
+    be reviewed first; the held earnings are then paid on the biweekly batch run
+    (payout_routing.run_scheduled_payouts) once the hold elapses. This is the
+    "charge the buyer now, pay the seller on a schedule" model — the tx's terminal
+    buyer-side state is PAYMENT_CAPTURED; the seller payout is tracked by the obligation
+    lifecycle (accrued -> available -> batched -> paid).
+
+    Money moves ONLY through the same audited functions the admin endpoints use
+    (record_metering -> capture). Every step is FSM-guarded and idempotent, so a re-run,
+    a concurrent admin action, or a duplicate result never double-charges. Best-effort.
+    Returns the final tx status."""
     secs = max(1, int(metered_seconds))
     try:
         if tx.status in ("RUNNING", "DISPATCHING"):
             record_metering(db, tx, actual_seconds=secs, source=source)
         if tx.status in ("METERING_FINALIZED", "CAPTURE_FAILED", "JOB_FAILED"):
-            capture(db, tx)
-        if tx.status in ("PAYMENT_CAPTURED", "TRANSFER_FAILED"):
-            transfer_to_seller(db, tx)
+            capture(db, tx)     # creates the HELD payout obligation; does not transfer
     except TransactionError as e:
         logger.warning("auto-settle halted for tx %s at status=%s: %s",
                        tx.public_id, tx.status, e)
@@ -565,8 +567,17 @@ def _ensure_payout_obligation(db, tx: ComputeTransaction):
     import db as _dbm
     acct = db.query(_dbm.ConnectedAccount).filter(
         _dbm.ConnectedAccount.user_id == tx.seller_id).first()
-    hold_until = (_now() + timedelta(hours=PAYOUT_COOLING_OFF_H)
-                  if PAYOUT_COOLING_OFF_H > 0 else None)
+    # Earnings risk hold: seller net is withheld for PAYOUT_HOLD_DAYS (default 14) so a
+    # dispute/report can be reviewed before the money leaves. Take the MAX of the earnings
+    # hold and any newly-added-destination cooling-off. 0 days disables the earnings hold.
+    hold_days = int(os.getenv("PAYOUT_HOLD_DAYS", "14"))
+    hold = None
+    if hold_days > 0:
+        hold = _now() + timedelta(days=hold_days)
+    if PAYOUT_COOLING_OFF_H > 0:
+        cool = _now() + timedelta(hours=PAYOUT_COOLING_OFF_H)
+        hold = cool if hold is None else max(hold, cool)
+    hold_until = hold
     return _dbm.create_payout_obligation(
         db, seller_id=tx.seller_id, compute_tx_id=tx.id, currency=tx.currency,
         net_amount_minor=tx.seller_net_amount, commission_minor=tx.platform_fee_amount,

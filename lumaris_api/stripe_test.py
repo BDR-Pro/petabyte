@@ -660,24 +660,58 @@ s = dbmod.SessionLocal()
 txb = sc.get_tx_by_public_id(s, brid)
 ok("bridge: tx is RUNNING before settle", txb.status == "RUNNING")
 st = sc.settle_after_result(s, txb, metered_seconds=1800)   # 30 min @ 2.50/h -> 125
-ok("bridge: settle_after_result drives RUNNING -> COMPLETED", st == "COMPLETED")
-s.close()
-s = dbmod.SessionLocal(); txb = sc.get_tx_by_public_id(s, brid)
+# The buyer is charged now; the seller's net is HELD (not transferred immediately).
+ok("bridge: settle captures the buyer -> PAYMENT_CAPTURED", st == "PAYMENT_CAPTURED")
+s.close(); s = dbmod.SessionLocal(); txb = sc.get_tx_by_public_id(s, brid)
 ok("bridge: captured the ACTUAL metered usage (125)", txb.captured_amount == 125)
 ok("bridge: platform fee + seller net == captured",
    txb.platform_fee_amount + txb.seller_net_amount == txb.captured_amount)
-ok("bridge: seller was transferred their net",
-   bool(txb.stripe_transfer_id) and txb.transferred_amount == txb.seller_net_amount)
-# idempotent: re-running settle must NOT double-capture or double-transfer
-cap0, tr0 = txb.captured_amount, txb.stripe_transfer_id
+ok("bridge: seller NOT transferred immediately (held for the biweekly batch)",
+   not txb.stripe_transfer_id and txb.transferred_amount == 0)
+obl = s.query(dbmod.PayoutObligation).filter(
+    dbmod.PayoutObligation.compute_tx_id == txb.id).first()
+ok("bridge: a HELD payout obligation was created (accrued, risk hold set)",
+   obl is not None and obl.state == "accrued" and obl.risk_hold_until is not None
+   and obl.net_amount_minor == txb.seller_net_amount)
+# idempotent: re-running settle must NOT double-capture
+cap0 = txb.captured_amount
 st2 = sc.settle_after_result(s, txb, metered_seconds=1800)
 s.close(); s = dbmod.SessionLocal(); txb = sc.get_tx_by_public_id(s, brid)
-ok("bridge: re-running settle is idempotent (no double capture/transfer)",
-   st2 == "COMPLETED" and txb.captured_amount == cap0 and txb.stripe_transfer_id == tr0)
+ok("bridge: re-running settle is idempotent (no double capture)",
+   st2 == "PAYMENT_CAPTURED" and txb.captured_amount == cap0)
+sid_a = dbmod.get_user_by_username(s, "seller_a").id
 s.close()
 
-# fail-closed at the source: a non-payout-ready seller can't even start a paid tx,
-# so money never begins to flow (nothing to settle/transfer).
+# 14-day hold: not batchable before it elapses; batchable after.
+s = dbmod.SessionLocal()
+before = dbmod.available_obligations(s, sid_a, "usd", mode=dbmod.payments_mode())
+ok("hold: earnings are NOT available before the risk hold elapses",
+   all(o.compute_tx_id != txb.id for o in before))
+s.query(dbmod.PayoutObligation).filter(dbmod.PayoutObligation.compute_tx_id == txb.id)\
+    .update({dbmod.PayoutObligation.available_at: dbmod._utcnow() - dbmod.timedelta(seconds=1)})
+s.commit()
+after = dbmod.available_obligations(s, sid_a, "usd", mode=dbmod.payments_mode())
+ok("hold: earnings become available once the hold elapses (auto-promote)",
+   any(o.compute_tx_id == txb.id for o in after))
+
+# report hold: a seller under review is NOT promoted even past the hold.
+brid2 = _run_to_running(make_online_spec("seller_a", price=2.50, units=5))
+s2 = dbmod.SessionLocal(); tx2 = sc.get_tx_by_public_id(s2, brid2)
+sc.settle_after_result(s2, tx2, metered_seconds=1800)
+s2.query(dbmod.PayoutObligation).filter(dbmod.PayoutObligation.compute_tx_id == tx2.id)\
+    .update({dbmod.PayoutObligation.available_at: dbmod._utcnow() - dbmod.timedelta(seconds=1)})
+s2.commit()
+dbmod.place_payout_hold(s2, sid_a, reason="test report")
+avail_held = dbmod.available_obligations(s2, sid_a, "usd", mode=dbmod.payments_mode())
+ok("report hold: matured earnings are withheld while the seller is under review",
+   all(o.compute_tx_id != tx2.id for o in avail_held))
+dbmod.clear_payout_hold(s2, sid_a)
+avail_cleared = dbmod.available_obligations(s2, sid_a, "usd", mode=dbmod.payments_mode())
+ok("report hold: releasing it makes the earnings batchable again",
+   any(o.compute_tx_id == tx2.id for o in avail_cleared))
+s2.close(); s.close()
+
+# fail-closed at the source: a non-payout-ready seller can't even start a paid tx.
 onboard_seller("seller_b", ok_=False)                 # seller_b never completes onboarding
 spec_nr = make_online_spec("seller_b", price=2.50, units=2)
 nr = c.post("/payments/authorize", headers=login("buyer1"),

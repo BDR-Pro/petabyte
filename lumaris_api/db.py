@@ -1123,10 +1123,61 @@ def create_payout_obligation(db: Session, *, seller_id: int, compute_tx_id: int,
     return obl
 
 
+# A seller under one of these risk decisions has their payouts HELD: matured earnings
+# do not become batchable until an admin clears the review. (Separate from the sanctions
+# gate in payout_routing.compliance_ok.)
+_PAYOUT_HOLD_DECISIONS = ("UNDER_REVIEW", "RESTRICTED", "INFORMATION_REQUIRED")
+
+
+def payout_hold_active(db: Session, seller_id: int) -> bool:
+    """True if the seller's LATEST 'risk' compliance decision is an active hold (e.g. an
+    open report under review). While held, their earnings stay 'accrued' past the risk
+    hold and are never batched — the money waits until an admin releases it."""
+    d = (db.query(ComplianceDecision)
+         .filter(ComplianceDecision.seller_id == seller_id,
+                 ComplianceDecision.screening_type == "risk")
+         .order_by(ComplianceDecision.id.desc()).first())
+    return bool(d and d.decision in _PAYOUT_HOLD_DECISIONS)
+
+
+def _held_seller_ids(db: Session) -> set:
+    """Sellers whose LATEST 'risk' decision is an active payout hold."""
+    rows = (db.query(ComplianceDecision.seller_id, ComplianceDecision.decision)
+            .filter(ComplianceDecision.screening_type == "risk")
+            .order_by(ComplianceDecision.seller_id, ComplianceDecision.id.desc()).all())
+    latest, held = set(), set()
+    for sid, dec in rows:
+        if sid in latest:
+            continue
+        latest.add(sid)
+        if dec in _PAYOUT_HOLD_DECISIONS:
+            held.add(sid)
+    return held
+
+
+def place_payout_hold(db: Session, seller_id: int, reason: str = "under review"):
+    """Put a seller's payouts on hold pending review (e.g. after a report). Recorded as a
+    'risk' ComplianceDecision so it sits in the same audited decision log."""
+    d = ComplianceDecision(seller_id=seller_id, screening_type="risk",
+                           decision="UNDER_REVIEW", reference=(reason or "")[:200])
+    db.add(d); db.commit(); db.refresh(d)
+    return d
+
+
+def clear_payout_hold(db: Session, seller_id: int, note: str = "cleared"):
+    """Release a payout hold after review; matured earnings become batchable again."""
+    d = ComplianceDecision(seller_id=seller_id, screening_type="risk",
+                           decision="APPROVED", reference=(note or "")[:200])
+    db.add(d); db.commit(); db.refresh(d)
+    return d
+
+
 def promote_due_obligations(db: Session, seller_id: int = None) -> int:
     """Move accrued obligations whose risk hold has elapsed (available_at <= now) to
     'available' so they become batchable automatically. Returns the count promoted.
-    Idempotent; safe to call on every read or from a scheduler."""
+    Sellers under an active payout hold (open report/review) are SKIPPED — their money
+    stays held past the risk window until an admin clears it. Idempotent; safe to call
+    on every read or from a scheduler."""
     q = (update(PayoutObligation)
          .where(PayoutObligation.state == "accrued",
                 PayoutObligation.batch_id.is_(None),
@@ -1134,7 +1185,13 @@ def promote_due_obligations(db: Session, seller_id: int = None) -> int:
                 PayoutObligation.available_at <= _utcnow())
          .values(state="available"))
     if seller_id is not None:
+        if payout_hold_active(db, seller_id):
+            return 0
         q = q.where(PayoutObligation.seller_id == seller_id)
+    else:
+        held = _held_seller_ids(db)
+        if held:
+            q = q.where(PayoutObligation.seller_id.notin_(held))
     res = db.execute(q)
     db.commit()
     return res.rowcount or 0

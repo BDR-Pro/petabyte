@@ -550,6 +550,49 @@ ok("exactly one Stripe transfer is created for the owned obligation",
         if t.get("metadata", {}).get("petabyte_tx") == _txok.public_id]) == 1)
 s.close()
 
+# ---------------- biweekly payout run: 14-day hold + report hold ----------------
+sid_bw = mk_seller("payout_biweekly", "US"); approve_sanctions(sid_bw)
+# two earnings, still WITHIN the 14-day risk hold (available_at in the future) -> accrued
+s = dbmod.SessionLocal()
+future = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=14)
+for net in (400, 350):
+    s.add(dbmod.PayoutObligation(seller_id=sid_bw, currency="usd", gross_amount_minor=net,
+        net_amount_minor=net, country="US", state="accrued",
+        risk_hold_until=future, available_at=future))
+s.commit(); s.close()
+
+
+def _my_batches(batches, sid):
+    return [b for b in batches if b.seller_id == sid]
+
+
+s = dbmod.SessionLocal()
+ok("biweekly: earnings inside the 14-day hold are NOT paid",
+   len(_my_batches(routing.run_scheduled_payouts(s), sid_bw)) == 0)
+ok("biweekly: held earnings show as pending (in risk hold)",
+   routing.seller_balances(s, sid_bw)["pending_minor"] == 750)
+
+# the hold elapses -> mature the earnings
+past = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=1)
+s.query(dbmod.PayoutObligation).filter(dbmod.PayoutObligation.seller_id == sid_bw)\
+    .update({dbmod.PayoutObligation.available_at: past})
+s.commit()
+
+# a report puts the seller under review -> even matured earnings are withheld
+dbmod.place_payout_hold(s, sid_bw, reason="reported")
+ok("biweekly: a reported seller is NOT paid even after the hold elapses",
+   len(_my_batches(routing.run_scheduled_payouts(s), sid_bw)) == 0)
+
+# review clears -> the biweekly run pays the ACCUMULATED total in ONE payout
+dbmod.clear_payout_hold(s, sid_bw)
+paid_batches = _my_batches(routing.run_scheduled_payouts(s), sid_bw)
+ok("biweekly: after review clears, ONE batch pays the accumulated 14-day total (750)",
+   len(paid_batches) == 1 and paid_batches[0].total_amount_minor == 750
+   and paid_batches[0].state == "paid")
+ok("biweekly: re-running the same day does not double-pay",
+   len(_my_batches(routing.run_scheduled_payouts(s), sid_bw)) == 0)
+s.close()
+
 # restore the real loader
 cap.load_dataset = _orig_load
 

@@ -2585,6 +2585,106 @@ def admin_delist_spec(spec_id: int, me=Depends(require_admin), db: Session = Dep
     return {"status": "ok", "spec_id": spec_id, "new_status": "offline"}
 
 
+# ------------------- REPORTS + PAYOUT HOLDS + BIWEEKLY PAYOUT RUN -------------------
+# Seller earnings are held for PAYOUT_HOLD_DAYS (default 14) before they can be paid, so
+# a dispute/report has a review window; matured earnings are then paid on the biweekly
+# batch run. A report can place a seller's payouts on hold beyond the window until an
+# admin clears it.
+
+class ReportSellerModel(BaseModel):
+    seller: str = Field(..., description="seller username or a GPU public_id")
+    reason: str = Field(..., min_length=3, max_length=500)
+
+
+def _resolve_seller(db, ident: str):
+    u = get_user_by_username(db, ident)
+    if u:
+        return u
+    from db import get_spec_by_public_id
+    spec = get_spec_by_public_id(db, ident)
+    return get_user_by_id(db, spec.user_id) if spec else None
+
+
+@app.post("/report/seller", tags=["marketplace"])
+def report_seller(data: ReportSellerModel, request: Request,
+                  user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Report a seller (abuse, non-delivery, bad result). It's recorded, the founder
+    inbox is notified, and — if PAYOUT_HOLD_ON_REPORT is on (default) — the seller's
+    payouts are placed on hold pending review so nothing is disbursed while we check.
+    The 14-day earnings hold already buys a review window; a report can extend it."""
+    ip = _client_ip(request) or "?"
+    if _rl_blocked(f"report:{ip}", 20, 3600):
+        return {"ok": True, "message": "Thanks — your report was received."}
+    seller = _resolve_seller(db, data.seller.strip())
+    if not seller:
+        raise HTTPException(status_code=404, detail="seller not found")
+    reporter = get_user_by_username(db, _username(user))
+    held = False
+    if os.getenv("PAYOUT_HOLD_ON_REPORT", "true").lower() == "true":
+        from db import place_payout_hold
+        place_payout_hold(db, seller.id,
+                          reason=f"reported by {reporter.username if reporter else '?'}")
+        held = True
+    audit(db, "seller.reported", actor=(reporter.username if reporter else None),
+          resource_type="user", resource_id=seller.username, ip=ip,
+          detail={"reason": data.reason[:200], "payout_held": held})
+    try:
+        _email_admins(db, f"Seller reported: {seller.username}",
+                      f"{seller.username} was reported by "
+                      f"{reporter.username if reporter else 'a user'}.\n"
+                      f"Reason: {data.reason[:300]}\nPayouts held pending review: {held}.")
+    except Exception:
+        logger.exception("failed to notify admins of seller report")
+    return {"ok": True, "payout_held": held,
+            "message": "Thanks — your report was received and is under review."}
+
+
+class PayoutHoldModel(BaseModel):
+    reason: str = Field("under review", max_length=200)
+
+
+@app.post("/admin/sellers/{username}/payout-hold", tags=["payments"])
+def admin_payout_hold(username: str, data: PayoutHoldModel,
+                      me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Hold a seller's payouts (their matured earnings stay pending, unbatched)."""
+    seller = get_user_by_username(db, username)
+    if not seller:
+        raise HTTPException(status_code=404, detail="seller not found")
+    from db import place_payout_hold
+    place_payout_hold(db, seller.id, reason=data.reason)
+    audit(db, "payout.hold", actor=me.username,
+          resource_type="user", resource_id=username, detail={"reason": data.reason[:200]})
+    return {"ok": True, "username": username, "payout_hold": True}
+
+
+@app.post("/admin/sellers/{username}/payout-release", tags=["payments"])
+def admin_payout_release(username: str, me=Depends(require_admin),
+                         db: Session = Depends(get_db)):
+    """Release a payout hold after review; matured earnings become batchable again."""
+    seller = get_user_by_username(db, username)
+    if not seller:
+        raise HTTPException(status_code=404, detail="seller not found")
+    from db import clear_payout_hold
+    clear_payout_hold(db, seller.id)
+    audit(db, "payout.release", actor=me.username,
+          resource_type="user", resource_id=username)
+    return {"ok": True, "username": username, "payout_hold": False}
+
+
+@app.post("/admin/payouts/run", tags=["payments"])
+def admin_run_payouts(me=Depends(require_admin), db: Session = Depends(get_db),
+                      min_threshold_minor: int = 0, execute: bool = True):
+    """Run the biweekly payout batch: for every seller with matured earnings (past the
+    14-day hold and not under a report hold), aggregate ALL of them into ONE payout and
+    send it. Idempotent — a re-run the same day never double-pays. Schedule this every
+    two weeks (see docs/PAYOUT_HOLD_AND_SCHEDULE.md)."""
+    import payout_routing as pr
+    batches = pr.run_scheduled_payouts(db, min_threshold_minor=min_threshold_minor,
+                                       execute=execute)
+    return {"ok": True, "count": len(batches),
+            "batches": [{"public_id": b.public_id, "seller_id": b.seller_id,
+                         "total_minor": b.total_amount_minor, "state": b.state,
+                         "rail": b.rail_type} for b in batches]}
 
 
 # ------------------- IDLE FALLBACK (earn when unrented) -------------------

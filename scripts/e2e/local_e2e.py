@@ -270,29 +270,41 @@ def main():
                     rr = expect("seller submit paid result", c.post(f"{BASE}/jobs/result", headers=SK,
                         json={"task_id": j2["task_id"], "status": "completed",
                               "result": "ok", **signed_proof("sha256:deadbeef")}))
-                    # ORCHESTRATOR BRIDGE: completing the job should auto-settle the tx
-                    # (meter -> capture -> transfer) with NO admin call.
+                    # ORCHESTRATOR BRIDGE: completing the job auto-captures the buyer,
+                    # but the seller's net is HELD (14-day risk hold) for the biweekly
+                    # batch — NOT transferred immediately.
                     auto = rr.json().get("compute_tx_status")
                     trace(f"auto-settle compute_tx_status = {auto}")
-                    if auto not in ("PAYMENT_CAPTURED", "SELLER_TRANSFERRED", "COMPLETED"):
-                        bug(f"job completed but tx did NOT auto-settle (status={auto})")
+                    if auto != "PAYMENT_CAPTURED":
+                        bug(f"job completed but tx not captured (status={auto})")
                 else:
                     bug("seller got NO job from /jobs/next after a paid dispatch "
                         "(paid dispatch not visible to the node?)")
 
-            # -------- ADMIN: settle (meter -> capture -> transfer) --------
-            print("\n== admin settles the transaction ==")
+            # -------- HOLD + BIWEEKLY PAYOUT + REPORT --------
+            print("\n== buyer charged; seller payout HELD for the biweekly batch ==")
             if tx_id:
                 AT = {"Authorization": f"Bearer {admin_t}"}
-                expect("admin meter", c.post(f"{BASE}/admin/payments/{tx_id}/meter", headers=AT,
-                       json={"actual_seconds": 57, "source": "agent"}), (200, 409))
-                expect("admin capture", c.post(f"{BASE}/admin/payments/{tx_id}/capture",
-                       headers=AT), (200, 409))
-                expect("admin transfer", c.post(f"{BASE}/admin/payments/{tx_id}/transfer",
-                       headers=AT), (200, 409))
-                rc = expect("buyer receipt", c.get(f"{BASE}/payments/{tx_id}/receipt", headers=BT))
+                rc = expect("buyer receipt (paid)", c.get(f"{BASE}/payments/{tx_id}/receipt", headers=BT)).json()
+                if not rc.get("is_completed_payment"):
+                    bug("buyer receipt does not show a completed payment after capture")
                 pv = expect("final tx view", c.get(f"{BASE}/payments/{tx_id}", headers=BT)).json()
-                trace(f"final tx status = {pv.get('status')}")
+                trace(f"tx status = {pv.get('status')} (buyer charged; seller payout on hold)")
+                if pv.get("status") in ("SELLER_TRANSFERRED", "COMPLETED"):
+                    bug("seller was transferred immediately — payout should be HELD, not paid")
+                # biweekly run now: earnings are still inside the 14-day hold -> nothing paid
+                run1 = expect("admin run biweekly payouts (inside hold)", c.post(
+                    f"{BASE}/admin/payouts/run", headers=AT)).json()
+                trace(f"biweekly run inside hold -> {run1.get('count')} batch(es) "
+                      "(0 expected: still held / honest rail coverage)")
+                # a buyer can report the seller -> payouts placed on hold for review
+                rep = expect("buyer reports the seller", c.post(f"{BASE}/report/seller", headers=BT,
+                             json={"seller": "seller1", "reason": "result looked wrong"})).json()
+                if not rep.get("payout_held"):
+                    bug("reporting a seller did not place their payouts on hold")
+                # admin can release after checking
+                expect("admin releases the payout hold", c.post(
+                    f"{BASE}/admin/sellers/seller1/payout-release", headers=AT))
 
         # ---- summary ----
         print("\n================= SUMMARY =================")

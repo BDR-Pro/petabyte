@@ -69,10 +69,16 @@ Each of these was hit by actually running the flow, not by reading code.
      capture/transfer is a safe no-op);
    - **opt-out** via `AUTO_SETTLE_ON_RESULT=false` (settlement stays admin-driven).
    Metering uses platform-observed wall-clock (server-side), capped by the pricing
-   snapshot's max duration. Covered by `stripe_test.py` (7 bridge assertions) and
-   the local E2E now shows `compute_tx_status: COMPLETED` straight off the result.
+   snapshot's max duration.
+   **Update — payout hold + biweekly batch:** the bridge now stops at
+   `PAYMENT_CAPTURED` (buyer charged) and the seller's net is **held for 14 days**
+   (`PAYOUT_HOLD_DAYS`) rather than transferred immediately; matured earnings are paid
+   in one aggregated payout on the biweekly run (`scripts/run_biweekly_payouts.py` /
+   `POST /admin/payouts/run`), and a report can hold a seller's payouts pending review.
+   See `docs/PAYOUT_HOLD_AND_SCHEDULE.md`. So the local E2E now shows
+   `compute_tx_status: PAYMENT_CAPTURED` (seller payout held), not an immediate transfer.
    (The `pytorch-matmul-v1` numeric validator in `lumaris_api/matmul_validation.py`
-   is the gate that must be wired before matmul jobs can auto-pay.)
+   is still the gate that must be wired before matmul jobs can auto-settle.)
 
 4. **Stripe ≥15 webhook event shape.** The fake gateway verifies webhooks with the
    *real* verifier, and stripe 15.x requires a top-level `object: "event"` field or
