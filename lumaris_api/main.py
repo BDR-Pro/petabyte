@@ -3435,6 +3435,28 @@ def payments_confirm(public_id: str, user: dict = Depends(get_current_user),
         raise HTTPException(status_code=409, detail=str(e))
     return _ctx_view(db, tx, viewer=me)
 
+
+@app.post("/payments/{public_id}/simulate-card", tags=["payments"])
+def payments_simulate_card(public_id: str, user: dict = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
+    """SANDBOX/TEST ONLY — stands in for the client-side Stripe.js card confirmation
+    when running against the in-process fake gateway (offline end-to-end tests).
+    Moves the manual-capture PaymentIntent to 'requires_capture'. Returns 404 in
+    real Stripe mode, so it is inert in production (no live PI can be confirmed here)."""
+    from stripe_gateway import get_gateway, FakeStripeGateway
+    gw = get_gateway()
+    if not isinstance(gw, FakeStripeGateway):
+        raise HTTPException(status_code=404, detail="not found")
+    me = get_user_by_username(db, _username(user))
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx or tx.buyer_id != me.id:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    if not tx.stripe_payment_intent_id:
+        raise HTTPException(status_code=409, detail="no payment intent on this transaction")
+    gw.confirm_payment_intent(tx.stripe_payment_intent_id)
+    return {"ok": True, "status": "requires_capture",
+            "note": "sandbox card confirmation (fake gateway only)"}
+
 @app.get("/payments/{public_id}", tags=["payments"])
 def payments_get(public_id: str, user: dict = Depends(get_current_user),
                  db: Session = Depends(get_db)):

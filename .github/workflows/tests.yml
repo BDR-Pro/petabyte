@@ -220,6 +220,20 @@ jobs:
           MAILGUN_DOMAIN: petabyte.market
         run: python email_integration_test.py
 
+  local-e2e:
+    # Runs the whole platform locally (uvicorn + SQLite + fake Stripe gateway) and
+    # drives a full buyer→seller→settlement flow through it end-to-end: seller
+    # onboarding + Ed25519-signed results, the payment FSM, job dispatch/claim, and
+    # capture + seller transfer. No GPU and no real Stripe — proves the wiring.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r lumaris_api/requirements.txt
+      - name: local buyer→seller→settlement E2E (offline full flow)
+        run: python scripts/e2e/local_e2e.py
+
   payout-coverage:
     # Honest seller-payout country coverage. The script EXITS NON-ZERO until we reach
     # 100 genuinely verified + implemented + approved + active countries. Today that is
