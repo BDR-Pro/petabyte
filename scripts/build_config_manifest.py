@@ -29,6 +29,11 @@ SECRET_EXACT = {
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "GATEWAY_TOKEN", "CAL_WEBHOOK_SECRET",
     "SENTRY_DSN", "TEE_TRUSTED_ROOT", "PETABYTE_API_KEY", "PETABYTE_AGENT_KEY",
     "DEPLOY_SSH_KEY", "DROPLET_HOST", "DROPLET_USER",
+    # observability credentials
+    "OTEL_EXPORTER_OTLP_HEADERS", "REDIS_URL", "PROMETHEUS_METRICS_TOKEN",
+    "GRAFANA_SERVICE_ACCOUNT_TOKEN", "PROMETHEUS_REMOTE_WRITE_PASSWORD",
+    "PROMETHEUS_REMOTE_WRITE_USERNAME", "LOKI_USERNAME", "LOKI_PASSWORD",
+    "TEMPO_USERNAME", "TEMPO_PASSWORD",
 }
 # Public-looking values that are NOT secrets even though the name matches the heuristic.
 NON_SECRET_EXACT = {"WG_PUBLIC_KEY", "GOOGLE_REDIRECT_URI", "STRIPE_API_VERSION",
@@ -188,6 +193,86 @@ CURATED = {
     "NEWSLETTER_REPLY_TO": {"format": "email_or_empty",
                             "description": "Reply-To for campaigns; a Mailgun Route forwards replies "
                                            "here (e.g. info@petabyte.market)."},
+    # --- Observability (telemetry is degrade-safe; never blocks payments or jobs) ---
+    "OBSERVABILITY_ENABLED": {"allowed": ["true", "false"], "format": "bool",
+                              "description": "Master switch for telemetry (logs/metrics/traces)."},
+    "OBSERVABILITY_FAILURE_MODE": {"allowed": ["degrade", "strict"],
+                                   "description": "On export failure: 'degrade' keeps serving; 'strict' raises.",
+                                   "prod_notes": "Keep 'degrade' — telemetry must never block payments/jobs."},
+    "OBSERVABILITY_EXPORT_TIMEOUT_SECONDS": {"format": "int",
+                                             "description": "OTLP export timeout (bounded)."},
+    "OBSERVABILITY_QUEUE_SIZE": {"format": "int", "description": "Bounded OTLP export queue size."},
+    "OBSERVABILITY_BATCH_SIZE": {"format": "int", "description": "OTLP export batch size."},
+    "LOG_FORMAT": {"allowed": ["json", "text"], "description": "Log format — json in all deployments."},
+    "LOG_REDACTION_ENABLED": {"allowed": ["true", "false"], "format": "bool",
+                              "description": "Redact secrets/PII from logs. MUST be true in prod.",
+                              "prod_notes": "Never disable in production."},
+    "OTEL_ENABLED": {"allowed": ["true", "false"], "format": "bool",
+                     "description": "Enable OpenTelemetry tracing export."},
+    "OTEL_SERVICE_NAMESPACE": {"description": "OTel service.namespace (petabyte)."},
+    "OTEL_SERVICE_NAME": {"description": "OTel service.name for the API (petabyte-api)."},
+    "OTEL_EXPORTER_OTLP_PROTOCOL": {"allowed": ["grpc", "http", "http/protobuf"],
+                                    "description": "OTLP transport to the Collector."},
+    "OTEL_EXPORTER_OTLP_ENDPOINT": {"format": "url_or_empty",
+                                    "description": "OTLP endpoint of the OpenTelemetry Collector "
+                                                   "(e.g. http://<obs>:4317). Blank -> tracing no-ops."},
+    "OTEL_TRACE_SAMPLE_RATIO": {"format": "float",
+                                "description": "Trace sample ratio (1.0 in test/pilot/investor demo)."},
+    "OTEL_METRICS_ENABLED": {"allowed": ["true", "false"], "format": "bool"},
+    "OTEL_LOGS_ENABLED": {"allowed": ["true", "false"], "format": "bool"},
+    "PROMETHEUS_ENABLED": {"allowed": ["true", "false"], "format": "bool"},
+    "PROMETHEUS_METRICS_PATH": {"description": "Protected Prometheus scrape path (default /internal/metrics)."},
+    "LOKI_ENABLED": {"allowed": ["true", "false"], "format": "bool"},
+    "TEMPO_ENABLED": {"allowed": ["true", "false"], "format": "bool"},
+    "GRAFANA_ENABLED": {"allowed": ["true", "false"], "format": "bool"},
+    "GPU_METRICS_ENABLED": {"allowed": ["true", "false"], "format": "bool", "scope": ["gpu"],
+                            "description": "Collect GPU metrics on the seller node (DCGM/NVML)."},
+    "AGENT_TELEMETRY_ENABLED": {"allowed": ["true", "false"], "format": "bool", "scope": ["gpu"],
+                                "description": "Seller-agent telemetry export (degrade-safe if obs down)."},
+    "PETABYTE_HOST_ROLE": {"description": "OTel resource attribute petabyte.host_role (e.g. api, worker)."},
+    "SENTRY_ENABLED": {"allowed": ["true", "false"], "format": "bool",
+                       "description": "Enable Sentry (needs SENTRY_DSN)."},
+    "SENTRY_TRACES_SAMPLE_RATE": {"format": "float"},
+    "SENTRY_PROFILES_SAMPLE_RATE": {"format": "float"},
+    "SENTRY_MAX_BREADCRUMBS": {"format": "int"},
+    "REDIS_NAMESPACE": {"description": "Key namespace prefix for Redis (petabyte)."},
+    "REDIS_ENABLED": {"allowed": ["true", "false"], "format": "bool",
+                      "description": "Use Redis for rate-limit/idempotency/lock coordination "
+                                     "(degrades to in-process when off/unavailable). Never the ledger."},
+}
+
+# Observability tooling config that GitHub holds but the API does not read at runtime
+# (used by the deploy, the Grafana provisioning, and the smoke test). Documented so the
+# operator has the full list. Secrets never carry a default.
+OBSERVABILITY_EXTRA = {
+    "OBSERVABILITY_SERVER_HOST": {"default": None, "scope": ["observability"],
+                                  "description": "Observability server host (private IP/DNS)."},
+    "PROMETHEUS_URL": {"default": None, "scope": ["observability"], "secret": False,
+                       "format": "url", "description": "Prometheus base URL (Grafana + smoke test)."},
+    "GRAFANA_URL": {"default": None, "scope": ["observability"], "secret": False,
+                    "format": "url", "description": "Grafana base URL."},
+    "LOKI_URL": {"default": None, "scope": ["observability"], "secret": False,
+                 "format": "url", "description": "Loki base URL."},
+    "TEMPO_URL": {"default": None, "scope": ["observability"], "secret": False,
+                  "format": "url", "description": "Tempo base URL."},
+    "SENTRY_ENVIRONMENT": {"default": None, "scope": ["observability"], "secret": False,
+                           "description": "Sentry environment label (defaults to ENVIRONMENT)."},
+    "OBSERVABILITY_REQUIRED": {"default": "false", "scope": ["observability"], "secret": False,
+                               "description": "Preflight control: when true the deploy FAILS if "
+                                              "observability is off/unconfigured (default true in "
+                                              "production, false elsewhere)."},
+    # tooling credentials — secrets, no defaults, not asserted required (depends on the
+    # actual auth config of the prepared observability server).
+    "PROMETHEUS_REMOTE_WRITE_USERNAME": {"secret": True, "scope": ["observability"],
+                                         "description": "Prometheus remote-write basic-auth user."},
+    "PROMETHEUS_REMOTE_WRITE_PASSWORD": {"secret": True, "scope": ["observability"],
+                                         "description": "Prometheus remote-write basic-auth password."},
+    "LOKI_USERNAME": {"secret": True, "scope": ["observability"], "description": "Loki push auth user."},
+    "LOKI_PASSWORD": {"secret": True, "scope": ["observability"], "description": "Loki push auth password."},
+    "TEMPO_USERNAME": {"secret": True, "scope": ["observability"], "description": "Tempo push auth user."},
+    "TEMPO_PASSWORD": {"secret": True, "scope": ["observability"], "description": "Tempo push auth password."},
+    "GRAFANA_SERVICE_ACCOUNT_TOKEN": {"secret": True, "scope": ["observability"],
+                                      "description": "Grafana service-account token (provisioning/smoke)."},
 }
 
 # Optional observability toggles the deployment layer standardizes on. Consumed by the
@@ -259,6 +344,13 @@ def build_doc() -> dict:
         add(name, required=m.get("required", False), default=m.get("default"),
             scope=m.get("scope", ["gpu"]), secret=sec, description=m.get("description", ""),
             fmt=m.get("format"))
+
+    # observability tooling config (URLs + tooling credentials) not read by the API itself
+    for name, m in OBSERVABILITY_EXTRA.items():
+        sec = m.get("secret", is_secret(name))
+        add(name, required=m.get("required", False), default=m.get("default"),
+            scope=m.get("scope", ["observability"]), secret=sec,
+            description=m.get("description", ""), fmt=m.get("format"))
 
     # reserved observability/gpu toggles (variables)
     for name, (default, allowed, desc) in RESERVED_VARS.items():

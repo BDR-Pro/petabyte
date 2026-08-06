@@ -39,9 +39,13 @@ GEOIP_DB=   # optional:
 GEOIP_STUB=true   # optional: GeoIP stub.
 GOOGLE_OAUTH_STUB=false   # optional: Google sign-in stub — MUST be false in production.
 GOOGLE_REDIRECT_URI=https://petabyte.market/auth/google/callback   # optional: Google OAuth redirect URI.
+GRAFANA_ENABLED=true   # optional: 
 HEARTBEAT_TIMEOUT_S=60   # optional: Seconds before a silent node is reaped.
 LEGACY_KEYS_FULL_ACCESS=false   # optional: Legacy scopeless-key escape hatch — MUST be false in production.
+LOG_FORMAT=json   # optional: Log format — json in all deployments.
 LOG_LEVEL=info   # optional: Log verbosity.
+LOG_REDACTION_ENABLED=true   # optional: Redact secrets/PII from logs. MUST be true in prod.
+LOKI_ENABLED=true   # optional: 
 MAILCHIMP_AUDIENCE_ID=   # optional: 
 MAILGUN_DOMAIN=petabyte.market   # optional: 
 MAILGUN_NEWSLETTER_DOMAIN=news.petabyte.market   # optional: Mailgun sending subdomain for the newsletter (e.g. news.petabyte.market). Reuses MAILGUN_API_KEY.
@@ -54,6 +58,19 @@ NICEHASH_API=https://api2.nicehash.com   # optional:
 NICEHASH_STUB=true   # optional: NiceHash stub.
 NICEHASH_TAKE_RATE=0.10   # optional: Platform commission on idle-mining revenue (idle_reconcile tool).
 NOTIFY_STUB=true   # optional: Email/notify stub — false to actually send.
+OBSERVABILITY_BATCH_SIZE=512   # optional: OTLP export batch size.
+OBSERVABILITY_ENABLED=true   # optional: Master switch for telemetry (logs/metrics/traces).
+OBSERVABILITY_EXPORT_TIMEOUT_SECONDS=5   # optional: OTLP export timeout (bounded).
+OBSERVABILITY_FAILURE_MODE=degrade   # optional: On export failure: 'degrade' keeps serving; 'strict' raises.
+OBSERVABILITY_QUEUE_SIZE=2048   # optional: Bounded OTLP export queue size.
+OTEL_ENABLED=true   # optional: Enable OpenTelemetry tracing export.
+OTEL_EXPORTER_OTLP_ENDPOINT=   # optional: OTLP endpoint of the OpenTelemetry Collector (e.g. http://<obs>:4317). Blank -> tracing no-ops.
+OTEL_EXPORTER_OTLP_PROTOCOL=grpc   # optional: OTLP transport to the Collector.
+OTEL_LOGS_ENABLED=true   # optional: 
+OTEL_METRICS_ENABLED=true   # optional: 
+OTEL_SERVICE_NAME=petabyte-api   # optional: OTel service.name for the API (petabyte-api).
+OTEL_SERVICE_NAMESPACE=petabyte   # optional: OTel service.namespace (petabyte).
+OTEL_TRACE_SAMPLE_RATIO=1.0   # optional: Trace sample ratio (1.0 in test/pilot/investor demo).
 PAYMENTS_LIVE_ENABLED=false   # optional: MASTER live-money switch. Must be false unless deliberately going live.
 PAYMENTS_MODE=sandbox   # optional: Payment mode label.
 PAYOUT_CAPABILITIES_PATH=   # optional: 
@@ -61,6 +78,7 @@ PAYOUT_COOLING_OFF_H=24   # optional:
 PAYOUT_HOLD_DAYS=14   # optional: Earnings risk-hold before biweekly payout.
 PAYOUT_HOLD_ON_REPORT=true   # optional: 
 PAYOUT_STUB=true   # optional: Payout provider stub.
+PETABYTE_HOST_ROLE=   # optional: OTel resource attribute petabyte.host_role (e.g. api, worker).
 PLATFORM_AUTH_MARGIN_BPS=2000   # optional: 
 PLATFORM_COMMISSION_BPS=   # optional: 
 PLATFORM_CURRENCY=usd   # optional: Platform settlement currency.
@@ -69,9 +87,13 @@ PLATFORM_FIXED_FEE_MINOR=0   # optional:
 PLATFORM_MAX_DURATION_S=86400   # optional: 
 PLATFORM_MIN_CHARGE_MINOR=50   # optional: 
 PLATFORM_TAKE_RATE=0.10   # optional: 
+PROMETHEUS_ENABLED=true   # optional: 
+PROMETHEUS_METRICS_PATH=/internal/metrics   # optional: Protected Prometheus scrape path (default /internal/metrics).
 PUBLIC_BASE_URL=   # optional: Public base URL for building share/reset links.
 REAPER_DISABLED=true   # optional: Keep true: the dedicated reaper service does the reaping.
 REAPER_INTERVAL_S=20   # optional: 
+REDIS_ENABLED=false   # optional: Use Redis for rate-limit/idempotency/lock coordination (degrades to in-process when off/unavailable). Never the ledger.
+REDIS_NAMESPACE=petabyte   # optional: Key namespace prefix for Redis (petabyte).
 REFERRAL_MONTHLY_CAP=25   # optional: 
 REFERRAL_REWARD_USD=20   # optional: 
 S3_BUCKET=   # optional: 
@@ -82,11 +104,16 @@ S3_STUB=true   # optional: S3 stub.
 SANCTIONS_SCREEN_PROVIDER=   # optional: 
 SELLER_AUDIT_SAMPLE_RATE=0.25   # optional: 
 SELLER_FRAUD_PENALTY=40   # optional: 
+SENTRY_ENABLED=true   # optional: Enable Sentry (needs SENTRY_DSN).
+SENTRY_MAX_BREADCRUMBS=30   # optional: 
+SENTRY_PROFILES_SAMPLE_RATE=0.0   # optional: 
+SENTRY_TRACES_SAMPLE_RATE=0.1   # optional: 
 STRIPE_ALLOW_LIVE=false   # optional: Second live gate; live keys refused unless true.
 STRIPE_API_VERSION=   # optional: 
 STRIPE_GATEWAY=fake   # optional: 'real' uses the Stripe SDK; anything else = in-process fake (tests only).
 STRIPE_MODE=test   # optional: Declared Stripe mode; must match key prefixes.
 TEE_MEASUREMENT_ALLOWLIST=   # optional: 
+TEMPO_ENABLED=true   # optional: 
 TREMENDOUS_API=https://api.tremendous.com/api/v2   # optional: 
 TRUSTED_PROXIES=127.0.0.1,::1   # optional: Reverse-proxy IPs trusted for X-Forwarded-For — never widen to spoofable.
 USDC_CHAIN=MATIC   # optional: 
@@ -117,8 +144,12 @@ Enter each in GitHub Secrets. Required ones (🔴) must be set before the first 
 - **`NICEHASH_API_KEY`** — ⚪ optional. NiceHash → API keys (only if using idle-mining fallback pricing).
 - **`NICEHASH_API_SECRET`** — ⚪ optional. NiceHash → API keys (the matching secret).
 - **`NICEHASH_ORG_ID`** — ⚪ optional. NiceHash → organization id.
+- **`OTEL_EXPORTER_OTLP_HEADERS`** — ⚪ optional. See the reference doc.
 - **`PAYMENT_WEBHOOK_SECRET`** — ⚪ optional. Stripe deposits webhook signing secret (whsec_…).
 - **`POSTMARK_TOKEN`** — ⚪ optional. Postmark (only if EMAIL_PROVIDER=postmark).
+- **`PROMETHEUS_METRICS_TOKEN`** — ⚪ optional. See the reference doc.
+- **`REDIS_PASSWORD`** — ⚪ optional. See the reference doc.
+- **`REDIS_URL`** — ⚪ optional. See the reference doc.
 - **`SECRET_KEY`** — 🔴 required. Generate once: `openssl rand -hex 32`. Rotating it logs everyone out.
 - **`SENDGRID_API_KEY`** — ⚪ optional. SendGrid (only if EMAIL_PROVIDER=sendgrid).
 - **`SENTRY_DSN`** — ⚪ optional. Sentry → project → Settings → Client Keys (DSN).
@@ -149,7 +180,9 @@ Config for a seller's GPU machine running the agent. The GPU node **never** rece
 ### Variables — GPU node
 
 ```ini
+AGENT_TELEMETRY_ENABLED=true   # optional: Seller-agent telemetry export (degrade-safe if obs down).
 GPU_COUNT=1   # optional: Manual GPU count override.
+GPU_METRICS_ENABLED=true   # optional: Collect GPU metrics on the seller node (DCGM/NVML).
 GPU_METRICS_INTERVAL=10   # optional: Seconds between GPU metrics samples (agent/telemetry). (reserved: standardized in GitHub config).
 GPU_MODEL=   # optional: Manual GPU model override when nvidia-smi is absent.
 HEARTBEAT_INTERVAL=15   # optional: Seconds between node heartbeats (a.k.a. GPU_HEARTBEAT_INTERVAL).

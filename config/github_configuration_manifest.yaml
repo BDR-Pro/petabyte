@@ -9,6 +9,16 @@ variables:
     scope:
     - platform
     description: Comma-separated admin usernames/emails.
+  AGENT_TELEMETRY_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - gpu
+    description: Seller-agent telemetry export (degrade-safe if obs down).
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
   ALLOWED_ORIGINS:
     required: false
     default: null
@@ -206,6 +216,16 @@ variables:
     - gpu
     description: Manual GPU count override.
     format: int
+  GPU_METRICS_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - gpu
+    description: Collect GPU metrics on the seller node (DCGM/NVML).
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
   GPU_METRICS_INTERVAL:
     required: false
     default: '10'
@@ -220,6 +240,23 @@ variables:
     scope:
     - gpu
     description: Manual GPU model override when nvidia-smi is absent.
+  GRAFANA_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  GRAFANA_URL:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Grafana base URL.
+    format: url
   HEARTBEAT_INTERVAL:
     required: false
     default: '15'
@@ -258,6 +295,15 @@ variables:
     - 'true'
     - 'false'
     format: bool
+  LOG_FORMAT:
+    required: false
+    default: json
+    scope:
+    - platform
+    description: "Log format \u2014 json in all deployments."
+    allowed:
+    - json
+    - text
   LOG_LEVEL:
     required: false
     default: info
@@ -275,6 +321,34 @@ variables:
     - WARNING
     - ERROR
     - CRITICAL
+  LOG_REDACTION_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: Redact secrets/PII from logs. MUST be true in prod.
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+    production_notes: Never disable in production.
+  LOKI_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  LOKI_URL:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Loki base URL.
+    format: url
   MAILCHIMP_AUDIENCE_ID:
     required: false
     default: null
@@ -414,6 +488,127 @@ variables:
     - 'true'
     - 'false'
     format: bool
+  OBSERVABILITY_BATCH_SIZE:
+    required: false
+    default: '512'
+    scope:
+    - platform
+    description: OTLP export batch size.
+    format: int
+  OBSERVABILITY_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: Master switch for telemetry (logs/metrics/traces).
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  OBSERVABILITY_EXPORT_TIMEOUT_SECONDS:
+    required: false
+    default: '5'
+    scope:
+    - platform
+    description: OTLP export timeout (bounded).
+    format: int
+  OBSERVABILITY_FAILURE_MODE:
+    required: false
+    default: degrade
+    scope:
+    - platform
+    description: 'On export failure: ''degrade'' keeps serving; ''strict'' raises.'
+    allowed:
+    - degrade
+    - strict
+    production_notes: "Keep 'degrade' \u2014 telemetry must never block payments/jobs."
+  OBSERVABILITY_QUEUE_SIZE:
+    required: false
+    default: '2048'
+    scope:
+    - platform
+    description: Bounded OTLP export queue size.
+    format: int
+  OBSERVABILITY_REQUIRED:
+    required: false
+    default: 'false'
+    scope:
+    - observability
+    description: 'Preflight control: when true the deploy FAILS if observability is off/unconfigured (default
+      true in production, false elsewhere).'
+  OBSERVABILITY_SERVER_HOST:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Observability server host (private IP/DNS).
+  OTEL_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: Enable OpenTelemetry tracing export.
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  OTEL_EXPORTER_OTLP_ENDPOINT:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: OTLP endpoint of the OpenTelemetry Collector (e.g. http://<obs>:4317). Blank -> tracing
+      no-ops.
+    format: url_or_empty
+  OTEL_EXPORTER_OTLP_PROTOCOL:
+    required: false
+    default: grpc
+    scope:
+    - platform
+    description: OTLP transport to the Collector.
+    allowed:
+    - grpc
+    - http
+    - http/protobuf
+  OTEL_LOGS_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  OTEL_METRICS_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  OTEL_SERVICE_NAME:
+    required: false
+    default: petabyte-api
+    scope:
+    - platform
+    description: OTel service.name for the API (petabyte-api).
+  OTEL_SERVICE_NAMESPACE:
+    required: false
+    default: petabyte
+    scope:
+    - platform
+    description: OTel service.namespace (petabyte).
+  OTEL_TRACE_SAMPLE_RATIO:
+    required: false
+    default: '1.0'
+    scope:
+    - platform
+    description: Trace sample ratio (1.0 in test/pilot/investor demo).
+    format: float
   PAYMENTS_LIVE_ENABLED:
     required: false
     default: 'false'
@@ -483,6 +678,12 @@ variables:
     - gpu
     description: Public Petabyte API base URL the agent talks to.
     format: url
+  PETABYTE_HOST_ROLE:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: OTel resource attribute petabyte.host_role (e.g. api, worker).
   PETABYTE_SPEC_ID:
     required: true
     default: null
@@ -560,6 +761,29 @@ variables:
     - gpu
     description: Seller's offered price per GPU-hour (USD).
     format: float
+  PROMETHEUS_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  PROMETHEUS_METRICS_PATH:
+    required: false
+    default: /internal/metrics
+    scope:
+    - platform
+    description: Protected Prometheus scrape path (default /internal/metrics).
+  PROMETHEUS_URL:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Prometheus base URL (Grafana + smoke test).
+    format: url
   PROVIDER:
     required: false
     default: null
@@ -591,6 +815,23 @@ variables:
     - platform
     description: ''
     format: int
+  REDIS_ENABLED:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: Use Redis for rate-limit/idempotency/lock coordination (degrades to in-process when off/unavailable).
+      Never the ledger.
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  REDIS_NAMESPACE:
+    required: false
+    default: petabyte
+    scope:
+    - platform
+    description: Key namespace prefix for Redis (petabyte).
   REFERRAL_MONTHLY_CAP:
     required: false
     default: '25'
@@ -663,6 +904,43 @@ variables:
     - platform
     description: ''
     format: int
+  SENTRY_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: Enable Sentry (needs SENTRY_DSN).
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  SENTRY_ENVIRONMENT:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Sentry environment label (defaults to ENVIRONMENT).
+  SENTRY_MAX_BREADCRUMBS:
+    required: false
+    default: '30'
+    scope:
+    - platform
+    description: ''
+    format: int
+  SENTRY_PROFILES_SAMPLE_RATE:
+    required: false
+    default: '0.0'
+    scope:
+    - platform
+    description: ''
+    format: float
+  SENTRY_TRACES_SAMPLE_RATE:
+    required: false
+    default: '0.1'
+    scope:
+    - platform
+    description: ''
+    format: float
   STRIPE_ALLOW_LIVE:
     required: false
     default: 'false'
@@ -703,6 +981,23 @@ variables:
     scope:
     - platform
     description: ''
+  TEMPO_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
+    allowed:
+    - 'true'
+    - 'false'
+    format: bool
+  TEMPO_URL:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Tempo base URL.
+    format: url
   TREMENDOUS_API:
     required: false
     default: https://api.tremendous.com/api/v2
@@ -857,6 +1152,24 @@ secrets:
     scope:
     - platform
     description: ''
+  GRAFANA_SERVICE_ACCOUNT_TOKEN:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Grafana service-account token (provisioning/smoke).
+  LOKI_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Loki push auth password.
+  LOKI_USERNAME:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Loki push auth user.
   MAILCHIMP_API_KEY:
     required: false
     default: null
@@ -887,6 +1200,12 @@ secrets:
     scope:
     - platform
     description: ''
+  OTEL_EXPORTER_OTLP_HEADERS:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   PAYMENT_WEBHOOK_SECRET:
     required: false
     default: null
@@ -912,6 +1231,36 @@ secrets:
     - gpu
     description: Encrypted node API key (X-API-KEY) minted at /create_api_key.
   POSTMARK_TOKEN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  PROMETHEUS_METRICS_TOKEN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  PROMETHEUS_REMOTE_WRITE_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Prometheus remote-write basic-auth password.
+  PROMETHEUS_REMOTE_WRITE_USERNAME:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Prometheus remote-write basic-auth user.
+  REDIS_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  REDIS_URL:
     required: false
     default: null
     scope:
@@ -971,6 +1320,18 @@ secrets:
     scope:
     - platform
     description: ''
+  TEMPO_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Tempo push auth password.
+  TEMPO_USERNAME:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Tempo push auth user.
   TREMENDOUS_API_KEY:
     required: false
     default: null

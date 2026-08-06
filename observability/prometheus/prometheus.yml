@@ -1,0 +1,126 @@
+# =============================================================================
+# Petabyte Prometheus configuration (scaffold)
+# -----------------------------------------------------------------------------
+# Scrapes the app's Prometheus endpoint and the standard exporters, evaluates the
+# recording/alerting rules in rules/, and remote_writes to the central obs server.
+#
+# SECURITY:
+#   * The app exposes metrics at /internal/metrics (NOT /metrics — that path
+#     serves the investor HTML page). /internal/metrics REQUIRES a bearer token
+#     (PROMETHEUS_METRICS_TOKEN); supply it via bearer_token_file below.
+#   * Nothing here should be reachable from the public internet. Scrape over the
+#     private network / WireGuard only, with TLS where targets support it.
+#   * No credentials are hardcoded — tokens/passwords come from files or env.
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+  external_labels:
+    cluster: petabyte
+    # Rendered per-deployment; keep in sync with DEPLOYMENT_ENVIRONMENT.
+    environment: "${DEPLOYMENT_ENVIRONMENT}"
+
+rule_files:
+  - /etc/prometheus/rules/petabyte_rules.yaml
+
+alerting:
+  alertmanagers:
+    - scheme: https
+      basic_auth:
+        username: "${ALERTMANAGER_USERNAME}"
+        password_file: /etc/prometheus/secrets/alertmanager_password
+      static_configs:
+        - targets:
+            - "${ALERTMANAGER_URL}"
+
+# Ship all samples to the central Prometheus/Mimir on the obs server. basic_auth
+# from env-injected secret files; never inline credentials.
+remote_write:
+  - url: "${PROMETHEUS_REMOTE_WRITE_URL}"
+    basic_auth:
+      username: "${REMOTE_WRITE_USERNAME}"
+      password_file: /etc/prometheus/secrets/remote_write_password
+    tls_config:
+      insecure_skip_verify: false
+    queue_config:
+      capacity: 10000
+      max_shards: 50
+      min_shards: 1
+      max_samples_per_send: 2000
+
+scrape_configs:
+  # --- Petabyte API (and other app services on the same endpoint) ------------
+  # /internal/metrics is bearer-protected; the token file is mounted from the
+  # secret store (see PROMETHEUS_METRICS_TOKEN in template.env).
+  - job_name: petabyte-api
+    metrics_path: /internal/metrics
+    scheme: https
+    bearer_token_file: /etc/prometheus/secrets/petabyte_metrics_token
+    tls_config:
+      insecure_skip_verify: false
+    static_configs:
+      - targets:
+          - "${PETABYTE_API_TARGET}"
+        labels:
+          service: petabyte-api
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  # --- NVIDIA DCGM exporter (per seller GPU host) ----------------------------
+  - job_name: dcgm-exporter
+    metrics_path: /metrics
+    scheme: https
+    tls_config:
+      insecure_skip_verify: false
+    # In production prefer service discovery (file_sd / consul) over static hosts.
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/targets/dcgm_hosts.yaml
+        refresh_interval: 60s
+
+  # --- node_exporter ---------------------------------------------------------
+  - job_name: node-exporter
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/targets/node_hosts.yaml
+        refresh_interval: 60s
+
+  # --- postgres_exporter -----------------------------------------------------
+  - job_name: postgres-exporter
+    static_configs:
+      - targets:
+          - "${POSTGRES_EXPORTER_TARGET}"
+
+  # --- redis_exporter --------------------------------------------------------
+  - job_name: redis-exporter
+    static_configs:
+      - targets:
+          - "${REDIS_EXPORTER_TARGET}"
+
+  # --- OpenTelemetry Collector (its own telemetry + any collector-exported metrics)
+  - job_name: otel-collector
+    static_configs:
+      - targets:
+          # collector self-telemetry (:8888) and prometheus exporter (:9464)
+          - "${OTEL_COLLECTOR_TELEMETRY_TARGET}"
+          - "${OTEL_COLLECTOR_PROM_TARGET}"
+
+  # --- Observability stack self-monitoring -----------------------------------
+  - job_name: prometheus
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+
+  - job_name: loki
+    static_configs:
+      - targets: ["${LOKI_METRICS_TARGET}"]
+
+  - job_name: tempo
+    static_configs:
+      - targets: ["${TEMPO_METRICS_TARGET}"]
+
+  - job_name: grafana
+    static_configs:
+      - targets: ["${GRAFANA_METRICS_TARGET}"]

@@ -21,6 +21,17 @@ import time
 
 logger = logging.getLogger("petabyte")
 
+# Observability: structured JSON logging + redaction, optional OTel tracing, and
+# bounded-cardinality Prometheus metrics. Import-safe and degrade-safe — if the telemetry
+# libs or the collector are absent the whole thing becomes a cheap no-op and the app runs
+# unchanged (telemetry must never break payments or jobs).
+import observability as obsmod  # noqa: E402
+from observability import (  # noqa: E402
+    obs, EVENTS, bind_context, get_context, new_request_id, sanitize_incoming_request_id,
+    bounded_label,
+)
+obsmod.init_observability(obsmod.SERVICE.API)
+
 from utils import (
     gen_wg_keypair, build_client_wg_config, apply_peer_to_interface,
     gen_secure_api_key, decode_api_key, verify_attestation, verify_signed_proof,
@@ -326,13 +337,31 @@ app = FastAPI(
     ],
 )
 
-# Optional error tracking — only active when SENTRY_DSN is set (see HARDENING.md).
+# Error tracking — active only when SENTRY_DSN is set and SENTRY_ENABLED != false.
+# Correlated with our traces (environment + release), PII off, and every event scrubbed
+# through the same redaction policy as our logs so no secret/card/token can leak upstream.
 _SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
-if _SENTRY_DSN:
+if _SENTRY_DSN and os.getenv("SENTRY_ENABLED", "true").strip().lower() != "false":
     try:
         import sentry_sdk
-        sentry_sdk.init(dsn=_SENTRY_DSN, traces_sample_rate=0.1,
-                        environment=os.getenv("PAYMENTS_MODE", "sandbox"))
+
+        def _sentry_scrub(evt, _hint):
+            try:
+                return obsmod.redact(evt)
+            except Exception:  # noqa: BLE001
+                return evt
+
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            environment=obsmod.ENVIRONMENT,
+            release=obsmod.RELEASE,
+            traces_sample_rate=obsmod._f("SENTRY_TRACES_SAMPLE_RATE", 0.1),
+            profiles_sample_rate=obsmod._f("SENTRY_PROFILES_SAMPLE_RATE", 0.0),
+            send_default_pii=False,
+            max_breadcrumbs=int(os.getenv("SENTRY_MAX_BREADCRUMBS", "30")),
+            before_send=_sentry_scrub,
+        )
+        sentry_sdk.set_tag("service", obsmod.SERVICE.API)
     except Exception as _e:  # noqa: BLE001
         import logging as _lg
         _lg.getLogger(__name__).warning(f"Sentry init skipped: {_e}")
@@ -358,15 +387,67 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 # can quote it and we can find the exact request. Headers are set here (not nginx)
 # so they hold no matter what fronts the app.
 # ---------------------------------------------------------------------------
+def _route_label(request: Request) -> str:
+    """Bounded route label for metrics. Prefer the matched route template, else collapse
+    id-like segments so cardinality stays bounded."""
+    route = request.scope.get("route")
+    tmpl = getattr(route, "path", None)
+    return tmpl if tmpl else obsmod.bounded_route(request.url.path)
+
+
+def _dec_in_flight():
+    if obsmod._prom_ok:
+        try:
+            obsmod.metric("petabyte_http_in_flight_requests").labels(
+                environment=obsmod.ENVIRONMENT).dec()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 @app.middleware("http")
 async def _request_context(request: Request, call_next):
-    rid = request.headers.get("X-Request-ID") or secrets.token_hex(8)
+    # Accept a caller-supplied id only after validation; otherwise mint one.
+    rid = sanitize_incoming_request_id(request.headers.get("X-Request-ID")) or new_request_id()
     request.state.request_id = rid
+    method = request.method
+    start = time.time()
+    obsmod.inc_metric("petabyte_http_in_flight_requests", environment=obsmod.ENVIRONMENT)
+    # A SERVER span parented on the incoming W3C trace context (browser/edge), so a single
+    # trace spans browser -> API -> downstream. No-op if OTel is inactive.
     try:
-        response = await call_next(request)
+        with obs.span("http.request", kind="server", carrier=dict(request.headers)):
+            bind_context(request_id=rid)
+            response = await call_next(request)
     except Exception:
+        _dec_in_flight()
+        obsmod.inc_metric("petabyte_http_requests_total", method=method,
+                          route=_route_label(request), status_class="5xx",
+                          environment=obsmod.ENVIRONMENT)
+        obs.event(EVENTS.UNHANDLED_EXCEPTION, level=logging.ERROR,
+                  message="unhandled error", route=_route_label(request), method=method)
         logger.exception("unhandled error request_id=%s path=%s", rid, request.url.path)
         raise
+    _dec_in_flight()
+    # record request metrics with BOUNDED labels (route template / collapsed ids)
+    route = _route_label(request)
+    dur = time.time() - start
+    sc = response.status_code
+    status_class = f"{sc // 100}xx"
+    obsmod.inc_metric("petabyte_http_requests_total", method=method, route=route,
+                      status_class=status_class, environment=obsmod.ENVIRONMENT)
+    obsmod.observe_metric("petabyte_http_request_duration_seconds", dur,
+                          method=method, route=route, environment=obsmod.ENVIRONMENT)
+    # Log an event only for non-2xx or slow requests (keeps Loki volume bounded); the
+    # metric above covers the happy path. Business ids live in the context, never as labels.
+    if sc >= 400 or dur > 2.0:
+        obs.event(EVENTS.HTTP_REQUEST,
+                  level=logging.WARNING if sc >= 500 else logging.INFO,
+                  message=f"{method} {route} -> {sc}", route=route, method=method,
+                  status_code=sc, duration_ms=round(dur * 1000, 1))
+    # expose the trace id to support (safe, non-secret) for cross-referencing
+    _tid = get_context().get("trace_id")
+    if _tid:
+        response.headers["X-Trace-Id"] = _tid
     # Referral attribution: if the visitor arrived with ?ref=CODE on ANY page, remember it
     # in a cookie so it survives leaving and coming back (people rarely sign up on the first
     # click). Signup reads this as a fallback. First-touch wins: don't overwrite an existing
@@ -417,7 +498,20 @@ LOGIN_MAX_FAILS, LOGIN_WINDOW_S = 10, 900
 
 
 def _rl_blocked(key: str, limit: int, window: int):
-    """True (+retry secs) if this key has burned its failure budget."""
+    """True (+retry secs) if this key has burned its failure budget.
+
+    Uses Redis for a SHARED counter across gunicorn workers when Redis is configured (the
+    in-process dict below is per-worker, so with N workers the real limit is N×). Falls
+    back to the in-process window when Redis is unavailable — the limiter never fails open
+    on a Redis outage; it just reverts to per-worker counting."""
+    try:
+        import redis_client
+        if redis_client.available():
+            count = redis_client.read_window(f"rlc:{key}")
+            if count is not None and count >= limit:
+                return window  # conservative retry hint; exact reset not tracked in cache
+    except Exception:  # noqa: BLE001
+        pass
     now = time.time()
     hits = [t for t in _RL_BUCKETS.get(key, []) if now - t < window]
     _RL_BUCKETS[key] = hits
@@ -426,7 +520,13 @@ def _rl_blocked(key: str, limit: int, window: int):
     return None
 
 
-def _rl_record_failure(key: str):
+def _rl_record_failure(key: str, window: int = 3600):
+    try:
+        import redis_client
+        if redis_client.available():
+            redis_client.incr_window(f"rlc:{key}", window)
+    except Exception:  # noqa: BLE001
+        pass
     _RL_BUCKETS.setdefault(key, []).append(time.time())
 
 
@@ -447,6 +547,12 @@ async def _rate_limit(request: Request, call_next):
     hits = [t for t in _RL_BUCKETS.get(key, []) if now - t < window]
     if len(hits) >= limit:
         retry = int(window - (now - hits[0])) + 1
+        obsmod.inc_metric("petabyte_ratelimit_blocks_total",
+                          route=obsmod.bounded_route(request.url.path),
+                          environment=obsmod.ENVIRONMENT)
+        obs.event(EVENTS.RATELIMIT_BLOCKED, level=logging.WARNING,
+                  message="rate limit exceeded",
+                  route=obsmod.bounded_route(request.url.path), retry_after_seconds=retry)
         return JSONResponse(
             status_code=429,
             headers={"Retry-After": str(retry)},
@@ -1427,6 +1533,49 @@ def readyz(db: Session = Depends(get_db)):
         raise HTTPException(status_code=503, detail="database unavailable")
 
 
+@app.get("/health/observability", include_in_schema=False)
+def health_observability():
+    """Health of the telemetry integrations (tracing/metrics/logging/redis). Never fails
+    the app — an operator reads this to confirm telemetry is flowing (or degraded)."""
+    h = obsmod.health()
+    try:
+        import redis_client
+        h["redis"] = redis_client.health()
+    except Exception:  # noqa: BLE001
+        h["redis"] = {"configured": False}
+    return h
+
+
+def _metrics_authorized(request: Request) -> bool:
+    """Prometheus scrape auth: allow a valid bearer token (PROMETHEUS_METRICS_TOKEN), or
+    a caller on the trusted/loopback network (Prometheus scrapes over the private net).
+    The endpoint is never anonymous-public when a token is configured."""
+    token = os.getenv("PROMETHEUS_METRICS_TOKEN", "").strip()
+    if token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and secrets.compare_digest(auth[7:], token):
+            return True
+        # a token is configured -> token is required (no silent loopback bypass)
+        return False
+    # no token configured -> restrict to loopback / trusted proxies only
+    ip = _client_ip(request) or ""
+    return ip in ("127.0.0.1", "::1") or ip in TRUSTED_PROXIES
+
+
+# Prometheus scrape endpoint. Path is configurable (defaults to /internal/metrics — NOT
+# /metrics, which already serves the investor HTML dashboard). Protected: money-adjacent
+# counters must not be world-readable.
+_PROM_PATH = os.getenv("PROMETHEUS_METRICS_PATH", "/internal/metrics")
+
+
+@app.get(_PROM_PATH, include_in_schema=False)
+def prometheus_metrics(request: Request):
+    if not _metrics_authorized(request):
+        raise HTTPException(status_code=403, detail="metrics access denied")
+    body, ctype = obsmod.metrics_response()
+    return Response(content=body, media_type=ctype)
+
+
 # ------------------- AUTH -------------------
 
 @app.post("/register_user", tags=["account"])
@@ -1893,11 +2042,25 @@ def jobs_next(agent=Depends(api_key_user), db: Session = Depends(get_db)):
     task = claim_next_task(db, agent)
     if not task:
         return Response(status_code=204)   # 204 must carry no body
+    mark_task_running(db, task)
+    # PRODUCER span across the queue/network boundary: inject the current W3C trace context
+    # into the job envelope so the seller agent's execution joins THIS trace end-to-end.
+    with obs.span("job.dispatch", kind="producer", task_type=str(task.task_type)):
+        payload = _build_job_payload(task)
+        payload["trace_context"] = obs.inject({})
+        tx_pub = getattr(getattr(task, "compute_tx", None), "public_id", None)
+        obs.event(EVENTS.JOB_DISPATCHED, message="job dispatched",
+                  task_type=task.task_type, job_id=task.id, transaction_id=tx_pub)
+    return payload
+
+
+def _build_job_payload(task) -> dict:
+    """Build the job envelope returned to the agent. Never includes platform secrets or
+    full buyer workload inputs beyond what the job type needs to run."""
     _backup = {"backup_enabled": bool(task.backup_enabled),
                "backup_interval_s": task.backup_interval_s,
                "volume": task.volume,
                "restore_from": task.latest_checkpoint_ref}   # restore if a backup exists
-    mark_task_running(db, task)
     if task.task_type == "notebook":
         return {"task_id": task.id, "task_type": "notebook", "code": task.code}
     if task.task_type == "test":

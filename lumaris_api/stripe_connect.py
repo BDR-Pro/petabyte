@@ -33,6 +33,7 @@ from db import (post, DEBIT, CREDIT, EXTERNAL_PAYMENTS, PLATFORM_REVENUE,
                 release_unit, create_task, get_user_by_id, update)
 from pricing import PricingConfig, price_per_hour_to_minor, estimate, settle, refund_split
 from stripe_gateway import get_gateway, StripeError
+import observability as _obs
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,14 @@ TERMINAL = {"COMPLETED", "PAYMENT_FAILED", "AUTHORIZATION_EXPIRED", "CANCELLED",
 def transition(db, tx: ComputeTransaction, to_state: str, *, actor: str = "system",
                reason: str | None = None, allow_same: bool = False) -> ComputeTransaction:
     """Validate and apply a state transition, appending to the append-only history.
-    Arbitrary jumps are rejected."""
+    Arbitrary jumps are rejected.
+
+    This is the single chokepoint for EVERY transaction state change, so it is also the
+    spine of the observability timeline: each transition emits a structured event + span
+    event and increments a bounded-label metric. `transaction_id`/`job_id` live in the
+    log/trace body (correlation), never as metric labels. Telemetry is best-effort and
+    can never block or fail the settlement path.
+    """
     cur = tx.status
     if to_state == cur and allow_same:
         return tx
@@ -94,7 +102,37 @@ def transition(db, tx: ComputeTransaction, to_state: str, *, actor: str = "syste
                           reason=reason, actor=actor))
     db.commit()
     db.refresh(tx)
+    _emit_transition_telemetry(tx, cur, to_state, actor, reason)
     return tx
+
+
+# Map terminal/notable states to their canonical event name for the timeline.
+_STATE_EVENT = {
+    "PAYMENT_AUTHORIZED": _obs.EVENTS.PAYMENT_AUTH_CONFIRMED,
+    "GPU_RESERVED": _obs.EVENTS.GPU_RESERVATION_CREATED,
+    "RUNNING": _obs.EVENTS.JOB_EXECUTION_STARTED,
+    "METERING_FINALIZED": _obs.EVENTS.METERING_FINALIZED,
+    "PAYMENT_CAPTURED": _obs.EVENTS.PAYMENT_CAPTURE_COMPLETED,
+    "COMPLETED": _obs.EVENTS.TX_COMPLETED,
+    "REFUNDED": _obs.EVENTS.REFUND_CREATED,
+}
+
+
+def _emit_transition_telemetry(tx, from_state, to_state, actor, reason):
+    try:
+        mode = _obs.bounded_label(getattr(tx, "mode", None), _obs.PAYMENT_MODE, "sandbox")
+        with _obs.ctx(transaction_id=tx.public_id, payment_intent_id=getattr(tx, "payment_intent_id", None)):
+            _obs.event(_obs.EVENTS.TX_TRANSITION,
+                       message=f"transaction {from_state} -> {to_state}",
+                       from_state=from_state, to_state=to_state, actor=actor, reason=reason)
+            specific = _STATE_EVENT.get(to_state)
+            if specific:
+                _obs.event(specific, message=to_state, from_state=from_state)
+            _obs.inc_metric("petabyte_transaction_transitions_total",
+                            to_state=to_state, payment_mode=mode,
+                            environment=_obs.ENVIRONMENT)
+    except Exception:  # noqa: BLE001 — telemetry must never break settlement
+        pass
 
 
 def _now():
@@ -524,6 +562,12 @@ def capture(db, tx: ComputeTransaction) -> ComputeTransaction:
             amount_to_capture=s["capture_amount"], idempotency_key=key)
     except StripeError as e:
         _finish_op(db, op, state="failed", error=str(e))
+        _mode = _obs.bounded_label(getattr(tx, "mode", None), _obs.PAYMENT_MODE, "sandbox")
+        _obs.inc_metric("petabyte_payment_captures_total", outcome="failure",
+                        payment_mode=_mode, environment=_obs.ENVIRONMENT)
+        with _obs.ctx(transaction_id=tx.public_id):
+            _obs.event(_obs.EVENTS.PAYMENT_CAPTURE_FAILED, message="capture failed",
+                       reason=str(e)[:200], payment_mode=_mode)
         transition(db, tx, "CAPTURE_FAILED", reason=str(e))
         raise TransactionError(f"capture failed: {e}")
 
@@ -545,6 +589,25 @@ def capture(db, tx: ComputeTransaction) -> ComputeTransaction:
     ], reference_id=tx.public_id,
        description="captured actual compute usage", entry_type="compute_capture")
     transition(db, tx, "PAYMENT_CAPTURED", reason=f"captured {captured}")
+    # Settlement telemetry: the money split (gross / commission / seller) as structured
+    # event fields for the executive + investor dashboards (they sum these from Loki,
+    # split by payment_mode — real and test money are never mixed). Amounts are minor
+    # units; no card/secret data. Best-effort; never blocks capture.
+    try:
+        _mode = _obs.bounded_label(getattr(tx, "mode", None), _obs.PAYMENT_MODE, "sandbox")
+        with _obs.ctx(transaction_id=tx.public_id,
+                      charge_id=getattr(tx, "stripe_charge_id", None)):
+            _obs.inc_metric("petabyte_payment_captures_total", outcome="success",
+                            payment_mode=_mode, environment=_obs.ENVIRONMENT)
+            _obs.event(_obs.EVENTS.COMMISSION_RECORDED, message="commission recorded",
+                       payment_mode=_mode, currency=tx.currency,
+                       gross_amount=captured, commission_amount=tx.platform_fee_amount,
+                       seller_amount=tx.seller_net_amount)
+            _obs.event(_obs.EVENTS.SELLER_EARNING_CREATED, message="seller earning created",
+                       payment_mode=_mode, currency=tx.currency,
+                       seller_amount=tx.seller_net_amount)
+    except Exception:  # noqa: BLE001 — telemetry must never break settlement
+        pass
     # Provider-neutral: settlement produces an IMMUTABLE payout obligation (what we owe
     # the seller). Idempotent per compute_tx; additive (never fails capture). If it fails
     # here the tx is still PAYMENT_CAPTURED, so it is REPAIRABLE:
@@ -694,6 +757,12 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
                           _dbm.PayoutObligation.state == "transferring")
                    .values(state="reconciling"))
         tx.reconciliation_status = "needs_review"; db.add(tx); db.commit()
+        _tmode = _obs.bounded_label(getattr(tx, "mode", None), _obs.PAYMENT_MODE, "sandbox")
+        _obs.inc_metric("petabyte_seller_transfers_total", outcome="failure",
+                        payment_mode=_tmode, environment=_obs.ENVIRONMENT)
+        with _obs.ctx(transaction_id=tx.public_id):
+            _obs.event(_obs.EVENTS.SELLER_TRANSFER_FAILED, message="transfer failed",
+                       reason=str(e)[:200], payment_mode=_tmode)
         transition(db, tx, "TRANSFER_FAILED", reason=str(e))
         raise TransactionError(f"transfer failed: {e}")
     tx.stripe_transfer_id = tr["id"]
@@ -708,6 +777,15 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
     transition(db, tx, "SELLER_TRANSFERRED", reason=f"transfer {tr['id']}")
     tx.reconciliation_status = "reconciled"
     db.add(tx); db.commit()
+    try:
+        _tmode = _obs.bounded_label(getattr(tx, "mode", None), _obs.PAYMENT_MODE, "sandbox")
+        _obs.inc_metric("petabyte_seller_transfers_total", outcome="success",
+                        payment_mode=_tmode, environment=_obs.ENVIRONMENT)
+        with _obs.ctx(transaction_id=tx.public_id, transfer_id=tr["id"]):
+            _obs.event(_obs.EVENTS.SELLER_TRANSFER_CREATED, message="seller transfer created",
+                       payment_mode=_tmode, currency=tx.currency, seller_amount=net)
+    except Exception:  # noqa: BLE001
+        pass
     # Stripe definitively confirmed: obligation 'transferring' -> 'paid'.
     try:
         db.execute(_dbm.update(_dbm.PayoutObligation)

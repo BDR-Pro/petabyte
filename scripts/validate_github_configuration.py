@@ -311,6 +311,36 @@ def enforce_rules(resolved: dict, secret_status: dict, env: dict, env_name: str,
                 res.error(f"production: required Secret {s} is missing.")
 
 
+def enforce_observability(resolved: dict, secret_status: dict, env_name: str,
+                          res: Result) -> None:
+    """Observability preflight. Telemetry is degrade-safe at runtime, but production and
+    investor-demo deployments must not SILENTLY run with observability off/unconfigured.
+    Controlled by OBSERVABILITY_REQUIRED (default: required in production)."""
+    env_name = (env_name or "").lower()
+    obs_enabled = _rget(resolved, "OBSERVABILITY_ENABLED", "true").lower() == "true"
+    required = _rget(resolved, "OBSERVABILITY_REQUIRED",
+                     "true" if env_name == "production" else "false").lower() == "true"
+    # log redaction must never be off in production
+    if env_name == "production" and _rget(resolved, "LOG_REDACTION_ENABLED", "true").lower() == "false":
+        res.error("production: LOG_REDACTION_ENABLED must be true (no unredacted logs).")
+    if _rget(resolved, "LOG_FORMAT", "json").lower() != "json" and env_name == "production":
+        res.warn("production: LOG_FORMAT is not json — structured logging is expected.")
+    if not required:
+        if not obs_enabled:
+            res.warn("OBSERVABILITY_ENABLED=false — telemetry is OFF (allowed here).")
+        return
+    # required: fail closed on the essentials
+    if not obs_enabled:
+        res.error(f"{env_name}: OBSERVABILITY_ENABLED must be true (set OBSERVABILITY_REQUIRED"
+                  "=false only for approved environments).")
+    if _rget(resolved, "OTEL_ENABLED", "true").lower() == "true" \
+            and not _rget(resolved, "OTEL_EXPORTER_OTLP_ENDPOINT"):
+        res.error(f"{env_name}: OTEL_ENABLED but OTEL_EXPORTER_OTLP_ENDPOINT is unset — "
+                  "traces would silently not reach Tempo.")
+    if _rget(resolved, "OBSERVABILITY_FAILURE_MODE", "degrade").lower() not in ("degrade", "strict"):
+        res.error("OBSERVABILITY_FAILURE_MODE must be 'degrade' or 'strict'.")
+
+
 # ---- unknown / obsolete detection ------------------------------------------------------
 def find_unknown(manifest: dict, env: dict, res: Result) -> list[str]:
     known = set(manifest.get("variables", {})) | set(manifest.get("secrets", {}))
@@ -377,6 +407,7 @@ def main(argv=None) -> int:
     env = dict(os.environ)
     resolved, secret_status, res = resolve(manifest, env, scopes)
     enforce_rules(resolved, secret_status, env, args.env_name, res)
+    enforce_observability(resolved, secret_status, args.env_name, res)
     unknown = find_unknown(manifest, env, res)
     if args.strict_unknown and unknown:
         for u in unknown:

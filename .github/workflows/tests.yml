@@ -130,10 +130,28 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install pyyaml cryptography
+      - run: pip install -r lumaris_api/requirements.txt
       - name: config toolchain tests
         working-directory: lumaris_api
         run: python config_test.py
+      - name: observability (correlation / redaction / cardinality / degrade-safe)
+        working-directory: lumaris_api
+        run: python observability_test.py
+      - name: observability smoke (local tier + OTel propagation; remote skipped offline)
+        run: python scripts/observability_smoke_test.py
+      - name: dashboards + alerts + collector configs are valid JSON/YAML
+        run: |
+          python - <<'PY'
+          import json, glob, yaml, sys
+          bad = 0
+          for f in glob.glob("observability/grafana/dashboards/*.json"):
+              try: json.load(open(f))
+              except Exception as e: print(f"::error::{f}: {e}"); bad += 1
+          for f in glob.glob("observability/**/*.y*ml", recursive=True):
+              try: list(yaml.safe_load_all(open(f)))
+              except Exception as e: print(f"::error::{f}: {e}"); bad += 1
+          sys.exit(1 if bad else 0)
+          PY
       - name: configuration drift (manifest / code / workflows / template.env in sync)
         run: python scripts/check_configuration_drift.py
       - name: manifest is up to date (re-generate → no diff)

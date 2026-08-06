@@ -49,6 +49,10 @@ _CODE_IGNORE = set(bcm.TEST_ONLY) | {
     "PYTEST_CURRENT_TEST", "PYTHONPATH", "HOME", "PATH", "PWD",
     "LUMARIS_ENV_FILE", "LUMARIS_REPORT_FILE", "PGBIN", "PGPORT", "PGDATA",
     "MAILGUN_API_BASE",  # hardcoded in email_service on purpose
+    # build/runtime identity metadata (resolved with fallback chains; not deploy knobs) —
+    # the same category as GITHUB_SHA, set by CI/build, not hand-entered config.
+    "DEPLOYMENT_ENVIRONMENT", "RELEASE_VERSION", "PETABYTE_RELEASE_SHA", "GITHUB_SHA",
+    "PETABYTE_AGENT_VERSION",
 }
 
 _ENV_RE = re.compile(r'os\.(?:getenv|environ\.get)\(\s*["\']([A-Z][A-Z0-9_]+)["\']')
@@ -127,7 +131,8 @@ def main() -> int:
 
     # 4) obsolete manifest entry — backed by nothing.
     tmpl_vars = set(bcm.parse_template_env())
-    backed = set(code_vars) | tmpl_vars | set(bcm.AGENT_VARS) | set(bcm.RESERVED_VARS)
+    backed = (set(code_vars) | tmpl_vars | set(bcm.AGENT_VARS) | set(bcm.RESERVED_VARS)
+              | set(bcm.OBSERVABILITY_EXTRA))
     # aka aliases count as backing their canonical name.
     for section in ("variables", "secrets"):
         for name, meta in committed.get(section, {}).items():
