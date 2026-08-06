@@ -183,6 +183,14 @@ variables:
     - production
     aka: APP_ENV
     production_notes: Must be 'production' in prod; never leave stubs enabled.
+  ENV_VARS:
+    required: false
+    default: null
+    scope:
+    - deployment
+    description: "THE single Repository Variable holding ALL non-sensitive config as KEY=value; pairs\
+      \ (semicolon-separated, newlines allowed). Generate it with `python scripts/env_bundle.py generate`.\
+      \ Secrets are NEVER placed here \u2014 they stay as individual GitHub Secrets."
   GEOIP_DB:
     required: false
     default: null

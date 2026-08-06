@@ -1,19 +1,18 @@
 name: Deploy server
 
-# GitHub Variables + Secrets are the source of truth for deployment configuration.
+# GitHub is the source of truth for deployment configuration.
 #
-#   1. configuration-preflight resolves ${{ vars.* }} / ${{ secrets.* }}, applies the
-#      documented defaults, validates formats + Stripe test/live separation, and verifies
-#      every REQUIRED secret is present. Secret VALUES are never printed.
-#   2. deploy (when enabled) generates the server env from that config, ships it to the
-#      box, and restarts — so nothing long-lived is hand-maintained on the server.
+#   * NON-SECRET config lives in ONE Repository Variable, ENV_VARS (KEY=value; pairs).
+#     Generate it with `python scripts/env_bundle.py generate`.
+#   * SECRETS stay as individual GitHub Secrets (SECRET_KEY, DATABASE_URL, STRIPE_*, …).
+#   * The deploy parses/validates ENV_VARS, injects the Secrets, and generates the server
+#     env atomically — nothing long-lived is hand-maintained on the box.
 #
-# ROLLOUT GATE — set the repository Variable DEPLOY_CONFIG_FROM_GITHUB=true ONCE you have
-# entered every Secret in GitHub (see docs/GITHUB_MANUAL_SETUP_CHECKLIST.md), including a
-# one-time migration of SECRET_KEY / SERVER_PRIVATE_KEY / DATABASE_URL from the server's
-# current /etc/lumaris/lumaris.env. Until it is true, the preflight runs as an advisory
-# report and the deploy stays code-only (it never overwrites the server env), so nothing
-# breaks while you fill in the config.
+# Only TWO standalone Variables remain: ENV_VARS and DEPLOY_CONFIG_FROM_GITHUB.
+#
+# ROLLOUT GATE — set DEPLOY_CONFIG_FROM_GITHUB=true once ENV_VARS + all Secrets are entered
+# (see docs/GITHUB_MANUAL_SETUP_CHECKLIST.md). Until then the preflight is advisory and the
+# deploy stays code-only (it never overwrites the server env), so nothing breaks mid-setup.
 
 on:
   push:
@@ -27,29 +26,30 @@ on:
 
 jobs:
   configuration-preflight:
-    # Runs before the deploy. Blocking only when the rollout gate is on; otherwise advisory
-    # so the code-only deploy keeps working while GitHub config is still being filled in.
+    # Parses + validates ENV_VARS, refuses secrets inside it, detects legacy individual
+    # Variables, and runs every existing safety check. Blocking only when the gate is on.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install pyyaml
-      - name: validate resolved GitHub configuration
+      - name: validate ENV_VARS + Secrets
         id: validate
         continue-on-error: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB != 'true' }}
         env:
-          VARS_JSON: ${{ toJSON(vars) }}
+          ENV_VARS: ${{ vars.ENV_VARS }}
+          DEPLOY_CONFIG_FROM_GITHUB: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB }}
+          VARS_JSON: ${{ toJSON(vars) }}       # only to DETECT legacy individual Variables
           SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
-          python scripts/validate_github_configuration.py \
-            --env-name "${{ vars.ENVIRONMENT || vars.APP_ENV || 'development' }}" \
+          python scripts/validate_github_configuration.py --env-name auto \
             | tee /tmp/config-summary.txt
       - name: configuration summary (sanitised — secrets shown as SET only)
         if: always()
         run: |
           {
-            echo "## Configuration preflight"
+            echo "## Configuration preflight (ENV_VARS bundle)"
             echo ""
             echo "Rollout gate DEPLOY_CONFIG_FROM_GITHUB=${{ vars.DEPLOY_CONFIG_FROM_GITHUB || 'false' }}"
             echo ""
@@ -67,11 +67,14 @@ jobs:
         with: { python-version: "3.12" }
       - run: pip install pyyaml
 
-      # Generate the server env from GitHub config, then ship it — ONLY when the gate is on.
-      # The generated file is 0600, git-ignored, never printed, and deleted from the runner.
-      - name: generate + push server env from GitHub config
+      # Generate the server env from ENV_VARS + Secrets, then ship it atomically — ONLY when
+      # the gate is on. The generated file is 0600, git-ignored, never printed, deleted from
+      # the runner. The current server env is backed up first for automatic rollback.
+      - name: generate + push server env (atomic; backup for rollback)
         if: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB == 'true' }}
         env:
+          ENV_VARS: ${{ vars.ENV_VARS }}
+          DEPLOY_CONFIG_FROM_GITHUB: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB }}
           VARS_JSON: ${{ toJSON(vars) }}
           SECRETS_JSON: ${{ toJSON(secrets) }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -80,19 +83,22 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          # revalidate (blocking) before we ship anything
-          python scripts/validate_github_configuration.py \
-            --env-name "${{ vars.ENVIRONMENT || vars.APP_ENV || 'development' }}" >/dev/null
+          # Revalidate (blocking) before shipping, then generate the env from the bundle.
+          python scripts/validate_github_configuration.py --env-name auto >/dev/null
           python scripts/generate_deploy_env.py --target platform --out .env.platform.generated
           mkdir -p ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          # push to a temp path, then install atomically as the lumaris-owned 0600 env file
           scp -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key \
             .env.platform.generated "$DROPLET_USER@$DROPLET_HOST:/tmp/lumaris.env.incoming"
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key \
-            "$DROPLET_USER@$DROPLET_HOST" \
-            'sudo install -m 600 -o lumaris -g lumaris /tmp/lumaris.env.incoming /etc/lumaris/lumaris.env && sudo rm -f /tmp/lumaris.env.incoming'
+          # Atomic install: back up the current env, then install the new one 0600.
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "$DROPLET_USER@$DROPLET_HOST" '
+            set -e
+            if sudo test -f /etc/lumaris/lumaris.env; then
+              sudo cp -a /etc/lumaris/lumaris.env /etc/lumaris/lumaris.env.deploybak
+            fi
+            sudo install -m 600 -o lumaris -g lumaris /tmp/lumaris.env.incoming /etc/lumaris/lumaris.env
+            sudo rm -f /tmp/lumaris.env.incoming'
 
       - name: Deploy code + restart over SSH
         env:
@@ -106,6 +112,36 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key \
             "$DROPLET_USER@$DROPLET_HOST" 'sudo /opt/lumaris/deploy/update.sh'
+
+      # Verify health after restart; if unhealthy, roll the env back to the backup and
+      # restart, then fail the deploy. Only runs when the gate is on (env was pushed).
+      - name: verify health + auto-rollback env on failure
+        if: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB == 'true' }}
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+          DROPLET_USER: ${{ secrets.DROPLET_USER }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "$DROPLET_USER@$DROPLET_HOST" '
+            set +e
+            ok=0
+            for i in $(seq 1 12); do
+              if curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1; then ok=1; break; fi
+              sleep 5
+            done
+            if [ "$ok" != 1 ]; then
+              echo "::error::health check FAILED after deploy — rolling back the env file"
+              if sudo test -f /etc/lumaris/lumaris.env.deploybak; then
+                sudo install -m 600 -o lumaris -g lumaris /etc/lumaris/lumaris.env.deploybak /etc/lumaris/lumaris.env
+                sudo systemctl restart lumaris-api lumaris-reaper
+              fi
+              exit 1
+            fi
+            echo "health OK after deploy"'
 
       - name: cleanup generated secrets from the runner
         if: always()

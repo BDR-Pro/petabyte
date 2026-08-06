@@ -48,6 +48,7 @@ run_suite "seller integrity audits (anti-fraud)" python seller_audit_test.py
 run_suite "quorum verification (redundant re-execution)" python quorum_test.py
 run_suite "marketplace intelligence (health/routing/trust/timeline)" python marketplace_test.py
 run_suite "github config (manifest/validator/generator/drift)" python config_test.py
+run_suite "ENV_VARS bundle (parser/secret-guard/precedence)" python env_vars_test.py
 run_suite "observability (correlation/redaction/cardinality/degrade)" python observability_test.py
 run_suite "observability smoke (local tier; remote skipped offline)" \
           bash -c "cd .. && python scripts/observability_smoke_test.py"

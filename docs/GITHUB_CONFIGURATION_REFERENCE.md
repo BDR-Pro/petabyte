@@ -2,13 +2,13 @@
 
 > **Generated** by `scripts/generate_config_docs.py` from `config/github_configuration_manifest.yaml`. Do not hand-edit — re-run the generator. The manifest is the single source of truth.
 
-GitHub is the source of truth for deployment configuration. Non-sensitive values are **GitHub Variables**; credentials/keys/tokens/passwords are **GitHub Secrets**. At deploy time GitHub Actions resolves these and generates the server env file — nothing long-lived is hand-maintained on the server.
+GitHub is the source of truth for deployment configuration. **All non-sensitive values live in ONE Repository Variable, `ENV_VARS`** (as `KEY=value;` pairs); credentials/keys/tokens/passwords are **individual GitHub Secrets**. At deploy time the workflow parses `ENV_VARS`, injects the Secrets, and generates the server env file atomically — nothing long-lived is hand-maintained on the server. The table below documents every key that `ENV_VARS` may contain (and every Secret); generate a ready-to-paste bundle with `python scripts/env_bundle.py generate`.
 
-Set them under **Settings → Secrets and variables → Actions** (repository level), or per **Environment** (test / staging / production) for environment-specific values and protection rules.
+Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are refused inside `ENV_VARS`, so the two never conflict). The only standalone Variables are `ENV_VARS` and `DEPLOY_CONFIG_FROM_GITHUB`; do not create individual Variables for anything else — the preflight reports leftover legacy Variables as a conflict.
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (141)
+## Variables (non-sensitive) (142)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -34,6 +34,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `ENABLE_PROMETHEUS` | no | platform | `true` | `true` | — | format: bool; one of: true / false | Enable Prometheus metrics scraping. (reserved: standardized in GitHub config). |
 | `ENABLE_SENTRY` | no | platform | `false` | `false` | — | format: bool; one of: true / false | Enable Sentry error reporting (also needs SENTRY_DSN). (reserved: standardized in GitHub config). |
 | `ENVIRONMENT`<br>`aka APP_ENV` | no | platform | `development` | `development` | api/main.py, api/stripe_gateway.py | one of: development / test / staging / production | Must be 'production' in prod; never leave stubs enabled. |
+| `ENV_VARS` | no | deployment | *(empty)* | `…` | GitHub Actions deploy | — | THE single Repository Variable holding ALL non-sensitive config as KEY=value; pairs (semicolon-separated, newlines allowed). Generate it with `python scripts/env_bundle.py generate`. Secrets are NEVER placed here — they stay as individual GitHub Secrets. |
 | `GEOIP_DB` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 | `GEOIP_STUB` | no | platform | `true` | `true` | api/utils.py | format: bool; one of: true / false | GeoIP stub. |
 | `GOOGLE_OAUTH_STUB` | no | platform | `false` | `false` | api/main.py | format: bool; one of: true / false | Google sign-in stub — MUST be false in production. |
@@ -210,7 +211,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 
 ## Environments
 
-Use GitHub **Environments** to hold environment-specific config and protection rules. The deploy validates against `${{ vars.ENVIRONMENT || 'development' }}`:
+The deploy derives the environment from the `ENVIRONMENT` key inside `ENV_VARS` (validated with `--env-name auto`). Use GitHub **Environments** for environment-specific `ENV_VARS`/Secrets and protection rules:
 
 - **test / staging** — production-grade infra on TEST money: `STRIPE_MODE=test`, `PAYMENTS_LIVE_ENABLED=false`, test keys only. A live key here is rejected.
 - **production** — live money: `ENVIRONMENT=production`, `STRIPE_MODE=live`, `PAYMENTS_LIVE_ENABLED=true`, `STRIPE_ALLOW_LIVE=true`, `STRIPE_GATEWAY=real`, live keys + webhook secret, all stubs off, https URLs. Add environment protection (required reviewers) so a live deploy is a deliberate act.

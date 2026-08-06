@@ -26,6 +26,7 @@ Secret values are NEVER printed. Only presence (`SET`) is ever reported.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -44,7 +45,9 @@ DEFAULT_MANIFEST = os.path.join(ROOT, "config", "github_configuration_manifest.y
 _RUNNER_NOISE = re.compile(
     r"^(GITHUB_|RUNNER_|ACTIONS_|CI$|HOME$|PATH$|PWD$|SHELL$|USER$|LANG$|LC_|TERM$|"
     r"HOSTNAME$|_$|PYTHON|PIP_|VIRTUAL_ENV$|LD_|TZ$|EDITOR$|SHLVL$|OLDPWD$|"
-    r"HTTPS?_PROXY$|NO_PROXY$|http_proxy$|https_proxy$|no_proxy$)"
+    r"HTTPS?_PROXY$|NO_PROXY$|http_proxy$|https_proxy$|no_proxy$|"
+    # bundle plumbing (not deployment config themselves)
+    r"ENV_VARS$|VARS_JSON$|SECRETS_JSON$|CONFIG_ENV_NAME$)"
 )
 
 
@@ -174,6 +177,11 @@ def resolve(manifest: dict, env: dict, scopes: set | None = None):
     resolved: dict[str, str] = {}
     for name, meta in variables.items():
         if not _in_scope(meta, scopes):
+            continue
+        if name == "ENV_VARS":
+            # The bundle container itself is never resolved/echoed — its value holds ALL
+            # the other variables (and, if misused, could hold a secret). Its contents are
+            # validated separately by validate_env_bundle().
             continue
         aka = meta.get("aka")
         val = _get_env(env, name, aka)
@@ -380,6 +388,36 @@ def _export_github_env(resolved: dict, path: str) -> None:
             f.write(f"{name}={val}\n")
 
 
+def validate_env_bundle(manifest: dict, res: Result) -> None:
+    """Validate the single ENV_VARS bundle (when present): syntax, no secrets inside,
+    known keys, no duplicates, and no conflicting legacy individual GitHub Variables. Does
+    not weaken any downstream safety check — resolve()/enforce_rules() still run after."""
+    import env_vars as ev
+    raw = os.environ.get("ENV_VARS")
+    if not (raw and raw.strip()):
+        return  # legacy per-variable mode; nothing bundle-specific to check
+    values, perrors = ev.parse_bundle(raw)
+    for e in perrors:
+        res.error(f"ENV_VARS parse: {e}")
+    for e in ev.check_no_secrets(values, manifest):
+        res.error(e)                       # sanitized; never includes the value
+    for e in ev.check_known(values, manifest):
+        res.error(f"ENV_VARS: {e}")
+    # Detect conflicting legacy individual Variables (from the vars context) so the two
+    # sources are never silently mixed.
+    vars_ctx = {}
+    try:
+        vars_ctx = json.loads(os.environ.get("VARS_JSON", "") or "{}")
+    except (ValueError, TypeError):
+        vars_ctx = {}
+    legacy = ev.detect_legacy_individual_vars(vars_ctx, manifest)
+    if legacy:
+        res.error("Legacy individual GitHub Variables still set alongside ENV_VARS: "
+                  + ", ".join(legacy) + ". Move them into ENV_VARS and delete the "
+                  "individual Variables (only ENV_VARS + DEPLOY_CONFIG_FROM_GITHUB should "
+                  "remain) — refusing to mix two config sources.")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--manifest", default=DEFAULT_MANIFEST)
@@ -404,16 +442,27 @@ def main(argv=None) -> int:
     scopes = None if args.scope.strip().lower() == "all" else {
         s.strip() for s in args.scope.split(",") if s.strip()}
 
+    # Bundle-specific validation (syntax, no secrets inside, known keys, no legacy mixing).
+    res = Result()
+    validate_env_bundle(manifest, res)
+
     env = dict(os.environ)
-    resolved, secret_status, res = resolve(manifest, env, scopes)
-    enforce_rules(resolved, secret_status, env, args.env_name, res)
-    enforce_observability(resolved, secret_status, args.env_name, res)
+    resolved, secret_status, res2 = resolve(manifest, env, scopes)
+    res.errors.extend(res2.errors)
+    res.warnings.extend(res2.warnings)
+    # `--env-name auto` (or empty) derives the environment from the resolved ENVIRONMENT,
+    # so the workflow doesn't need a separate individual Variable just for the env name.
+    env_name = args.env_name
+    if not env_name or env_name.lower() == "auto":
+        env_name = _rget(resolved, "ENVIRONMENT", "development").lower()
+    enforce_rules(resolved, secret_status, env, env_name, res)
+    enforce_observability(resolved, secret_status, env_name, res)
     unknown = find_unknown(manifest, env, res)
     if args.strict_unknown and unknown:
         for u in unknown:
             res.error(f"Unknown/undocumented env var: {u}")
 
-    print_summary(resolved, secret_status, args.env_name)
+    print_summary(resolved, secret_status, env_name)
 
     if res.warnings:
         print("\n-- warnings --")

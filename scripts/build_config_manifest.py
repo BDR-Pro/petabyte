@@ -266,6 +266,11 @@ OBSERVABILITY_EXTRA = {
                                                  "server env from GitHub config and pushes it; until "
                                                  "then deploys stay code-only. Flip to true after "
                                                  "entering all Secrets."},
+    "ENV_VARS": {"default": None, "scope": ["deployment"], "secret": False,
+                 "description": "THE single Repository Variable holding ALL non-sensitive config as "
+                                "KEY=value; pairs (semicolon-separated, newlines allowed). Generate "
+                                "it with `python scripts/env_bundle.py generate`. Secrets are NEVER "
+                                "placed here — they stay as individual GitHub Secrets."},
     # tooling credentials — secrets, no defaults, not asserted required (depends on the
     # actual auth config of the prepared observability server).
     "PROMETHEUS_REMOTE_WRITE_USERNAME": {"secret": True, "scope": ["observability"],

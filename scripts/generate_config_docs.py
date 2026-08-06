@@ -133,14 +133,18 @@ def build_reference(manifest: dict, code_map: dict) -> str:
         "`config/github_configuration_manifest.yaml`. Do not hand-edit — re-run the "
         "generator. The manifest is the single source of truth.",
         "",
-        "GitHub is the source of truth for deployment configuration. Non-sensitive values "
-        "are **GitHub Variables**; credentials/keys/tokens/passwords are **GitHub Secrets**. "
-        "At deploy time GitHub Actions resolves these and generates the server env file — "
-        "nothing long-lived is hand-maintained on the server.",
+        "GitHub is the source of truth for deployment configuration. **All non-sensitive "
+        "values live in ONE Repository Variable, `ENV_VARS`** (as `KEY=value;` pairs); "
+        "credentials/keys/tokens/passwords are **individual GitHub Secrets**. At deploy time "
+        "the workflow parses `ENV_VARS`, injects the Secrets, and generates the server env "
+        "file atomically — nothing long-lived is hand-maintained on the server. The table "
+        "below documents every key that `ENV_VARS` may contain (and every Secret); generate a "
+        "ready-to-paste bundle with `python scripts/env_bundle.py generate`.",
         "",
-        "Set them under **Settings → Secrets and variables → Actions** (repository level), "
-        "or per **Environment** (test / staging / production) for environment-specific "
-        "values and protection rules.",
+        "Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are "
+        "refused inside `ENV_VARS`, so the two never conflict). The only standalone Variables "
+        "are `ENV_VARS` and `DEPLOY_CONFIG_FROM_GITHUB`; do not create individual Variables for "
+        "anything else — the preflight reports leftover legacy Variables as a conflict.",
         "",
         "Scope legend: **platform** = API server · **gpu** = seller GPU node agent · "
         "**deployment** = GitHub Actions → server (never written into the server runtime env).",
@@ -177,8 +181,9 @@ def build_reference(manifest: dict, code_map: dict) -> str:
     lines.append("")
     lines.append("## Environments")
     lines.append("")
-    lines.append("Use GitHub **Environments** to hold environment-specific config and protection "
-                 "rules. The deploy validates against `${{ vars.ENVIRONMENT || 'development' }}`:")
+    lines.append("The deploy derives the environment from the `ENVIRONMENT` key inside `ENV_VARS` "
+                 "(validated with `--env-name auto`). Use GitHub **Environments** for "
+                 "environment-specific `ENV_VARS`/Secrets and protection rules:")
     lines.append("")
     lines.append("- **test / staging** — production-grade infra on TEST money: `STRIPE_MODE=test`, "
                  "`PAYMENTS_LIVE_ENABLED=false`, test keys only. A live key here is rejected.")
@@ -208,48 +213,63 @@ def build_reference(manifest: dict, code_map: dict) -> str:
 
 
 def build_checklist(manifest: dict) -> str:
+    import env_vars as ev
     variables = manifest.get("variables", {})
     secrets = manifest.get("secrets", {})
 
     def scoped(items, scope):
         return {k: v for k, v in items.items() if scope in v.get("scope", [])}
 
+    def bundle_lines(scopes):
+        out = []
+        for name in sorted(variables):
+            meta = variables[name]
+            if name in ev.BOOTSTRAP_VARS or ev.is_secret_name(name, manifest):
+                continue
+            if not (set(meta.get("scope", [])) & scopes):
+                continue
+            d = meta.get("default")
+            d = "" if d in (None,) else d
+            out.append(f"{name}={d};")
+        return out
+
     lines = [
         "# GitHub manual setup checklist",
         "",
-        "> **Generated** by `scripts/generate_config_docs.py`. Work top to bottom. Create "
-        "each **Variable** and **Secret** in GitHub under **Settings → Secrets and variables "
-        "→ Actions** (or per **Environment**). This list is complete — you should not need to "
-        "search the repository.",
+        "> **Generated** by `scripts/generate_config_docs.py`. The setup is now tiny: create "
+        "**one** Variable (`ENV_VARS`) holding all non-secret config, set the small set of "
+        "**Secrets** individually, and flip one gate. You should not need to search the repo.",
         "",
-        "Format below: Variables are shown as `NAME=default` (the value the app uses if you "
-        "don't override it). Secrets are shown as `NAME=<what to put>` — **never** commit or "
-        "paste a real secret into a file; only enter it in the GitHub Secrets UI.",
-        "",
-        "After entering everything, the `configuration-preflight` CI job validates it and "
-        "**fails the deploy** if anything required is missing or unsafe. A deploy applies the "
-        "config by regenerating the server env and restarting the services (so every change "
-        "takes effect on the next deploy).",
+        "**GitHub → Settings → Secrets and variables → Actions.**",
         "",
         "Legend: 🔴 required · ⚪ optional (default is safe).",
         "",
+        "## 1. Create the `ENV_VARS` Variable",
+        "",
+        "Under **Variables**, create **`ENV_VARS`** and paste the bundle below (all non-secret "
+        "config as `KEY=value;` pairs — newlines are fine). Regenerate any time with "
+        "`python scripts/env_bundle.py generate`. **Never put a secret in here** — the deploy "
+        "rejects any secret-classified key found in `ENV_VARS`.",
+        "",
+        "```ini",
     ]
+    lines += bundle_lines({"platform", "observability"})
+    lines.append("```")
+    lines.append("")
+    lines.append("Edit values in place before pasting (e.g. `ENVIRONMENT=production;`, "
+                 "`STRIPE_MODE=live;` when going live). Anything you omit falls back to the "
+                 "safe manifest default. Validate a bundle locally with "
+                 "`python scripts/env_bundle.py validate` (reads `$ENV_VARS`, a `--file`, or stdin).")
+    lines.append("")
 
-    def var_block(title, items, blurb=""):
-        lines.append(f"### {title}")
-        if blurb:
-            lines.append("")
-            lines.append(blurb)
-        lines.append("")
-        lines.append("```ini")
-        for name in sorted(items):
-            meta = items[name]
-            mark = "REQUIRED" if meta.get("required") else "optional"
-            d = meta.get("default")
-            d = "" if d in (None,) else d
-            lines.append(f"{name}={d}   # {mark}: {_md_escape(meta.get('description') or '')}")
-        lines.append("```")
-        lines.append("")
+    lines.append("## 2. Create the `DEPLOY_CONFIG_FROM_GITHUB` Variable")
+    lines.append("")
+    lines.append("Set **`DEPLOY_CONFIG_FROM_GITHUB=false`** while you finish setup. Flip it to "
+                 "**`true`** once `ENV_VARS` + all required Secrets are in — then the deploy "
+                 "generates the server env from GitHub and pushes it (atomically, with health "
+                 "check + auto-rollback). These two are the ONLY standalone Variables; every "
+                 "other non-secret value lives in `ENV_VARS`.")
+    lines.append("")
 
     def secret_block(title, items, blurb=""):
         lines.append(f"### {title}")
@@ -264,37 +284,32 @@ def build_checklist(manifest: dict) -> str:
             lines.append(f"- **`{name}`** — {mark}. {_md_escape(hint)}")
         lines.append("")
 
-    # --- Platform server ---
-    lines.append("## 1. Platform (API server)")
+    # --- Secrets (individually managed) ---
+    lines.append("## 3. Secrets (individually managed — NOT in ENV_VARS)")
     lines.append("")
-    var_block("Variables — platform",
-              scoped(variables, "platform"),
-              "Non-sensitive server config. Override any line in GitHub Variables; leave the "
-              "rest and the shown default is used.")
-    secret_block("Secrets — platform",
-                 scoped(secrets, "platform"),
-                 "Enter each in GitHub Secrets. Required ones (🔴) must be set before the first "
-                 "deploy — the preflight fails closed if they are missing.")
-
-    # --- Deployment ---
-    lines.append("## 2. Deployment (GitHub Actions → server)")
+    lines.append("Create each under **Secrets**. Required ones (🔴) must exist before the first "
+                 "gated deploy — the preflight fails closed if any is missing. Values are never "
+                 "printed anywhere.")
     lines.append("")
-    lines.append("These let the deploy workflow reach the server. They are **never** written "
-                 "into the server's runtime env.")
-    lines.append("")
-    secret_block("Secrets — deployment", scoped(secrets, "deployment"))
+    secret_block("Platform secrets", scoped(secrets, "platform"))
+    secret_block("Deployment secrets (GitHub Actions → server; never in the runtime env)",
+                 scoped(secrets, "deployment"))
 
     # --- GPU node ---
-    lines.append("## 3. GPU node (seller agent)")
+    lines.append("## 4. GPU node (seller agent) — configured on the node, not the platform")
     lines.append("")
-    lines.append("Config for a seller's GPU machine running the agent. The GPU node **never** "
-                 "receives any platform secret (Stripe, DB, admin, signing key).")
+    lines.append("A seller's GPU machine gets its OWN config (it never receives any platform "
+                 "secret). Generate its bundle with `python scripts/env_bundle.py generate "
+                 "--scope gpu` and set its secrets on the node:")
     lines.append("")
-    var_block("Variables — GPU node", scoped(variables, "gpu"))
-    secret_block("Secrets — GPU node", scoped(secrets, "gpu"))
+    lines.append("```ini")
+    lines += bundle_lines({"gpu"})
+    lines.append("```")
+    lines.append("")
+    secret_block("GPU node secrets", scoped(secrets, "gpu"))
 
     # --- Newsletter callout ---
-    lines.append("## 4. Newsletter (Mailgun) — one-time Mailgun setup")
+    lines.append("## 5. Newsletter (Mailgun) — one-time Mailgun setup")
     lines.append("")
     lines.append("The newsletter runs on the Mailgun sending subdomain **news.petabyte.market**, "
                  "sends **From `updates@petabyte.market`**, and forwards replies to "
@@ -307,24 +322,27 @@ def build_checklist(manifest: dict) -> str:
                  "and set its From name/address to `updates@petabyte.market`.")
     lines.append("3. Add a Mailgun **Route** that forwards replies to that list/address on to "
                  "`info@petabyte.market`.")
-    lines.append("4. Set the GitHub Variables `NEWSLETTER_PROVIDER=mailgun`, "
-                 "`MAILGUN_NEWSLETTER_DOMAIN=news.petabyte.market`, "
+    lines.append("4. The newsletter keys are already in the `ENV_VARS` bundle above "
+                 "(`NEWSLETTER_PROVIDER=mailgun`, `MAILGUN_NEWSLETTER_DOMAIN=news.petabyte.market`, "
                  "`NEWSLETTER_LIST_ADDRESS=newsletter@news.petabyte.market`, "
                  "`NEWSLETTER_FROM=updates@petabyte.market`, "
-                 "`NEWSLETTER_REPLY_TO=info@petabyte.market` (defaults already match). The "
-                 "newsletter reuses the `MAILGUN_API_KEY` secret — no extra key needed.")
+                 "`NEWSLETTER_REPLY_TO=info@petabyte.market`) — defaults match, no change needed. "
+                 "The newsletter reuses the `MAILGUN_API_KEY` **Secret** — no extra key.")
     lines.append("")
     lines.append("---")
     lines.append("")
     lines.append("### Validate after entering everything")
     lines.append("")
     lines.append("```bash")
-    lines.append("# locally, with the same values exported, or let CI's configuration-preflight run it:")
-    lines.append("python scripts/validate_github_configuration.py --env-name test        # test/staging")
-    lines.append("python scripts/validate_github_configuration.py --env-name production   # production")
+    lines.append("# validate the ENV_VARS bundle itself (syntax, no secrets, known keys):")
+    lines.append("ENV_VARS=\"$(pbpaste)\" python scripts/env_bundle.py validate   # or --file bundle.txt")
+    lines.append("# full preflight (bundle + Secrets + safety rules); CI runs this on every deploy:")
+    lines.append("python scripts/validate_github_configuration.py --env-name auto")
     lines.append("```")
     lines.append("")
-    lines.append("Secrets are reported only as `NAME=SET` / `MISSING` — values are never printed.")
+    lines.append("Secrets are reported only as `NAME=SET` / `MISSING` — values are never printed. "
+                 "A secret accidentally placed in `ENV_VARS`, an unknown key, a duplicate, or a "
+                 "leftover legacy individual Variable all FAIL the preflight.")
     lines.append("")
     return "\n".join(lines)
 

@@ -42,10 +42,33 @@ syntax-validated in CI-style checks.
 **Remaining manual action:** run it on the Droplet and paste the output back. The stack is
 **not** declared fixed until that output confirms all services healthy.
 
+## Config architecture — ONE `ENV_VARS` bundle (current)
+
+Non-secret configuration is now a **single** GitHub Repository Variable, `ENV_VARS`
+(`KEY=value;` pairs, newlines allowed), instead of 100+ individual Variables. Secrets stay
+individual. Only two standalone Variables remain: `ENV_VARS` + `DEPLOY_CONFIG_FROM_GITHUB`.
+
+- **Parser** (`scripts/env_vars.py`): treats `ENV_VARS` as DATA (never eval/sourced) —
+  semicolon split, trims, ignores blanks, splits on the FIRST `=` (so `DATABASE_OPTIONS=sslmode=require`
+  works), validates names `^[A-Z_][A-Z0-9_]*$`, rejects duplicates / null bytes /
+  newline-injected values / entries without `=`; shell syntax is kept as literal text.
+- **Secret guard**: a secret-classified key inside `ENV_VARS` FAILS the deploy with a
+  sanitized error (value never printed), backed by a defense-in-depth denylist.
+- **Precedence**: GitHub Secrets > `ENV_VARS` > manifest defaults (secret & non-secret keys
+  are disjoint, so no ambiguity). Legacy individual Variables are detected and reported —
+  the two sources are never silently mixed.
+- **Generation**: the deploy generates `/etc/lumaris/lumaris.env` from `ENV_VARS` + Secrets
+  + safe defaults, atomically (temp → validate → 0600 → install), backs up the old env,
+  restarts, health-checks, and **auto-rolls-back** on failure. Never printed in logs.
+- **Dev tool** (`scripts/env_bundle.py`): `generate` (paste-ready bundle, never secrets),
+  `validate`, `list`.
+- Docs: `docs/GITHUB_MANUAL_SETUP_CHECKLIST.md` is now "paste one Variable + set Secrets".
+
 ## Shipped (in the current branch)
 
 | Area | State | Where |
 |---|---|---|
+| **GitHub config = ONE ENV_VARS bundle** | ✅ parser + secret-guard + precedence + env_bundle tool + atomic deploy w/ rollback | `scripts/env_vars.py`, `scripts/env_bundle.py`, `scripts/config_context.py` |
 | **GitHub config = source of truth** | ✅ manifest + validator + drift + docs + deploy-env generator (scope-filtered) + gated deploy | `scripts/*config*`, `config/github_configuration_manifest.yaml`, `docs/GITHUB_*` |
 | **Observability core** | ✅ correlation context, JSON logs + redaction, OTel traces, bounded Prometheus metrics, degrade-safe | `lumaris_api/observability.py` |
 | **API/settlement instrumentation** | ✅ request spans+metrics, transaction spine, capture/commission/transfer events, protected `/internal/metrics`, `/health/observability` | `lumaris_api/main.py`, `stripe_connect.py` |

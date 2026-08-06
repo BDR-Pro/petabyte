@@ -134,6 +134,9 @@ jobs:
       - name: config toolchain tests
         working-directory: lumaris_api
         run: python config_test.py
+      - name: ENV_VARS bundle tests (parser / secret-guard / precedence / generated env)
+        working-directory: lumaris_api
+        run: python env_vars_test.py
       - name: observability (correlation / redaction / cardinality / degrade-safe)
         working-directory: lumaris_api
         run: python observability_test.py
