@@ -205,7 +205,14 @@ service:
       level: info
     metrics:
       level: detailed
-      address: "127.0.0.1:8888"
+      # `address` was deprecated (collector v0.111) and REMOVED (v0.123). Use the
+      # supported OpenTelemetry-SDK `readers:` syntax to expose internal metrics.
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
   pipelines:
     traces:
       receivers: [otlp]

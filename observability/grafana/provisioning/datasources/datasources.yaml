@@ -50,7 +50,7 @@ datasources:
       derivedFields:
         - name: trace_id
           # Matches "trace_id":"<hex>" in the structured JSON log line.
-          matcherRegex: "\"trace_id\"\\s*:\\s*\"([a-fA-F0-9]+)\""
+          matcherRegex: '"trace_id"\s*:\s*"([a-fA-F0-9]+)"'
           url: "${__value.raw}"
           datasourceUid: tempo
           urlDisplayLabel: "View trace"

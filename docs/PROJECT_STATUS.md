@@ -14,6 +14,34 @@ automation → performance → UI polish.
 
 _Last updated: 2026-08-06._
 
+## Observability Droplet repair — IMPLEMENTATION READY — WAITING FOR OPERATOR EXECUTION
+
+The observability stack at `/opt/petabyte-observability` came up with five failures. A
+complete, idempotent repair is implemented in the repo; it must be run **on the Droplet**
+(the sandbox cannot SSH there).
+
+**Failure summary → root cause → fix:**
+
+| # | Failure | Root cause | Fix (in `docs/scripts/repair_observability_stack.sh`) |
+|---|---|---|---|
+| 1 | Grafana: `yaml: line 27: found unknown escape character` | A regex `\s` inside a **double-quoted** YAML scalar in the datasource file; YAML double quotes reject `\s`. | Emit datasources with regexes **single-quoted** (no escape processing). Also fixed in the repo reference `observability/grafana/provisioning/datasources/datasources.yaml`. |
+| 2 | OTel Collector: `service.telemetry.metrics has invalid key: address` | `…metrics.address` was deprecated (v0.111) and **removed** (v0.123). | Use the supported `readers:` (OTel-SDK) syntax. Also fixed in `observability/otel-collector/config.yaml`. |
+| 3 | Tempo: `field ingester/compactor not found in type app.Config` | Config didn't match the running binary schema. | Write a canonical single-binary + local-storage config valid for the pinned **Tempo 2.6.1** (WAL/blocks on the existing volume). |
+| 4 | Loki: health check may be inaccurate | Wrong/early probe. | Probe `/ready` with a `start_period`. |
+| 5 | Redis: health check uses the password incorrectly | Password not read from container env. | `redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping` from the container env — never printed. |
+
+**Also:** removes all `:latest` tags and pins Grafana 11.4.0, Prometheus v2.54.1, Loki
+3.2.1, Tempo 2.6.1, OTel Collector-contrib 0.111.0, Redis 7.4.1, Node Exporter v1.8.2,
+cAdvisor v0.49.1. Backs up first, **preserves .env + volumes + credentials**, validates
+(`docker compose config` + `otelcol validate`), restarts, verifies every service, prints a
+sanitized summary, and supports `--rollback`.
+
+**Repair implementation status:** ✅ script + embedded copy/paste (`docs/DEBUG_EXCHANGE.md`
+#2) + run/verify/rollback instructions (`docs/TESTING_EXCHANGE.md`) complete and
+syntax-validated in CI-style checks.
+**Remaining manual action:** run it on the Droplet and paste the output back. The stack is
+**not** declared fixed until that output confirms all services healthy.
+
 ## Shipped (in the current branch)
 
 | Area | State | Where |

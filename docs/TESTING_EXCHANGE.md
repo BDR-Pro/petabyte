@@ -164,4 +164,67 @@ to `ok`. `0 failed`. No secret appears in any emitted event.
 
 ---
 
+## 2026-08-06 — Observability stack repair (Droplet `/opt/petabyte-observability`)
+
+Fixes the five known failures (Grafana datasource escape, OTel `address` key, Tempo
+schema, Loki + Redis health checks) and pins all images. Idempotent + safe to rerun; it
+backs up first, preserves volumes + credentials, and never deletes data or prints secrets.
+The full copy/paste-without-file-transfer script is **DEBUG REQUEST #2** in
+`docs/DEBUG_EXCHANGE.md`.
+
+**Exact run command** (on the observability Droplet, as root):
+```bash
+cd /opt/petabyte-observability
+sudo bash /opt/petabyte/docs/scripts/repair_observability_stack.sh
+```
+
+**Expected output (tail):**
+```
+================ REPAIR SUCCESSFUL ================
+   OK   Grafana healthy (http://localhost:3000/api/health)
+   OK   Prometheus healthy (http://localhost:9090/-/healthy)
+   OK   Loki healthy (http://localhost:3100/ready)
+   OK   Tempo healthy (http://localhost:3200/ready)
+   OK   OTel Collector healthy (http://localhost:13133/)
+   OK   Redis PONG (authenticated)
+   OK   Node Exporter running
+   OK   cAdvisor running
+Backup: /opt/petabyte-observability/backups/<ts>   (credentials + volumes preserved)
+```
+
+**Success criteria:**
+- Exit code 0 and the `REPAIR SUCCESSFUL` banner.
+- `docker compose ps` shows every service `running`/`healthy` with **pinned** image tags
+  (no `:latest`).
+- No Grafana provisioning error in `docker compose logs grafana`.
+- No `invalid key: address` in `docker compose logs otel-collector`.
+- No `field ingester/compactor not found` in `docker compose logs tempo`.
+- No secret value appears anywhere in the output.
+
+**Independent verification commands** (run after the script):
+```bash
+cd /opt/petabyte-observability
+docker compose ps
+docker compose config | grep -E 'image:'                 # confirm pinned versions, no :latest
+curl -fsS http://localhost:3000/api/health; echo         # Grafana {"database":"ok"...}
+curl -fsS http://localhost:9090/-/healthy; echo          # Prometheus Healthy
+curl -fsS http://localhost:3100/ready; echo              # Loki: ready
+curl -fsS http://localhost:3200/ready; echo              # Tempo: ready
+curl -fsS http://localhost:13133/; echo                  # OTel health_check: 200
+docker compose exec -T redis sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping'  # PONG
+docker compose logs grafana --tail=50 | grep -i provisioning || echo "no provisioning errors"
+```
+
+**Rollback command** (restores the timestamped backup and restarts):
+```bash
+sudo bash /opt/petabyte/docs/scripts/repair_observability_stack.sh --rollback
+# or a specific backup:
+sudo bash /opt/petabyte/docs/scripts/repair_observability_stack.sh --rollback <ts>
+```
+
+_Status: ⏳ WAITING FOR OPERATOR EXECUTION — do not mark COMPLETE until the script output is
+pasted back and all services report healthy._
+
+---
+
 <!-- Append new dated sections below; mark finished sections ✅ COMPLETE. Never overwrite. -->
