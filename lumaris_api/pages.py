@@ -1580,6 +1580,8 @@ async function boot(){
   document.getElementById('njobs').textContent=u.bookings;
   document.getElementById('wbal').textContent=money(u.balance);
   document.getElementById('wearn').textContent=money(u.earnings);
+  if(new URLSearchParams(location.search).get('funded')==='1'){
+    wmsg('Payment received — your balance updates as soon as Stripe confirms.');}
   loadNodes();loadJobs();loadKeys();loadMethods();loadTemplates();loadVMs();loadEarnings();loadOnboarding();loadDiagnostics();loadBurn();loadEmail();loadNotifs();setInterval(loadBurn,20000);
 }
 async function loadVMs(){var r=await api('/vm');if(!r.ok)return;var vms=r.body.vms||[];
@@ -1654,9 +1656,14 @@ async function mkkey(){var lb=document.getElementById('klabel').value;var q=new 
   el.textContent=r.ok?('Copy now — shown once:\\n\\n'+r.body.api_key):'Could not create key.';loadKeys();}
 async function rvkey(j){await api('/keys/'+j+'/revoke',{method:'POST'});loadKeys();}
 async function deposit(){var a=parseFloat(document.getElementById('amt').value||'0');
-  var r=await api('/deposit',{method:'POST',body:JSON.stringify({amount:a})});
-  if(r.ok){document.getElementById('bal').textContent=money(r.body.balance);document.getElementById('wbal').textContent=money(r.body.balance);wmsg('Added '+money(a)+' (sandbox credit).');}
-  else if(r.status===403){wmsg('Live mode: deposits go through checkout, not here.');}else{wmsg('Could not add funds.');}}
+  if(!(a>0)){wmsg('Enter an amount.');return;}
+  // Open Stripe's hosted card page for a wallet top-up (test or live per config).
+  var r=await api('/wallet/topup',{method:'POST',body:JSON.stringify({amount_minor:Math.round(a*100)})});
+  if(r.ok && r.body.checkout_url){
+    wmsg((r.body.test_mode?'Test mode — ':'')+'Redirecting to secure Stripe checkout…');
+    location.href=r.body.checkout_url;
+  } else if(r.status===400){ wmsg((r.body&&r.body.detail)?r.body.detail:'Enter a valid amount.'); }
+  else { wmsg('Could not start checkout — please try again.'); }}
 async function withdraw(){var a=parseFloat(document.getElementById('amt').value||'0');
   var r=await api('/wallet/withdraw',{method:'POST',body:JSON.stringify({amount:a})});
   wmsg(r.ok?('Withdrawal of '+money(a)+' requested.'):(r.body&&r.body.detail?r.body.detail:'Add a payout method first.'));loadMethods();}

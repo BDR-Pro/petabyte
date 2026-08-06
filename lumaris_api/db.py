@@ -1098,6 +1098,50 @@ class PayoutMethodRail(Base):
     disabled_at = Column(DateTime, nullable=True)
 
 
+class WalletTopup(Base):
+    """A buyer 'Add funds' via Stripe Checkout (hosted card page). The wallet is credited
+    when the session is paid (checkout.session.completed webhook, or the sandbox
+    simulate-pay). Stamped with the money mode (TEST|LIVE) so demo top-ups can never be
+    counted as live funds."""
+    __tablename__ = "wallet_topups"
+    id = Column(Integer, primary_key=True, index=True)
+    public_id = Column(String, unique=True, index=True, default=lambda: "wtu_" + _rand_vm_id())
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    amount_minor = Column(Integer, nullable=False)
+    currency = Column(String, nullable=False, default="usd")
+    stripe_session_id = Column(String, unique=True, index=True, nullable=True)
+    stripe_payment_intent_id = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="pending", index=True)  # pending|paid|failed|expired
+    mode = Column(String, nullable=False, default=payments_mode, index=True)  # TEST|LIVE, immutable
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    credited_at = Column(DateTime, nullable=True)
+    __table_args__ = (
+        CheckConstraint("amount_minor > 0", name="ck_topup_amount_pos"),
+    )
+
+
+def get_topup_by_session(db: Session, session_id: str) -> "WalletTopup":
+    return db.query(WalletTopup).filter(
+        WalletTopup.stripe_session_id == session_id).first()
+
+
+def mark_topup_paid_and_credit(db: Session, topup: "WalletTopup", *,
+                               payment_intent_id: str = None) -> bool:
+    """Credit the buyer's wallet exactly once for a paid top-up. Idempotent: a second
+    call (duplicate webhook / retry) returns False and never double-credits."""
+    if topup.status == "paid":
+        return False
+    topup.status = "paid"
+    topup.credited_at = _utcnow()
+    if payment_intent_id:
+        topup.stripe_payment_intent_id = payment_intent_id
+    user = db.query(User).filter(User.id == topup.user_id).first()
+    if user:
+        deposit(db, user, topup.amount_minor / 100.0)   # minor -> major (2-dp currencies)
+    db.add(topup); db.commit()
+    return True
+
+
 def create_payout_obligation(db: Session, *, seller_id: int, compute_tx_id: int,
                              currency: str, net_amount_minor: int, country: str = None,
                              commission_minor: int = 0, pricing_snapshot: str = None,
@@ -1225,7 +1269,7 @@ def _forbid_mode_change(mapper, connection, target):
             f"({hist.deleted[0]} -> {hist.added[0]}); test and live money must never "
             f"be reclassified.")
 
-for _mode_cls in (ComputeTransaction, PayoutObligation, PayoutBatch):
+for _mode_cls in (ComputeTransaction, PayoutObligation, PayoutBatch, WalletTopup):
     event.listen(_mode_cls, "before_update", _forbid_mode_change, propagate=True)
 
 

@@ -898,6 +898,13 @@ def _handle_event(db, event: dict):
             _sync_from_stripe(db, ca, obj)
         return
 
+    if etype == "checkout.session.completed":
+        # Buyer finished the hosted card page for an 'Add funds' top-up -> credit the
+        # wallet (idempotent; a duplicate event is a no-op).
+        import wallet_funding
+        wallet_funding.credit_from_session(db, obj)
+        return
+
     if etype in ("payment_intent.amount_capturable_updated", "payment_intent.succeeded"):
         tx = _tx_by_pi(db, obj.get("id"))
         if tx and obj.get("status") == "requires_capture" and tx.status == "PAYMENT_REQUIRES_ACTION":

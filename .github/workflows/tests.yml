@@ -43,6 +43,9 @@ jobs:
       - name: account (reset + cal webhook + demo notify)
         working-directory: lumaris_api
         run: python account_test.py
+      - name: wallet (add funds via stripe checkout)
+        working-directory: lumaris_api
+        run: python wallet_test.py
       - name: tunnel (NAT traversal + failover)
         working-directory: lumaris_gateway
         run: python tunnel_test.py

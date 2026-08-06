@@ -3371,6 +3371,61 @@ def deposit_funds(data: DepositModel, user: dict = Depends(get_current_user),
     return {"status": "ok", "balance": balance}
 
 
+class TopupModel(BaseModel):
+    amount_minor: int = Field(..., ge=1, description="amount to add, in minor units (cents)")
+
+
+@app.post("/wallet/topup", tags=["wallet"])
+def wallet_topup(data: TopupModel, request: Request,
+                 user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Add funds: open Stripe's hosted card page for a wallet top-up and return the
+    checkout URL to redirect the buyer to. Works in demo (TEST) and LIVE mode depending
+    on the configured Stripe keys; the response carries `mode`/`test_mode` so the UI can
+    badge it. The balance is credited when the payment completes (webhook)."""
+    import wallet_funding as wf
+    me = get_user_by_username(db, _username(user))
+    base = (os.getenv("PUBLIC_BASE_URL") or str(request.base_url)).rstrip("/")
+    try:
+        return wf.start_topup(db, me, amount_minor=data.amount_minor,
+                              success_url=f"{base}/account?funded=1",
+                              cancel_url=f"{base}/account?funded=0")
+    except wf.WalletError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/wallet/topup/{topup_id}", tags=["wallet"])
+def wallet_topup_status(topup_id: str, user: dict = Depends(get_current_user),
+                        db: Session = Depends(get_db)):
+    from db import WalletTopup
+    me = get_user_by_username(db, _username(user))
+    t = db.query(WalletTopup).filter(WalletTopup.public_id == topup_id,
+                                     WalletTopup.user_id == me.id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="top-up not found")
+    return {"topup_id": t.public_id, "status": t.status, "amount_minor": t.amount_minor,
+            "currency": t.currency, "mode": t.mode, "credited": t.status == "paid"}
+
+
+@app.post("/wallet/topup/{topup_id}/simulate-pay", tags=["wallet"])
+def wallet_topup_simulate(topup_id: str, user: dict = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    """SANDBOX/TEST ONLY: complete the hosted card page against the in-process fake
+    gateway and credit the wallet (offline demo / CI). 404 in real Stripe mode."""
+    import wallet_funding as wf
+    from db import WalletTopup
+    me = get_user_by_username(db, _username(user))
+    t = db.query(WalletTopup).filter(WalletTopup.public_id == topup_id,
+                                     WalletTopup.user_id == me.id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="top-up not found")
+    try:
+        wf.simulate_pay(db, t)
+    except wf.WalletError:
+        raise HTTPException(status_code=404, detail="not found")
+    db.refresh(t)
+    return {"ok": True, "status": t.status, "credited": t.status == "paid"}
+
+
 @app.post("/webhooks/payment")
 async def payment_webhook(request: Request, db: Session = Depends(get_db)):
     """Credit a buyer's balance from a verified payment event (idempotent).
