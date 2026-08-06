@@ -2013,6 +2013,12 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
             import seller_audit
             seller_audit.freeze_for_fraud(db, spec, "failed platform integrity audit",
                                           seller_id=agent.id, penalty=0)
+        # Quorum replica: record this seller's result; the cross-seller comparison (not
+        # the known answer) decides — divergence from the majority freezes the diverging
+        # seller, and a no-majority split holds everyone for review.
+        if getattr(tw, "trigger", "manual") == "quorum":
+            import quorum
+            quorum.record_submission(db, task.id, data.proof.get("output_hash"))
         return {"status": "ok", "task_id": task.id, "test_passed": passed,
                 "reputation": agent.reputation,
                 "can_accept_paid_jobs": agent.can_accept_paid_jobs}
@@ -2707,6 +2713,26 @@ def admin_run_audits(me=Depends(require_admin), db: Session = Depends(get_db),
     import seller_audit
     dispatched = seller_audit.run_spot_checks(db, difficulty=difficulty, sample_rate=sample_rate)
     return {"ok": True, "dispatched": len(dispatched), "audits": dispatched}
+
+
+@app.post("/admin/quorum/run", tags=["seller"])
+def admin_run_quorum(me=Depends(require_admin), db: Session = Depends(get_db),
+                     replicas: int = Query(3, ge=2, le=10), difficulty: str = "easy"):
+    """Open a quorum check: dispatch the SAME deterministic challenge to several distinct
+    live sellers and compare their results. A seller whose result diverges from the
+    majority is frozen for fraud; a no-majority split holds all participants for review.
+    Returns the check + the replica tasks each seller must run."""
+    import quorum
+    chk = quorum.run_quorum_audit(db, replicas=replicas, difficulty=difficulty)
+    if chk is None:
+        raise HTTPException(status_code=409,
+                            detail="not enough distinct live sellers for a quorum (need >= 2)")
+    import json as _json
+    subs = _json.loads(chk.submissions or "{}")
+    return {"ok": True, "quorum_id": chk.public_id, "status": chk.status,
+            "min_agree": chk.min_agree,
+            "replicas": [{"seller_id": int(sid), "task_id": r["task_id"]}
+                         for sid, r in subs.items()]}
 
 
 # ------------------- IDLE FALLBACK (earn when unrented) -------------------

@@ -49,6 +49,9 @@ jobs:
       - name: seller integrity audits (anti-fraud)
         working-directory: lumaris_api
         run: python seller_audit_test.py
+      - name: quorum verification (redundant re-execution)
+        working-directory: lumaris_api
+        run: python quorum_test.py
       - name: tunnel (NAT traversal + failover)
         working-directory: lumaris_gateway
         run: python tunnel_test.py

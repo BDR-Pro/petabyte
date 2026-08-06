@@ -368,6 +368,25 @@ class TestWorkload(Base):
     completed_at = Column(DateTime, nullable=True)
 
 
+class QuorumCheck(Base):
+    """Redundant re-execution: the SAME deterministic challenge is dispatched to several
+    independent sellers and their results are compared. Honest sellers agree; a seller who
+    fakes/corrupts the result diverges and is flagged. Used for deterministic workloads
+    the platform can't cheaply compute itself (seller agreement is the oracle)."""
+    __tablename__ = "quorum_checks"
+    id = Column(Integer, primary_key=True, index=True)
+    public_id = Column(String, unique=True, index=True, default=lambda: "qrm_" + _rand_vm_id())
+    size = Column(Integer, nullable=False)
+    seed = Column(Integer, nullable=False)
+    nonce = Column(String, nullable=False)
+    min_agree = Column(Integer, nullable=False, default=2)
+    status = Column(String, nullable=False, default="open", index=True)  # open|AGREED|DIVERGENT|INCONCLUSIVE
+    agreed_hash = Column(String, nullable=True)
+    submissions = Column(Text, nullable=False, default="{}")  # JSON {seller_id: {task_id, hash}}
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    finalized_at = Column(DateTime, nullable=True)
+
+
 class Organization(Base):
     """Enterprise/lab account with a shared wallet and optional budget cap."""
     __tablename__ = "orgs"

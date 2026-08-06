@@ -49,9 +49,15 @@ Never trust a bare `completed=true`. Layered, from cheapest to strongest:
   really run; over max = timeout), **GPU-telemetry consistency** (0% GPU utilisation →
   INCONCLUSIVE), and **duplicate-submission** detection. Verdict ∈
   `VALID/INVALID/INCONCLUSIVE/MANUAL_REVIEW`; a seller is paid **only on VALID**.
-- **Redundant re-execution / quorum (recommended next).** For deterministic workloads,
-  occasionally dispatch the same seeded job to a second independent seller (or recompute a
-  slice server-side) and compare within tolerance. Divergence → flag both, withhold, review.
+- **Redundant re-execution / quorum (implemented — `quorum.py`).** Dispatch the SAME
+  seeded challenge to several independent sellers and compare their results
+  (`POST /admin/quorum/run?replicas=N`). Seller agreement is the oracle, so it works even
+  for workloads the platform can't compute itself:
+    - **AGREED** — a majority returned the same result; any seller who diverges from it
+      faked/corrupted the result → **frozen for fraud** (`seller_audit.freeze_for_fraud`).
+    - **INCONCLUSIVE** — no majority (e.g. a 1-vs-1 split): we can't tell who's right →
+      **all participants held** for manual review (never auto-paid).
+  You need ≥3 replicas to identify a single liar; with 2 a disagreement holds both.
 - **Signed result manifest + GPU binding (recommended next).** Have the agent include the
   GPU UUID/model/driver/CUDA in the signed manifest and check it against the attested spec;
   a class/perf mismatch is fraud.
