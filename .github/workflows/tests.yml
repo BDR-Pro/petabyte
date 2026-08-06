@@ -52,6 +52,9 @@ jobs:
       - name: quorum verification (redundant re-execution)
         working-directory: lumaris_api
         run: python quorum_test.py
+      - name: marketplace intelligence (health/routing/trust/timeline)
+        working-directory: lumaris_api
+        run: python marketplace_test.py
       - name: tunnel (NAT traversal + failover)
         working-directory: lumaris_gateway
         run: python tunnel_test.py

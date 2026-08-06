@@ -2446,6 +2446,71 @@ def marketplace_stats(db: Session = Depends(get_db)):
             "contains_demo_data": demo_present}
 
 
+@app.get("/marketplace/health", tags=["marketplace"])
+def marketplace_health(db: Session = Depends(get_db)):
+    """The operational heartbeat: supply / demand / economics / quality, all live DB
+    aggregates for the current money mode. Zeros/nulls mean no data yet (never faked)."""
+    import marketplace_insight as mi
+    return mi.health(db)
+
+
+@app.get("/marketplace/health/summary", tags=["marketplace"])
+def marketplace_health_summary(db: Session = Depends(get_db)):
+    """A plain-language summary generated from the live health numbers (the honest,
+    LLM-swappable substrate for a natural-language exec/investor dashboard)."""
+    import marketplace_insight as mi
+    h = mi.health(db)
+    return {"summary": mi.summarize_health(h), "health": h}
+
+
+class RouteModel(BaseModel):
+    workload: Optional[str] = None
+    gpu_class: Optional[str] = None
+    min_vram: Optional[int] = Field(default=None, ge=0)
+    region: Optional[str] = None
+    country: Optional[str] = None
+    confidential: Optional[bool] = None
+    max_price_per_hour: Optional[float] = Field(default=None, gt=0)
+    min_reputation: Optional[int] = Field(default=None, ge=0, le=100)
+    redundancy: int = Field(default=1, ge=1, le=10)
+    hours: int = Field(default=1, ge=1, le=720)
+
+
+@app.post("/route", tags=["marketplace"])
+def route_explain(data: RouteModel, db: Session = Depends(get_db)):
+    """Explainable routing: pick the best GPU(s) for the stated intent and show WHY —
+    a predicted success probability from real historical signals, plus a plain checklist
+    (price / region / reliability / CUDA / trust / availability / historical success).
+    This is 'sell intelligence, not listings' — every number is real; a node with no
+    history shows the honest verified-node prior, never a fabricated stat."""
+    import marketplace_insight as mi
+    intent = {k: v for k, v in data.model_dump().items() if v is not None}
+    plan = select_plan(db, intent)
+
+    def annotate(item):
+        spec = _get_spec(db, item["spec_id"])
+        if spec is not None:
+            rep = compute_reputation(db, spec)
+            item["predicted_success"] = mi.predict_success(spec, rep)
+        return item
+    plan["selected"] = [annotate(i) for i in plan.get("selected", [])]
+    plan["alternatives"] = [annotate(i) for i in plan.get("alternatives", [])]
+    plan["checklist"] = mi.route_checklist(plan, intent)
+    return plan
+
+
+@app.get("/sellers/{public_id}/trust", tags=["marketplace"])
+def seller_trust(public_id: str, db: Session = Depends(get_db)):
+    """A seller node's trust score (0-100) + star rating + the real historical signals
+    behind it. Untracked dimensions are null on purpose — surfaced honestly, never faked."""
+    from db import get_spec_by_public_id
+    import marketplace_insight as mi
+    spec = get_spec_by_public_id(db, public_id)
+    if not spec:
+        raise HTTPException(status_code=404, detail="GPU not found")
+    return mi.trust_score(db, spec)
+
+
 @app.get("/metrics/overview", tags=["marketplace"])
 def metrics_overview(db: Session = Depends(get_db),
                      scope: str = "all", since: Optional[str] = None,
@@ -3736,6 +3801,31 @@ def payments_receipt(public_id: str, user: dict = Depends(get_current_user),
             "metered_seconds": tx.metering_seconds,
             "is_completed_payment": tx.status in ("PAYMENT_CAPTURED", "SELLER_TRANSFERRED", "COMPLETED"),
             "note": "The authorized maximum is a hold; you are charged only the final captured amount."}
+
+
+@app.get("/payments/{public_id}/timeline", tags=["payments"])
+def payment_timeline(public_id: str, user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """The immutable, append-only timeline for a transaction — nothing hidden. Buyer,
+    seller, and admins each see every state change (who, when, why), plus a plain
+    'why it failed' line when the transaction ended in a failure state."""
+    import marketplace_insight as mi
+    me = get_user_by_username(db, _username(user))
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx or (me.id not in (tx.buyer_id, tx.seller_id) and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="transaction not found")
+    events = (db.query(dbmod.ComputeTxEvent)
+              .filter(dbmod.ComputeTxEvent.tx_id == tx.id)
+              .order_by(dbmod.ComputeTxEvent.id).all())
+    timeline = [{"at": e.created_at.isoformat() if e.created_at else None,
+                 "from": e.from_state, "to": e.to_state, "reason": e.reason, "by": e.actor}
+                for e in events]
+    why_failed = None
+    if tx.status in mi._TX_FAILED:
+        fev = [e for e in events if e.to_state == tx.status and e.reason]
+        why_failed = fev[-1].reason if fev else f"transaction ended in {tx.status}"
+    return {"transaction_id": tx.public_id, "status": tx.status,
+            "timeline": timeline, "why_failed": why_failed}
 
 @app.post("/payments/{public_id}/cancel", tags=["payments"])
 def payments_cancel(public_id: str, request: Request,
