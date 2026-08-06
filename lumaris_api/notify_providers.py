@@ -50,9 +50,29 @@ class PostmarkProvider(EmailProvider):
         return r.status_code == 200
 
 
+class MailgunProvider(EmailProvider):
+    """Route plain notification emails through the Mailgun HTTP integration
+    (email_service.EmailService), so the whole notify() layer — demo leads,
+    security notices, etc. — uses the one email path we actually verify end-to-end.
+    The text is wrapped in a minimal branded HTML body; the plain text is kept as
+    the fallback."""
+    def send(self, to, subject, body):
+        import html as _html
+        from email_service import get_email_service, EmailError
+        safe = _html.escape(body or "").replace("\n", "<br>")
+        html_body = ("<div style=\"font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;"
+                     "font-size:15px;line-height:22px;color:#111\">" + safe + "</div>")
+        try:
+            res = get_email_service().send(to=to, subject=subject, html=html_body,
+                                           text=body, tags=["notification"], embed_logo=False)
+            return bool(getattr(res, "ok", False))
+        except EmailError:
+            return False
+
+
 def get_email_provider() -> EmailProvider:
     if os.getenv("NOTIFY_STUB", "").lower() == "true":
         return StubEmailProvider()
     which = os.getenv("EMAIL_PROVIDER", "ses").lower()
     return {"sendgrid": SendGridProvider, "ses": SESProvider,
-            "postmark": PostmarkProvider}.get(which, StubEmailProvider)()
+            "postmark": PostmarkProvider, "mailgun": MailgunProvider}.get(which, StubEmailProvider)()

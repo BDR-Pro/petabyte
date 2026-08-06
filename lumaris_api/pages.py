@@ -1218,6 +1218,10 @@ LOGIN_HTML = _page("Petabyte — sign in", """
     </button>
     <p id="err" class="mut" style="display:none;color:var(--bad);margin-top:12px;font-size:13px"></p>
 
+    <p id="forgotrow" style="text-align:right;margin-top:10px;font-size:12px">
+      <a class="teal" href="#" onclick="forgot();return false" id="forgotlink">Forgot password?</a>
+    </p>
+
     <div style="display:flex;align-items:center;gap:10px;margin:18px 0">
       <div style="flex:1;height:1px;background:var(--line)"></div>
       <span class="mini">or</span>
@@ -1246,7 +1250,18 @@ function toggleMode(){
   document.getElementById('p').setAttribute('autocomplete', reg ? 'new-password' : 'current-password');
   document.getElementById('err').style.display='none';
 }
-function fail(m){var e=document.getElementById('err');e.textContent=m;e.style.display='';}
+function fail(m){var e=document.getElementById('err');e.textContent=m;e.style.color='var(--bad)';e.style.display='';}
+function info(m){var e=document.getElementById('err');e.textContent=m;e.style.color='var(--mut)';e.style.display='';}
+async function forgot(){
+  var id=document.getElementById('u').value.trim();
+  if(!id){ id=(prompt("Enter your account email or username to reset your password:")||"").trim(); }
+  if(!id){ return; }
+  try{
+    await fetch('/password/forgot',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({identifier:id})});
+  }catch(e){}
+  info("If an account matches, we've emailed a password reset link. Check your inbox.");
+}
 async function login(u,p){
   var r = await fetch('/login', {method:'POST',
     headers:{'Content-Type':'application/x-www-form-urlencoded'},
@@ -1277,6 +1292,54 @@ async function go(){
     if(!t){fail(mode==="register"?"Account created — but sign-in failed. Try signing in.":"Wrong username or password."); return;}
     localStorage.setItem('pb_token', t);document.documentElement.setAttribute('data-auth','in');
     location.href='/app';
+  }catch(e){fail("Network error — check your connection and try again.");}
+}
+</script>""")
+
+
+RESET_HTML = _page("Petabyte — reset password", """
+<div class="wrap" style="max-width:440px;padding:60px 22px 40px">
+  <div class="eyebrow"><span class="dot"></span> <span>account</span></div>
+  <h1 style="font-size:clamp(28px,5vw,36px);margin:16px 0 6px">Choose a new password</h1>
+  <p class="mut">Enter a new password for your Petabyte account.</p>
+
+  <div class="card" style="margin-top:20px" id="form">
+    <label class="mini" style="display:block;margin-bottom:6px">New password</label>
+    <input id="p1" type="password" placeholder="new password (8+ characters)" style="width:100%" autocomplete="new-password"/>
+    <label class="mini" style="display:block;margin:14px 0 6px">Confirm password</label>
+    <input id="p2" type="password" placeholder="re-enter new password" style="width:100%" autocomplete="new-password"
+           onkeydown="if(event.key==='Enter')reset()"/>
+    <button class="btn-amber" style="width:100%;justify-content:center;margin-top:18px" onclick="reset()">
+      <span>Update password</span>
+    </button>
+    <p id="err" class="mut" style="display:none;color:var(--bad);margin-top:12px;font-size:13px"></p>
+  </div>
+
+  <div class="card" style="margin-top:20px;display:none" id="done">
+    <p style="margin:0">Your password has been updated.</p>
+    <a class="btn btn-amber" style="width:100%;justify-content:center;margin-top:16px" href="/login">Sign in</a>
+  </div>
+</div>
+<script>
+function tok(){ return new URLSearchParams(location.search).get('token')||''; }
+function fail(m){var e=document.getElementById('err');e.textContent=m;e.style.display='';}
+async function reset(){
+  var p1=document.getElementById('p1').value, p2=document.getElementById('p2').value;
+  if(p1.length<8){fail("Password must be at least 8 characters."); return;}
+  if(p1!==p2){fail("Passwords do not match."); return;}
+  var t=tok();
+  if(!t){fail("This reset link is missing its token. Request a new link from the sign-in page."); return;}
+  document.getElementById('err').style.display='none';
+  try{
+    var r=await fetch('/password/reset',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token:t,new_password:p1})});
+    if(r.ok){
+      document.getElementById('form').style.display='none';
+      document.getElementById('done').style.display='';
+      return;
+    }
+    var b={};try{b=await r.json()}catch(e){}
+    fail((typeof b.detail==='string'?b.detail:null)||"This reset link is invalid or has expired.");
   }catch(e){fail("Network error — check your connection and try again.");}
 }
 </script>""")

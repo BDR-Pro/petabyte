@@ -74,7 +74,7 @@ from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
                    PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TEMPLATES_HTML,
                    CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML,
-                   SELLER_EARNINGS_HTML)
+                   SELLER_EARNINGS_HTML, RESET_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -841,24 +841,45 @@ def _email_booking_link(lead):
         logger.exception("failed to email booking link to lead %s", lead.public_id)
 
 
+def _email_admins(db, subject: str, body: str) -> None:
+    """Email every address named in ADMIN_USERS (e.g. info@petabyte.market) directly.
+
+    This does not depend on an admin having a User row — the founder inbox is
+    configuration, so a demo lead / booking always reaches it. Best-effort; also
+    records an in-app notification for any admin User that matches."""
+    from notify_providers import get_email_provider
+    provider = get_email_provider()
+    for addr in _admin_allowlist():
+        if "@" not in addr:
+            continue
+        try:
+            provider.send(addr, subject, body)
+        except Exception:
+            logger.exception("failed to email admin address")
+
+
 def _notify_founder_of_lead(db, lead):
     """Tell the founder a demand signal just arrived.
 
-    Routed to any admin account so it shows up in the same notifications panel as
-    everything else. Best-effort: a failure here must never lose the lead, which is
-    already committed."""
+    Two channels, both best-effort (a failure must never lose the lead, which is
+    already committed): (1) an in-app notification for every admin User, and (2) a
+    direct email to the configured ADMIN_USERS inbox (info@petabyte.market), so the
+    founder is notified even if info@ has no User row."""
+    who = lead.organization or lead.name
+    subject = f"Demo request from {who}"
+    body = (f"{lead.name} ({lead.email}) — role: {lead.role or 'n/a'}, "
+            f"org: {lead.organization or 'n/a'}. Workload: {lead.workload or 'n/a'}. "
+            f"Ref {lead.public_id}.")
     try:
         from db import User
-        admins = db.query(User).filter(User.role == "admin").all()
-        who = lead.organization or lead.name
-        for a in admins:
-            notifications.notify(
-                db, a.id, "demo.requested",
-                subject=f"Demo request from {who}",
-                body=f"{lead.name} ({lead.email}) — role: {lead.role or 'n/a'}. "
-                     f"Ref {lead.public_id}.")
+        for a in db.query(User).filter(User.role == "admin").all():
+            notifications.notify(db, a.id, "demo.requested", subject=subject, body=body)
     except Exception:
-        logger.exception("failed to notify founder of demo lead %s", lead.public_id)
+        logger.exception("failed to notify admin users of demo lead %s", lead.public_id)
+    try:
+        _email_admins(db, subject, body)
+    except Exception:
+        logger.exception("failed to email ADMIN_USERS of demo lead %s", lead.public_id)
 
 
 def _require_seller(db: Session, user: dict):
@@ -1493,6 +1514,105 @@ def change_role(data: RoleModel, user: dict = Depends(get_current_user),
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "ok", "msg": f"Role changed to {new_role}"}
+
+
+# ------------------- PASSWORD RESET -------------------
+# Self-service reset. A signed, short-lived token carries the username plus a
+# fingerprint of the CURRENT password hash ('pv'); once the password changes the
+# fingerprint changes, so a used (or stale) link stops working — single-use-ish
+# without a new table. Google-only accounts have no usable password to reset.
+PWRESET_TTL_MIN = 30
+
+
+class ForgotPasswordModel(BaseModel):
+    identifier: str          # username OR email
+
+
+class ResetPasswordModel(BaseModel):
+    token: str
+    new_password: str
+
+
+def _pw_fingerprint(user) -> str:
+    import hashlib
+    return hashlib.sha256((user.password or "").encode()).hexdigest()[:16]
+
+
+def _pwreset_token(user) -> str:
+    return create_access_token(
+        {"sub": user.username, "purpose": "pwreset", "pv": _pw_fingerprint(user)},
+        expires_delta=timedelta(minutes=PWRESET_TTL_MIN))
+
+
+def _find_user_by_identifier(db, identifier: str):
+    from db import User
+    ident = (identifier or "").strip()
+    if not ident:
+        return None
+    u = get_user_by_username(db, ident)
+    if u:
+        return u
+    return db.query(User).filter(User.email.isnot(None),
+                                 func.lower(User.email) == ident.lower()).first()
+
+
+@app.post("/password/forgot", tags=["account"])
+def password_forgot(body: ForgotPasswordModel, request: Request, db: Session = Depends(get_db)):
+    """Start a password reset. ALWAYS returns the same message (no account
+    enumeration). If the identifier matches an account WITH an email, a branded
+    reset link is emailed via Mailgun. Rate-limited by IP."""
+    generic = {"ok": True,
+               "message": "If an account matches, we've emailed a password reset link."}
+    ip = _client_ip(request) or "?"
+    if _rl_blocked(f"pwforgot:{ip}", 10, 3600):
+        return generic          # silently absorb abuse; never reveal anything
+    user = _find_user_by_identifier(db, body.identifier)
+    if user and user.email:
+        try:
+            base = (os.getenv("PUBLIC_BASE_URL") or str(request.base_url)).rstrip("/")
+            reset_url = f"{base}/reset?token={_pwreset_token(user)}"
+            from email_service import get_email_service, EmailError, EmailConfigError
+            try:
+                get_email_service().send_password_reset(
+                    user.email, reset_url=reset_url, ttl_minutes=PWRESET_TTL_MIN)
+            except EmailConfigError:
+                logger.warning("password reset requested but email is not configured; link not sent")
+            except EmailError:
+                logger.exception("password reset email send failed")
+            audit(db, "password.reset_requested", actor=user.username,
+                  resource_type="user", resource_id=user.username, ip=ip)
+        except Exception:
+            logger.exception("password reset flow error")
+    return generic
+
+
+@app.post("/password/reset", tags=["account"])
+def password_reset(body: ResetPasswordModel, request: Request, db: Session = Depends(get_db)):
+    """Complete a password reset with a token from the emailed link."""
+    from db import hash_password
+    if len((body.new_password or "")) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters.")
+    try:
+        payload = verify_token(body.token)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired.")
+    if payload.get("purpose") != "pwreset":
+        raise HTTPException(status_code=400, detail="This reset link is invalid.")
+    user = get_user_by_username(db, payload.get("sub", ""))
+    if not user or payload.get("pv") != _pw_fingerprint(user):
+        raise HTTPException(status_code=400,
+                            detail="This reset link has already been used or is no longer valid.")
+    user.password = hash_password(body.new_password)
+    db.commit()
+    audit(db, "password.reset", actor=user.username, resource_type="user",
+          resource_id=user.username, ip=_client_ip(request))
+    return {"ok": True, "message": "Password updated. You can now sign in."}
+
+
+@app.get("/reset", response_class=HTMLResponse)
+@app.get("/reset-password", response_class=HTMLResponse)
+def reset_password_page():
+    return RESET_HTML
 
 
 # ------------------- SELLER -------------------
@@ -2771,6 +2891,45 @@ def request_demo(body: DemoRequestModel, request: Request, db: Session = Depends
             "message": "Thanks — we have your request. Expect an email within one "
                        "business day to set up a time.",
             "reference": lead.public_id}
+
+
+@app.post("/webhooks/cal", tags=["marketing"])
+async def cal_webhook(request: Request, db: Session = Depends(get_db)):
+    """Cal.com booking webhook. When someone books a demo slot, notify the founder
+    inbox (ADMIN_USERS, e.g. info@petabyte.market) that a demo was booked — Cal
+    sends the attendee/host confirmation itself; this is our own record + alert.
+
+    Point a Cal.com webhook (trigger BOOKING_CREATED) at
+    https://petabyte.market/webhooks/cal. If CAL_WEBHOOK_SECRET is set it is
+    HMAC-verified; unset = accept (best-effort for first setup)."""
+    raw = await request.body()
+    secret = os.getenv("CAL_WEBHOOK_SECRET", "").strip()
+    if secret:
+        sig = request.headers.get("X-Cal-Signature-256", "")
+        if not verify_webhook_signature(secret, raw, sig):
+            raise HTTPException(status_code=401, detail="invalid signature")
+    try:
+        payload = json.loads(raw or b"{}")
+    except Exception:
+        payload = {}
+    trigger = str(payload.get("triggerEvent") or payload.get("event") or "").upper()
+    if "BOOKING" in trigger and "CANCEL" not in trigger and "REJECT" not in trigger:
+        p = payload.get("payload") or payload
+        atts = p.get("attendees") if isinstance(p.get("attendees"), list) else []
+        who = "Someone"
+        if atts:
+            a0 = atts[0] or {}
+            who = f"{a0.get('name', '')} <{a0.get('email', '')}>".strip() or who
+        when = p.get("startTime") or p.get("start") or ""
+        title = p.get("title") or "Demo"
+        body = f"{who} booked '{title}'" + (f" for {when}" if when else "") + "."
+        try:
+            _email_admins(db, "New demo booked", body)
+        except Exception:
+            logger.exception("failed to email admins of cal booking")
+        audit(db, "demo.booked", actor_type="system", resource_type="cal_booking",
+              resource_id=str(p.get("uid") or p.get("bookingId") or p.get("id") or "")[:64])
+    return {"ok": True}
 
 
 @app.get("/admin/demo-requests", tags=["marketing"])

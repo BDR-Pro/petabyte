@@ -40,6 +40,9 @@ jobs:
       - name: matmul result validation (offline)
         working-directory: lumaris_api
         run: python matmul_validation_test.py
+      - name: account (reset + cal webhook + demo notify)
+        working-directory: lumaris_api
+        run: python account_test.py
       - name: tunnel (NAT traversal + failover)
         working-directory: lumaris_gateway
         run: python tunnel_test.py
@@ -91,6 +94,10 @@ jobs:
       - name: matmul result validation (offline)
         working-directory: lumaris_api
         run: python matmul_validation_test.py
+
+      - name: account (reset + cal webhook + demo notify)
+        working-directory: lumaris_api
+        run: python account_test.py
 
       - name: postgres-only — exact NUMERIC, advisory lock, true races
         working-directory: lumaris_api
