@@ -50,17 +50,29 @@ Each of these was hit by actually running the flow, not by reading code.
    "set up payouts" and stops is silently delisted. Recommend surfacing a
    "finish onboarding to stay listed" state to the seller rather than a silent drop.
 
-3. **Job completion does NOT auto-settle the payment ("two systems").**
-   On `POST /jobs/result` for a paid, ComputeTransaction-dispatched job the response
-   is `booking_released: false` — the job result advances the *task*, but it does
-   **not** drive the ComputeTransaction to metering/capture. Settlement only happens
-   because the **admin** endpoints (`/admin/payments/{id}/{meter,capture,transfer}`)
-   are called explicitly. In production there must be an orchestrator that, on a
-   validated result, finalises metering and triggers capture + transfer — today that
-   bridge is manual/admin. This matches `docs/REMOVED_PAYMENT_STUBS.md` ("the central
-   rewire … not done") and is the most important architectural gap for a hands-off
-   paid flow. (See also `lumaris_api/matmul_validation.py` for the validation step
-   that should gate that capture.)
+3. **Job completion did NOT auto-settle the payment ("two systems"). — FIXED.**
+   Originally, `POST /jobs/result` for a paid, ComputeTransaction-dispatched job
+   returned `booking_released: false` and did **not** drive the ComputeTransaction
+   to metering/capture; settlement only happened via the **admin** endpoints. This
+   was the central gap for a hands-off paid flow (`docs/REMOVED_PAYMENT_STUBS.md`,
+   "the central rewire … not done").
+   **Fix:** `/jobs/result` now calls the orchestrator bridge
+   `stripe_connect.settle_after_result(tx, metered_seconds=…)` on a completed,
+   signature-verified job — it finalises metering and drives capture + seller
+   transfer through the **same audited functions** the admin endpoints use, so a
+   completed job now reaches `COMPLETED` on its own. It is:
+   - **fail-closed** — templates whose correctness needs manifest validation
+     (`pytorch-matmul-v1`) are skipped until that validator is wired into the result
+     payload, and a non-payout-ready seller can't even start a paid tx;
+   - **idempotent + FSM-guarded** — a duplicate result or a concurrent admin call
+     never double-charges or double-pays (verified: after auto-settle, an admin
+     capture/transfer is a safe no-op);
+   - **opt-out** via `AUTO_SETTLE_ON_RESULT=false` (settlement stays admin-driven).
+   Metering uses platform-observed wall-clock (server-side), capped by the pricing
+   snapshot's max duration. Covered by `stripe_test.py` (7 bridge assertions) and
+   the local E2E now shows `compute_tx_status: COMPLETED` straight off the result.
+   (The `pytorch-matmul-v1` numeric validator in `lumaris_api/matmul_validation.py`
+   is the gate that must be wired before matmul jobs can auto-pay.)
 
 4. **Stripe ≥15 webhook event shape.** The fake gateway verifies webhooks with the
    *real* verifier, and stripe 15.x requires a top-level `object: "event"` field or

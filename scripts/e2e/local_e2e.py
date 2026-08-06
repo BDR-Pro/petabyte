@@ -267,9 +267,15 @@ def main():
                 if claim2.status_code == 200:
                     j2 = claim2.json()
                     task_id = task_id or j2.get("task_id")
-                    expect("seller submit paid result", c.post(f"{BASE}/jobs/result", headers=SK,
+                    rr = expect("seller submit paid result", c.post(f"{BASE}/jobs/result", headers=SK,
                         json={"task_id": j2["task_id"], "status": "completed",
                               "result": "ok", **signed_proof("sha256:deadbeef")}))
+                    # ORCHESTRATOR BRIDGE: completing the job should auto-settle the tx
+                    # (meter -> capture -> transfer) with NO admin call.
+                    auto = rr.json().get("compute_tx_status")
+                    trace(f"auto-settle compute_tx_status = {auto}")
+                    if auto not in ("PAYMENT_CAPTURED", "SELLER_TRANSFERRED", "COMPLETED"):
+                        bug(f"job completed but tx did NOT auto-settle (status={auto})")
                 else:
                     bug("seller got NO job from /jobs/next after a paid dispatch "
                         "(paid dispatch not visible to the node?)")

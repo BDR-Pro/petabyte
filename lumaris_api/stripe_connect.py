@@ -454,6 +454,33 @@ def record_metering(db, tx: ComputeTransaction, *, actual_seconds: int,
     return transition(db, tx, "METERING_FINALIZED", reason=f"metered {secs}s from {source}")
 
 
+def settle_after_result(db, tx: ComputeTransaction, *, metered_seconds: int,
+                        source: str = "platform") -> str:
+    """Orchestrator bridge: after a VALID, completed job, finalize metering and drive
+    capture + seller transfer in one go.
+
+    Money still moves ONLY through the same audited functions the admin endpoints use
+    (record_metering -> capture -> transfer_to_seller); this just chains them on job
+    completion instead of requiring a manual admin call. Every step is guarded by the
+    FSM and is idempotent, so a re-run, a concurrent admin action, or a duplicate
+    result never double-charges or double-pays. Best-effort: if a step can't proceed
+    (e.g. seller not payout-ready), it stops and leaves the tx in a repairable state
+    (the seller payable is retained) for the admin/reconcile path. Returns the final
+    tx status."""
+    secs = max(1, int(metered_seconds))
+    try:
+        if tx.status in ("RUNNING", "DISPATCHING"):
+            record_metering(db, tx, actual_seconds=secs, source=source)
+        if tx.status in ("METERING_FINALIZED", "CAPTURE_FAILED", "JOB_FAILED"):
+            capture(db, tx)
+        if tx.status in ("PAYMENT_CAPTURED", "TRANSFER_FAILED"):
+            transfer_to_seller(db, tx)
+    except TransactionError as e:
+        logger.warning("auto-settle halted for tx %s at status=%s: %s",
+                       tx.public_id, tx.status, e)
+    return tx.status
+
+
 # ----------------------------------------------------------------- capture
 def _write_settlement(db, tx, s: dict, version: int) -> Settlement:
     st = Settlement(tx_id=tx.id, version=version, currency=tx.currency,

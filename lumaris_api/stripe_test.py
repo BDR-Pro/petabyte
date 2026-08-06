@@ -638,6 +638,54 @@ ok("atomic stale-op reclaim: exactly ONE of two same-attempt claims wins",
 sA.close(); sB.close()
 
 
+# ============ ORCHESTRATOR BRIDGE: settle_after_result (job completion -> settle) ====
+# A completed job should drive meter -> capture -> transfer via the SAME audited
+# functions, idempotently. This is what /jobs/result now calls automatically.
+def _run_to_running(spec_pub):
+    a = c.post("/payments/authorize", headers=login("buyer1"),
+               json={"spec_id": spec_pub, "estimated_seconds": 3600}).json()
+    tid = a.get("transaction_id")
+    if not tid:
+        return None
+    pid = sc.get_tx_by_public_id(dbmod.SessionLocal(), tid).stripe_payment_intent_id
+    GW.confirm_payment_intent(pid)
+    c.post(f"/payments/{tid}/confirm", headers=login("buyer1"))
+    c.post(f"/admin/payments/{tid}/reserve", headers=admin)
+    c.post(f"/admin/payments/{tid}/dispatch", headers=admin, json={})
+    return tid
+
+spec_br = make_online_spec("seller_a", price=2.50, units=5)
+brid = _run_to_running(spec_br)
+s = dbmod.SessionLocal()
+txb = sc.get_tx_by_public_id(s, brid)
+ok("bridge: tx is RUNNING before settle", txb.status == "RUNNING")
+st = sc.settle_after_result(s, txb, metered_seconds=1800)   # 30 min @ 2.50/h -> 125
+ok("bridge: settle_after_result drives RUNNING -> COMPLETED", st == "COMPLETED")
+s.close()
+s = dbmod.SessionLocal(); txb = sc.get_tx_by_public_id(s, brid)
+ok("bridge: captured the ACTUAL metered usage (125)", txb.captured_amount == 125)
+ok("bridge: platform fee + seller net == captured",
+   txb.platform_fee_amount + txb.seller_net_amount == txb.captured_amount)
+ok("bridge: seller was transferred their net",
+   bool(txb.stripe_transfer_id) and txb.transferred_amount == txb.seller_net_amount)
+# idempotent: re-running settle must NOT double-capture or double-transfer
+cap0, tr0 = txb.captured_amount, txb.stripe_transfer_id
+st2 = sc.settle_after_result(s, txb, metered_seconds=1800)
+s.close(); s = dbmod.SessionLocal(); txb = sc.get_tx_by_public_id(s, brid)
+ok("bridge: re-running settle is idempotent (no double capture/transfer)",
+   st2 == "COMPLETED" and txb.captured_amount == cap0 and txb.stripe_transfer_id == tr0)
+s.close()
+
+# fail-closed at the source: a non-payout-ready seller can't even start a paid tx,
+# so money never begins to flow (nothing to settle/transfer).
+onboard_seller("seller_b", ok_=False)                 # seller_b never completes onboarding
+spec_nr = make_online_spec("seller_b", price=2.50, units=2)
+nr = c.post("/payments/authorize", headers=login("buyer1"),
+            json={"spec_id": spec_nr, "estimated_seconds": 3600})
+ok("bridge: authorize refused for a non-payout-ready seller (money can't start)",
+   nr.status_code == 409)
+
+
 print(f"\n=== stripe: {PASSES} passed, {FAILS} failed ===")
 for f in ("stripe_test.db", "stripe_test.db-wal", "stripe_test.db-shm"):
     if os.path.exists(f):

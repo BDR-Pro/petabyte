@@ -1923,6 +1923,53 @@ def jobs_next(agent=Depends(api_key_user), db: Session = Depends(get_db)):
             "cpu": task.cpu, "ram": task.ram, "cuda": task.cuda}
 
 
+def _observed_seconds(task) -> int:
+    """Platform-observed wall-clock for a task (dispatch -> result), server-side and
+    not a seller/browser value. Capped later by the pricing snapshot's max duration."""
+    ca = getattr(task, "created_at", None)
+    if ca is None:
+        return 1
+    if ca.tzinfo is None:
+        ca = ca.replace(tzinfo=timezone.utc)
+    return max(1, int((datetime.now(timezone.utc) - ca).total_seconds()))
+
+
+def _auto_settle_compute_tx(db, task):
+    """Bridge a completed, signature-verified job to Stripe settlement
+    (meter -> capture -> transfer). Returns the resulting compute-tx status, or None
+    when the task isn't tied to a paid ComputeTransaction (legacy/unpaid path).
+
+    Guards:
+      * opt-out via AUTO_SETTLE_ON_RESULT=false (settlement then stays admin-driven);
+      * FAIL CLOSED for templates whose correctness needs manifest validation that is
+        not yet carried in the result payload (e.g. pytorch-matmul-v1) — never auto-pay
+        a result we cannot validate;
+      * everything downstream is idempotent + FSM-guarded, so a duplicate result or a
+        concurrent admin action can't double-charge or double-pay.
+    """
+    if os.getenv("AUTO_SETTLE_ON_RESULT", "true").lower() != "true":
+        return None
+    from db import ComputeTransaction
+    tx = db.query(ComputeTransaction).filter(ComputeTransaction.task_id == task.id).first()
+    if not tx:
+        return None                      # legacy booking / unpaid diagnostic job
+    if (getattr(task, "template", "") or "") == "pytorch-matmul-v1":
+        # The matmul manifest isn't part of JobResultModel yet, so we can't run
+        # matmul_validation here. Fail closed: leave capture/transfer to the admin
+        # path rather than pay on an unvalidated numeric result.
+        logger.info("tx %s: %s completed but manifest validation isn't wired; "
+                    "leaving settlement to the admin path (fail-closed)",
+                    tx.public_id, task.template)
+        return tx.status
+    try:
+        return _sc.settle_after_result(db, tx, metered_seconds=_observed_seconds(task),
+                                       source="platform")
+    except Exception:
+        logger.exception("auto-settle error for tx %s (job completed; retry via admin)",
+                         tx.public_id)
+        return tx.status
+
+
 @app.post("/jobs/result")
 def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
                 db: Session = Depends(get_db)):
@@ -1978,14 +2025,20 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
         note_job_failed(db, spec, "job reported failed")
     released = False
     if data.status == "completed" and task.booking_id:
-        released = release_booking(db, task.booking_id)   # pay seller + platform
+        released = release_booking(db, task.booking_id)   # pay seller + platform (legacy)
+    compute_tx_status = None
     if data.status == "completed":
         _advance_manifest(db, task, data.result or data.proof.get("output_hash"))
+        # Orchestrator bridge: a completed, signature-verified job for a Stripe-native
+        # ComputeTransaction now finalizes metering + capture + seller transfer, instead
+        # of waiting for a manual admin call. Fail-closed + idempotent (see below).
+        compute_tx_status = _auto_settle_compute_tx(db, task)
     # NOTE: a failed job is NOT auto-refunded here — failed tasks are retryable
     # (see /tasks/{id}/retry), which relies on the escrow being retained. Escrow is
     # returned by the buyer cancel path and by the reaper when a node goes dead.
     return {"status": "ok", "task_id": task.id, "task_status": task.status,
-            "output_hash": data.proof.get("output_hash"), "booking_released": released}
+            "output_hash": data.proof.get("output_hash"), "booking_released": released,
+            "compute_tx_status": compute_tx_status}
 
 
 @app.post("/dispatch_test")
