@@ -142,6 +142,20 @@ class EVENTS:
     AGENT_HEARTBEAT_MISSED = "agent.heartbeat.missed"
     AGENT_ENROLLED = "agent.enrolled"
     AGENT_RECONNECTED = "agent.reconnected"
+    # seller lifecycle / activity (observed server-side from the agent's outbound calls,
+    # so a seller GPU never needs an inbound port and its history survives it going offline)
+    SELLER_ONBOARDED = "seller.onboarded"
+    SELLER_HEARTBEAT = "seller.heartbeat"
+    SELLER_OFFLINE = "seller.offline"
+    SELLER_RECONNECTED = "seller.reconnected"
+    GPU_DETECTED = "seller.gpu.detected"
+    SELLER_PRICING_CHANGED = "seller.pricing.changed"
+    SELLER_AVAILABILITY_CHANGED = "seller.availability.changed"
+    JOB_ACCEPTED = "job.accepted"
+    JOB_REJECTED = "job.rejected"
+    SELLER_SUSPICIOUS = "seller.suspicious"
+    AGENT_UPGRADED = "agent.upgraded"
+    SELLERS_REAPED = "seller.reaped.batch"
     # redis / infra
     REDIS_UNAVAILABLE = "redis.unavailable"
     LOCK_ACQUIRED = "redis.lock.acquired"
@@ -580,16 +594,23 @@ def init_metrics() -> bool:
         H("petabyte_job_duration_seconds", "Job execution duration", ("gpu_class", "environment"))
         C("petabyte_reservation_conflicts_total", "Reservation conflicts", ("environment",))
         H("petabyte_routing_duration_seconds", "GPU routing duration", ("environment",))
-        G("petabyte_gpus_online", "Online GPUs", ("environment",))
-        G("petabyte_gpus_available", "Available GPUs", ("environment",))
-        G("petabyte_gpus_reserved", "Reserved GPUs", ("environment",))
-        G("petabyte_jobs_running", "Running jobs", ("environment",))
         G("petabyte_queue_depth", "Queue depth", ("queue", "environment"))
+        # NOTE: marketplace supply gauges (gpus_online/available/reserved, jobs_running,
+        # agents_online, sellers_*, gpus_by_model/country, available_gpu_hours) are provided
+        # by the scrape-time MarketplaceCollector (register_marketplace_collector) so they
+        # reflect LIVE DB state and stale sellers drop out of supply automatically.
         # transaction spine
         C("petabyte_transaction_transitions_total", "Transaction state transitions",
           ("to_state", "payment_mode", "environment"))
-        # agents
-        G("petabyte_agents_online", "Connected seller agents", ("environment",))
+        # seller activity (bounded labels only; seller ids stay in the log/trace body)
+        C("petabyte_seller_heartbeats_total", "Seller heartbeats received", ("environment",))
+        C("petabyte_seller_reconnects_total", "Seller agent reconnects", ("environment",))
+        C("petabyte_seller_job_decisions_total", "Seller job accept/reject",
+          ("decision", "environment"))
+        C("petabyte_seller_suspicious_total", "Suspicious seller telemetry",
+          ("category", "environment"))
+        C("petabyte_sellers_reaped_total", "Seller specs reaped as stale (went offline)",
+          ("environment",))
         # telemetry health
         C("petabyte_telemetry_export_failures_total", "Telemetry export failures",
           ("exporter", "environment"))
@@ -634,6 +655,55 @@ def set_metric(name: str, value: float, **labels) -> None:
         (m.labels(**labels) if labels else m).set(value)
     except Exception:  # noqa: BLE001
         pass
+
+
+def gpu_model_to_class(model) -> str:
+    """Map a free-text GPU model string to a BOUNDED gpu_class label."""
+    m = ("" if model is None else str(model)).lower()
+    for key in ("h100", "a100", "l40s", "l4", "a10", "t4", "v100"):
+        if key in m:
+            return key
+    if "4090" in m:
+        return "rtx4090"
+    if "3090" in m:
+        return "rtx3090"
+    return "other"
+
+
+def register_marketplace_collector(fn) -> bool:
+    """Register a scrape-time collector. `fn()` returns a list of
+    {"name","doc","labels":{...},"value":float} dicts computed from the DB, yielded fresh
+    on every Prometheus scrape — so marketplace supply reflects LIVE state and a stale
+    seller automatically leaves the gauges. Bounded labels only. Never raises into a scrape.
+    """
+    if not _prom_ok or _REGISTRY is None:
+        return False
+    try:
+        from prometheus_client.core import GaugeMetricFamily
+
+        class _MarketplaceCollector:
+            def collect(self):
+                try:
+                    rows = fn() or []
+                except Exception:  # noqa: BLE001 — a broken query must not break scraping
+                    return
+                fams: dict = {}
+                for r in rows:
+                    name = r["name"]
+                    labels = r.get("labels", {})
+                    keys = tuple(sorted(labels))
+                    fk = (name, keys)
+                    if fk not in fams:
+                        fams[fk] = GaugeMetricFamily(name, r.get("doc", ""), labels=list(keys))
+                    fams[fk].add_metric([str(labels[k]) for k in keys], float(r["value"]))
+                yield from fams.values()
+
+        _REGISTRY.register(_MarketplaceCollector())
+        return True
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("marketplace collector registration skipped",
+                        extra={"event_name": "metrics.collector.skipped", "reason": str(e)})
+        return False
 
 
 def metrics_response():

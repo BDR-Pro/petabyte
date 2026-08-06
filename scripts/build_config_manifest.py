@@ -261,6 +261,11 @@ OBSERVABILITY_EXTRA = {
                                "description": "Preflight control: when true the deploy FAILS if "
                                               "observability is off/unconfigured (default true in "
                                               "production, false elsewhere)."},
+    "DEPLOY_CONFIG_FROM_GITHUB": {"default": "false", "scope": ["deployment"], "secret": False,
+                                  "description": "Rollout gate. When 'true' the deploy generates the "
+                                                 "server env from GitHub config and pushes it; until "
+                                                 "then deploys stay code-only. Flip to true after "
+                                                 "entering all Secrets."},
     # tooling credentials — secrets, no defaults, not asserted required (depends on the
     # actual auth config of the prepared observability server).
     "PROMETHEUS_REMOTE_WRITE_USERNAME": {"secret": True, "scope": ["observability"],

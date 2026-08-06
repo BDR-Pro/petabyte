@@ -222,7 +222,21 @@ def _maintenance_cycle() -> None:
             _maintenance["holder"] = False
             return                       # another worker owns maintenance
         _maintenance["holder"] = True
+        # Ephemeral sellers: detect offline from heartbeat EXPIRY. Count the specs about to
+        # be reaped so the transition is observable (history survives the GPU going away).
+        try:
+            from db import _utcnow as _now_fn
+            _cut = _now_fn() - timedelta(seconds=HEARTBEAT_TIMEOUT_S)
+            _stale_n = db.query(SellerSpec).filter(
+                SellerSpec.status == "online", SellerSpec.last_seen < _cut).count()
+        except Exception:  # noqa: BLE001
+            _stale_n = 0
         reap_and_failover(db, HEARTBEAT_TIMEOUT_S)  # migrate live VMs off dead nodes
+        if _stale_n:
+            obsmod.inc_metric("petabyte_sellers_reaped_total", _stale_n,
+                              environment=obsmod.ENVIRONMENT)
+            obs.event(EVENTS.SELLERS_REAPED, message="stale sellers reaped offline",
+                      count=_stale_n, timeout_s=HEARTBEAT_TIMEOUT_S)
         settle_dead_specs(db)            # refund in-flight bookings on dead nodes
         meter_and_expire(db)             # auto-stop VMs whose prepaid window ended
         reprice_specs(db)                # demand-based auto-pricing for opted-in nodes
@@ -1576,6 +1590,93 @@ def prometheus_metrics(request: Request):
     return Response(content=body, media_type=ctype)
 
 
+def _marketplace_metrics():
+    """Scrape-time marketplace supply/seller gauges, computed LIVE from Postgres. Sellers
+    are ephemeral: a stale heartbeat (older than HEARTBEAT_TIMEOUT_S) drops a spec out of
+    'online' supply automatically here, without scraping the seller machine. Bounded labels
+    only (gpu_class, country); seller ids never become labels. Best-effort — a query error
+    yields no rows rather than breaking the scrape. Real supply excludes seeded demo nodes."""
+    from db import SellerSpec, ComputeTransaction, _utcnow
+    env = obsmod.ENVIRONMENT
+    rows = []
+    dbs = SessionLocal()
+    try:
+        # Compare naive-to-naive: stored last_seen is naive UTC (SQLite) but _utcnow() may
+        # be tz-aware — normalise both so the comparison never throws.
+        cutoff = (_utcnow() - timedelta(seconds=HEARTBEAT_TIMEOUT_S)).replace(tzinfo=None)
+        specs = dbs.query(SellerSpec).filter(SellerSpec.is_demo.is_(False)).all()
+
+        def _ls(s):
+            return s.last_seen.replace(tzinfo=None) if s.last_seen is not None else None
+
+        def _fresh(s):
+            return s.status == "online" and _ls(s) is not None and _ls(s) >= cutoff
+
+        def _stale(s):
+            return s.status == "online" and (_ls(s) is None or _ls(s) < cutoff)
+
+        online_specs = [s for s in specs if _fresh(s)]
+        stale_specs = [s for s in specs if _stale(s)]
+        offline_specs = [s for s in specs if s.status != "online"]
+
+        rows += [
+            {"name": "petabyte_sellers_registered", "doc": "Distinct sellers with a listing",
+             "labels": {"environment": env},
+             "value": len({s.user_id for s in specs})},
+            {"name": "petabyte_sellers_online", "doc": "Sellers with a fresh heartbeat",
+             "labels": {"environment": env},
+             "value": len({s.user_id for s in online_specs})},
+            {"name": "petabyte_sellers_offline", "doc": "Sellers with all specs offline",
+             "labels": {"environment": env},
+             "value": len({s.user_id for s in offline_specs}
+                          - {s.user_id for s in online_specs})},
+            {"name": "petabyte_sellers_stale", "doc": "Specs online but heartbeat expired",
+             "labels": {"environment": env}, "value": len(stale_specs)},
+            {"name": "petabyte_agents_online", "doc": "Connected seller agents (fresh specs)",
+             "labels": {"environment": env}, "value": len(online_specs)},
+            {"name": "petabyte_gpus_online", "doc": "Online GPUs",
+             "labels": {"environment": env},
+             "value": sum((s.gpu_count or 0) for s in online_specs)},
+            {"name": "petabyte_gpus_available", "doc": "Available rentable units",
+             "labels": {"environment": env},
+             "value": sum((s.available_units or 0) for s in online_specs)},
+            {"name": "petabyte_gpus_reserved", "doc": "Reserved units",
+             "labels": {"environment": env},
+             "value": sum(max(0, (s.total_units or 0) - (s.available_units or 0))
+                          for s in online_specs)},
+            {"name": "petabyte_available_gpu_hours", "doc": "Available GPU-hours (units x max hrs)",
+             "labels": {"environment": env},
+             "value": sum((s.available_units or 0) * (s.duration or 0) for s in online_specs)},
+        ]
+        # GPUs by model (bounded gpu_class) and by country (ISO set), online supply only
+        by_model, by_country = {}, {}
+        for s in online_specs:
+            gc = obsmod.gpu_model_to_class(s.gpu_model)
+            by_model[gc] = by_model.get(gc, 0) + (s.gpu_count or 0)
+            country = (s.country or s.detected_country or "unknown").upper()[:2] or "unknown"
+            by_country[country] = by_country.get(country, 0) + (s.gpu_count or 0)
+        for gc, n in by_model.items():
+            rows.append({"name": "petabyte_gpus_by_model", "doc": "Online GPUs by class",
+                         "labels": {"gpu_class": gc, "environment": env}, "value": n})
+        for country, n in by_country.items():
+            rows.append({"name": "petabyte_gpus_by_country", "doc": "Online GPUs by country",
+                         "labels": {"country": country, "environment": env}, "value": n})
+        # live job counts (durable — survive a seller going offline)
+        running = dbs.query(ComputeTransaction).filter(
+            ComputeTransaction.status == "RUNNING").count()
+        rows.append({"name": "petabyte_jobs_running", "doc": "Running jobs",
+                     "labels": {"environment": env}, "value": running})
+    except Exception:  # noqa: BLE001
+        logger.debug("marketplace metrics query failed", exc_info=True)
+    finally:
+        dbs.close()
+    return rows
+
+
+# Register the scrape-time collector once (no-op if prometheus_client is absent).
+obsmod.register_marketplace_collector(_marketplace_metrics)
+
+
 # ------------------- AUTH -------------------
 
 @app.post("/register_user", tags=["account"])
@@ -1849,11 +1950,38 @@ def heartbeat(data: HeartbeatModel, request: Request, owner=Depends(api_key_user
     spec = get_spec_by_id(db, data.spec_id)
     if not spec or spec.user_id != owner.id:
         raise HTTPException(status_code=404, detail="Spec not found")
+    was_offline = spec.status != "online"       # for reconnect detection
+    first_time = spec.last_seen is None
     detected = geolocate_country(_client_ip(request))
     spec.detected_country = detected
     spec.region_verified = bool(detected and spec.country and detected == spec.country)
     touch_spec(db, spec)   # persists detected/verified + online/last_seen
     note_heartbeat(db, spec)
+    # Seller activity is observed HERE (the agent's authenticated OUTBOUND call) — no
+    # inbound port, no direct scrape of the seller machine. Ids live in the log body.
+    try:
+        obsmod.inc_metric("petabyte_seller_heartbeats_total", environment=obsmod.ENVIRONMENT)
+        with obs.ctx(seller_id=str(owner.id), gpu_id=spec.public_id):
+            if first_time:
+                obs.event(EVENTS.GPU_DETECTED, message="gpu detected on heartbeat",
+                          gpu_model=spec.gpu_model, gpu_count=spec.gpu_count,
+                          country=spec.country, detected_country=detected,
+                          region_verified=spec.region_verified)
+            if was_offline and not first_time:
+                obsmod.inc_metric("petabyte_seller_reconnects_total", environment=obsmod.ENVIRONMENT)
+                obs.event(EVENTS.SELLER_RECONNECTED, message="seller agent reconnected",
+                          gpu_model=spec.gpu_model)
+            else:
+                obs.event(EVENTS.SELLER_HEARTBEAT, message="heartbeat", state="online")
+            # region spoofing is suspicious telemetry worth surfacing
+            if detected and spec.country and detected != spec.country:
+                obsmod.inc_metric("petabyte_seller_suspicious_total",
+                                  category="region_mismatch", environment=obsmod.ENVIRONMENT)
+                obs.event(EVENTS.SELLER_SUSPICIOUS, level=logging.WARNING,
+                          message="declared country != detected", category="region_mismatch",
+                          declared=spec.country, detected=detected)
+    except Exception:  # noqa: BLE001
+        pass
     return {"status": "ok", "spec_id": spec.id, "state": "online",
             "detected_country": detected, "region_verified": spec.region_verified,
             "idle_fallback": bool(spec.idle_fallback)}
@@ -2049,8 +2177,14 @@ def jobs_next(agent=Depends(api_key_user), db: Session = Depends(get_db)):
         payload = _build_job_payload(task)
         payload["trace_context"] = obs.inject({})
         tx_pub = getattr(getattr(task, "compute_tx", None), "public_id", None)
-        obs.event(EVENTS.JOB_DISPATCHED, message="job dispatched",
-                  task_type=task.task_type, job_id=task.id, transaction_id=tx_pub)
+        # A successful claim is the seller ACCEPTING the job (pull model).
+        obsmod.inc_metric("petabyte_seller_job_decisions_total", decision="accepted",
+                          environment=obsmod.ENVIRONMENT)
+        with obs.ctx(seller_id=str(getattr(agent, "id", "")) or None):
+            obs.event(EVENTS.JOB_DISPATCHED, message="job dispatched",
+                      task_type=task.task_type, job_id=task.id, transaction_id=tx_pub)
+            obs.event(EVENTS.JOB_ACCEPTED, message="seller accepted job",
+                      task_type=task.task_type, job_id=task.id)
     return payload
 
 

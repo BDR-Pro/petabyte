@@ -87,6 +87,13 @@ variables:
     scope:
     - platform
     description: ''
+  DEPLOY_CONFIG_FROM_GITHUB:
+    required: false
+    default: 'false'
+    scope:
+    - deployment
+    description: Rollout gate. When 'true' the deploy generates the server env from GitHub config and
+      pushes it; until then deploys stay code-only. Flip to true after entering all Secrets.
   EMAIL_FROM:
     required: false
     default: no-reply@petabyte.market

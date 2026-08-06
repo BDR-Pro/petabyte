@@ -177,6 +177,30 @@ for bad in ("GRAFANA_SERVICE_ACCOUNT_TOKEN", "LOKI_PASSWORD", "TEMPO_PASSWORD",
         hit = True
     ok(f"GPU env deny-list refuses {bad}", hit)
 
+# ---- marketplace collector: scrape-time gauges with bounded labels ----
+if o.health()["metrics"]["active"]:
+    def _prov():
+        return [
+            {"name": "petabyte_sellers_online", "doc": "d",
+             "labels": {"environment": "test"}, "value": 3},
+            {"name": "petabyte_gpus_by_country", "doc": "d",
+             "labels": {"country": "US", "environment": "test"}, "value": 5},
+        ]
+    ok("marketplace collector registers", o.register_marketplace_collector(_prov))
+    mtext = o.metrics_response()[0].decode()
+    ok("scrape-time seller gauge appears", "petabyte_sellers_online" in mtext)
+    ok("gpus_by_country uses a bounded country label (not a seller id)",
+       'country="US"' in mtext)
+    ok("gpu_model_to_class maps to a bounded class",
+       o.gpu_model_to_class("NVIDIA H100 80GB") == "h100"
+       and o.gpu_model_to_class("weird") == "other")
+else:
+    ok("marketplace collector (skipped: no client)", True)
+    ok("scrape-time seller gauge (skipped)", True)
+    ok("bounded country label (skipped)", True)
+    ok("gpu_model_to_class maps to a bounded class",
+       o.gpu_model_to_class("NVIDIA H100 80GB") == "h100")
+
 # ---- observability can be disabled only in approved environments (validator) ----
 import validate_github_configuration as V  # noqa: E402
 r = V.Result()
