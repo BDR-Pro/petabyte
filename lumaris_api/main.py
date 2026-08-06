@@ -1987,13 +1987,16 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
     try:
         verify_signed_proof(spec.attest_pubkey, data.proof, data.signature)
     except ValueError as e:
-        penalize_user(db, agent, 40)            # forged/expired proof is severe
-        note_fraud(db, spec, "invalid result signature")
+        # A forged/expired signature is unforgeable-by-accident -> hard fraud: penalize,
+        # record fraud, AND freeze payouts pending review (money can't leave while we check).
+        import seller_audit
         if task.task_type == "test":
             tw = get_testworkload_by_task(db, task.id)
             if tw:
                 record_test_result(db, tw, "<invalid-signature>")
         submit_task_result(db, task, None, "failed")
+        seller_audit.freeze_for_fraud(db, spec, "invalid result signature",
+                                      seller_id=agent.id)
         raise HTTPException(status_code=401, detail=f"Invalid proof: {e}")
 
     # 2) Known-answer test workloads: compare to the expected hash, update reputation.
@@ -2003,6 +2006,13 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
             raise HTTPException(status_code=404, detail="Test record missing")
         passed = record_test_result(db, tw, data.proof["output_hash"])
         submit_task_result(db, task, None, "completed" if passed else "failed")
+        # Failing a PLATFORM audit (server-seeded, unannounced) is strong evidence the
+        # seller isn't really computing on the claimed GPU -> freeze payouts for review.
+        # (A seller's own manual self-test failing just costs reputation, not a freeze.)
+        if not passed and getattr(tw, "trigger", "manual") == "audit":
+            import seller_audit
+            seller_audit.freeze_for_fraud(db, spec, "failed platform integrity audit",
+                                          seller_id=agent.id, penalty=0)
         return {"status": "ok", "task_id": task.id, "test_passed": passed,
                 "reputation": agent.reputation,
                 "can_accept_paid_jobs": agent.can_accept_paid_jobs}
@@ -2685,6 +2695,18 @@ def admin_run_payouts(me=Depends(require_admin), db: Session = Depends(get_db),
             "batches": [{"public_id": b.public_id, "seller_id": b.seller_id,
                          "total_minor": b.total_amount_minor, "state": b.state,
                          "rail": b.rail_type} for b in batches]}
+
+
+@app.post("/admin/audits/run", tags=["seller"])
+def admin_run_audits(me=Depends(require_admin), db: Session = Depends(get_db),
+                     difficulty: str = "easy", sample_rate: float = Query(None, ge=0, le=1)):
+    """Randomly spot-check live sellers with server-seeded known-answer challenges
+    (proof of continuous honest compute). A seller who isn't really running work on the
+    claimed GPU fails the challenge in /jobs/result — dropping reputation and, on a
+    failed audit, freezing their payouts. Schedule this periodically (cron)."""
+    import seller_audit
+    dispatched = seller_audit.run_spot_checks(db, difficulty=difficulty, sample_rate=sample_rate)
+    return {"ok": True, "dispatched": len(dispatched), "audits": dispatched}
 
 
 # ------------------- IDLE FALLBACK (earn when unrented) -------------------

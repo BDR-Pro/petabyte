@@ -46,6 +46,9 @@ jobs:
       - name: wallet (add funds via stripe checkout)
         working-directory: lumaris_api
         run: python wallet_test.py
+      - name: seller integrity audits (anti-fraud)
+        working-directory: lumaris_api
+        run: python seller_audit_test.py
       - name: tunnel (NAT traversal + failover)
         working-directory: lumaris_gateway
         run: python tunnel_test.py
