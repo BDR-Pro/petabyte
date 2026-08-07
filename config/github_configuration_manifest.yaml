@@ -81,6 +81,20 @@ variables:
     scope:
     - platform
     description: ''
+  CONNECT_REFRESH_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: Absolute Stripe Connect onboarding refresh URL; falls back to PUBLIC_BASE_URL when unset.
+    format: url_or_empty
+  CONNECT_RETURN_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: Absolute Stripe Connect onboarding return URL; falls back to PUBLIC_BASE_URL when unset.
+    format: url_or_empty
   DEFAULT_LANDING_VIDEO_ID:
     required: false
     default: UUSWYaxboDA
@@ -676,6 +690,20 @@ variables:
     scope:
     - platform
     description: OTel resource attribute petabyte.host_role (e.g. api, worker).
+  PETABYTE_OFFLINE_TEST:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: 'Offline self-test toggle: ''1'' lets a served API run the fake gateway with STRIPE_GATEWAY
+      unset. Never set in production.'
+    allowed:
+    - ''
+    - '0'
+    - '1'
+    - 'true'
+    - 'false'
+    production_notes: Must be unset/0 in production.
   PETABYTE_SPEC_ID:
     required: true
     default: null

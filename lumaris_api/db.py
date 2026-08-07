@@ -1010,6 +1010,11 @@ class ConnectedAccount(Base):
     requirements_past_due = Column(Text, nullable=True)         # JSON list
     disabled_reason = Column(String, nullable=True)
     last_synced_at = Column(DateTime, nullable=True)
+    # Which Stripe gateway minted this account: 'real' (Stripe API) or 'fake' (offline
+    # FakeStripeGateway). A fake account (acct_fake…) must NEVER be reused once the process
+    # switches to the real gateway, or the real Stripe Connect account is never created. Nullable
+    # for legacy rows; the account-id prefix ('acct_fake') is the fallback classifier.
+    gateway_mode = Column(String, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -1317,6 +1322,34 @@ def create_payout_obligation(db: Session, *, seller_id: int, compute_tx_id: int,
     return obl
 
 
+def payout_hold_elapsed(obligation, now=None) -> bool:
+    """CLOCK-INJECTABLE risk-hold check: True iff this obligation's hold window has elapsed.
+
+    This is the pure, testable core of the 14-day seller payout hold. Production calls it with
+    ``now=None`` (a trusted UTC clock); tests inject ``now=captured_at + timedelta(days=15)`` to
+    verify the exact boundary WITHOUT changing wall-clock time or exposing any clock override to
+    a runtime HTTP request. The hold is satisfied at or after ``available_at``
+    (== captured_at + PAYOUT_HOLD_DAYS), so day 13 is held and day 14 onward is eligible.
+
+    It checks ONLY the time-based hold. Batch state, sanctions, and admin review holds are
+    enforced separately (see payout_hold_active / payout_routing), so a True here does NOT by
+    itself release money — it is one necessary condition, never the whole gate."""
+    if obligation is None:
+        return False
+    if getattr(obligation, "state", None) in ("paid", "reversed", "cancelled"):
+        return False
+    now = now or _utcnow()
+    avail = getattr(obligation, "available_at", None)
+    if avail is None:
+        return True                      # no hold configured (PAYOUT_HOLD_DAYS=0)
+    # Normalize naive datetimes (SQLite round-trips lose tzinfo) to UTC before comparing.
+    if getattr(avail, "tzinfo", None) is None:
+        avail = avail.replace(tzinfo=timezone.utc)
+    if getattr(now, "tzinfo", None) is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now >= avail
+
+
 # A seller under one of these risk decisions has their payouts HELD: matured earnings
 # do not become batchable until an admin clears the review. (Separate from the sanctions
 # gate in payout_routing.compliance_ok.)
@@ -1452,6 +1485,7 @@ def _ensure_columns():
         "compute_transactions": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
         "payout_obligations": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
         "payout_batches": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
+        "connected_accounts": [("gateway_mode", "VARCHAR")],
     }
     try:
         insp = _inspect(engine)

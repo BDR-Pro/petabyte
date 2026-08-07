@@ -116,6 +116,14 @@ jobs:
         working-directory: lumaris_api
         run: python payout_test.py
 
+      - name: e2e safety — no silent fake gateway / connect-mode / payout-hold clock
+        working-directory: lumaris_api
+        run: python e2e_safety_test.py
+
+      - name: e2e flow — dispatch ONCE -> auto meter+capture -> held payout (idempotent)
+        working-directory: lumaris_api
+        run: python stripe_e2e_flow_test.py
+
       - name: matmul result validation (offline)
         working-directory: lumaris_api
         run: python matmul_validation_test.py
@@ -163,6 +171,12 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -r lumaris_api/requirements.txt
+      - name: repo-root import (canonical `uvicorn lumaris_api.main:app` works)
+        run: python scripts/repo_root_import_test.py
+      - name: agent dependency/import audit (all hard runtime imports are declared)
+        run: python lumaris_agent/deps_audit_test.py
+      - name: e2e runner safety (refuses live Stripe; masks + redacts secrets)
+        run: python scripts/e2e_marketplace_runner_test.py
       - name: config toolchain tests
         working-directory: lumaris_api
         run: python config_test.py

@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real
 
 help:
 	@echo "Petabyte make targets:"
@@ -28,6 +28,8 @@ help:
 	@echo "  make smoke-load      Concurrent buyer/seller API load + invariants (set DATABASE_URL=postgres...)"
 	@echo "  make smoke-gpu       Seller GPU hardware assertion (real GPU compute + utilization)"
 	@echo "  make smoke-e2e-gpu   Full Buyer->Platform->Seller->GPU->Result chain + merged report"
+	@echo "  make e2e-preflight   Real-Stripe-TEST E2E preflight only (safe; creates no payment)"
+	@echo "  make e2e-real        One-command real Stripe TEST + remote GPU E2E (needs SPEC=<public-id>)"
 	@echo "  make verify          install + migrate check + full test + demo test"
 	@echo "  make verify-series-a Run the release gates + write a machine-readable evidence bundle"
 	@echo "  make diligence-bundle  Alias for verify-series-a (investor diligence evidence)"
@@ -124,6 +126,23 @@ smoke-gpu:
 # Full Buyer -> Platform -> Seller -> GPU -> Result chain; merges both reports.
 smoke-e2e-gpu:
 	python3 scripts/smoke_e2e_gpu.py
+
+# ---- real Stripe TEST + remote GPU marketplace E2E (one command) ------------
+# Preflight only: checks API/DB health, that STRIPE_SECRET_KEY is a sk_test_ key, and that the
+# spec is bookable (payout-ready seller). Creates NO payment. Safe to run anytime.
+#   make e2e-preflight  [SPEC=<public-spec-id>]  [API=http://host:8000]
+e2e-preflight:
+	python3 scripts/e2e_marketplace_test.py --preflight-only \
+		$(if $(SPEC),--spec $(SPEC),) $(if $(E2E_API),--api $(E2E_API),) $(ARGS)
+
+# Full one-command E2E against a RUNNING API + real Stripe TEST mode. Refuses live keys.
+# Requires SPEC=<public-spec-id> and STRIPE_SECRET_KEY=sk_test_... in the environment.
+#   make e2e-real SPEC=e1qdx89mtqjq
+#   make e2e-real SPEC=e1qdx89mtqjq ARGS='--gpu-test-seconds 45 --verbose'
+e2e-real:
+	@test -n "$(SPEC)" || { echo "usage: make e2e-real SPEC=<public-spec-id>"; exit 2; }
+	python3 scripts/e2e_marketplace_test.py --spec $(SPEC) \
+		$(if $(E2E_API),--api $(E2E_API),) $(ARGS)
 
 # Clean-DB migration/schema sanity + full tests + demo honesty tests.
 verify: install

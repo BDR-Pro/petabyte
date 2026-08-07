@@ -143,6 +143,17 @@ CURATED = {
                     "description": "Public application domain."},
     "PUBLIC_BASE_URL": {"aka": "APP_URL", "format": "url_or_empty",
                         "description": "Public base URL for building share/reset links."},
+    "CONNECT_RETURN_URL": {"format": "url_or_empty",
+                           "description": "Absolute Stripe Connect onboarding return URL; "
+                                          "falls back to PUBLIC_BASE_URL when unset."},
+    "CONNECT_REFRESH_URL": {"format": "url_or_empty",
+                            "description": "Absolute Stripe Connect onboarding refresh URL; "
+                                           "falls back to PUBLIC_BASE_URL when unset."},
+    "PETABYTE_OFFLINE_TEST": {"allowed": ["", "0", "1", "true", "false"],
+                              "description": "Offline self-test toggle: '1' lets a served API "
+                                             "run the fake gateway with STRIPE_GATEWAY unset. "
+                                             "Never set in production.",
+                              "prod_notes": "Must be unset/0 in production."},
     "LOG_LEVEL": {"allowed": ["debug", "info", "warning", "error", "critical",
                               "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                   "description": "Log verbosity."},

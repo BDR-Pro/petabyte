@@ -22,6 +22,9 @@ os.environ["PLATFORM_MIN_CHARGE_MINOR"] = "50"
 os.environ["PLATFORM_MAX_DURATION_S"] = "7200"      # 2h cap, below the API's le bound
 os.environ["ADMIN_USERS"] = "admin@petabyte.market"
 os.environ["REAPER_DISABLED"] = "true"
+# Stripe onboarding needs an ABSOLUTE return/refresh URL (a real deployment always has one);
+# the onboarding-link endpoint now fails closed with a clear error if it can't build one.
+os.environ["PUBLIC_BASE_URL"] = "https://test.petabyte.market"
 
 for f in ("stripe_test.db", "stripe_test.db-wal", "stripe_test.db-shm"):
     if os.path.exists(f):

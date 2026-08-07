@@ -1,6 +1,6 @@
 from fastapi import (
     FastAPI, Depends, HTTPException, Query, Header, Security, Request, WebSocket,
-    WebSocketDisconnect,
+    WebSocketDisconnect, Body,
 )
 from fastapi.responses import PlainTextResponse, JSONResponse, Response, HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -303,9 +303,40 @@ def _assert_production_is_safe() -> None:
                 "missing " + ", ".join(missing) + ". Refusing to start half-live.")
 
 
+def _assert_gateway_explicit() -> None:
+    """A SERVED API process must CHOOSE its payment gateway explicitly.
+
+    Silently defaulting to the in-process FakeStripeGateway (which is what happens when
+    STRIPE_GATEWAY is unset) once minted a fake Connect account (``acct_fake…``) inside a real
+    TEST database, then blocked the real account from ever being created. So: require
+    STRIPE_GATEWAY to be ``real`` or ``fake``. The only way to run without setting it is to
+    declare an offline self-test context (``PETABYTE_OFFLINE_TEST=1``), which pins the fake
+    gateway loudly. Fail closed otherwise — never move (or pretend to move) money on a default.
+
+    This runs from the lifespan, i.e. only when the app is actually SERVED (uvicorn). Unit
+    tests instantiate a bare ``TestClient(app)`` without entering the lifespan, so they are
+    unaffected; the offline load harness sets STRIPE_GATEWAY=fake explicitly."""
+    gw = os.getenv("STRIPE_GATEWAY", "").strip().lower()
+    if gw in ("real", "fake"):
+        return
+    if os.getenv("PETABYTE_OFFLINE_TEST", "").strip().lower() in ("1", "true", "yes"):
+        os.environ["STRIPE_GATEWAY"] = "fake"
+        logger.warning("PETABYTE_OFFLINE_TEST=1 with STRIPE_GATEWAY unset -> pinning the "
+                       "offline FakeStripeGateway for this self-test process (no real money).")
+        return
+    raise RuntimeError(
+        "STRIPE_GATEWAY is not set. A served Petabyte API must choose its payment gateway "
+        "EXPLICITLY: STRIPE_GATEWAY=real (real Stripe — TEST or LIVE per your keys) or "
+        "STRIPE_GATEWAY=fake (offline, no money). Refusing to silently fall back to the fake "
+        "gateway; that once minted a fake Connect account in a real TEST database. For offline "
+        "self-tests set PETABYTE_OFFLINE_TEST=1.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _assert_production_is_safe()
+    # No silent fake money: a served process must pick real|fake explicitly (see above).
+    _assert_gateway_explicit()
     # Hard-fail at boot if a LIVE Stripe key is present without the deliberate
     # production opt-in — no silent live mode, ever.
     from stripe_gateway import assert_test_mode
@@ -4117,29 +4148,61 @@ def _admin_reason(reason: str):
         raise HTTPException(status_code=400, detail="a reason is required for this action")
 
 
+def _connect_or_409(fn, *a, **k):
+    """Run a Connect helper, translating a gateway-mode mismatch into a clear 409 (never a
+    raw 500) so the operator sees exactly why a stale fake account was refused."""
+    try:
+        return fn(*a, **k)
+    except _sc.ConnectedAccountModeMismatch as e:
+        raise HTTPException(status_code=409,
+                            detail=f"CONNECTED_ACCOUNT_MODE_MISMATCH: {e}")
+
+
+def _connect_return_urls(data: "OnboardingLinkModel") -> tuple[str, str]:
+    """Resolve ABSOLUTE return/refresh URLs for Stripe onboarding. Precedence: explicit body
+    field -> CONNECT_RETURN_URL/CONNECT_REFRESH_URL -> PUBLIC_BASE_URL-derived. Stripe rejects a
+    relative URL, so if no absolute base is configured we return a clear config error instead of
+    letting Stripe 500."""
+    base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    return_url = (data.return_url or os.getenv("CONNECT_RETURN_URL")
+                  or (f"{base}/seller/payouts?stripe=return" if base else None))
+    refresh_url = (data.refresh_url or os.getenv("CONNECT_REFRESH_URL")
+                   or (f"{base}/seller/payouts?stripe=refresh" if base else None))
+    for label, u in (("return_url", return_url), ("refresh_url", refresh_url)):
+        if not u or not str(u).lower().startswith(("http://", "https://")):
+            raise HTTPException(
+                status_code=503,
+                detail=("CONNECT_RETURN_URL_MISSING: Stripe onboarding needs an absolute "
+                        f"{label}. Set PUBLIC_BASE_URL (e.g. https://app.petabyte.market) or "
+                        f"CONNECT_RETURN_URL/CONNECT_REFRESH_URL, or pass {label} in the body."))
+    return return_url, refresh_url
+
+
 # ---------------- Seller: Stripe Connect onboarding ----------------
 @app.post("/payments/connect/account", tags=["payments"])
-def connect_create_account(data: SellerConnectModel,
-                           user: dict = Depends(get_current_user),
-                           db: Session = Depends(get_db)):
+def connect_create_account(user: dict = Depends(get_current_user),
+                           db: Session = Depends(get_db),
+                           data: SellerConnectModel = Body(default_factory=SellerConnectModel)):
     """Create (or return) THIS seller's connected account. Idempotent — never creates
-    a second Stripe account, and a seller can only ever touch their own."""
+    a second Stripe account, and a seller can only ever touch their own. The JSON body is
+    OPTIONAL: POST with no body, `{}`, or `{"country": "..."}` all work."""
     me = get_user_by_username(db, _username(user))
-    ca = _sc.get_or_create_connected_account(db, me, country=data.country, email=data.email)
+    ca = _connect_or_409(_sc.get_or_create_connected_account, db, me,
+                         country=data.country, email=data.email)
     return {"connected_account_id": ca.stripe_account_id, "onboarding_state": ca.onboarding_state,
             "payout_ready": ca.payout_ready()}
 
 @app.post("/payments/connect/onboarding-link", tags=["payments"])
-def connect_onboarding_link(data: OnboardingLinkModel,
-                            user: dict = Depends(get_current_user),
-                            db: Session = Depends(get_db)):
+def connect_onboarding_link(user: dict = Depends(get_current_user),
+                            db: Session = Depends(get_db),
+                            data: OnboardingLinkModel = Body(default_factory=OnboardingLinkModel)):
+    """Return a Stripe-hosted onboarding link. Body is OPTIONAL; return/refresh URLs default
+    from PUBLIC_BASE_URL / CONNECT_RETURN_URL / CONNECT_REFRESH_URL when omitted."""
     me = get_user_by_username(db, _username(user))
-    ca = _sc.get_or_create_connected_account(db, me)
-    base = os.getenv("PUBLIC_BASE_URL", "").rstrip("/") or ""
-    url = _sc.create_onboarding_link(
-        db, ca,
-        refresh_url=data.refresh_url or f"{base}/seller/payouts?stripe=refresh",
-        return_url=data.return_url or f"{base}/seller/payouts?stripe=return")
+    return_url, refresh_url = _connect_return_urls(data)      # 503 with a clear code if unset
+    ca = _connect_or_409(_sc.get_or_create_connected_account, db, me)
+    url = _connect_or_409(_sc.create_onboarding_link, db, ca,
+                          refresh_url=refresh_url, return_url=return_url)
     return {"url": url}
 
 @app.post("/payments/connect/refresh", tags=["payments"])
@@ -4221,6 +4284,10 @@ def payments_authorize(data: AuthorizeModel, request: Request,
     audit(db, "payment.authorize", actor=me.username, resource_type="compute_tx",
           resource_id=tx.public_id, ip=_client_ip(request))
     return {"transaction_id": tx.public_id, "client_secret": getattr(tx, "_client_secret", None),
+            # The PaymentIntent id (pi_…) is NOT secret — only client_secret is. Returning it
+            # lets a test runner confirm the PI via the Stripe SDK without fragile parsing of
+            # client_secret. NEVER log client_secret.
+            "payment_intent_id": tx.stripe_payment_intent_id,
             "authorization_amount": tx.authorization_amount, "currency": tx.currency,
             "status": tx.status,
             "publishable_key": os.getenv("STRIPE_PUBLISHABLE_KEY", "")}
@@ -4241,13 +4308,21 @@ def payments_confirm(public_id: str, user: dict = Depends(get_current_user),
     return _ctx_view(db, tx, viewer=me)
 
 
-@app.post("/payments/{public_id}/simulate-card", tags=["payments"])
+@app.post("/payments/{public_id}/simulate-card", tags=["payments"],
+          summary="[FAKE GATEWAY ONLY] confirm a PaymentIntent offline",
+          description="**FAKE GATEWAY ONLY.** Stands in for the client-side Stripe.js card "
+                      "confirmation when running against the in-process FakeStripeGateway "
+                      "(offline end-to-end tests). It returns **404 whenever the real Stripe "
+                      "gateway is active**, so it can NEVER confirm a real (test or live) "
+                      "PaymentIntent. For a real Stripe TEST E2E, confirm the PaymentIntent "
+                      "with the Stripe SDK instead — see scripts/e2e_marketplace_test.py.")
 def payments_simulate_card(public_id: str, user: dict = Depends(get_current_user),
                            db: Session = Depends(get_db)):
-    """SANDBOX/TEST ONLY — stands in for the client-side Stripe.js card confirmation
+    """FAKE GATEWAY ONLY — stands in for the client-side Stripe.js card confirmation
     when running against the in-process fake gateway (offline end-to-end tests).
     Moves the manual-capture PaymentIntent to 'requires_capture'. Returns 404 in
-    real Stripe mode, so it is inert in production (no live PI can be confirmed here)."""
+    real Stripe mode, so it is inert in production (no real PI can be confirmed here).
+    The real Stripe TEST E2E runner confirms via the Stripe SDK, not this endpoint."""
     from stripe_gateway import get_gateway, FakeStripeGateway
     gw = get_gateway()
     if not isinstance(gw, FakeStripeGateway):

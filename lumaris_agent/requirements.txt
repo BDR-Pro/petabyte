@@ -4,4 +4,11 @@ nbclient>=0.9.0
 flask>=3.0.0
 requests>=2.31.0
 python-dotenv>=1.0.0
+# Ed25519 node identity (crypto.py) + Fernet payload decryption (task_fetcher.py). This is a
+# HARD runtime dependency: without it the agent cannot sign attestations or claim jobs. It was
+# missing before, so a clean install started but crashed at first use with ModuleNotFoundError.
+cryptography>=42
+# NOTE: opentelemetry-* is an OPTIONAL tracing extra. agent_telemetry.py imports it lazily
+# inside try/except, so the agent runs fully without it. Install these only for OTLP tracing:
+#   opentelemetry-sdk>=1.20 opentelemetry-exporter-otlp>=1.20
 

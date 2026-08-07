@@ -307,3 +307,134 @@ utilization during the job's running interval. That on-hardware correlation is
 
 _Status: ⏳ WAITING FOR OPERATOR EXECUTION on the Seller GPU Droplet — paste
 `artifacts/SMOKE_GPU_REPORT.json` back to mark ✅ COMPLETE._
+
+---
+
+# 2026-08-07 — REAL STRIPE TEST + REMOTE GPU E2E (one command)
+
+The whole buyer → Stripe TEST → GPU seller → capture → **held** payout flow is now a single
+command. No more copying JWTs, PaymentIntent IDs, `curl`, or hand-built JSON, and no calling
+`/dispatch` twice — the runner dispatches **once** and polls `GET /payments/{tx}`.
+
+## One-time setup
+
+1. **Platform env** — the served API chooses its gateway explicitly (it will refuse to start
+   otherwise; there is no silent fake-money fallback):
+
+   ```bash
+   export STRIPE_GATEWAY=real
+   export STRIPE_MODE=test
+   export PAYMENTS_MODE=sandbox
+   export STRIPE_SECRET_KEY=sk_test_...        # a TEST key — a live key is rejected
+   export STRIPE_PUBLISHABLE_KEY=pk_test_...
+   export PUBLIC_BASE_URL=https://petabyte.market   # needed for Connect onboarding return URLs
+   ```
+
+2. **Seller** completes real Stripe Connect **TEST** onboarding once, and the agent is
+   installed and running:
+
+   ```bash
+   systemctl status petabyte-agent
+   ```
+
+3. Start the API from the **repo root** (this now works — no `cd lumaris_api` needed):
+
+   ```bash
+   python -m uvicorn lumaris_api.main:app --host 0.0.0.0 --port 8000
+   ```
+
+## Repeated E2E
+
+```bash
+# same shell must have STRIPE_SECRET_KEY=sk_test_... exported
+export STRIPE_SECRET_KEY=sk_test_...
+
+# safe check first — creates NO payment:
+make e2e-preflight SPEC=<public-spec-id> E2E_API=http://127.0.0.1:8000
+
+# the full run:
+make e2e-real SPEC=<public-spec-id> E2E_API=http://127.0.0.1:8000
+# extra options via ARGS, e.g. a longer GPU workload + verbose:
+make e2e-real SPEC=<public-spec-id> ARGS='--gpu-test-seconds 45 --verbose'
+```
+
+The seller side needs **no command** if the agent is already running.
+
+Find `<public-spec-id>` (the string handle, e.g. `e1qdx89mtqjq` — **not** the numeric DB id
+and **not** the seller id) in the public marketplace:
+
+```bash
+curl -fsS http://127.0.0.1:8000/marketplace/specs | python3 -m json.tool | grep '"id"'
+```
+
+## What PASS means
+
+The runner drives: preflight → buyer auth → `/payments/authorize` (real Stripe TEST
+PaymentIntent, `capture_method=manual`) → confirm the PI with the **Stripe SDK** (test card
+`pm_card_visa`, no Stripe CLI needed) → assert `livemode=false` + `requires_capture` →
+`POST /payments/{tx}/confirm` (Petabyte re-verifies Stripe server-side) → reserve →
+**dispatch once** → seller agent runs the bounded GPU workload → `/jobs/result` → automatic
+meter + capture → poll `GET` → verify capture / fee / seller-net / receipt / timeline.
+
+**Seller payout is intentionally PENDING.** Capture creates a *held* payout obligation with a
+14-day risk hold; `transferred_amount` stays `0` until the hold elapses and the biweekly batch
+runs. That is the correct terminal E2E state:
+
+```
+Seller settlement
+  Transferred now        $0.00
+  Status                 PENDING BY DESIGN (held for the configured payout hold)
+```
+
+Artifacts (secrets redacted — never any key, `client_secret`, JWT, or webhook secret):
+
+```
+artifacts/REAL_E2E_REPORT.json
+artifacts/REAL_E2E_REPORT.txt
+```
+
+## Safety (built in, no override)
+
+- Refuses `sk_live_` / `rk_live_` keys and any PaymentIntent with `livemode=true` — aborts
+  before touching money; there is no `--force`.
+- `simulate-card` is **FAKE-GATEWAY ONLY** and returns 404 under real Stripe; the runner never
+  uses it — it confirms via the Stripe SDK.
+- A served API refuses to start with `STRIPE_GATEWAY` unset (no silent fake gateway). For
+  offline self-tests only, `PETABYTE_OFFLINE_TEST=1` pins the fake gateway loudly.
+- A **fake** Connect account can never be reused once the process runs the **real** gateway
+  (and vice versa) — `ConnectedAccountModeMismatch` fails closed. If you see it, remove that
+  seller's stale account and re-onboard under the real gateway.
+
+## Webhook testing (optional — separate from the basic E2E)
+
+The basic E2E does **not** need the Stripe CLI. Webhook signature handling is covered by its
+own suite (`stripe_test.py`: valid/invalid signature, replay, duplicate, unknown tx,
+TEST/LIVE mismatch). For a live webhook loop:
+
+```bash
+stripe listen --forward-to http://127.0.0.1:8000/webhooks/stripe
+# use the printed whsec_... as STRIPE_WEBHOOK_SECRET; signatures are always verified.
+```
+
+## Payout-eligibility tests (no 14-day wait)
+
+The hold boundary is unit-tested with an **injected clock** — no wall-clock change, no HTTP
+override:
+
+```bash
+cd lumaris_api && python e2e_safety_test.py     # day 0 / 13 / exact-14 boundary / day 15
+```
+
+## Troubleshooting (operator-safe error codes)
+
+| Symptom | Meaning / fix |
+|---|---|
+| `CONNECTED_ACCOUNT_MODE_MISMATCH` | A fake account exists under the real gateway. Remove the seller's stale `connected_accounts` row, re-onboard. |
+| `CONNECT_RETURN_URL_MISSING` (503) | Set `PUBLIC_BASE_URL` (or `CONNECT_RETURN_URL`/`CONNECT_REFRESH_URL`). |
+| Preflight `GPU spec … not listed` | Spec isn't publicly bookable: not attested, no units, or seller not payout-ready. |
+| `STRIPE_AUTHORIZATION` expected `requires_capture` | PaymentIntent needs redirect handling; the runner passes a `return_url`. Check the key is `sk_test_`. |
+| `ABORT: … sk_live_` | You exported a live key. The runner never runs on live money. |
+| API won't start, `STRIPE_GATEWAY is not set` | Export `STRIPE_GATEWAY=real` (or `fake`). No silent fallback. |
+
+_Status: ⏳ WAITING FOR OPERATOR EXECUTION on the Platform Droplet — run `make e2e-real SPEC=...`
+and paste `artifacts/REAL_E2E_REPORT.txt` back to mark ✅ COMPLETE._
