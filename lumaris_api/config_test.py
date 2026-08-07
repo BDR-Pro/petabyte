@@ -41,6 +41,7 @@ def _base_platform_env(**over):
         "SERVER_PRIVATE_KEY": "fernet-key-placeholder",
         "DATABASE_URL": "postgresql+psycopg2://u:p@h:5432/db",
         "DEPLOY_SSH_KEY": "ssh-key", "DROPLET_HOST": "1.2.3.4", "DROPLET_USER": "deploy",
+        "DROPLET_SSH_KNOWN_HOSTS": "1.2.3.4 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA",
     }
     env.update(over)
     return env

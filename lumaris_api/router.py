@@ -123,8 +123,14 @@ def candidate_snapshot(ranked, selected_ids):
             for c in ranked]
 
 
-def select_plan(db, intent: dict):
-    """Return a placement plan: N nodes across DISTINCT owners for real redundancy."""
+def select_plan(db, intent: dict, *, _with_caches: bool = False):
+    """Return a placement plan: N nodes across DISTINCT owners for real redundancy.
+
+    `_with_caches` is an INTERNAL opt-in: when true the plan additionally carries
+    request-scoped `_specs`/`_reputation` maps (holding ORM SellerSpec objects) so /route
+    can annotate without re-fetching. It defaults to False so a plan returned to ANY other
+    caller (e.g. /solve) is safe to serialize — ORM objects can never leak into a public
+    response. Only /route sets it, and it pops the caches before responding."""
     redundancy = max(1, int(intent.get("redundancy", 1)))
     hours = max(1, int(intent.get("hours", 1)))
     ranked = score_candidates(gather_candidates(db, intent))
@@ -149,7 +155,7 @@ def select_plan(db, intent: dict):
     from db import D, q
     est = q(sum((D(c["spec"].price_per_hour) for c in selected), D(0)) * D(hours))
     selected_ids = [c["spec"].id for c in selected]
-    return {
+    plan = {
         "fulfilled": len(selected) >= redundancy,
         "requested_redundancy": redundancy,
         "selected": [_fmt(c, True) for c in selected],
@@ -161,8 +167,12 @@ def select_plan(db, intent: dict):
         "selected_spec_ids": selected_ids,
         "note": "Candidates are our own verified nodes; the scorer is provider-"
                 "agnostic so external-cloud adapters can contribute candidates later.",
-        # Internal request-scoped caches so /route can annotate selected + alternatives
-        # WITHOUT re-fetching specs or recomputing reputation (popped before responding).
-        "_specs": {c["spec"].id: c["spec"] for c in ranked},
-        "_reputation": {c["spec"].id: c["rep_full"] for c in ranked},
     }
+    if _with_caches:
+        # Internal request-scoped caches so /route can annotate selected + alternatives
+        # WITHOUT re-fetching specs or recomputing reputation. These hold ORM SellerSpec
+        # objects and must NEVER reach a client — /route (the only opt-in caller) pops them
+        # before responding; every other caller never receives them at all.
+        plan["_specs"] = {c["spec"].id: c["spec"] for c in ranked}
+        plan["_reputation"] = {c["spec"].id: c["rep_full"] for c in ranked}
+    return plan

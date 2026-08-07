@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile payout-test payout-coverage email-test email-integration stripe-integration local-e2e test test-postgres install verify
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu
 
 help:
 	@echo "Petabyte make targets:"
@@ -18,12 +18,19 @@ help:
 	@echo "  make email-integration  Send a REAL Mailgun email (needs MAILGUN_API_KEY; skips otherwise)"
 	@echo "  make local-e2e       Run the whole platform locally + a buyer/seller/admin flow (offline)"
 	@echo "  make reconcile       Reconcile internal ledger + transactions vs Stripe (test mode)"
+	@echo "  make audit-ledger    Ledger integrity + booking/payout cross-checks (read-only; fails on drift)"
 	@echo "  make payout-test     Run the provider-neutral global payout routing suite"
 	@echo "  make payout-coverage Print the honest seller-payout country coverage (fails <100)"
 	@echo "  make test            Run smoke + adversarial + stripe + payout + gateway suites (SQLite)"
 	@echo "  make test-postgres   Run the full suite against SQLite AND PostgreSQL"
 	@echo "  make install         Install Python dependencies"
+	@echo "  make smoke           Lightweight functional smoke test (SQLite, fast)"
+	@echo "  make smoke-load      Concurrent buyer/seller API load + invariants (set DATABASE_URL=postgres...)"
+	@echo "  make smoke-gpu       Seller GPU hardware assertion (real GPU compute + utilization)"
+	@echo "  make smoke-e2e-gpu   Full Buyer->Platform->Seller->GPU->Result chain + merged report"
 	@echo "  make verify          install + migrate check + full test + demo test"
+	@echo "  make verify-series-a Run the release gates + write a machine-readable evidence bundle"
+	@echo "  make diligence-bundle  Alias for verify-series-a (investor diligence evidence)"
 
 install:
 	pip install -r $(API)/requirements.txt
@@ -70,6 +77,11 @@ email-integration:
 reconcile:
 	cd $(API) && python3 reconcile.py
 
+# Ledger integrity + booking/payout cross-checks. Read-only; exits non-zero on any drift,
+# so it can gate a release. Point DATABASE_URL at the DB you want to audit.
+audit-ledger:
+	python3 scripts/audit_ledger.py
+
 # Provider-neutral payout routing/aggregation suite (offline, deterministic).
 payout-test:
 	cd $(API) && python3 payout_test.py
@@ -84,6 +96,34 @@ test:
 
 test-postgres:
 	cd $(API) && bash run_tests.sh --postgres
+
+# Release / diligence gate: runs the gates and writes a machine-readable evidence bundle to
+# evidence/. Exits non-zero on any P0 failure. Add ARGS='--strict' to also fail on P0 skips
+# (e.g. Postgres invariants), or ARGS='--quick' for the fast structural gates only.
+verify-series-a:
+	python3 scripts/verify_series_a.py $(ARGS)
+
+diligence-bundle: verify-series-a
+
+# ---- load / GPU smoke tests -------------------------------------------------
+# Lightweight functional smoke (SQLite, fast) — the existing single-flow check.
+smoke:
+	cd $(API) && python3 smoke_test.py
+
+# Concurrent buyer/seller load over the REAL API: capacity contention, no-oversell, ledger
+# invariants, buyer isolation. Writes artifacts/SMOKE_LOAD_REPORT.json. For a real
+# concurrency-correctness claim, point DATABASE_URL at Postgres (the load_test workflow does).
+smoke-load:
+	python3 scripts/smoke_load.py
+
+# Seller GPU hardware assertion: real in-container PyTorch matmul + measured utilization.
+# Reports EXTERNAL_GPU_TEST_REQUIRED (not a fake PASS) when no GPU/Docker is present.
+smoke-gpu:
+	python3 scripts/smoke_gpu.py
+
+# Full Buyer -> Platform -> Seller -> GPU -> Result chain; merges both reports.
+smoke-e2e-gpu:
+	python3 scripts/smoke_e2e_gpu.py
 
 # Clean-DB migration/schema sanity + full tests + demo honesty tests.
 verify: install

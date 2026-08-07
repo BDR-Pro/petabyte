@@ -20,10 +20,22 @@ Fee rule (documented, configurable, snapshotted per transaction):
 """
 from __future__ import annotations
 
+import math
 import os
 from decimal import Decimal, ROUND_HALF_UP
 
 SNAPSHOT_VERSION = 1
+
+# Absolute ceiling on any single authorization/capture (minor units). Defence in depth: an
+# absurd price_per_hour or duration (a fat-fingered listing, a bug, or an attack) must be
+# REFUSED before it ever reaches a payment provider. Default: $1,000,000 in cents. Operators
+# can raise it deliberately via PLATFORM_MAX_CHARGE_MINOR.
+_DEFAULT_MAX_CHARGE_MINOR = 100_000_000
+
+
+class PricingError(ValueError):
+    """Raised on invalid pricing config or an amount that exceeds the absolute ceiling.
+    Callers translate this into a 4xx — money must never move on a bad-config path."""
 
 
 def _env_int(name: str, default: int) -> int:
@@ -31,6 +43,21 @@ def _env_int(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)))
     except (TypeError, ValueError):
         return default
+
+
+def _take_rate_bps(default_bps: int = 1000) -> int:
+    """Parse PLATFORM_TAKE_RATE (a 0..1 fraction) into basis points, rejecting NaN/inf and
+    out-of-range values rather than crashing or producing a nonsensical commission."""
+    raw = os.getenv("PLATFORM_TAKE_RATE")
+    if raw is None or raw.strip() == "":
+        return default_bps
+    try:
+        rate = float(raw)
+    except (TypeError, ValueError):
+        raise PricingError(f"PLATFORM_TAKE_RATE is not a number: {raw!r}")
+    if not math.isfinite(rate):
+        raise PricingError(f"PLATFORM_TAKE_RATE must be finite (got {raw!r})")
+    return int(round(rate * 10000))
 
 
 class PricingConfig:
@@ -45,12 +72,12 @@ class PricingConfig:
                  fixed_fee_minor: int | None = None,
                  min_charge_minor: int | None = None,
                  max_duration_s: int | None = None,
-                 auth_margin_bps: int | None = None):
+                 auth_margin_bps: int | None = None,
+                 max_charge_minor: int | None = None):
         # commission in basis points (1000 = 10.00%); default tracks PLATFORM_TAKE_RATE.
-        default_bps = int(round(float(os.getenv("PLATFORM_TAKE_RATE", "0.10")) * 10000))
         self.currency = (currency or os.getenv("PLATFORM_CURRENCY", "usd")).lower()
         self.commission_bps = commission_bps if commission_bps is not None \
-            else _env_int("PLATFORM_COMMISSION_BPS", default_bps)
+            else _env_int("PLATFORM_COMMISSION_BPS", _take_rate_bps())
         self.fixed_fee_minor = fixed_fee_minor if fixed_fee_minor is not None \
             else _env_int("PLATFORM_FIXED_FEE_MINOR", 0)
         self.min_charge_minor = min_charge_minor if min_charge_minor is not None \
@@ -60,19 +87,45 @@ class PricingConfig:
         # safety margin added to the estimate to set the authorization ceiling.
         self.auth_margin_bps = auth_margin_bps if auth_margin_bps is not None \
             else _env_int("PLATFORM_AUTH_MARGIN_BPS", 2000)         # +20%
+        self.max_charge_minor = max_charge_minor if max_charge_minor is not None \
+            else _env_int("PLATFORM_MAX_CHARGE_MINOR", _DEFAULT_MAX_CHARGE_MINOR)
+        self._validate()
+
+    def _validate(self) -> None:
+        """Reject nonsensical config BEFORE it can produce a bad charge. A negative or
+        >100% commission would make the platform fee negative or swallow the whole capture
+        (breaking `capture == fee + seller_net` in spirit); negative fixed/min/margin or a
+        non-positive duration/ceiling are all money hazards."""
+        if not 0 <= self.commission_bps <= 10000:
+            raise PricingError(
+                f"commission must be 0..100% (0..10000 bps); got {self.commission_bps} bps")
+        if self.fixed_fee_minor < 0:
+            raise PricingError(f"fixed_fee_minor must be >= 0; got {self.fixed_fee_minor}")
+        if self.min_charge_minor < 0:
+            raise PricingError(f"min_charge_minor must be >= 0; got {self.min_charge_minor}")
+        if self.auth_margin_bps < 0:
+            raise PricingError(f"auth_margin_bps must be >= 0; got {self.auth_margin_bps}")
+        if self.max_duration_s <= 0:
+            raise PricingError(f"max_duration_s must be > 0; got {self.max_duration_s}")
+        if self.max_charge_minor <= 0:
+            raise PricingError(f"max_charge_minor must be > 0; got {self.max_charge_minor}")
 
     def snapshot(self, price_per_hour_minor: int) -> dict:
         """Freeze the config + the seller's per-hour price (in minor units) onto a
         transaction. Everything needed to recompute any amount later lives here."""
+        ppm = int(price_per_hour_minor)
+        if ppm < 0:
+            raise PricingError(f"price_per_hour_minor must be >= 0; got {ppm}")
         return {
             "version": SNAPSHOT_VERSION,
             "currency": self.currency,
-            "price_per_hour_minor": int(price_per_hour_minor),
+            "price_per_hour_minor": ppm,
             "commission_bps": self.commission_bps,
             "fixed_fee_minor": self.fixed_fee_minor,
             "min_charge_minor": self.min_charge_minor,
             "max_duration_s": self.max_duration_s,
             "auth_margin_bps": self.auth_margin_bps,
+            "max_charge_minor": self.max_charge_minor,
         }
 
 
@@ -101,6 +154,13 @@ def estimate(snapshot: dict, estimated_seconds: int) -> dict:
     est = max(est, int(snapshot["min_charge_minor"])) if secs > 0 else est
     margin = (est * int(snapshot["auth_margin_bps"])) // 10000
     authorization = est + margin + int(snapshot["fixed_fee_minor"])
+    # Absolute ceiling: refuse an absurd authorization BEFORE it reaches a provider.
+    # (max_charge_minor may be absent on snapshots frozen before this field existed.)
+    ceiling = int(snapshot.get("max_charge_minor", _DEFAULT_MAX_CHARGE_MINOR))
+    if authorization > ceiling:
+        raise PricingError(
+            f"authorization {authorization} exceeds the maximum allowed charge {ceiling} "
+            f"(minor units) — refusing to book")
     return {
         "currency": snapshot["currency"],
         "estimated_seconds": secs,

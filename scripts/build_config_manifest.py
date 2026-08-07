@@ -116,6 +116,12 @@ AGENT_VARS = {
                      "description": "Deploy target host (IP/DNS)."},
     "DROPLET_USER": {"required": True, "default": None, "secret": True, "scope": ["deployment"],
                      "description": "Deploy SSH user."},
+    "DROPLET_SSH_KNOWN_HOSTS": {"required": True, "default": None, "secret": True,
+                                "scope": ["deployment"],
+                                "description": "Pinned SSH host key(s) for the deploy target "
+                                               "(output of `ssh-keyscan -t ed25519,rsa <host>`). "
+                                               "Verifies the server before any secret is "
+                                               "transferred; the deploy fails closed if unset."},
 }
 
 # ---- Curated metadata for important platform vars (allowed values / validation / notes) --

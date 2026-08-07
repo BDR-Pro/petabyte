@@ -537,9 +537,12 @@ def job_loop():
                 # the W3C trace context (added by the API when the job is dispatched).
                 carrier = task.get("trace_context") or {}
                 _tel.bind(job_id=task.get("task_id"), transaction_id=task.get("transaction_id"))
-                _tel.event(_tel.EVENTS.JOB_RECEIVED, message="job claimed",
-                           task_type=tt, job_id=task.get("task_id"))
+                # Emit JOB_RECEIVED INSIDE the span so the receipt joins THIS job's trace
+                # (the span extracts the platform trace from the carrier). Emitting it before
+                # the span would attribute it to the previous job's still-lingering trace_id.
                 with _tel.span("gpu.job.execute", carrier=carrier, task_type=str(tt)):
+                    _tel.event(_tel.EVENTS.JOB_RECEIVED, message="job claimed",
+                               task_type=tt, job_id=task.get("task_id"))
                     _tel.event(_tel.EVENTS.JOB_EXECUTION_STARTED, message="execution started",
                                task_type=tt)
                     try:

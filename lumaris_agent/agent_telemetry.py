@@ -167,6 +167,11 @@ def span(name, carrier=None, **attrs):
     if not _otel_ok or _tracer is None:
         yield None
         return
+    # Snapshot the trace_id currently in the shared context so we can RESTORE it when this
+    # span ends. Without this, a completed span's trace_id lingers in the module-level
+    # context and the NEXT job's pre-span events (e.g. JOB_RECEIVED) are wrongly attributed
+    # to the previous job's trace.
+    _prev_trace = _ctx.get("trace_id")
     # SETUP phase — degrade (yield None) only on a tracer/setup failure, BEFORE yielding.
     try:
         from opentelemetry import trace
@@ -197,6 +202,12 @@ def span(name, carrier=None, **attrs):
             sp.set_status(trace.Status(trace.StatusCode.ERROR, str(exc)))
         raise
     finally:
+        # Restore the prior trace_id (or drop it) so no later event inherits this span's
+        # trace once it has ended.
+        if _prev_trace is None:
+            _ctx.pop("trace_id", None)
+        else:
+            _ctx["trace_id"] = _prev_trace
         with contextlib.suppress(Exception):
             span_cm.__exit__(*sys.exc_info())
 

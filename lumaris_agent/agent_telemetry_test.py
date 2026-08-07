@@ -92,8 +92,23 @@ if at.health()["otel_active"]:
         consumer_tid = at._ctx.get("trace_id")
     ok("the agent span joins the incoming (platform) trace via the job-envelope carrier",
        bool(producer_tid) and len(producer_tid) == 32 and producer_tid == consumer_tid)
+
+    # ---- finding 2: a completed span's trace_id must NOT leak onto later inter-job events ----
+    with at.span("job1.execute"):
+        tid1 = at._ctx.get("trace_id")
+    ok("agent: a span's trace_id is cleared when it ends (no cross-job contamination)",
+       bool(tid1) and at._ctx.get("trace_id") is None)
+    # An event emitted BETWEEN jobs (like the next job's JOB_RECEIVED, before its span) must
+    # not inherit the previous job's trace_id.
+    captured.clear()
+    at.event(at.EVENTS.JOB_RECEIVED, message="next job claimed")
+    doc2 = json.loads(captured.get("line", "") or "{}")
+    ok("agent: an inter-job event is not attributed to the previous job's trace",
+       "trace_id" not in doc2 and tid1 not in captured.get("line", ""))
 else:
     ok("trace-context propagation (skipped: OTel SDK not installed)", True)
+    ok("agent: trace_id cleared after span (skipped)", True)
+    ok("agent: inter-job event isolation (skipped)", True)
 
 print(f"\n=== agent telemetry: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
 raise SystemExit(1 if _fail else 0)

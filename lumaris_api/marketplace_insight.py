@@ -12,8 +12,11 @@ import db as dbmod
 
 _SETTLED = ("PAYMENT_CAPTURED", "SELLER_TRANSFER_PENDING", "SELLER_TRANSFERRED", "COMPLETED")
 # Public: terminal failure states. (Kept `_TX_FAILED` as a back-compat alias.)
-TX_FAILED = ("PAYMENT_FAILED", "RESERVATION_FAILED", "DISPATCH_FAILED", "JOB_FAILED",
-             "CAPTURE_FAILED", "TRANSFER_FAILED", "CANCELLED", "REFUNDED")
+# AUTHORIZATION_EXPIRED is a real terminal state (see stripe_connect.TERMINAL); it must be
+# here so payment_timeline sanitizes it and populates why_failed from _FAILURE_MESSAGES.
+TX_FAILED = ("PAYMENT_FAILED", "AUTHORIZATION_EXPIRED", "RESERVATION_FAILED",
+             "DISPATCH_FAILED", "JOB_FAILED", "CAPTURE_FAILED", "TRANSFER_FAILED",
+             "CANCELLED", "REFUNDED")
 _TX_FAILED = TX_FAILED
 
 # Safe, user-facing failure messages. Raw ComputeTxEvent.reason may embed

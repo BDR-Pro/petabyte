@@ -608,6 +608,13 @@ def init_metrics() -> bool:
         C("petabyte_reconciliation_discrepancies_total", "Reconciliation discrepancies",
           ("environment",))
         C("petabyte_ledger_imbalance_total", "Ledger imbalance detections", ("environment",))
+        # newsletter signups (low cardinality: never an email as a label)
+        C("petabyte_newsletter_subscribe_requests_total", "Newsletter signup requests",
+          ("environment",))
+        C("petabyte_newsletter_subscribe_success_total", "Newsletter signups accepted",
+          ("outcome", "environment"))                 # outcome: new | duplicate
+        C("petabyte_newsletter_subscribe_failures_total", "Newsletter signup failures",
+          ("reason", "environment"))                  # reason: mailgun | db
         # jobs / marketplace
         C("petabyte_jobs_total", "Jobs by terminal status",
           ("job_status", "template", "gpu_class", "environment"))
