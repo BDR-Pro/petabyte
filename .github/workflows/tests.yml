@@ -142,6 +142,14 @@ jobs:
         # any financial drift.
         run: python ../scripts/audit_ledger.py
 
+      - name: ledger audit — sign-aware reconciliation (wrong-direction leg)
+        working-directory: lumaris_api
+        # Proves the audit rejects a mis-directed capture leg that still balances — a plain
+        # magnitude sum would have passed it. Offline (forces its own throwaway SQLite DB).
+        env:
+          DATABASE_URL: ""
+        run: python ../scripts/audit_ledger_test.py
+
   config:
     # GitHub-config source of truth: manifest freshness, the validator (defaults,
     # formats, test/live separation, fail-closed secrets), the deploy-env generator's

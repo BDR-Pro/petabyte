@@ -454,22 +454,31 @@ groups:
           first_check: "Engage the kill switch; run GET /admin/financial-integrity and scripts/audit_ledger.py to find the broken tx. Do NOT edit ledger rows."
 
       # Settlement worker silently died: jobs keep COMPLETING but no capture succeeds (#288).
+      # Split by payment_mode: a steady stream of TEST captures must never mask a LIVE
+      # settlement outage. petabyte_jobs_total carries no payment_mode label, so the split
+      # lives on the capture side, and a 24h prior-activity guard means we only fire for a
+      # mode that WAS settling and stopped — never for a mode that is simply not in use here
+      # (e.g. no LIVE money in a sandbox environment).
       - alert: PetabyteSettlementsStalled
         expr: |
           sum by (environment) (increase(petabyte_jobs_total{job_status=~"completed|validated"}[30m])) > 0
           and on (environment)
-          sum by (environment) (increase(petabyte_payment_captures_total{outcome="success"}[30m])) == 0
+          (
+            sum by (environment, payment_mode) (increase(petabyte_payment_captures_total{outcome="success"}[30m])) == 0
+            and
+            sum by (environment, payment_mode) (increase(petabyte_payment_captures_total{outcome="success"}[24h] offset 30m)) > 0
+          )
         for: 15m
         labels:
           severity: critical
           service: petabyte-settlement
         annotations:
-          summary: "Jobs are completing but settlements have stopped"
-          description: "Completed jobs increased over 30m while successful captures stayed flat in {{ $labels.environment }}."
-          impact: "Delivered compute is not being charged — revenue leakage; likely a dead settlement worker."
+          summary: "Jobs are completing but {{ $labels.payment_mode }} settlements have stopped"
+          description: "Completed jobs increased over 30m while successful {{ $labels.payment_mode }} captures went flat (they were active in the prior 24h) in {{ $labels.environment }}."
+          impact: "Delivered compute is not being charged in {{ $labels.payment_mode }} mode — revenue leakage; likely a dead settlement worker. A separate TEST capture stream can no longer hide this."
           dashboard: "/d/petabyte-settlement/petabyte-stripe-settlement"
           runbook: "docs/runbooks/FINANCIAL_INTEGRITY_INCIDENT.md"
-          first_check: "Is the settlement/reaper worker alive? Check its logs and the PAYMENT_CAPTURED transition rate."
+          first_check: "Is the settlement/reaper worker alive for {{ $labels.payment_mode }}? Check its logs and the PAYMENT_CAPTURED transition rate split by payment_mode."
 
       # Payout scheduler stalled: sellers owed money that never enters a batch (#289/#294).
       - alert: PetabytePayoutBacklogAging

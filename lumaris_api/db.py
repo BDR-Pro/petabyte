@@ -626,31 +626,44 @@ class NewsletterSubscriber(Base):
     unsubscribed_at = Column(DateTime, nullable=True)
 
 
-def record_newsletter_signup(db: Session, email: str, source: str = "homepage") -> bool:
-    """Idempotently record a newsletter signup (single opt-in). Returns True if a NEW
-    subscriber row was created, False if the address was already present (or a concurrent
-    insert won the race). Re-subscribes a previously-unsubscribed address. Never raises on a
-    duplicate — the unique constraint on `email` is the final idempotency guard."""
+def record_newsletter_signup(db: Session, email: str, source: str = "homepage") -> str:
+    """Idempotently record a newsletter signup (single opt-in). Returns a status:
+
+      'new'          a new subscriber row was created
+      'active'       already subscribed (idempotent no-op)
+      'reactivated'  a still-PENDING (never-confirmed) signup was confirmed to subscribed
+      'suppressed'   the address was previously UNSUBSCRIBED — its opt-out is PRESERVED and
+                     is NOT silently reactivated by an (unauthenticated) public request.
+                     Re-subscription must go through a confirmed / double-opt-in flow, so the
+                     caller MUST NOT re-add a suppressed address to the Mailgun list.
+
+    Never raises on a duplicate — the unique constraint on `email` is the final guard."""
     existing = (db.query(NewsletterSubscriber)
                 .filter(NewsletterSubscriber.email == email).first())
     if existing:
-        if existing.status != "subscribed":
-            existing.status = "subscribed"
-            existing.unsubscribed_at = None
-            if existing.confirmed_at is None:
-                existing.confirmed_at = _utcnow()
-            db.add(existing)
-            db.commit()
-        return False
+        if existing.status == "subscribed":
+            return "active"
+        if existing.status == "unsubscribed":
+            # Consent boundary: a recipient who opted out is not resubscribed by anyone who
+            # merely knows their address. Leave the row untouched (no Mailgun re-add).
+            return "suppressed"
+        # status == "pending": they signed up and never opted out -> confirm it.
+        existing.status = "subscribed"
+        existing.unsubscribed_at = None
+        if existing.confirmed_at is None:
+            existing.confirmed_at = _utcnow()
+        db.add(existing)
+        db.commit()
+        return "reactivated"
     sub = NewsletterSubscriber(email=email, status="subscribed", source=source,
                                confirmed_at=_utcnow())
     db.add(sub)
     try:
         db.commit()
-        return True
+        return "new"
     except IntegrityError:
         db.rollback()          # concurrent duplicate insert -> idempotent success
-        return False
+        return "active"
 
 
 def mark_newsletter_synced(db: Session, email: str, synced: bool = True) -> None:
@@ -673,6 +686,9 @@ def unsubscribe_newsletter(db: Session, email: str) -> bool:
         return False
     sub.status = "unsubscribed"
     sub.unsubscribed_at = _utcnow()
+    # The Mailgun list still has this member until removal completes; flag it so
+    # reconciliation can detect the pending removal (local state stays authoritative).
+    sub.mailgun_synced = False
     db.add(sub)
     db.commit()
     return True

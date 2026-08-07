@@ -195,13 +195,15 @@ def sample_loop(stop_evt, spec_ids):
                     SAMPLES[key] += 1
             except Exception:
                 SAMPLES[key] += 1
-        # capacity + running (best-effort; tolerate sqlite lock contention)
+        # capacity + running (best-effort; tolerate sqlite lock contention). The session is
+        # ALWAYS closed in finally — a query that raised here previously leaked the connection,
+        # exhausting the pool over a long sampling run.
+        s = None
         try:
             s = dbmod.SessionLocal()
             running = s.query(func.count(CT.id)).filter(CT.status == "RUNNING").scalar() or 0
             rows = s.query(S.id, S.available_units, S.total_units).filter(
                 S.id.in_(spec_ids)).all()
-            s.close()
             reserved = sum(max(0, (tu or 0) - (au or 0)) for _, au, tu in rows)
             avail = sum((au or 0) for _, au, _ in rows)
             with _lock:
@@ -214,6 +216,9 @@ def sample_loop(stop_evt, spec_ids):
                 SAMPLES["samples"] += 1
         except Exception:
             pass
+        finally:
+            if s is not None:
+                s.close()
         time.sleep(0.4)
     hc.close()
 
@@ -356,6 +361,13 @@ def release_check(buyer, spec_pub, spec_ids):
 # --------------------------------------------------------------------------- orchestration
 def main():
     started = time.time()
+    # A per-run tag isolates this run's users/specs from anything already in a SHARED database
+    # (the load_test workflow uses a persistent Postgres, and re-runs reuse it). Without it,
+    # fixed names like "seller0" collide (register_user 400) and, worse, spec discovery would
+    # pick up other runs'/tenants' specs and mis-count capacity. Tagged names keep the run's
+    # capacity math scoped to exactly the sellers this run created.
+    run_tag = os.urandom(4).hex()
+    providers = [f"seller_{run_tag}_{i}" for i in range(CFG["sellers"])]
     proc, log, db_url, engine_kind = start_server()
     result = {"pass": False}
     try:
@@ -368,7 +380,7 @@ def main():
         with httpx.Client(timeout=25) as c:
             spec_pubs, spec_ids, seller_keys = [], [], []
             for i in range(CFG["sellers"]):
-                u = f"seller{i}"
+                u = providers[i]
                 c.post(f"{BASE}/register_user", json={"username": u, "password": PW})
                 st = _tok(c, u)
                 c.post(f"{BASE}/change_role", headers={"Authorization": f"Bearer {st}"},
@@ -397,35 +409,38 @@ def main():
                             headers={"Authorization": f"Bearer {st}"},
                             json={"country": "US", "email": f"{u}@x.com"})
                 acct = ca.json().get("connected_account_id")
-                _stripe_webhook(c, {"id": f"evt_acct_{i}", "type": "account.updated",
+                _stripe_webhook(c, {"id": f"evt_acct_{run_tag}_{i}", "type": "account.updated",
                     "data": {"object": {"id": acct, "charges_enabled": True,
                         "payouts_enabled": True, "details_submitted": True,
                         "capabilities": {"transfers": "active", "card_payments": "active"},
                         "requirements": {"currently_due": [], "past_due": []}}}})
-            # all sellers registered — collect the bookable spec ids visible in the marketplace
-            specs = c.get(f"{BASE}/marketplace/specs").json()
-            specs = specs if isinstance(specs, list) else specs.get("specs", [])
-            spec_pubs = [sm["id"] for sm in specs if sm.get("id")]
-            if not spec_pubs:
-                print("NO bookable specs visible after bootstrap — server log tail:\n"
-                      + open(log.name).read()[-1800:])
-                return 2
             buyers = []
             for i in range(CFG["buyers"]):
-                u = f"buyer{i}"
+                u = f"buyer_{run_tag}_{i}"
                 c.post(f"{BASE}/register_user", json={"username": u, "password": PW})
                 buyers.append({"u": u, "t": _tok(c, u)})
 
-        # internal spec ids (for capacity sampling)
+        # Collect the bookable specs SCOPED TO THIS RUN'S SELLERS (by our unique provider
+        # names) straight from the DB — never the whole marketplace, which on a shared DB
+        # would include other runs'/tenants' specs and corrupt the capacity math. We read both
+        # the public_id (used by /payments/authorize) and the internal id (capacity sampling)
+        # from the same rows, so the two id spaces can never drift apart.
         import db as dbmod
         s = dbmod.SessionLocal()
         initial_avail = {}
-        rows = s.query(dbmod.SellerSpec).filter(
-            dbmod.SellerSpec.provider.in_([f"seller{i}" for i in range(CFG["sellers"])])).all()
-        for sp in rows:
-            spec_ids.append(sp.id)
-            initial_avail[sp.id] = sp.available_units
-        s.close()
+        try:
+            rows = s.query(dbmod.SellerSpec).filter(
+                dbmod.SellerSpec.provider.in_(providers)).all()
+            for sp in rows:
+                spec_ids.append(sp.id)
+                spec_pubs.append(sp.public_id)
+                initial_avail[sp.id] = sp.available_units
+        finally:
+            s.close()
+        if not spec_pubs:
+            print("NO bookable specs after bootstrap for this run — server log tail:\n"
+                  + open(log.name).read()[-1800:])
+            return 2
         total_capacity = sum(initial_avail.values())
         print(f"bootstrapped {CFG['sellers']} seller(s), total capacity={total_capacity}, "
               f"{CFG['buyers']} buyer(s); dispatching {CFG['buyers']*CFG['jobs_per_buyer']} jobs")
@@ -463,11 +478,24 @@ def main():
                 if r["ok"]:
                     done["done"] += 1
 
-        # let sellers drain, then stop
+        # Let sellers drain any still-in-flight jobs, then stop. Wait on the ACTUAL server-side
+        # RUNNING count reaching zero — the previous condition compared done["done"] to the
+        # count of ok records, which are already equal once the futures resolve, so it never
+        # waited and left the fixed sleep to gate, intermittently tripping no_orphan_running_jobs.
+        from sqlalchemy import func as _func
         drain_deadline = time.monotonic() + 15
-        while done["done"] < sum(1 for r in records if r["ok"]) and time.monotonic() < drain_deadline:
+        while time.monotonic() < drain_deadline:
+            _s = dbmod.SessionLocal()
+            try:
+                running_now = _s.query(_func.count(dbmod.ComputeTransaction.id)).filter(
+                    dbmod.ComputeTransaction.status == "RUNNING").scalar() or 0
+            except Exception:
+                running_now = -1   # transient read error: keep waiting, don't stop early
+            finally:
+                _s.close()
+            if running_now == 0:
+                break
             time.sleep(0.3)
-        time.sleep(1.0)
         stop_evt.set()
         for t in sellers:
             t.join(timeout=5)

@@ -118,10 +118,19 @@ AGENT_VARS = {
                      "description": "Deploy SSH user."},
     "DROPLET_SSH_KNOWN_HOSTS": {"required": True, "default": None, "secret": True,
                                 "scope": ["deployment"],
-                                "description": "Pinned SSH host key(s) for the deploy target "
-                                               "(output of `ssh-keyscan -t ed25519,rsa <host>`). "
-                                               "Verifies the server before any secret is "
-                                               "transferred; the deploy fails closed if unset."},
+                                "description": "Pinned SSH host key(s) for the deploy target. "
+                                               "Generate with `ssh-keyscan -t ed25519,rsa "
+                                               "<host>`, then VERIFY the fingerprint "
+                                               "out-of-band before pinning — compare "
+                                               "`ssh-keygen -lf` of the scanned key against "
+                                               "the fingerprint from the droplet's own console "
+                                               "(e.g. `ssh-keygen -lf /etc/ssh/"
+                                               "ssh_host_ed25519_key.pub` over the provider "
+                                               "console). ssh-keyscan output is unauthenticated "
+                                               "and can be MITM'd, so pinning it unverified only "
+                                               "trusts-on-first-use. Verifies the server before "
+                                               "any secret is transferred; the deploy fails "
+                                               "closed if unset."},
 }
 
 # ---- Curated metadata for important platform vars (allowed values / validation / notes) --

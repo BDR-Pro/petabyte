@@ -14,7 +14,10 @@ from cryptography.fernet import Fernet
 
 # Configure BEFORE importing main: NEWSLETTER_LIST_ADDRESS is captured at import time.
 os.environ["TRUSTED_PROXIES"] = "testclient,127.0.0.1,::1"
-os.environ.setdefault("DATABASE_URL", "sqlite:///./newsletter_test.db")
+# FORCE an offline SQLite DB — this suite is offline-only and MUST NOT inherit an external
+# DATABASE_URL, because the schema reset below would DROP SCHEMA on whatever it points at
+# (a dev/prod Postgres). Never `setdefault` here.
+os.environ["DATABASE_URL"] = "sqlite:///./newsletter_test.db"
 os.environ["SECRET_KEY"] = "t"
 os.environ["SERVER_PRIVATE_KEY"] = Fernet.generate_key().decode()
 os.environ["WG_PUBLIC_KEY"] = "x"
@@ -44,10 +47,8 @@ atexit.register(_cleanup)
 import httpx  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 import db as dbmod  # noqa: E402
-if dbmod.engine.dialect.name.startswith("postgres"):
-    with dbmod.engine.begin() as _c:
-        _c.exec_driver_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    dbmod.init_db()
+# SQLite only (forced above): a fresh file per run, so no schema-reset dance is needed and
+# there is no code path that could ever DROP SCHEMA on an inherited database.
 import main  # noqa: E402
 
 c = TestClient(main.app)
@@ -119,6 +120,33 @@ n = s.query(dbmod.NewsletterSubscriber).filter(
     dbmod.NewsletterSubscriber.email == "alice@example.com").count()
 s.close()
 ok("duplicate signup does NOT create a second row", n == 1)
+
+# ---- consent: an UNSUBSCRIBED address is NOT reactivated by a public signup (finding #1) ----
+# Isolate this block from the shared per-IP rate-limit budget so its extra signups don't push
+# the later best-effort Mailgun tests past the limit (and vice versa).
+main._RL_BUCKETS.clear()
+mock_mailgun(_FakeResp(200))
+sub("optout@example.com")                       # subscribe first
+_s = dbmod.SessionLocal()
+dbmod.unsubscribe_newsletter(_s, "optout@example.com")
+_s.close()
+opt = db_row("optout@example.com")
+ok("unsubscribe marks the row unsubscribed and pending-resync (mailgun_synced=False)",
+   opt.status == "unsubscribed" and opt.mailgun_synced is False)
+# a later unauthenticated signup returns the SAME neutral message but must NOT resubscribe
+_calls = {"n": 0}
+_orig_add = main._newsletter_add_to_mailgun
+main._newsletter_add_to_mailgun = lambda e: (_calls.__setitem__("n", _calls["n"] + 1), "synced")[1]
+rr = sub("optout@example.com")
+main._newsletter_add_to_mailgun = _orig_add
+ok("re-signup of an unsubscribed address still returns a neutral 200 (no state leak)",
+   rr.status_code == 200)
+opt2 = db_row("optout@example.com")
+ok("consent preserved: the address stays UNSUBSCRIBED (not silently reactivated)",
+   opt2.status == "unsubscribed")
+ok("consent preserved: a suppressed re-signup is NEVER pushed back to Mailgun",
+   _calls["n"] == 0)
+main._RL_BUCKETS.clear()   # restore a fresh budget for the best-effort Mailgun tests below
 
 # ---- Mailgun 'already exists' 400 -> treated as success/synced ----
 mock_mailgun(_FakeResp(400, "Address already exists"))

@@ -3404,9 +3404,13 @@ def my_referral(request: Request, me=Depends(get_current_user), db: Session = De
 
 
 def _hash_email(email: str) -> str:
-    """A short, stable, non-reversible tag for logs/diagnostics — never the raw address."""
+    """A short, non-reversible correlation tag for logs — never the raw address, and NOT a
+    plain digest a log reader could re-identify by hashing candidate addresses. Keyed with
+    HMAC-SHA-256 under the server SECRET_KEY, then truncated for correlation only."""
     import hashlib
-    return hashlib.sha256(email.encode("utf-8")).hexdigest()[:12]
+    import hmac
+    key = (os.getenv("SECRET_KEY", "") or "petabyte").encode("utf-8")
+    return hmac.new(key, email.encode("utf-8"), hashlib.sha256).hexdigest()[:12]
 
 
 def _newsletter_add_to_mailgun(email: str) -> str:
@@ -3483,7 +3487,7 @@ def newsletter_subscribe(body: NewsletterModel, request: Request,
 
     # 1) Authoritative record (idempotent). A real DB error is the only hard failure.
     try:
-        created = dbmod.record_newsletter_signup(db, email, source="homepage")
+        status = dbmod.record_newsletter_signup(db, email, source="homepage")
     except Exception:
         logger.exception("newsletter: DB persist failed (email_sha=%s)", tag)
         obsmod.inc_metric("petabyte_newsletter_subscribe_failures_total",
@@ -3491,6 +3495,17 @@ def newsletter_subscribe(body: NewsletterModel, request: Request,
         raise HTTPException(status_code=503, detail={
             "code": "NEWSLETTER_UNAVAILABLE",
             "message": "We couldn't subscribe you right now. Please try again shortly."})
+
+    created = status == "new"
+    # CONSENT: a previously-unsubscribed address is NOT reactivated by this public request and
+    # is NEVER re-pushed to Mailgun. Return the same neutral message (don't leak opt-out state).
+    if status == "suppressed":
+        obsmod.inc_metric("petabyte_newsletter_subscribe_success_total",
+                          outcome="duplicate", environment=env)
+        obs.event("marketing.newsletter.suppressed_optout",
+                  message="newsletter signup ignored (address previously unsubscribed)",
+                  source="homepage", email_sha=tag)
+        return {"ok": True, "message": "Thanks — you're subscribed."}
 
     # 2) Deliver to the mailing list (best-effort; the DB stays the source of truth).
     provider = (NEWSLETTER_PROVIDER or "none").lower()
