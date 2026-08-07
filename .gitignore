@@ -21,6 +21,9 @@ env/
 .env.platform.generated
 .env.gpu.generated
 
+# Generated release/diligence evidence bundles (regenerate with `make verify-series-a`).
+evidence/
+
 # Builds / artifacts
 build/
 dist/

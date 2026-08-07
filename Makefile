@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e test test-postgres install verify
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e test test-postgres install verify verify-series-a diligence-bundle
 
 help:
 	@echo "Petabyte make targets:"
@@ -25,6 +25,8 @@ help:
 	@echo "  make test-postgres   Run the full suite against SQLite AND PostgreSQL"
 	@echo "  make install         Install Python dependencies"
 	@echo "  make verify          install + migrate check + full test + demo test"
+	@echo "  make verify-series-a Run the release gates + write a machine-readable evidence bundle"
+	@echo "  make diligence-bundle  Alias for verify-series-a (investor diligence evidence)"
 
 install:
 	pip install -r $(API)/requirements.txt
@@ -90,6 +92,14 @@ test:
 
 test-postgres:
 	cd $(API) && bash run_tests.sh --postgres
+
+# Release / diligence gate: runs the gates and writes a machine-readable evidence bundle to
+# evidence/. Exits non-zero on any P0 failure. Add ARGS='--strict' to also fail on P0 skips
+# (e.g. Postgres invariants), or ARGS='--quick' for the fast structural gates only.
+verify-series-a:
+	python3 scripts/verify_series_a.py $(ARGS)
+
+diligence-bundle: verify-series-a
 
 # Clean-DB migration/schema sanity + full tests + demo honesty tests.
 verify: install
