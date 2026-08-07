@@ -96,3 +96,9 @@ Then follow the job across services (executor lives on the seller node):
   is `RUNNING → METERING_FINALIZED → PAYMENT_CAPTURE_PENDING` for the metered amount
   only. When in doubt, refund — a buyer must not pay for a hung job.
 - Seller payout follows buyer capture; a stuck job never triggers a premature transfer.
+
+## See also
+
+- `SELLER_AGENT_OFFLINE.md` — a broad rise in job failures
+  (`petabyte_jobs_total{job_status="failed"}`) is often driven by sellers/agents
+  dropping offline; check fleet supply there.

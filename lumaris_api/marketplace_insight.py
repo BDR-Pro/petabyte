@@ -11,8 +11,31 @@ from sqlalchemy import func
 import db as dbmod
 
 _SETTLED = ("PAYMENT_CAPTURED", "SELLER_TRANSFER_PENDING", "SELLER_TRANSFERRED", "COMPLETED")
-_TX_FAILED = ("PAYMENT_FAILED", "RESERVATION_FAILED", "DISPATCH_FAILED", "JOB_FAILED",
-              "CAPTURE_FAILED", "TRANSFER_FAILED", "CANCELLED", "REFUNDED")
+# Public: terminal failure states. (Kept `_TX_FAILED` as a back-compat alias.)
+TX_FAILED = ("PAYMENT_FAILED", "RESERVATION_FAILED", "DISPATCH_FAILED", "JOB_FAILED",
+             "CAPTURE_FAILED", "TRANSFER_FAILED", "CANCELLED", "REFUNDED")
+_TX_FAILED = TX_FAILED
+
+# Safe, user-facing failure messages. Raw ComputeTxEvent.reason may embed
+# str(StripeError) (gateway/decline/account/request internals) and must NEVER reach a
+# normal buyer/seller — only authorized admins get the raw reason for troubleshooting.
+_FAILURE_MESSAGES = {
+    "PAYMENT_FAILED": "The payment could not be completed. You were not charged.",
+    "CAPTURE_FAILED": "We couldn't capture payment for this job. You were not charged for it.",
+    "AUTHORIZATION_EXPIRED": "The payment authorization expired before settlement. No charge was made.",
+    "RESERVATION_FAILED": "We couldn't reserve a GPU for this request.",
+    "DISPATCH_FAILED": "The job couldn't be dispatched to a GPU.",
+    "JOB_FAILED": "The GPU job failed during execution.",
+    "TRANSFER_FAILED": "The seller payout couldn't be completed and is under review.",
+    "REFUNDED": "This transaction was refunded.",
+    "CANCELLED": "This transaction was cancelled.",
+}
+
+
+def explain_failure(status: str) -> str:
+    """A safe, user-facing explanation for a terminal failure status — never exposes raw
+    gateway/Stripe error text. Falls back to a generic message for any unknown status."""
+    return _FAILURE_MESSAGES.get(status, "This transaction did not complete successfully.")
 
 
 def health(db) -> dict:
@@ -49,9 +72,13 @@ def health(db) -> dict:
     def pct(n, d):
         return round(100.0 * n / d, 1) if d else None
     job_denom = completed_jobs + failed_jobs
-    lat_specs = [s for s in db.query(S).all() if (s.latency_n or 0)]
-    avg_latency = (round(sum(s.latency_sum_s for s in lat_specs)
-                         / sum(s.latency_n for s in lat_specs), 2) if lat_specs else None)
+    # Aggregate latency in SQL (do NOT load every SellerSpec row). Ignore specs with no
+    # samples; return None when there are no qualifying rows at all.
+    lat_sum, lat_n = db.query(
+        func.coalesce(func.sum(S.latency_sum_s), 0.0),
+        func.coalesce(func.sum(S.latency_n), 0)
+    ).filter(S.latency_n > 0).one()
+    avg_latency = round(float(lat_sum) / lat_n, 2) if lat_n else None
     demo = (db.query(func.count(S.id)).filter(S.is_demo == True).scalar() or 0) > 0  # noqa: E712
 
     return {

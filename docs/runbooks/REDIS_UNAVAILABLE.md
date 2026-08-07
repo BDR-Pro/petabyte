@@ -92,3 +92,8 @@ Also check lock contention across services:
   are deterministic and enforced at the DB, independent of any Redis lock.
 - Do not treat a stale `petabyte_queue_depth` as a settlement problem — verify against
   transaction states in Postgres.
+
+## See also
+
+- `WORKER_QUEUE_BACKLOG.md` — sustained reservation contention
+  (`petabyte_reservation_conflicts_total`) can accompany or drive a queue backlog.

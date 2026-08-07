@@ -1435,7 +1435,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"petabyte-api\",environment=\"$environment\"} | json | event_name=\"result.validation.failed\" [5m]))",
+          "expr": "sum(count_over_time({service=\"petabyte-api\",environment=\"$environment\"} | json | event_name=\"result.validation.failed\" [1m]))",
           "legendFormat": "result.validation.failed (logs)",
           "queryType": "range",
           "refId": "B"
@@ -1580,7 +1580,7 @@
             "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "{service=\"petabyte-api\"} | json | event_name=~\"seller\\\\..*|job\\\\.(accepted|rejected)|result\\\\.validation\\\\.failed\"",
+          "expr": "{service=\"petabyte-api\",environment=\"$environment\"} | json | event_name=~\"seller\\\\..*|job\\\\.(accepted|rejected)|result\\\\.validation\\\\.failed\"",
           "queryType": "range",
           "maxLines": 200,
           "refId": "A"

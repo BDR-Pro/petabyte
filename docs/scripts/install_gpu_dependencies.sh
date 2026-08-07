@@ -11,9 +11,25 @@ step "NVIDIA driver"
 if command -v nvidia-smi >/dev/null; then nvidia-smi | head -15; ok "driver present"; else
   warn "no NVIDIA driver — install the vendor driver for your GPU before continuing"; fi
 
-step "Docker"
+step "Docker (official signed APT repository — no curl|sh)"
 if ! command -v docker >/dev/null; then
-  curl -fsSL https://get.docker.com | sh
+  # Do NOT pipe a downloaded script into a shell. Install docker-ce from Docker's
+  # official, GPG-signed apt repository. Idempotent: keyring + list are re-created cleanly.
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y
+  apt-get install -y ca-certificates curl gnupg
+  install -m 0755 -d /etc/apt/keyrings
+  . /etc/os-release   # sets $ID (ubuntu/debian) and $VERSION_CODENAME
+  curl -fsSL "https://download.docker.com/linux/${ID}/gpg" \
+    | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  chmod a+r /etc/apt/keyrings/docker.gpg
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" \
+    > /etc/apt/sources.list.d/docker.list
+  apt-get update -y
+  apt-get install -y docker-ce docker-ce-cli containerd.io \
+    docker-buildx-plugin docker-compose-plugin
+  systemctl enable --now docker 2>/dev/null || true
 fi
 docker --version && ok "docker present"
 

@@ -21,7 +21,8 @@ datasources:
     type: prometheus
     uid: prometheus
     access: proxy
-    url: ${PROMETHEUS_URL}
+    # Internal compose network, unauthenticated — no auth header.
+    url: http://prometheus:9090
     isDefault: true
     jsonData:
       httpMethod: POST
@@ -32,10 +33,6 @@ datasources:
       exemplarTraceIdDestinations:
         - name: trace_id
           datasourceUid: tempo
-      # Bearer auth to a protected Prometheus, if enabled.
-      httpHeaderName1: Authorization
-    secureJsonData:
-      httpHeaderValue1: "Bearer ${GRAFANA_PROMETHEUS_TOKEN}"
     editable: false
 
   # --------------------------------------------------------------------------
@@ -43,7 +40,8 @@ datasources:
     type: loki
     uid: loki
     access: proxy
-    url: ${LOKI_URL}
+    # Internal compose network, unauthenticated — no auth header.
+    url: http://loki:3100
     jsonData:
       # Extract trace_id from the JSON log body and link to Tempo. Business ids
       # (transaction_id, job_id, ...) live in the log BODY, not as Loki labels.
@@ -55,9 +53,6 @@ datasources:
           datasourceUid: tempo
           urlDisplayLabel: "View trace"
       maxLines: 2000
-      httpHeaderName1: Authorization
-    secureJsonData:
-      httpHeaderValue1: "Bearer ${GRAFANA_LOKI_TOKEN}"
     editable: false
 
   # --------------------------------------------------------------------------
@@ -65,7 +60,8 @@ datasources:
     type: tempo
     uid: tempo
     access: proxy
-    url: ${TEMPO_URL}
+    # Internal compose network, unauthenticated — no auth header.
+    url: http://tempo:3200
     jsonData:
       # Tempo -> Loki: jump from a trace to its correlated logs.
       tracesToLogsV2:
@@ -93,7 +89,4 @@ datasources:
         enabled: true
       search:
         hide: false
-      httpHeaderName1: Authorization
-    secureJsonData:
-      httpHeaderValue1: "Bearer ${GRAFANA_TEMPO_TOKEN}"
     editable: false

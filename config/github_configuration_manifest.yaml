@@ -376,13 +376,6 @@ variables:
     scope:
     - platform
     description: ''
-  MAILGUN_NEWSLETTER_DOMAIN:
-    required: false
-    default: news.petabyte.market
-    scope:
-    - platform
-    description: Mailgun sending subdomain for the newsletter (e.g. news.petabyte.market). Reuses MAILGUN_API_KEY.
-    format: hostname
   MAX_CONCURRENT_GPU_JOBS:
     required: false
     default: '1'
@@ -426,13 +419,6 @@ variables:
     - gpu
     description: "Notebook job hard timeout (s) \u2014 must stay bounded."
     format: int
-  NEWSLETTER_FROM:
-    required: false
-    default: updates@petabyte.market
-    scope:
-    - platform
-    description: From address campaigns are sent as (e.g. updates@petabyte.market).
-    format: email_or_empty
   NEWSLETTER_LIST_ADDRESS:
     required: false
     default: newsletter@news.petabyte.market
@@ -451,13 +437,6 @@ variables:
     - mailgun
     - mailchimp
     - none
-  NEWSLETTER_REPLY_TO:
-    required: false
-    default: info@petabyte.market
-    scope:
-    - platform
-    description: Reply-To for campaigns; a Mailgun Route forwards replies here (e.g. info@petabyte.market).
-    format: email_or_empty
   NICEHASH_ADDRESS:
     required: false
     default: null
@@ -589,11 +568,9 @@ variables:
     required: false
     default: 'true'
     scope:
-    - platform
-    description: ''
-    allowed:
-    - 'true'
-    - 'false'
+    - observability
+    description: 'Collector/deploy-layer toggle for OTLP log export (collector -> Loki). Infra-only: the
+      API does not read it, so it is NOT a platform env var.'
     format: bool
   OTEL_METRICS_ENABLED:
     required: false

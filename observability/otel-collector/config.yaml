@@ -79,7 +79,7 @@ processors:
         value: petabyte
         action: upsert
       - key: deployment.environment
-        from_attribute: deployment.environment
+        value: "${env:DEPLOYMENT_ENVIRONMENT}"
         action: insert
 
   # Tail sampling: KEEP 100% of (a) error traces, (b) traces carrying a

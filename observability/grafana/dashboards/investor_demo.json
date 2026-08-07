@@ -312,7 +312,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max(DCGM_FI_DEV_GPU_UTIL)",
+          "expr": "max(max_over_time(DCGM_FI_DEV_GPU_UTIL[$__range]))",
           "legendFormat": "util",
           "range": false,
           "instant": true,

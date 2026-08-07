@@ -85,8 +85,11 @@ reading container stdout on the box and the Collector's own logs.
 
 - `petabyte_telemetry_export_failures_total` stops incrementing.
 - `/health/observability` shows `tracing.active=true` and `metrics.active=true`.
-- New traces appear in Tempo, series resume in Prometheus, log lines flow in Loki,
-  and a test error reaches Sentry.
+- New traces appear in Tempo, series resume in Prometheus, and log lines flow in Loki.
+- Sentry is **optional**: only if Sentry is enabled **and** `SENTRY_DSN` is configured,
+  confirm a test error reaches Sentry. If Sentry is not configured, skip this check and
+  instead verify the telemetry backends that *are* configured (Prometheus / Loki /
+  Tempo) have recovered.
 - Grafana dashboards repopulate with current data.
 
 ## Financial-safety considerations

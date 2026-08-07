@@ -29,9 +29,15 @@ log has aged out, the truth is still in Postgres and in Stripe.
 ## Sampling and volume controls
 
 - **Trace sampling** — `OTEL_TRACE_SAMPLE_RATIO` (default `1.0`). Lower it under high
-  volume; the sampler is `ParentBased(TraceIdRatioBased(ratio))`, so a sampled parent
-  keeps its children — a `transaction_id`'s trace stays whole or absent, not partial.
-  Consider keeping money-path traces at higher effective sampling than routine reads.
+  volume; the sampler is `ParentBased(TraceIdRatioBased(ratio))`, so the **sampling
+  decision** is kept consistent across a trace's descendants — a sampled parent's child
+  spans inherit the same keep/drop decision rather than re-rolling it. This does **not**
+  guarantee a complete trace: queue and exporter limits (the BatchSpanProcessor
+  `max_queue_size` / `OBSERVABILITY_QUEUE_SIZE`, and export timeouts) can still drop
+  spans, so a sampled trace may still export partially. Watch collector/exporter
+  dropped-span metrics (`otelcol_exporter_send_failed_spans`,
+  `otelcol_processor_dropped_spans`) to catch this. Consider keeping money-path traces
+  at higher effective sampling than routine reads.
 - **Sentry sampling** — `SENTRY_TRACES_SAMPLE_RATE` bounds performance-trace volume;
   errors are captured on their own quota.
 - **Metrics cardinality** — the dominant cost driver for Prometheus. Petabyte caps it

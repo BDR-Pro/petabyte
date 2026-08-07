@@ -4,6 +4,7 @@ trust score, and the immutable transaction timeline.
 
 Run: python marketplace_test.py
 """
+import atexit
 import os
 import json
 
@@ -18,9 +19,20 @@ os.environ["PAYMENT_WEBHOOK_SECRET"] = "w"
 os.environ["REAPER_DISABLED"] = "true"
 os.environ["NOTIFY_STUB"] = "true"
 
-for f in ("marketplace_test.db", "marketplace_test.db-wal", "marketplace_test.db-shm"):
-    if os.path.exists(f):
-        os.remove(f)
+_DB_FILES = ("marketplace_test.db", "marketplace_test.db-wal", "marketplace_test.db-shm")
+
+
+def _cleanup_db():
+    for f in _DB_FILES:
+        try:
+            if os.path.exists(f):
+                os.remove(f)
+        except OSError:
+            pass
+
+
+_cleanup_db()                  # clean start: never inherit a previous run's SQLite state
+atexit.register(_cleanup_db)   # robust teardown even if an assertion raises or SystemExit fires
 
 from fastapi.testclient import TestClient  # noqa: E402
 import db as dbmod  # noqa: E402
@@ -119,14 +131,28 @@ ok("trust: completion rate from real jobs (95%)", ts["components"]["completion_r
 ok("trust: untracked dims are null (never faked)",
    ts["components"]["buyer_rating"] is None and ts["components"]["uptime_pct"] is None)
 
+# ---- finding P: a missing country normalizes to 'unknown', never 'UN' ----
+ok("missing country (all sources empty) -> 'unknown', not 'UN'",
+   main._norm_country(None, "", "   ") == "unknown")
+ok("a present country normalizes to a 2-letter upper code",
+   main._norm_country("us") == "US" and main._norm_country(None, "de") == "DE")
+ok("the FIRST non-empty source wins (country over detected_country)",
+   main._norm_country("CA", "US") == "CA")
+
 # ---- immutable transaction timeline ----
 tl = c.get(f"/payments/{tx_pub_ok}/timeline", headers=BT).json()
 ok("timeline: buyer sees the full state history", len(tl["timeline"]) == 7 and tl["status"] == "COMPLETED")
 ok("timeline: a completed tx has no failure reason", tl["why_failed"] is None)
 
+# A buyer (non-admin) gets a SAFE, mapped failure explanation — never the raw operational
+# reason (which can embed str(StripeError): gateway/decline/account internals).
+RAW_FAIL = "GPU disconnected after 83% of execution"
 tlf = c.get(f"/payments/{tx_pub_fail}/timeline", headers=BT).json()
-ok("timeline: a failed tx explains why", tlf["status"] == "JOB_FAILED"
-   and "GPU disconnected" in (tlf["why_failed"] or ""))
+ok("timeline: a failed tx explains why (buyer sees the safe mapped message)",
+   tlf["status"] == "JOB_FAILED"
+   and tlf["why_failed"] == mi.explain_failure("JOB_FAILED"))
+ok("timeline: the buyer NEVER sees the raw operational failure reason",
+   RAW_FAIL not in json.dumps(tlf))
 
 # a stranger cannot read someone else's timeline
 c.post("/register_user", json={"username": "mk_stranger", "password": "pw-correct-horse-1"})
@@ -134,8 +160,19 @@ st = c.post("/login", data={"username": "mk_stranger", "password": "pw-correct-h
 ok("timeline: a non-party cannot read the timeline (404)",
    c.get(f"/payments/{tx_pub_ok}/timeline", headers={"Authorization": f"Bearer {st}"}).status_code == 404)
 
+# An admin DOES get the raw reason (for troubleshooting). _is_admin() reads ADMIN_USERS
+# live, so registering an admin user + naming it here is enough; an admin need not be a party.
+c.post("/register_user", json={"username": "mk_admin", "password": "pw-correct-horse-1"})
+os.environ["ADMIN_USERS"] = "mk_admin"
+at = c.post("/login", data={"username": "mk_admin", "password": "pw-correct-horse-1"}).json()["access_token"]
+AH = {"Authorization": f"Bearer {at}"}
+tla = c.get(f"/payments/{tx_pub_fail}/timeline", headers=AH).json()
+ok("timeline: an admin sees the RAW failure reason (why_failed) for troubleshooting",
+   tla["status"] == "JOB_FAILED" and RAW_FAIL in (tla["why_failed"] or ""))
+ok("timeline: an admin sees the RAW reason on the failure event too",
+   any(RAW_FAIL in (ev.get("reason") or "") for ev in tla["timeline"]))
+os.environ.pop("ADMIN_USERS", None)
+
 print(f"\n=== marketplace: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
-for f in ("marketplace_test.db", "marketplace_test.db-wal", "marketplace_test.db-shm"):
-    if os.path.exists(f):
-        os.remove(f)
+# DB files are removed by the atexit handler registered at startup (robust on any exit path).
 raise SystemExit(1 if _fail else 0)

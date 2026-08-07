@@ -38,7 +38,7 @@ SECRET_EXACT = {
 # Public-looking values that are NOT secrets even though the name matches the heuristic.
 NON_SECRET_EXACT = {"WG_PUBLIC_KEY", "GOOGLE_REDIRECT_URI", "STRIPE_API_VERSION",
                     "PAYOUT_CAPABILITIES_PATH", "MAILGUN_DOMAIN", "GEOIP_DB",
-                    "EMAIL_TOKEN_TTL_MIN", "MAILGUN_NEWSLETTER_DOMAIN"}
+                    "EMAIL_TOKEN_TTL_MIN"}
 
 
 def is_secret(name: str) -> bool:
@@ -177,22 +177,14 @@ CURATED = {
     "ALLOWED_ORIGINS": {"format": "csv_or_empty",
                         "description": "CORS origins — empty (same-origin) is the safe default; never '*' in prod."},
     "ADMIN_USERS": {"description": "Comma-separated admin usernames/emails."},
-    # --- Newsletter (Mailgun mailing list on the news. sending subdomain) ---
+    # --- Newsletter (Mailgun mailing list; From/Reply-To are set on the list in Mailgun) ---
     "NEWSLETTER_PROVIDER": {"allowed": ["mailgun", "mailchimp", "none"],
                             "description": "Newsletter backend. 'mailgun' adds signups to a Mailgun "
                                            "mailing list; 'mailchimp' uses the legacy audience; 'none' "
                                            "shows the honest 'not wired up' message."},
-    "MAILGUN_NEWSLETTER_DOMAIN": {"format": "hostname",
-                                  "description": "Mailgun sending subdomain for the newsletter (e.g. "
-                                                 "news.petabyte.market). Reuses MAILGUN_API_KEY."},
     "NEWSLETTER_LIST_ADDRESS": {"format": "email_or_empty",
                                 "description": "Mailgun mailing-list address signups are added to "
                                                "(e.g. newsletter@news.petabyte.market)."},
-    "NEWSLETTER_FROM": {"format": "email_or_empty",
-                        "description": "From address campaigns are sent as (e.g. updates@petabyte.market)."},
-    "NEWSLETTER_REPLY_TO": {"format": "email_or_empty",
-                            "description": "Reply-To for campaigns; a Mailgun Route forwards replies "
-                                           "here (e.g. info@petabyte.market)."},
     # --- Observability (telemetry is degrade-safe; never blocks payments or jobs) ---
     "OBSERVABILITY_ENABLED": {"allowed": ["true", "false"], "format": "bool",
                               "description": "Master switch for telemetry (logs/metrics/traces)."},
@@ -219,7 +211,6 @@ CURATED = {
     "OTEL_TRACE_SAMPLE_RATIO": {"format": "float",
                                 "description": "Trace sample ratio (1.0 in test/pilot/investor demo)."},
     "OTEL_METRICS_ENABLED": {"allowed": ["true", "false"], "format": "bool"},
-    "OTEL_LOGS_ENABLED": {"allowed": ["true", "false"], "format": "bool"},
     "PROMETHEUS_ENABLED": {"allowed": ["true", "false"], "format": "bool"},
     "PROMETHEUS_METRICS_PATH": {"description": "Protected Prometheus scrape path (default /internal/metrics)."},
     "LOKI_ENABLED": {"allowed": ["true", "false"], "format": "bool"},
@@ -257,6 +248,11 @@ OBSERVABILITY_EXTRA = {
                   "format": "url", "description": "Tempo base URL."},
     "SENTRY_ENVIRONMENT": {"default": None, "scope": ["observability"], "secret": False,
                            "description": "Sentry environment label (defaults to ENVIRONMENT)."},
+    "OTEL_LOGS_ENABLED": {"default": "true", "scope": ["observability"], "secret": False,
+                          "format": "bool",
+                          "description": "Collector/deploy-layer toggle for OTLP log export "
+                                         "(collector -> Loki). Infra-only: the API does not read "
+                                         "it, so it is NOT a platform env var."},
     "OBSERVABILITY_REQUIRED": {"default": "false", "scope": ["observability"], "secret": False,
                                "description": "Preflight control: when true the deploy FAILS if "
                                               "observability is off/unconfigured (default true in "

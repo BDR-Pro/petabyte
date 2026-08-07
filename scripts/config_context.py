@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import env_vars as _ev
 
@@ -34,7 +35,10 @@ def _merge(blob: str) -> int:
         return 0
     try:
         data = json.loads(blob)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        # Concise warning WITHOUT the blob contents (it may hold secrets). Safe result: 0.
+        print(f"config_context: ignoring malformed JSON context ({type(e).__name__}); "
+              "no values merged", file=sys.stderr)
         return 0
     n = 0
     for k, v in (data or {}).items():

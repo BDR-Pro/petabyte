@@ -103,3 +103,8 @@ Scope to a single node/GPU or job:
   agent cannot cause a double payout.
 - Do not release/refund by hand-editing DB state — drive it through the FSM so the
   append-only `ComputeTxEvent` history and ledger stay consistent.
+
+## See also
+
+- `GPU_JOB_STUCK.md` — GPU hardware faults (XID errors) on a node can wedge individual
+  jobs as well as drop the agent; triage a stuck/corrupted job there.

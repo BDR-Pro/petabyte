@@ -12,6 +12,11 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: the whole suite only needs to read the repo. No job pushes, comments,
+# or mutates GitHub state — checkouts below also drop the persisted token.
+permissions:
+  contents: read
+
 jobs:
   sqlite:
     name: sqlite (fast signal)
@@ -128,6 +133,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -r lumaris_api/requirements.txt
@@ -140,6 +147,9 @@ jobs:
       - name: observability (correlation / redaction / cardinality / degrade-safe)
         working-directory: lumaris_api
         run: python observability_test.py
+      - name: agent telemetry (span exception-safety / redaction / trace-join / degrade)
+        working-directory: lumaris_agent
+        run: python agent_telemetry_test.py
       - name: observability smoke (local tier + OTel propagation; remote skipped offline)
         run: python scripts/observability_smoke_test.py
       - name: dashboards + alerts + collector configs are valid JSON/YAML

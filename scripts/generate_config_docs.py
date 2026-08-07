@@ -319,15 +319,15 @@ def build_checklist(manifest: dict) -> str:
     lines.append("1. In Mailgun, add + verify the sending domain `news.petabyte.market` "
                  "(DNS: SPF, DKIM, and a tracking CNAME).")
     lines.append("2. Create a **mailing list** on that domain (e.g. `newsletter@news.petabyte.market`) "
-                 "and set its From name/address to `updates@petabyte.market`.")
+                 "and set its From name/address to `updates@petabyte.market` on the list itself.")
     lines.append("3. Add a Mailgun **Route** that forwards replies to that list/address on to "
                  "`info@petabyte.market`.")
     lines.append("4. The newsletter keys are already in the `ENV_VARS` bundle above "
-                 "(`NEWSLETTER_PROVIDER=mailgun`, `MAILGUN_NEWSLETTER_DOMAIN=news.petabyte.market`, "
-                 "`NEWSLETTER_LIST_ADDRESS=newsletter@news.petabyte.market`, "
-                 "`NEWSLETTER_FROM=updates@petabyte.market`, "
-                 "`NEWSLETTER_REPLY_TO=info@petabyte.market`) — defaults match, no change needed. "
-                 "The newsletter reuses the `MAILGUN_API_KEY` **Secret** — no extra key.")
+                 "(`NEWSLETTER_PROVIDER=mailgun`, "
+                 "`NEWSLETTER_LIST_ADDRESS=newsletter@news.petabyte.market`) — defaults match, no "
+                 "change needed. From / Reply-To and reply-forwarding are configured **on the list "
+                 "in Mailgun** (steps 2–3), not via env vars. The newsletter reuses the "
+                 "`MAILGUN_API_KEY` **Secret** — no extra key.")
     lines.append("")
     lines.append("---")
     lines.append("")

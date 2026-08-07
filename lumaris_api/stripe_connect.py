@@ -562,13 +562,19 @@ def capture(db, tx: ComputeTransaction) -> ComputeTransaction:
             amount_to_capture=s["capture_amount"], idempotency_key=key)
     except StripeError as e:
         _finish_op(db, op, state="failed", error=str(e))
-        _mode = _obs.bounded_label(getattr(tx, "mode", None), _obs.PAYMENT_MODE, "sandbox")
-        _obs.inc_metric("petabyte_payment_captures_total", outcome="failure",
-                        payment_mode=_mode, environment=_obs.ENVIRONMENT)
-        with _obs.ctx(transaction_id=tx.public_id):
-            _obs.event(_obs.EVENTS.PAYMENT_CAPTURE_FAILED, message="capture failed",
-                       reason=str(e)[:200], payment_mode=_mode)
+        # AUTHORITATIVE financial state FIRST — the terminal transition must not be blocked
+        # by a telemetry error (in strict observability mode telemetry can raise). Otherwise
+        # the tx could be stuck in PAYMENT_CAPTURE_PENDING.
         transition(db, tx, "CAPTURE_FAILED", reason=str(e))
+        try:
+            _mode = _obs.bounded_label(getattr(tx, "mode", None), _obs.PAYMENT_MODE, "sandbox")
+            _obs.inc_metric("petabyte_payment_captures_total", outcome="failure",
+                            payment_mode=_mode, environment=_obs.ENVIRONMENT)
+            with _obs.ctx(transaction_id=tx.public_id):
+                _obs.event(_obs.EVENTS.PAYMENT_CAPTURE_FAILED, message="capture failed",
+                           reason=str(e)[:200], payment_mode=_mode)
+        except Exception:  # noqa: BLE001 — telemetry can NEVER block the state transition
+            pass
         raise TransactionError(f"capture failed: {e}")
 
     captured = int(pi.get("amount_received", s["capture_amount"]))
@@ -757,13 +763,18 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
                           _dbm.PayoutObligation.state == "transferring")
                    .values(state="reconciling"))
         tx.reconciliation_status = "needs_review"; db.add(tx); db.commit()
-        _tmode = _obs.bounded_label(getattr(tx, "mode", None), _obs.PAYMENT_MODE, "sandbox")
-        _obs.inc_metric("petabyte_seller_transfers_total", outcome="failure",
-                        payment_mode=_tmode, environment=_obs.ENVIRONMENT)
-        with _obs.ctx(transaction_id=tx.public_id):
-            _obs.event(_obs.EVENTS.SELLER_TRANSFER_FAILED, message="transfer failed",
-                       reason=str(e)[:200], payment_mode=_tmode)
+        # AUTHORITATIVE financial state FIRST — never let telemetry block the terminal
+        # transition (would strand the tx in SELLER_TRANSFER_PENDING in strict mode).
         transition(db, tx, "TRANSFER_FAILED", reason=str(e))
+        try:
+            _tmode = _obs.bounded_label(getattr(tx, "mode", None), _obs.PAYMENT_MODE, "sandbox")
+            _obs.inc_metric("petabyte_seller_transfers_total", outcome="failure",
+                            payment_mode=_tmode, environment=_obs.ENVIRONMENT)
+            with _obs.ctx(transaction_id=tx.public_id):
+                _obs.event(_obs.EVENTS.SELLER_TRANSFER_FAILED, message="transfer failed",
+                           reason=str(e)[:200], payment_mode=_tmode)
+        except Exception:  # noqa: BLE001 — telemetry can NEVER block the state transition
+            pass
         raise TransactionError(f"transfer failed: {e}")
     tx.stripe_transfer_id = tr["id"]
     tx.transferred_amount = net

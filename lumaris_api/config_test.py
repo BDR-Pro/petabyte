@@ -171,6 +171,22 @@ try:
 except SystemExit:
     ok("GPU allows the node's own local signing-key path (PETABYTE_AGENT_KEY)", False)
 
+# NiceHash: the idle-mining CREDENTIALS (API key/secret, org id) must NEVER reach a GPU
+# node, but the idle-mining RUNTIME config (payout address, miner image) is GPU-safe. The
+# deny-list must distinguish them — a too-broad "NICEHASH" match would strip the runtime.
+for _leak in ("NICEHASH_API_KEY", "NICEHASH_API_SECRET", "NICEHASH_ORG_ID"):
+    try:
+        G.assert_gpu_safe([("NICEHASH_ADDRESS", "addr"), (_leak, "secret")])
+        ok(f"GPU deny-list refuses the NiceHash credential {_leak}", False)
+    except SystemExit as e:
+        ok(f"GPU deny-list refuses the NiceHash credential {_leak}", e.code == 3)
+try:
+    G.assert_gpu_safe([("NICEHASH_ADDRESS", "3F...addr"),
+                       ("NICEHASH_IMAGE", "nicehash/nicehashminer:latest")])
+    ok("GPU allows NiceHash idle-mining runtime config (ADDRESS + IMAGE, no credentials)", True)
+except SystemExit:
+    ok("GPU allows NiceHash idle-mining runtime config (ADDRESS + IMAGE, no credentials)", False)
+
 # ---- secrets are never printed by the validator ----
 SENTINEL = "SENTINEL_SECRET_VALUE_do_not_print_1234567890"
 env = os.environ.copy()
@@ -199,12 +215,41 @@ drift = subprocess.run(
 ok("configuration drift check passes (manifest/code/workflows/template.env in sync)",
    drift.returncode == 0)
 
-# ---- the deploy workflow removes the generated files after upload ----
-wf = open(os.path.join(ROOT, ".github", "workflows", "deploy-server.yml")).read()
-ok("deploy workflow deletes the generated env file(s) after use",
-   ".generated" in wf and ("rm -f" in wf or "rm " in wf))
+# ---- the deploy workflow cleans up EVERY generated env file it creates, unconditionally ----
+# Not a loose ".generated"+"rm" substring check: we (1) discover the exact --out targets the
+# workflow generates, (2) require each to be explicitly `rm`'d on the same command line, and
+# (3) require that cleanup step to run `if: always()` so a mid-deploy failure can't leave a
+# generated secret file behind on the runner.
+import re as _re  # noqa: E402
+_wf_path = os.path.join(ROOT, ".github", "workflows", "deploy-server.yml")
+_wf_text = open(_wf_path).read()
+_gen_outs = set(_re.findall(r'--out\s+(\S+\.generated)', _wf_text))
+ok("deploy workflow generates at least one scoped env file (--out *.generated)",
+   bool(_gen_outs))
+
+_wf = yaml.safe_load(_wf_text)
+_steps = _wf.get("jobs", {}).get("deploy", {}).get("steps", []) or []
+
+
+def _cleanup_guard(fname):
+    """Return the `if:` guard of the step that removes fname on the runner, else None.
+    Matches only an `rm ... <fname>` on the SAME line (so the unrelated `rm` of the remote
+    /tmp incoming file in the generate step is not mistaken for the runner cleanup)."""
+    for s in _steps:
+        for line in (s.get("run", "") or "").splitlines():
+            if _re.search(r'\brm\b', line) and fname in line:
+                return str(s.get("if", "")).strip()
+    return None
+
+
+_guards = {f: _cleanup_guard(f) for f in _gen_outs}
+ok("deploy workflow explicitly deletes every generated env file it creates (after use)",
+   bool(_gen_outs) and all(v is not None for v in _guards.values()))
+ok("the generated-secret cleanup runs unconditionally (if: always()) — a failed deploy "
+   "never leaves the env file on the runner",
+   bool(_gen_outs) and all((v or "").replace(" ", "") == "always()" for v in _guards.values()))
 ok("deploy workflow runs the configuration validator before generating env",
-   "validate_github_configuration.py" in wf)
+   "validate_github_configuration.py" in _wf_text)
 
 print(f"\n=== config: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
 raise SystemExit(1 if _fail else 0)

@@ -8,15 +8,16 @@ here is internally consistent with the telemetry the platform already emits
 
 ## What's here
 
-```
+```text
 observability/
 ├── grafana/
-│   ├── dashboards/                 # 8 version-controlled dashboards (JSON)
+│   ├── dashboards/                 # 9 version-controlled dashboards (JSON)
 │   │   ├── executive_marketplace.json   uid: petabyte-executive
 │   │   ├── transaction_trace.json       uid: petabyte-transaction-trace
 │   │   ├── api.json                     uid: petabyte-api
 │   │   ├── workers_queue.json           uid: petabyte-workers
 │   │   ├── seller_agent_fleet.json      uid: petabyte-seller-fleet
+│   │   ├── marketplace_sellers.json     uid: petabyte-marketplace-sellers
 │   │   ├── stripe_settlement.json       uid: petabyte-settlement
 │   │   ├── infrastructure.json          uid: petabyte-infra
 │   │   └── investor_demo.json           uid: petabyte-investor-demo (read-only)

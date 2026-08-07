@@ -68,7 +68,8 @@ def scan_code_vars() -> dict[str, set]:
             base = os.path.basename(f)
             if base.startswith("demo") or base.endswith("_test.py"):
                 continue
-            text = open(f).read()
+            with open(f, encoding="utf-8") as fh:
+                text = fh.read()
             for m in list(_ENV_RE.finditer(text)) + list(_ENVIRON_IDX_RE.finditer(text)):
                 out.setdefault(m.group(1), set()).add(os.path.relpath(f, ROOT))
     return out
@@ -78,7 +79,8 @@ def scan_workflow_refs() -> dict[str, set]:
     out: dict[str, set] = {}
     for f in glob.glob(os.path.join(ROOT, ".github", "workflows", "*.yml")) + \
              glob.glob(os.path.join(ROOT, ".github", "workflows", "*.yaml")):
-        text = open(f).read()
+        with open(f, encoding="utf-8") as fh:
+            text = fh.read()
         for m in _WF_RE.finditer(text):
             out.setdefault(m.group(1), set()).add(os.path.relpath(f, ROOT))
     return out
@@ -100,12 +102,13 @@ def main() -> int:
     errors: list[str] = []
     warnings: list[str] = []
 
-    with open(MANIFEST) as f:
+    with open(MANIFEST, encoding="utf-8") as f:
         committed = yaml.safe_load(f)
 
     # 1) manifest freshness — committed file must match a fresh build.
     fresh_text = bcm.render_yaml(bcm.build_doc())
-    committed_text = open(MANIFEST).read()
+    with open(MANIFEST, encoding="utf-8") as f:
+        committed_text = f.read()
     if fresh_text != committed_text:
         errors.append("config/github_configuration_manifest.yaml is STALE — run "
                       "`python scripts/build_config_manifest.py` and commit the result.")

@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 
@@ -77,6 +78,10 @@ def _redact(obj, depth=0):
 
 _ctx: dict = {}
 
+# Standard LogRecord attribute names, computed ONCE (not per log line). Anything on a
+# record that is NOT in this set is a caller-supplied structured `extra` field.
+_STD_RECORD_ATTRS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", (), None)).keys())
+
 
 class _JsonFmt(logging.Formatter):
     def format(self, record):
@@ -86,9 +91,11 @@ class _JsonFmt(logging.Formatter):
             "level": record.levelname, "message": _mask(record.getMessage()),
             "service": SERVICE_NAME, "environment": ENVIRONMENT, "release": RELEASE,
         }
-        base.update(_ctx)
+        # Snapshot the shared context before merging so a concurrent bind()/init() can't
+        # mutate it mid-iteration ("dictionary changed size during iteration").
+        base.update(dict(_ctx))
         for k, v in record.__dict__.items():
-            if k not in base and k not in logging.LogRecord("", 0, "", 0, "", (), None).__dict__:
+            if k not in base and k not in _STD_RECORD_ATTRS:
                 base[k] = v
         return json.dumps(_redact(base), default=str, ensure_ascii=False)
 
@@ -160,6 +167,7 @@ def span(name, carrier=None, **attrs):
     if not _otel_ok or _tracer is None:
         yield None
         return
+    # SETUP phase — degrade (yield None) only on a tracer/setup failure, BEFORE yielding.
     try:
         from opentelemetry import trace
         parent = None
@@ -167,21 +175,30 @@ def span(name, carrier=None, **attrs):
             with contextlib.suppress(Exception):
                 from opentelemetry.propagate import extract
                 parent = extract(carrier)
-        with _tracer.start_as_current_span(name, context=parent) as sp:
-            for k, v in _redact(attrs).items():
-                with contextlib.suppress(Exception):
-                    sp.set_attribute(k, v if isinstance(v, (str, bool, int, float)) else str(v))
-            sctx = sp.get_span_context()
-            _ctx["trace_id"] = format(sctx.trace_id, "032x")
-            try:
-                yield sp
-            except Exception as exc:
-                with contextlib.suppress(Exception):
-                    sp.record_exception(exc)
-                    sp.set_status(trace.Status(trace.StatusCode.ERROR, str(exc)))
-                raise
-    except Exception:  # noqa: BLE001
+        span_cm = _tracer.start_as_current_span(name, context=parent)
+        sp = span_cm.__enter__()
+        for k, v in _redact(attrs).items():
+            with contextlib.suppress(Exception):
+                sp.set_attribute(k, v if isinstance(v, (str, bool, int, float)) else str(v))
+        sctx = sp.get_span_context()
+        _ctx["trace_id"] = format(sctx.trace_id, "032x")
+    except Exception:  # noqa: BLE001 — a broken tracer must not break the agent
+        with contextlib.suppress(Exception):
+            span_cm.__exit__(None, None, None)  # noqa: F821
         yield None
+        return
+    # YIELDED phase — a caller exception is theirs: record it and re-raise the EXACT
+    # original exception (never a second yield -> no "generator didn't stop after throw()").
+    try:
+        yield sp
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            sp.record_exception(exc)
+            sp.set_status(trace.Status(trace.StatusCode.ERROR, str(exc)))
+        raise
+    finally:
+        with contextlib.suppress(Exception):
+            span_cm.__exit__(*sys.exc_info())
 
 
 def health():

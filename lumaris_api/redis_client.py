@@ -148,9 +148,15 @@ def acquire_lock(name: str, token: str, ttl_ms: int) -> bool:
     ok = _do("lock", lambda c: c.set(_key("lock", name), token, nx=True, px=max(1, int(ttl_ms))),
              None)
     if ok:
-        _obs.event(_obs.EVENTS.LOCK_ACQUIRED, message="lock acquired", lock=name)
+        # A successful acquire is high-volume: count it (bounded 'outcome' label — NEVER the
+        # lock name) instead of emitting a structured log line every time.
+        _obs.inc_metric("petabyte_lock_acquisitions_total", outcome="acquired",
+                        environment=_obs.ENVIRONMENT)
         return True
     if ok is False:
+        _obs.inc_metric("petabyte_lock_acquisitions_total", outcome="conflict",
+                        environment=_obs.ENVIRONMENT)
+        # A conflict is diagnostic (rarer) — keep the event; the lock name is a LOG field.
         _obs.event(_obs.EVENTS.LOCK_CONFLICT, message="lock busy", lock=name)
     return False
 

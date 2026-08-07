@@ -5,7 +5,7 @@ from fastapi import (
 from fastapi.responses import PlainTextResponse, JSONResponse, Response, HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func
+from sqlalchemy import text, func, case, or_, distinct
 from pydantic import BaseModel, Field, field_validator
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -108,15 +108,13 @@ PAYMENTS_MODE = os.getenv("PAYMENTS_MODE", "sandbox").lower()      # sandbox|liv
 CAL_BOOKING_URL = os.getenv("CAL_BOOKING_URL", "").strip()
 
 # Newsletter. NEWSLETTER_PROVIDER selects the backend:
-#   mailgun   -> add the signup to a Mailgun mailing list on the news. sending subdomain
-#                (reuses MAILGUN_API_KEY; From/Reply-To are set on the list in Mailgun).
+#   mailgun   -> add the signup to the Mailgun mailing list at NEWSLETTER_LIST_ADDRESS
+#                (reuses MAILGUN_API_KEY; From/Reply-To are configured on the list in Mailgun,
+#                not here — the sending subdomain is implied by the list address).
 #   mailchimp -> legacy Mailchimp audience (MAILCHIMP_API_KEY + MAILCHIMP_AUDIENCE_ID).
 #   none/blank -> the form returns an honest "not wired up yet" message (no dead POST).
 NEWSLETTER_PROVIDER = os.getenv("NEWSLETTER_PROVIDER", "mailgun").strip().lower()
-MAILGUN_NEWSLETTER_DOMAIN = os.getenv("MAILGUN_NEWSLETTER_DOMAIN", "").strip()
 NEWSLETTER_LIST_ADDRESS = os.getenv("NEWSLETTER_LIST_ADDRESS", "").strip()
-NEWSLETTER_FROM = os.getenv("NEWSLETTER_FROM", "").strip()
-NEWSLETTER_REPLY_TO = os.getenv("NEWSLETTER_REPLY_TO", "").strip()
 # Legacy Mailchimp (only used when NEWSLETTER_PROVIDER=mailchimp). The API key ends with a
 # datacenter suffix like "-us21"; we use that suffix for the API host.
 MAILCHIMP_API_KEY = os.getenv("MAILCHIMP_API_KEY", "").strip()
@@ -410,12 +408,17 @@ def _route_label(request: Request) -> str:
 
 
 def _dec_in_flight():
-    if obsmod._prom_ok:
-        try:
-            obsmod.metric("petabyte_http_in_flight_requests").labels(
-                environment=obsmod.ENVIRONMENT).dec()
-        except Exception:  # noqa: BLE001
-            pass
+    obsmod.dec_metric("petabyte_http_in_flight_requests", environment=obsmod.ENVIRONMENT)
+
+
+def _safe_path(request: Request) -> str:
+    """Request path safe for logging. JSON logging escapes control chars structurally, so
+    the raw path is kept there for correlation; for plain-text logging we strip C0 control
+    chars (incl. a decoded %0A/%0D) so an attacker-controlled path can't forge a log line."""
+    p = request.url.path
+    if obsmod.LOG_FORMAT == "json":
+        return p
+    return "".join(ch for ch in p if ch >= " " and ch != "\x7f")
 
 
 @app.middleware("http")
@@ -439,7 +442,7 @@ async def _request_context(request: Request, call_next):
                           environment=obsmod.ENVIRONMENT)
         obs.event(EVENTS.UNHANDLED_EXCEPTION, level=logging.ERROR,
                   message="unhandled error", route=_route_label(request), method=method)
-        logger.exception("unhandled error request_id=%s path=%s", rid, request.url.path)
+        logger.exception("unhandled error request_id=%s path=%s", rid, _safe_path(request))
         raise
     _dec_in_flight()
     # record request metrics with BOUNDED labels (route template / collapsed ids)
@@ -504,10 +507,15 @@ async def _request_context(request: Request, call_next):
 # fine for a single instance; move to Redis when we run more than one.
 # ---------------------------------------------------------------------------
 _RL_BUCKETS: dict = {}
-_RL_RULES = {           # path -> (max_FAILED_hits, window_seconds)
+_RL_RULES = {           # path -> (max_hits, window_seconds)
     "/register_user": (10, 3600),  # signup spam
     "/withdraw": (10, 3600),       # money-out probing
+    "/route": (60, 60),            # unauth, DB-backed — cap total volume per IP
 }
+# Paths where EVERY request (not just failures) consumes budget. Credential endpoints
+# count only failures (brute-force guard); an unauthenticated DB-backed endpoint like
+# /route must cap total request volume.
+_RL_COUNT_ALL = {"/route"}
 LOGIN_MAX_FAILS, LOGIN_WINDOW_S = 10, 900
 
 
@@ -541,7 +549,11 @@ def _rl_record_failure(key: str, window: int = 3600):
             redis_client.incr_window(f"rlc:{key}", window)
     except Exception:  # noqa: BLE001
         pass
-    _RL_BUCKETS.setdefault(key, []).append(time.time())
+    now = time.time()
+    _RL_BUCKETS.setdefault(key, []).append(now)
+    if len(_RL_BUCKETS) > 10000:      # crude bound; prevents unbounded growth
+        for k in [k for k, v in _RL_BUCKETS.items() if not v or now - v[-1] > 3600]:
+            _RL_BUCKETS.pop(k, None)
 
 
 def _rate_limit_key(request: Request) -> str:
@@ -552,37 +564,34 @@ def _rate_limit_key(request: Request) -> str:
 
 @app.middleware("http")
 async def _rate_limit(request: Request, call_next):
-    rule = _RL_RULES.get(request.url.path)
+    path = request.url.path
+    rule = _RL_RULES.get(path)
     if not rule or request.method != "POST":
         return await call_next(request)
     limit, window = rule
-    now = time.time()
     key = _rate_limit_key(request)
-    hits = [t for t in _RL_BUCKETS.get(key, []) if now - t < window]
-    if len(hits) >= limit:
-        retry = int(window - (now - hits[0])) + 1
+    # Use the SHARED limiter helpers (Redis-backed across workers, in-process fallback) —
+    # no direct _RL_BUCKETS manipulation here.
+    retry = _rl_blocked(key, limit, window)
+    if retry:
         obsmod.inc_metric("petabyte_ratelimit_blocks_total",
-                          route=obsmod.bounded_route(request.url.path),
+                          route=obsmod.bounded_route(path),
                           environment=obsmod.ENVIRONMENT)
         obs.event(EVENTS.RATELIMIT_BLOCKED, level=logging.WARNING,
                   message="rate limit exceeded",
-                  route=obsmod.bounded_route(request.url.path), retry_after_seconds=retry)
+                  route=obsmod.bounded_route(path), retry_after_seconds=int(retry))
         return JSONResponse(
             status_code=429,
-            headers={"Retry-After": str(retry)},
+            headers={"Retry-After": str(int(retry))},
             content={"error": {"code": "RATE_LIMIT_EXCEEDED",
-                               "message": f"Too many attempts. Try again in {retry} seconds.",
-                               "retry_after_seconds": retry}},
+                               "message": f"Too many attempts. Try again in {int(retry)} seconds.",
+                               "retry_after_seconds": int(retry)}},
         )
     response = await call_next(request)
-    # Only FAILED attempts consume budget. Counting successes would lock out a whole
-    # office behind one NAT'd IP — the limiter exists to stop guessing, not usage.
-    if response.status_code >= 400:
-        hits.append(now)
-        _RL_BUCKETS[key] = hits
-        if len(_RL_BUCKETS) > 10000:      # crude bound; prevents unbounded growth
-            for k in [k for k, v in _RL_BUCKETS.items() if not v or now - v[-1] > 3600]:
-                _RL_BUCKETS.pop(k, None)
+    # Credential endpoints consume budget only on FAILURE (brute-force guard); count-all
+    # paths (e.g. /route) consume budget on every request to cap total volume.
+    if response.status_code >= 400 or path in _RL_COUNT_ALL:
+        _rl_record_failure(key, window)
     return response
 
 
@@ -1492,7 +1501,7 @@ async def _structured_http_error(request: Request, exc: HTTPException):
 async def _unhandled_error(request: Request, exc: Exception):
     """Never leak a stack trace or internal exception text to a caller."""
     rid = getattr(request.state, "request_id", None)
-    logger.exception("unhandled request_id=%s path=%s", rid, request.url.path)
+    logger.exception("unhandled request_id=%s path=%s", rid, _safe_path(request))
     return JSONResponse(
         status_code=500,
         content={"error": {"code": "INTERNAL_ERROR",
@@ -1590,6 +1599,18 @@ def prometheus_metrics(request: Request):
     return Response(content=body, media_type=ctype)
 
 
+def _norm_country(*values) -> str:
+    """Normalize a country label: strip → uppercase → first two chars of the FIRST non-empty
+    source, else 'unknown'. Normalizing the source first (not the fallback) means a missing
+    country becomes 'unknown', never 'UN' (which is what truncating the word 'unknown' gave)."""
+    for v in values:
+        if v:
+            cc = str(v).strip().upper()[:2]
+            if cc:
+                return cc
+    return "unknown"
+
+
 def _marketplace_metrics():
     """Scrape-time marketplace supply/seller gauges, computed LIVE from Postgres. Sellers
     are ephemeral: a stale heartbeat (older than HEARTBEAT_TIMEOUT_S) drops a spec out of
@@ -1597,73 +1618,79 @@ def _marketplace_metrics():
     only (gpu_class, country); seller ids never become labels. Best-effort — a query error
     yields no rows rather than breaking the scrape. Real supply excludes seeded demo nodes."""
     from db import SellerSpec, ComputeTransaction, _utcnow
+    S = SellerSpec
     env = obsmod.ENVIRONMENT
     rows = []
     dbs = SessionLocal()
     try:
-        # Compare naive-to-naive: stored last_seen is naive UTC (SQLite) but _utcnow() may
-        # be tz-aware — normalise both so the comparison never throws.
+        # naive-UTC cutoff (matches reap_stale_specs); stored last_seen is naive.
         cutoff = (_utcnow() - timedelta(seconds=HEARTBEAT_TIMEOUT_S)).replace(tzinfo=None)
-        specs = dbs.query(SellerSpec).filter(SellerSpec.is_demo.is_(False)).all()
+        demo = S.is_demo.is_(False)
+        # "fresh" = online AND heartbeat within the window. Evaluated in SQL — we do NOT
+        # load every SellerSpec row into memory (that was the perf finding).
+        fresh = (demo, S.status == "online", S.last_seen.isnot(None), S.last_seen >= cutoff)
 
-        def _ls(s):
-            return s.last_seen.replace(tzinfo=None) if s.last_seen is not None else None
+        def _agg(col, *crit):
+            return dbs.query(func.coalesce(func.sum(col), 0)).filter(*crit).scalar() or 0
 
-        def _fresh(s):
-            return s.status == "online" and _ls(s) is not None and _ls(s) >= cutoff
+        def _uids(*crit):
+            return {r[0] for r in dbs.query(distinct(S.user_id)).filter(*crit).all()}
 
-        def _stale(s):
-            return s.status == "online" and (_ls(s) is None or _ls(s) < cutoff)
-
-        online_specs = [s for s in specs if _fresh(s)]
-        stale_specs = [s for s in specs if _stale(s)]
-        offline_specs = [s for s in specs if s.status != "online"]
+        online_uids = _uids(*fresh)
+        offline_uids = _uids(demo, S.status != "online")
+        registered = dbs.query(func.count(distinct(S.user_id))).filter(demo).scalar() or 0
+        agents_online = dbs.query(func.count(S.id)).filter(*fresh).scalar() or 0
+        stale_specs = dbs.query(func.count(S.id)).filter(
+            demo, S.status == "online",
+            or_(S.last_seen.is_(None), S.last_seen < cutoff)).scalar() or 0
+        reserved = _agg(
+            case((S.total_units > S.available_units, S.total_units - S.available_units),
+                 else_=0), *fresh)
 
         rows += [
             {"name": "petabyte_sellers_registered", "doc": "Distinct sellers with a listing",
-             "labels": {"environment": env},
-             "value": len({s.user_id for s in specs})},
+             "labels": {"environment": env}, "value": registered},
             {"name": "petabyte_sellers_online", "doc": "Sellers with a fresh heartbeat",
-             "labels": {"environment": env},
-             "value": len({s.user_id for s in online_specs})},
+             "labels": {"environment": env}, "value": len(online_uids)},
             {"name": "petabyte_sellers_offline", "doc": "Sellers with all specs offline",
-             "labels": {"environment": env},
-             "value": len({s.user_id for s in offline_specs}
-                          - {s.user_id for s in online_specs})},
+             "labels": {"environment": env}, "value": len(offline_uids - online_uids)},
             {"name": "petabyte_sellers_stale", "doc": "Specs online but heartbeat expired",
-             "labels": {"environment": env}, "value": len(stale_specs)},
+             "labels": {"environment": env}, "value": stale_specs},
             {"name": "petabyte_agents_online", "doc": "Connected seller agents (fresh specs)",
-             "labels": {"environment": env}, "value": len(online_specs)},
+             "labels": {"environment": env}, "value": agents_online},
             {"name": "petabyte_gpus_online", "doc": "Online GPUs",
-             "labels": {"environment": env},
-             "value": sum((s.gpu_count or 0) for s in online_specs)},
+             "labels": {"environment": env}, "value": _agg(S.gpu_count, *fresh)},
             {"name": "petabyte_gpus_available", "doc": "Available rentable units",
-             "labels": {"environment": env},
-             "value": sum((s.available_units or 0) for s in online_specs)},
+             "labels": {"environment": env}, "value": _agg(S.available_units, *fresh)},
             {"name": "petabyte_gpus_reserved", "doc": "Reserved units",
-             "labels": {"environment": env},
-             "value": sum(max(0, (s.total_units or 0) - (s.available_units or 0))
-                          for s in online_specs)},
+             "labels": {"environment": env}, "value": reserved},
             {"name": "petabyte_available_gpu_hours", "doc": "Available GPU-hours (units x max hrs)",
              "labels": {"environment": env},
-             "value": sum((s.available_units or 0) * (s.duration or 0) for s in online_specs)},
+             "value": _agg(S.available_units * S.duration, *fresh)},
         ]
-        # GPUs by model (bounded gpu_class) and by country (ISO set), online supply only
-        by_model, by_country = {}, {}
-        for s in online_specs:
-            gc = obsmod.gpu_model_to_class(s.gpu_model)
-            by_model[gc] = by_model.get(gc, 0) + (s.gpu_count or 0)
-            country = (s.country or s.detected_country or "unknown").upper()[:2] or "unknown"
-            by_country[country] = by_country.get(country, 0) + (s.gpu_count or 0)
+        # GPUs by model (grouped in SQL) -> folded to a bounded gpu_class in Python.
+        by_model = {}
+        for model, n in dbs.query(S.gpu_model, func.coalesce(func.sum(S.gpu_count), 0)) \
+                .filter(*fresh).group_by(S.gpu_model).all():
+            gc = obsmod.gpu_model_to_class(model)
+            by_model[gc] = by_model.get(gc, 0) + int(n or 0)
         for gc, n in by_model.items():
             rows.append({"name": "petabyte_gpus_by_model", "doc": "Online GPUs by class",
                          "labels": {"gpu_class": gc, "environment": env}, "value": n})
-        for country, n in by_country.items():
+        # GPUs by country (grouped in SQL) -> normalized (strip/upper/[:2], fallback
+        # 'unknown' only when empty, so a MISSING country is never mislabeled 'UN').
+        by_country = {}
+        for country, detected, n in dbs.query(
+                S.country, S.detected_country, func.coalesce(func.sum(S.gpu_count), 0)) \
+                .filter(*fresh).group_by(S.country, S.detected_country).all():
+            cc = _norm_country(country, detected)
+            by_country[cc] = by_country.get(cc, 0) + int(n or 0)
+        for cc, n in by_country.items():
             rows.append({"name": "petabyte_gpus_by_country", "doc": "Online GPUs by country",
-                         "labels": {"country": country, "environment": env}, "value": n})
-        # live job counts (durable — survive a seller going offline)
-        running = dbs.query(ComputeTransaction).filter(
-            ComputeTransaction.status == "RUNNING").count()
+                         "labels": {"country": cc, "environment": env}, "value": n})
+        # live job count (durable — survives a seller going offline)
+        running = dbs.query(func.count(ComputeTransaction.id)).filter(
+            ComputeTransaction.status == "RUNNING").scalar() or 0
         rows.append({"name": "petabyte_jobs_running", "doc": "Running jobs",
                      "labels": {"environment": env}, "value": running})
     except Exception:  # noqa: BLE001
@@ -2791,11 +2818,18 @@ def route_explain(data: RouteModel, db: Session = Depends(get_db)):
     import marketplace_insight as mi
     intent = {k: v for k, v in data.model_dump().items() if v is not None}
     plan = select_plan(db, intent)
+    # Reuse the specs + reputation already loaded/computed by select_plan — no per-item
+    # spec fetch and no reputation recompute for selected + alternatives (query explosion).
+    specs = plan.pop("_specs", {})
+    rep_cache = plan.pop("_reputation", {})
 
     def annotate(item):
-        spec = _get_spec(db, item["spec_id"])
+        spec = specs.get(item["spec_id"]) or _get_spec(db, item["spec_id"])
         if spec is not None:
-            rep = compute_reputation(db, spec)
+            rep = rep_cache.get(spec.id)
+            if rep is None:
+                rep = compute_reputation(db, spec)
+                rep_cache[spec.id] = rep
             item["predicted_success"] = mi.predict_success(spec, rep)
         return item
     plan["selected"] = [annotate(i) for i in plan.get("selected", [])]
@@ -4161,13 +4195,25 @@ def payment_timeline(public_id: str, user: dict = Depends(get_current_user),
     events = (db.query(dbmod.ComputeTxEvent)
               .filter(dbmod.ComputeTxEvent.tx_id == tx.id)
               .order_by(dbmod.ComputeTxEvent.id).all())
+    is_admin = _is_admin(me)
+    # A failure `reason` can embed str(StripeError) (gateway/decline/account internals).
+    # Admins get the raw reason for troubleshooting; buyers/sellers get sanitized text.
+    def _reason(e):
+        if is_admin:
+            return e.reason
+        if e.to_state in mi.TX_FAILED and e.reason:
+            return mi.explain_failure(e.to_state)
+        return e.reason
     timeline = [{"at": e.created_at.isoformat() if e.created_at else None,
-                 "from": e.from_state, "to": e.to_state, "reason": e.reason, "by": e.actor}
+                 "from": e.from_state, "to": e.to_state, "reason": _reason(e), "by": e.actor}
                 for e in events]
     why_failed = None
-    if tx.status in mi._TX_FAILED:
-        fev = [e for e in events if e.to_state == tx.status and e.reason]
-        why_failed = fev[-1].reason if fev else f"transaction ended in {tx.status}"
+    if tx.status in mi.TX_FAILED:
+        if is_admin:
+            fev = [e for e in events if e.to_state == tx.status and e.reason]
+            why_failed = fev[-1].reason if fev else f"transaction ended in {tx.status}"
+        else:
+            why_failed = mi.explain_failure(tx.status)
     return {"transaction_id": tx.public_id, "status": tx.status,
             "timeline": timeline, "why_failed": why_failed}
 

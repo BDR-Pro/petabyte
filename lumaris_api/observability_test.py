@@ -56,18 +56,44 @@ if otel_active:
         cc = o.get_context()
         ok("inside a span the context has a 32-hex trace_id",
            len(cc.get("trace_id", "")) == 32 and len(cc.get("span_id", "")) == 16)
-    # propagation carrier round-trips a traceparent
+    # propagation carrier round-trips a traceparent AND the consumer joins the same trace
     carrier = {}
     with o.span("producer.span", kind="producer"):
+        producer_tid = o.get_context().get("trace_id")
         o.inject_context(carrier)
     ok("inject writes a W3C traceparent header", "traceparent" in carrier)
+    consumer_tid = None
     with o.span("consumer.span", kind="consumer", carrier=carrier):
-        pass
-    ok("a span can be created from an incoming carrier (cross-machine link)", True)
+        consumer_tid = o.get_context().get("trace_id")
+    # Real cross-machine link: the consumer span must land in the SAME trace as the producer
+    # (32-hex trace_id carried over the W3C traceparent), not merely "a span was created".
+    ok("consumer span joins the producer's trace (same trace_id across the carrier)",
+       bool(producer_tid) and len(producer_tid) == 32 and producer_tid == consumer_tid)
 else:
     ok("OTel active for span tests (skipped: sdk not installed)", True)
     ok("inject writes a W3C traceparent header (skipped)", True)
     ok("cross-machine link (skipped)", True)
+
+# ---- finding A: a span NEVER swallows or replaces the caller's exception ----
+# Regression for the "generator didn't stop after throw()" bug: the setup phase degrades
+# (yield None) on its own failures, but once control is with the caller the ORIGINAL
+# exception must propagate unchanged — not be converted into a degrade fallback or a
+# RuntimeError from a double-yield.
+class _Boom(Exception):
+    pass
+
+
+_raised = "none"
+try:
+    with o.span("caller.block", kind="internal", amount=1):
+        raise _Boom("original-boom")
+except _Boom as _e:
+    _raised = ("boom", str(_e))
+except Exception as _e:  # noqa: BLE001 — any other type is a failure of the property
+    _raised = ("other", type(_e).__name__ + ":" + str(_e))
+ok("a span re-raises the EXACT original exception from the caller's block "
+   "(no swallow, no double-yield RuntimeError)",
+   _raised == ("boom", "original-boom"))
 
 # ---- structured log schema + redaction ----
 captured = {}
@@ -101,6 +127,17 @@ ok("redaction masks nested secret keys", red["nested"]["api_key"] == "«redacted
    and red["nested"]["keep"] == "v")
 ok("redaction masks value patterns (PAN + live key)",
    "4242424242424242" not in json.dumps(red) and "sk_live_ABCDEF" not in json.dumps(red))
+
+# ---- finding I: the 'webhook' key family must not be over-redacted ----
+# webhook_event_id / webhook_id are safe correlation ids (needed for debugging + dashboards);
+# only the webhook SECRET is sensitive. The key match keys on 'webhook_secret', not a bare
+# 'webhook', so the ids survive while the secret is masked.
+wh = o.redact({"webhook_event_id": "evt_1JZ", "webhook_id": "wh_42",
+               "webhook_secret": "whsec_DEADBEEF", "stripe_webhook_secret": "whsec_XYZ"})
+ok("a non-secret webhook_event_id / webhook_id is preserved (not over-redacted)",
+   wh["webhook_event_id"] == "evt_1JZ" and wh["webhook_id"] == "wh_42")
+ok("the webhook_secret (and stripe_webhook_secret) IS redacted",
+   wh["webhook_secret"] == "«redacted»" and wh["stripe_webhook_secret"] == "«redacted»")
 
 # ---- Prometheus bounded cardinality ----
 body, ctype = o.metrics_response()
@@ -143,12 +180,17 @@ attrs = o._span_safe_attrs({"stripe_secret_key": "sk_live_XYZ",
 ok("span attributes drop secret-shaped keys",
    attrs.get("stripe_secret_key") == "«redacted»" and attrs.get("payment_intent_id") == "pi_123")
 
-# ---- TEST / DEMO / PILOT / REAL remain distinguishable ----
-modes = {o.bounded_label(m, o.PAYMENT_MODE) for m in ("test", "live", "pilot", "demo", "real")}
-ok("payment modes test/live/pilot/demo/real are all distinct bounded labels",
-   modes == {"test", "live", "pilot", "demo", "real"})
-ok("an unknown payment mode collapses to a bounded default",
-   o.bounded_label("wildcardmode", o.PAYMENT_MODE) == "other")
+# ---- canonical payment modes remain distinguishable ----
+# The money model has exactly three modes: test, live, sandbox (production == 'live', not
+# 'real'). Invented labels (pilot/demo/real) are NOT modes and must collapse to 'other' so
+# a stray value can never inflate metric cardinality or masquerade as a real mode.
+modes = {o.bounded_label(m, o.PAYMENT_MODE) for m in ("test", "live", "sandbox")}
+ok("canonical payment modes test/live/sandbox are all distinct bounded labels",
+   modes == {"test", "live", "sandbox"})
+ok("invented / unknown payment modes collapse to a bounded default ('other')",
+   o.bounded_label("real", o.PAYMENT_MODE) == "other"
+   and o.bounded_label("pilot", o.PAYMENT_MODE) == "other"
+   and o.bounded_label("wildcardmode", o.PAYMENT_MODE) == "other")
 
 # ---- exporter failure does not break the caller (degrade) ----
 raised = False

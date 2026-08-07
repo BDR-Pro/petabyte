@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 
@@ -165,7 +166,10 @@ class EVENTS:
 # Controlled label enumerations (bounded cardinality). Values outside these collapse to
 # "other" via bounded_label(), so a metric can never explode into unbounded series.
 JOB_STATUS = {"queued", "running", "completed", "failed", "validated", "invalid", "cancelled"}
-PAYMENT_MODE = {"test", "live", "sandbox", "pilot", "demo", "real"}
+# Canonical money-mode label values — the ONLY values the code actually stamps on financial
+# records via db.payments_mode() (TEST|LIVE, lowercased) plus 'sandbox' as the fallback for
+# an unset mode. Production is 'live' (NOT 'real'). Anything else clamps to 'other'.
+PAYMENT_MODE = {"test", "live", "sandbox"}
 GPU_CLASS = {"h100", "a100", "l40s", "l4", "a10", "rtx4090", "rtx3090", "t4", "v100", "other"}
 FAILURE_CATEGORY = {"none", "timeout", "validation", "gpu_offline", "payment", "network",
                     "internal", "conflict", "rate_limited", "auth"}
@@ -264,9 +268,9 @@ _REDACT_KEYS = {
     "stripe_secret_key", "server_private_key", "secret_key", "dsn",
 }
 _REDACT_SUBSTR = ("secret", "password", "passwd", "token", "api_key", "apikey",
-                  "private_key", "client_secret", "webhook", "cookie", "authorization",
-                  "credential", "cvc", "cvv", "card_number", "account_number",
-                  "routing_number")
+                  "private_key", "client_secret", "webhook_secret", "cookie",
+                  "authorization", "credential", "cvc", "cvv", "card_number",
+                  "account_number", "routing_number")
 # Value patterns that must be masked wherever they appear, even in a free-text message.
 _VALUE_PATTERNS = [
     re.compile(r"sk_(live|test)_[A-Za-z0-9]+"),        # Stripe secret key
@@ -482,6 +486,8 @@ def span(name: str, *, kind: str = "internal", carrier: dict | None = None, **at
     if not _otel_ok or _TRACER is None:
         yield None
         return
+    # --- SETUP phase: any failure here is a tracer/setup problem. Degrade (yield None)
+    #     BEFORE we ever hand control to the caller, so we can never yield twice. ---
     try:
         from opentelemetry import trace
         from opentelemetry.trace import SpanKind
@@ -492,27 +498,39 @@ def span(name: str, *, kind: str = "internal", carrier: dict | None = None, **at
                 parent = extract(carrier)
         kmap = {"server": SpanKind.SERVER, "client": SpanKind.CLIENT,
                 "producer": SpanKind.PRODUCER, "consumer": SpanKind.CONSUMER}
-        with _TRACER.start_as_current_span(
-                name, kind=kmap.get(kind, SpanKind.INTERNAL), context=parent) as sp:
-            for k, v in _span_safe_attrs(attrs).items():
+        span_cm = _TRACER.start_as_current_span(
+            name, kind=kmap.get(kind, SpanKind.INTERNAL), context=parent)
+        sp = span_cm.__enter__()
+        for k, v in _span_safe_attrs(attrs).items():
+            with contextlib.suppress(Exception):
                 sp.set_attribute(k, v)
-            sctx = sp.get_span_context()
-            token = _CTX.set({**_CTX.get(),
-                              "trace_id": format(sctx.trace_id, "032x"),
-                              "span_id": format(sctx.span_id, "016x")})
-            try:
-                yield sp
-            except Exception as exc:
-                with contextlib.suppress(Exception):
-                    sp.record_exception(exc)
-                    sp.set_status(trace.Status(trace.StatusCode.ERROR, str(exc)))
-                raise
-            finally:
-                _CTX.reset(token)
+        sctx = sp.get_span_context()
+        token = _CTX.set({**_CTX.get(),
+                          "trace_id": format(sctx.trace_id, "032x"),
+                          "span_id": format(sctx.span_id, "016x")})
     except Exception:  # noqa: BLE001 — a broken tracer must not break the caller
+        with contextlib.suppress(Exception):
+            span_cm.__exit__(None, None, None)  # noqa: F821 (may be unbound; suppressed)
         if FAILURE_MODE != "degrade":
             raise
         yield None
+        return
+    # --- YIELDED phase: control is now with the caller. An exception raised in the caller's
+    #     block is THEIRS — record it on the span, close the span, and re-raise the EXACT
+    #     original exception. Never convert it into a degrade fallback (that caused
+    #     "generator didn't stop after throw()"). ---
+    try:
+        yield sp
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            sp.record_exception(exc)
+            sp.set_status(trace.Status(trace.StatusCode.ERROR, str(exc)))
+        raise
+    finally:
+        with contextlib.suppress(Exception):
+            _CTX.reset(token)
+        with contextlib.suppress(Exception):
+            span_cm.__exit__(*sys.exc_info())
 
 
 # --------------------------------------------------------------------------- metrics
@@ -526,6 +544,9 @@ class _NoMetric:
         return self
 
     def inc(self, *a, **k):
+        pass
+
+    def dec(self, *a, **k):
         pass
 
     def observe(self, *a, **k):
@@ -611,6 +632,9 @@ def init_metrics() -> bool:
           ("category", "environment"))
         C("petabyte_sellers_reaped_total", "Seller specs reaped as stale (went offline)",
           ("environment",))
+        # Distributed lock outcomes — bounded 'outcome' label only (never the lock NAME).
+        C("petabyte_lock_acquisitions_total", "Redis distributed-lock outcomes",
+          ("outcome", "environment"))
         # telemetry health
         C("petabyte_telemetry_export_failures_total", "Telemetry export failures",
           ("exporter", "environment"))
@@ -643,6 +667,17 @@ def inc_metric(name: str, value: float = 1, **labels) -> None:
         if m is None:
             return
         (m.labels(**labels) if labels else m).inc(value)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def dec_metric(name: str, value: float = 1, **labels) -> None:
+    """Decrement a gauge (no-op if metrics are disabled/unavailable)."""
+    try:
+        m = _metrics.get(name)
+        if m is None:
+            return
+        (m.labels(**labels) if labels else m).dec(value)
     except Exception:  # noqa: BLE001
         pass
 
@@ -765,6 +800,7 @@ class _Obs:
     ctx = staticmethod(ctx)
     bind = staticmethod(bind_context)
     inc = staticmethod(inc_metric)
+    dec = staticmethod(dec_metric)
     observe = staticmethod(observe_metric)
     set = staticmethod(set_metric)
     bounded = staticmethod(bounded_label)

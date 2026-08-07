@@ -102,3 +102,8 @@ Correlate to a specific stuck transaction:
 - If a restore-from-backup is ever required, any Stripe activity that occurred after
   the backup point must be reconciled against Stripe as source of truth before
   resuming settlement.
+
+## See also
+
+- `API_UNAVAILABLE.md` — the maintenance/reaper loop runs inside the API process; if
+  `maintenance.stale == true` while Postgres is healthy, triage the API process here.

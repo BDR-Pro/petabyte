@@ -45,12 +45,9 @@ LOKI_ENABLED=true;
 LOKI_URL=;
 MAILCHIMP_AUDIENCE_ID=;
 MAILGUN_DOMAIN=petabyte.market;
-MAILGUN_NEWSLETTER_DOMAIN=news.petabyte.market;
 MIN_REPUTATION=50;
-NEWSLETTER_FROM=updates@petabyte.market;
 NEWSLETTER_LIST_ADDRESS=newsletter@news.petabyte.market;
 NEWSLETTER_PROVIDER=mailgun;
-NEWSLETTER_REPLY_TO=info@petabyte.market;
 NICEHASH_API=https://api2.nicehash.com;
 NICEHASH_STUB=true;
 NICEHASH_TAKE_RATE=0.10;
@@ -221,9 +218,9 @@ VRAM_GB=;
 The newsletter runs on the Mailgun sending subdomain **news.petabyte.market**, sends **From `updates@petabyte.market`**, and forwards replies to **`info@petabyte.market`**. The signup form adds subscribers to a Mailgun mailing list. Configure in this order:
 
 1. In Mailgun, add + verify the sending domain `news.petabyte.market` (DNS: SPF, DKIM, and a tracking CNAME).
-2. Create a **mailing list** on that domain (e.g. `newsletter@news.petabyte.market`) and set its From name/address to `updates@petabyte.market`.
+2. Create a **mailing list** on that domain (e.g. `newsletter@news.petabyte.market`) and set its From name/address to `updates@petabyte.market` on the list itself.
 3. Add a Mailgun **Route** that forwards replies to that list/address on to `info@petabyte.market`.
-4. The newsletter keys are already in the `ENV_VARS` bundle above (`NEWSLETTER_PROVIDER=mailgun`, `MAILGUN_NEWSLETTER_DOMAIN=news.petabyte.market`, `NEWSLETTER_LIST_ADDRESS=newsletter@news.petabyte.market`, `NEWSLETTER_FROM=updates@petabyte.market`, `NEWSLETTER_REPLY_TO=info@petabyte.market`) — defaults match, no change needed. The newsletter reuses the `MAILGUN_API_KEY` **Secret** — no extra key.
+4. The newsletter keys are already in the `ENV_VARS` bundle above (`NEWSLETTER_PROVIDER=mailgun`, `NEWSLETTER_LIST_ADDRESS=newsletter@news.petabyte.market`) — defaults match, no change needed. From / Reply-To and reply-forwarding are configured **on the list in Mailgun** (steps 2–3), not via env vars. The newsletter reuses the `MAILGUN_API_KEY` **Secret** — no extra key.
 
 ---
 

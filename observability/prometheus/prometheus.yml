@@ -33,7 +33,9 @@ alerting:
         password_file: /etc/prometheus/secrets/alertmanager_password
       static_configs:
         - targets:
-            - "${ALERTMANAGER_URL}"
+            # ALERTMANAGER_TARGET is host:port only (no scheme/path). TLS is
+            # selected by `scheme: https` under alerting above.
+            - "${ALERTMANAGER_TARGET}"
 
 # Ship all samples to the central Prometheus/Mimir on the obs server. basic_auth
 # from env-injected secret files; never inline credentials.

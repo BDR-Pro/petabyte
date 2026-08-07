@@ -720,6 +720,36 @@ ok("bridge: authorize refused for a non-payout-ready seller (money can't start)"
    nr.status_code == 409)
 
 
+# ============ REGRESSION (finding B): telemetry failure NEVER breaks settlement ============
+# The AUTHORITATIVE financial state is written BEFORE, and independently of, telemetry.
+# Make EVERY telemetry emitter raise, then drive settlement directly (no HTTP middleware in
+# the way): the money outcome must be exactly correct and the tx must reach a terminal
+# captured state — never stuck in a *_PENDING state because a metric/event throw aborted it.
+_obs_event_orig, _obs_inc_orig = sc._obs.event, sc._obs.inc_metric
+def _boom_telemetry(*a, **k):
+    raise RuntimeError("simulated telemetry failure")
+_spec_tb = make_online_spec("seller_a", price=2.50, units=5)
+_tb_id = _run_to_running(_spec_tb)
+_sB = dbmod.SessionLocal()
+_txB = sc.get_tx_by_public_id(_sB, _tb_id)
+try:
+    sc._obs.event = _boom_telemetry
+    sc._obs.inc_metric = _boom_telemetry
+    _stB = sc.settle_after_result(_sB, _txB, metered_seconds=1800)   # 30 min @2.50/h -> 125
+finally:
+    sc._obs.event, sc._obs.inc_metric = _obs_event_orig, _obs_inc_orig
+_sB.close()
+_sB = dbmod.SessionLocal()
+_txB = sc.get_tx_by_public_id(_sB, _tb_id)
+_balB, _brokenB = dbmod.ledger_is_balanced(_sB)
+_sB.close()
+ok("finding B: telemetry failure never blocks settlement (capture completed correctly)",
+   _stB == "PAYMENT_CAPTURED" and _txB.captured_amount == 125
+   and _txB.status == "PAYMENT_CAPTURED")
+ok("finding B: ledger stays balanced despite telemetry raising throughout settlement",
+   _balB and not _brokenB)
+
+
 print(f"\n=== stripe: {PASSES} passed, {FAILS} failed ===")
 for f in ("stripe_test.db", "stripe_test.db-wal", "stripe_test.db-shm"):
     if os.path.exists(f):

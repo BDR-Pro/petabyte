@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (142)
+## Variables (non-sensitive) (139)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -57,17 +57,14 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `LOKI_URL` | no | observability | *(empty)* | `https://…` | — | format: url | Loki base URL. |
 | `MAILCHIMP_AUDIENCE_ID` | no | platform | *(empty)* | `…` | api/main.py | — | — |
 | `MAILGUN_DOMAIN` | no | platform | `petabyte.market` | `petabyte.market` | api/email_service.py | — | — |
-| `MAILGUN_NEWSLETTER_DOMAIN` | no | platform | `news.petabyte.market` | `news.petabyte.market` | api/main.py | format: hostname | Mailgun sending subdomain for the newsletter (e.g. news.petabyte.market). Reuses MAILGUN_API_KEY. |
 | `MAX_CONCURRENT_GPU_JOBS` | no | gpu | `1` | `1` | GPU node agent | format: int | Max concurrent paid jobs per GPU node (must stay bounded). (reserved: standardized in GitHub config). |
 | `MAX_HOURS` | no | gpu | `24` | `24` | agent/provision.py | format: int | Max rentable hours offered. |
 | `MIN_REPUTATION` | no | platform | `50` | `50` | api/db.py | format: int | — |
 | `NB_CELL_TIMEOUT` | no | gpu | `120` | `120` | agent/notebook.py | format: int | Per-cell notebook timeout (s). |
 | `NB_MAX_OUTPUT` | no | gpu | `1000000` | `1000000` | agent/notebook.py | format: int | Max notebook output bytes. |
 | `NB_TIMEOUT` | no | gpu | `600` | `600` | agent/notebook.py | format: int | Notebook job hard timeout (s) — must stay bounded. |
-| `NEWSLETTER_FROM` | no | platform | `updates@petabyte.market` | `updates@petabyte.market` | api/main.py | format: email_or_empty | From address campaigns are sent as (e.g. updates@petabyte.market). |
 | `NEWSLETTER_LIST_ADDRESS` | no | platform | `newsletter@news.petabyte.market` | `newsletter@news.petabyte.market` | api/main.py | format: email_or_empty | Mailgun mailing-list address signups are added to (e.g. newsletter@news.petabyte.market). |
 | `NEWSLETTER_PROVIDER` | no | platform | `mailgun` | `mailgun` | api/main.py | one of: mailgun / mailchimp / none | Newsletter backend. 'mailgun' adds signups to a Mailgun mailing list; 'mailchimp' uses the legacy audience; 'none' shows the honest 'not wired up' message. |
-| `NEWSLETTER_REPLY_TO` | no | platform | `info@petabyte.market` | `info@petabyte.market` | api/main.py | format: email_or_empty | Reply-To for campaigns; a Mailgun Route forwards replies here (e.g. info@petabyte.market). |
 | `NICEHASH_ADDRESS` | no | gpu | *(empty)* | `…` | agent/task_fetcher.py | — | NiceHash payout address for idle mining (shared across nodes). |
 | `NICEHASH_API` | no | platform | `https://api2.nicehash.com` | `https://api2.nicehash.com` | api/nicehash.py | — | — |
 | `NICEHASH_IMAGE` | no | gpu | `nicehash/nicehashminer:latest` | `nicehash/nicehashminer:latest` | agent/task_fetcher.py | — | Docker image for the idle NiceHash miner. |
@@ -84,7 +81,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `OTEL_ENABLED` | no | platform | `true` | `true` | — | format: bool; one of: true / false | Enable OpenTelemetry tracing export. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no | platform | *(empty)* | `https://…` | agent/agent_telemetry.py, api/observability.py | format: url_or_empty | OTLP endpoint of the OpenTelemetry Collector (e.g. http://<obs>:4317). Blank -> tracing no-ops. |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | no | platform | `grpc` | `grpc` | agent/agent_telemetry.py, api/observability.py | one of: grpc / http / http/protobuf | OTLP transport to the Collector. |
-| `OTEL_LOGS_ENABLED` | no | platform | `true` | `true` | — | format: bool; one of: true / false | — |
+| `OTEL_LOGS_ENABLED` | no | observability | `true` | `true` | — | format: bool | Collector/deploy-layer toggle for OTLP log export (collector -> Loki). Infra-only: the API does not read it, so it is NOT a platform env var. |
 | `OTEL_METRICS_ENABLED` | no | platform | `true` | `true` | — | format: bool; one of: true / false | — |
 | `OTEL_SERVICE_NAME` | no | platform | `petabyte-api` | `petabyte-api` | agent/agent_telemetry.py, api/observability.py | — | OTel service.name for the API (petabyte-api). |
 | `OTEL_SERVICE_NAMESPACE` | no | platform | `petabyte` | `petabyte` | api/observability.py | — | OTel service.namespace (petabyte). |

@@ -102,3 +102,9 @@ Inspect one backed-up job:
   after an expired authorization is impossible by design and must not be worked around.
 - If you cancel queued jobs to shed load, ensure each goes through `CANCELLED`
   (void auth, release GPU, charge $0) — do not orphan a held authorization.
+
+## See also
+
+- `PAYMENT_CAPTURE_FAILURE.md` — if authorizations are expiring
+  (`AUTHORIZATION_EXPIRED`) rather than jobs merely waiting, the capture path itself
+  may be failing; triage capture there.

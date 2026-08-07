@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 # Metric names match exactly what the app emits (see lumaris_api/observability.py).
 # GPU metrics come from the NVIDIA DCGM exporter; infra from node/postgres/redis
-# exporters. Financial data is ALWAYS split by payment_mode — never mix real and
+# exporters. Financial data is ALWAYS split by payment_mode — never mix live and
 # test in one expression.
 #
 # Every alert carries: labels {severity, service} and annotations
@@ -415,25 +415,21 @@ groups:
 
       - alert: PetabyteTestLiveModeMismatch
         expr: |
-          (
-            sum by (environment) (rate(petabyte_payment_captures_total{payment_mode="live"}[10m])) > 0
-            and on (environment)
-            (max by (environment) (petabyte_build_info{payment_env="test"}) > 0)
-          )
+          sum by (environment) (
+            rate(petabyte_payment_captures_total{payment_mode="live", environment!="production"}[10m])
+          ) > 0
           or
-          (
-            sum by (environment) (rate(petabyte_payment_captures_total{payment_mode="test"}[10m])) > 0
-            and on (environment) (label_replace(vector(1), "environment", "production", "", "") > 0)
-            and on (environment) (max by (environment) (petabyte_payment_captures_total{payment_mode="live"}) >= 0)
-          )
+          sum by (environment) (
+            rate(petabyte_payment_captures_total{payment_mode="test", environment="production"}[10m])
+          ) > 0
         for: 5m
         labels:
           severity: critical
           service: petabyte-settlement
         annotations:
           summary: "Stripe test/live mode mismatch"
-          description: "Live-mode captures seen while the service is configured for test (or test traffic on a production/live env) in {{ $labels.environment }}."
-          impact: "Real and test money may be mixed. Investor-demo integrity and accounting at risk."
+          description: "Live-mode captures in a non-production environment, or test-mode captures in production, in {{ $labels.environment }}."
+          impact: "Live and test money may be mixed. Investor-demo integrity and accounting at risk."
           dashboard: "/d/petabyte-settlement/petabyte-stripe-settlement"
           runbook: "docs/runbooks/TEST_LIVE_MODE_MISMATCH.md"
           first_check: "Confirm STRIPE_* keys mode vs DEPLOYMENT_ENVIRONMENT; never run live keys in a demo."
