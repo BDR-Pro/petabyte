@@ -24,6 +24,9 @@ env/
 # Generated release/diligence evidence bundles (regenerate with `make verify-series-a`).
 evidence/
 
+# Generated smoke/load/GPU reports (regenerate with `make smoke-load` / `smoke-gpu`).
+artifacts/
+
 # Builds / artifacts
 build/
 dist/

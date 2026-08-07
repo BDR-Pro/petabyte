@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e test test-postgres install verify verify-series-a diligence-bundle
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu
 
 help:
 	@echo "Petabyte make targets:"
@@ -24,6 +24,10 @@ help:
 	@echo "  make test            Run smoke + adversarial + stripe + payout + gateway suites (SQLite)"
 	@echo "  make test-postgres   Run the full suite against SQLite AND PostgreSQL"
 	@echo "  make install         Install Python dependencies"
+	@echo "  make smoke           Lightweight functional smoke test (SQLite, fast)"
+	@echo "  make smoke-load      Concurrent buyer/seller API load + invariants (set DATABASE_URL=postgres...)"
+	@echo "  make smoke-gpu       Seller GPU hardware assertion (real GPU compute + utilization)"
+	@echo "  make smoke-e2e-gpu   Full Buyer->Platform->Seller->GPU->Result chain + merged report"
 	@echo "  make verify          install + migrate check + full test + demo test"
 	@echo "  make verify-series-a Run the release gates + write a machine-readable evidence bundle"
 	@echo "  make diligence-bundle  Alias for verify-series-a (investor diligence evidence)"
@@ -100,6 +104,26 @@ verify-series-a:
 	python3 scripts/verify_series_a.py $(ARGS)
 
 diligence-bundle: verify-series-a
+
+# ---- load / GPU smoke tests -------------------------------------------------
+# Lightweight functional smoke (SQLite, fast) — the existing single-flow check.
+smoke:
+	cd $(API) && python3 smoke_test.py
+
+# Concurrent buyer/seller load over the REAL API: capacity contention, no-oversell, ledger
+# invariants, buyer isolation. Writes artifacts/SMOKE_LOAD_REPORT.json. For a real
+# concurrency-correctness claim, point DATABASE_URL at Postgres (the load_test workflow does).
+smoke-load:
+	python3 scripts/smoke_load.py
+
+# Seller GPU hardware assertion: real in-container PyTorch matmul + measured utilization.
+# Reports EXTERNAL_GPU_TEST_REQUIRED (not a fake PASS) when no GPU/Docker is present.
+smoke-gpu:
+	python3 scripts/smoke_gpu.py
+
+# Full Buyer -> Platform -> Seller -> GPU -> Result chain; merges both reports.
+smoke-e2e-gpu:
+	python3 scripts/smoke_e2e_gpu.py
 
 # Clean-DB migration/schema sanity + full tests + demo honesty tests.
 verify: install

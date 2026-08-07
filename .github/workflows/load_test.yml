@@ -1,0 +1,100 @@
+name: load_test
+
+# Concurrent Buyer -> Platform -> Seller load over the REAL API, on PostgreSQL (so capacity
+# locking / booking contention / settlement are proven, not smoke-signalled on SQLite).
+# The GPU hardware assertion is a SEPARATE, opt-in job: ordinary CI runners have no GPU, so
+# it only runs when explicitly requested on a self-hosted GPU runner — it never fake-PASSes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_gpu:
+        description: "Also run the GPU hardware assertion (needs a self-hosted GPU runner)"
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - "scripts/smoke_load.py"
+      - "scripts/smoke_gpu.py"
+      - "scripts/smoke_e2e_gpu.py"
+      - "lumaris_api/**"
+      - ".github/workflows/load_test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-load:
+    name: concurrent buyer/seller load (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: petabyte_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/petabyte_test
+      SMOKE_BUYERS: "10"
+      SMOKE_JOBS_PER_BUYER: "2"
+      SMOKE_CONCURRENCY: "10"
+      SMOKE_SELLERS: "2"
+      SMOKE_SELLER_CAPACITY: "2"
+      SMOKE_JOB_RUNTIME_S: "0.8"
+      SMOKE_TIMEOUT_SECONDS: "180"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r lumaris_api/requirements.txt
+      - name: concurrent buyer/seller load + invariants (Postgres)
+        run: python scripts/smoke_load.py
+      - name: load report to job summary
+        if: always()
+        run: |
+          {
+            echo '## Smoke load report'
+            echo '```json'
+            cat artifacts/SMOKE_LOAD_REPORT.json 2>/dev/null || echo '(no report produced)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: upload load report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-load-report
+          path: artifacts/SMOKE_LOAD_REPORT.*
+          if-no-files-found: ignore
+
+  smoke-gpu:
+    name: seller GPU hardware assertion (self-hosted GPU)
+    # Opt-in only: needs a self-hosted runner labelled [self-hosted, gpu] with Docker + the
+    # NVIDIA container runtime. Ordinary CI has no GPU, so this stays off by default and is
+    # NEVER a fake PASS — smoke_gpu.py reports EXTERNAL_GPU_TEST_REQUIRED when hardware is absent.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_gpu }}
+    runs-on: [self-hosted, gpu]
+    env:
+      SMOKE_GPU_REQUIRED: "1"      # a GPU box was explicitly requested -> missing GPU is a FAIL
+      SMOKE_MIN_GPU_UTILIZATION: "20"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: GPU hardware assertion (real compute + measured utilization)
+        run: python scripts/smoke_gpu.py
+      - name: upload gpu report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-gpu-report
+          path: artifacts/SMOKE_GPU_REPORT.json
+          if-no-files-found: ignore

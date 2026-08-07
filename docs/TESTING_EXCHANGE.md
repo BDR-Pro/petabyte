@@ -228,3 +228,82 @@ pasted back and all services report healthy._
 ---
 
 <!-- Append new dated sections below; mark finished sections ✅ COMPLETE. Never overwrite. -->
+
+## 2026-08-07 — Load / GPU smoke suite (real Buyer → Platform → Seller → GPU chain)
+
+Proves Petabyte can create **measurable load through the real marketplace path** — not that
+a GPU merely exists. Commands are idempotent; each writes a machine-readable report under
+`artifacts/`. GPU assertions require a Seller GPU box (Docker + NVIDIA runtime); on a runner
+without a GPU they report `EXTERNAL_GPU_TEST_REQUIRED` and never fake PASS.
+
+### [PLATFORM]
+
+```bash
+# Start / check the API (its Droplet)
+sudo systemctl status lumaris-api
+
+# Verify PostgreSQL (concurrency correctness REQUIRES Postgres, not SQLite)
+psql "$DATABASE_URL" -c "select version();"
+
+# Readiness (DB-checked) + liveness
+curl -fsS https://petabyte.market/readyz && echo
+curl -fsS https://petabyte.market/healthz && echo
+
+# Watch jobs / bookings + financial heartbeat while a load run is in flight
+watch -n 2 'curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" https://petabyte.market/admin/financial-integrity | jq'
+
+# Watch structured logs / metrics
+journalctl -u lumaris-api -f | jq -R 'fromjson? // .'
+curl -fsS -H "Authorization: Bearer $PROMETHEUS_METRICS_TOKEN" https://petabyte.market/internal/metrics | grep petabyte_
+```
+
+### [BUYER]  (concurrent load through the REAL API)
+
+```bash
+cd /opt/petabyte
+
+# Postgres is required for a real concurrency claim; point at the platform DB (test DB!).
+export DATABASE_URL='postgresql+psycopg2://USER:PASS@127.0.0.1:5432/petabyte_test'
+
+SMOKE_BUYERS=10 SMOKE_JOBS_PER_BUYER=2 SMOKE_CONCURRENCY=10 \
+SMOKE_SELLERS=2 SMOKE_SELLER_CAPACITY=2 \
+make smoke-load
+# -> artifacts/SMOKE_LOAD_REPORT.json  (+ .md)
+```
+
+Expected: `FINAL: PASS` with every invariant ok — `capacity_never_oversold`,
+`capacity_never_negative`, `no_capacity_leak`, `contention_enforced`, `no_real_failures`,
+`cross_buyer_isolation`, `ledger_balanced`, `platform_stayed_ready`. Under contention some
+jobs are correctly `jobs_rejected_capacity` (capacity is time-bound to a rental; a 409 at
+booking is the limit binding, not a failure).
+
+### [SELLER GPU]  (real GPU compute in the workload runtime)
+
+```bash
+# 1. host GPU present?
+nvidia-smi
+
+# 2. GPU visible INSIDE the Petabyte workload runtime (NOT host-only)
+docker run --rm --gpus all --cap-drop ALL --security-opt no-new-privileges \
+  pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime nvidia-smi -L
+
+# 3. bounded GPU load + measured utilization (this is the assertion, not the human watching)
+cd /opt/petabyte
+SMOKE_GPU_REQUIRED=1 SMOKE_MIN_GPU_UTILIZATION=20 make smoke-gpu
+# -> artifacts/SMOKE_GPU_REPORT.json  (peak/avg utilization, peak mem, duration)
+
+# 4. the FULL chain (marketplace load + GPU compute), merged report
+make smoke-e2e-gpu   # -> artifacts/SMOKE_E2E_GPU_REPORT.json
+
+# Optional live human view (assertions do NOT depend on this):
+watch -n 1 nvidia-smi
+```
+
+To prove buyer load **causes** GPU load end to end on one box: run the **real seller agent**
+against the platform on this GPU Droplet, then drive `make smoke-load` at it — the agent
+claims the buyer's job and executes it in a GPU container while `nvidia-smi` sampling records
+utilization during the job's running interval. That on-hardware correlation is
+`EXTERNAL_GPU_TEST_REQUIRED` (it cannot run on a GPU-less CI runner).
+
+_Status: ⏳ WAITING FOR OPERATOR EXECUTION on the Seller GPU Droplet — paste
+`artifacts/SMOKE_GPU_REPORT.json` back to mark ✅ COMPLETE._
