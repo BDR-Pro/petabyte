@@ -77,14 +77,28 @@ jobs:
 
       # Single SSH-key setup (deduplicated): write the deploy key once; later steps reuse
       # ~/.ssh/deploy_key. The final cleanup step removes it. The secret is never printed.
-      - name: Set up SSH key
+      # ALSO pin the deploy host's key into ~/.ssh/known_hosts so every scp/ssh below runs
+      # with StrictHostKeyChecking=yes — an impersonated/MITM host is refused BEFORE we ever
+      # transfer .env.platform.generated (which is rendered from GitHub Secrets). We fail
+      # CLOSED if the pin is missing: never fall back to trust-on-first-use for a host we
+      # send production credentials to.
+      - name: Set up SSH key + pinned host key
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DROPLET_SSH_KNOWN_HOSTS: ${{ secrets.DROPLET_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          if [ -z "${DROPLET_SSH_KNOWN_HOSTS//[[:space:]]/}" ]; then
+            echo "::error::DROPLET_SSH_KNOWN_HOSTS secret is empty — refusing to deploy without a" \
+                 "pinned host key. Generate it with: ssh-keyscan -t ed25519,rsa <host>  and store" \
+                 "the output as the DROPLET_SSH_KNOWN_HOSTS Secret." >&2
+            exit 1
+          fi
+          printf '%s\n' "$DROPLET_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
 
       # Generate the server env from ENV_VARS + Secrets, then ship it atomically — ONLY when
       # the gate is on. The generated file is 0600, git-ignored, never printed, deleted from
@@ -101,9 +115,9 @@ jobs:
           umask 077
           python scripts/validate_github_configuration.py --env-name auto >/dev/null
           python scripts/generate_deploy_env.py --target platform --out .env.platform.generated
-          scp -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key \
+          scp -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/deploy_key \
             .env.platform.generated "$DROPLET_USER@$DROPLET_HOST:/tmp/lumaris.env.incoming"
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "$DROPLET_USER@$DROPLET_HOST" '
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/deploy_key "$DROPLET_USER@$DROPLET_HOST" '
             set -e
             if sudo test -f /etc/lumaris/lumaris.env; then
               sudo cp -a /etc/lumaris/lumaris.env /etc/lumaris/lumaris.env.deploybak
@@ -114,7 +128,7 @@ jobs:
       - name: Deploy code + restart over SSH
         run: |
           set -euo pipefail
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key \
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/deploy_key \
             "$DROPLET_USER@$DROPLET_HOST" 'sudo /opt/lumaris/deploy/update.sh'
 
       # Verify health after restart; if unhealthy, roll the env back to the backup and
@@ -123,7 +137,7 @@ jobs:
         if: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB == 'true' }}
         run: |
           set -euo pipefail
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key "$DROPLET_USER@$DROPLET_HOST" '
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/deploy_key "$DROPLET_USER@$DROPLET_HOST" '
             set +e
             ok=0
             for i in $(seq 1 12); do
@@ -145,7 +159,7 @@ jobs:
       - name: Env report to job summary
         if: always()
         run: |
-          REPORT="$(ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key \
+          REPORT="$(ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/deploy_key \
             "$DROPLET_USER@$DROPLET_HOST" \
             'sudo bash /opt/lumaris/deploy/env-report.sh 2>/dev/null' || true)"
           {

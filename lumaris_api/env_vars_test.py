@@ -119,7 +119,8 @@ def _run_validator(env_overrides, env_name="test"):
 import json  # noqa: E402
 _SECRETS = json.dumps({
     "SECRET_KEY": "x" * 40, "SERVER_PRIVATE_KEY": "fk", "DATABASE_URL": "postgresql://u:p@h/db",
-    "DEPLOY_SSH_KEY": "k", "DROPLET_HOST": "1.2.3.4", "DROPLET_USER": "deploy"})
+    "DEPLOY_SSH_KEY": "k", "DROPLET_HOST": "1.2.3.4", "DROPLET_USER": "deploy",
+    "DROPLET_SSH_KNOWN_HOSTS": "1.2.3.4 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA"})
 
 # ---- validator: a valid test bundle passes ----
 rc, out = _run_validator({

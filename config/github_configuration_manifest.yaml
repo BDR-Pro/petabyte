@@ -1120,6 +1120,13 @@ secrets:
     scope:
     - deployment
     description: Deploy target host (IP/DNS).
+  DROPLET_SSH_KNOWN_HOSTS:
+    required: true
+    default: null
+    scope:
+    - deployment
+    description: Pinned SSH host key(s) for the deploy target (output of `ssh-keyscan -t ed25519,rsa <host>`).
+      Verifies the server before any secret is transferred; the deploy fails closed if unset.
   DROPLET_USER:
     required: true
     default: null

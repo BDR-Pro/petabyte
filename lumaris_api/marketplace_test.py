@@ -102,6 +102,18 @@ s.add(dbmod.ComputeTxEvent(tx_id=txf.id, from_state="RUNNING", to_state="JOB_FAI
                            reason="GPU disconnected after 83% of execution", actor="reaper"))
 s.commit()
 tx_pub_fail = txf.public_id
+
+# a tx that ended in AUTHORIZATION_EXPIRED (a real terminal state) carrying an operational
+# reason — it must be sanitized in the buyer timeline exactly like the other failures.
+txe = dbmod.ComputeTransaction(buyer_id=buyer_id, seller_id=seller_id, spec_id=spec.id,
+    currency="usd", pricing_snapshot="{}", status="AUTHORIZATION_EXPIRED", mode=mode,
+    authorization_amount=300, captured_amount=0)
+s.add(txe); s.commit(); s.refresh(txe)
+s.add(dbmod.ComputeTxEvent(tx_id=txe.id, from_state="PAYMENT_AUTHORIZED",
+                           to_state="AUTHORIZATION_EXPIRED",
+                           reason="stripe auth voided after 7 days uncaptured", actor="reaper"))
+s.commit()
+tx_pub_expired = txe.public_id
 s.close()
 
 # ---- health reflects the real data ----
@@ -123,6 +135,15 @@ ok("route returns a ✓ checklist", isinstance(r.get("checklist"), list) and len
 ps = r["selected"][0].get("predicted_success", {})
 ok("route predicts a success probability from real history (0<p<=1)",
    0 < ps.get("probability", 0) <= 1 and any("completion" in f for f in ps.get("factors", [])))
+
+# ---- finding 4: /solve returns a PUBLIC plan with no internal ORM caches ----
+# select_plan embeds request-scoped _specs/_reputation (ORM SellerSpec objects) only for
+# /route (opt-in). Any other boundary — /solve here — must never serialize them.
+sol = c.post("/solve", headers=BT, json={"min_vram": 8, "hours": 1, "redundancy": 1}).json()
+ok("/solve returns a placement plan over verified inventory",
+   isinstance(sol.get("selected"), list) and len(sol["selected"]) == 1)
+ok("/solve never leaks the internal _specs / _reputation caches (ORM objects)",
+   "_specs" not in sol and "_reputation" not in sol)
 
 # ---- seller trust score ----
 ts = c.get(f"/sellers/{spec_pub}/trust").json()
@@ -153,6 +174,16 @@ ok("timeline: a failed tx explains why (buyer sees the safe mapped message)",
    and tlf["why_failed"] == mi.explain_failure("JOB_FAILED"))
 ok("timeline: the buyer NEVER sees the raw operational failure reason",
    RAW_FAIL not in json.dumps(tlf))
+
+# finding 3: AUTHORIZATION_EXPIRED is a terminal failure too — it must be sanitized and
+# get a why_failed line (it was missing from TX_FAILED, so why_failed was silently None).
+RAW_EXPIRED = "stripe auth voided after 7 days uncaptured"
+tle = c.get(f"/payments/{tx_pub_expired}/timeline", headers=BT).json()
+ok("timeline: AUTHORIZATION_EXPIRED is explained for the buyer (why_failed populated)",
+   tle["status"] == "AUTHORIZATION_EXPIRED"
+   and tle["why_failed"] == mi.explain_failure("AUTHORIZATION_EXPIRED"))
+ok("timeline: the buyer never sees the raw AUTHORIZATION_EXPIRED operational reason",
+   RAW_EXPIRED not in json.dumps(tle))
 
 # a stranger cannot read someone else's timeline
 c.post("/register_user", json={"username": "mk_stranger", "password": "pw-correct-horse-1"})

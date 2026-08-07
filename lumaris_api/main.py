@@ -2817,9 +2817,10 @@ def route_explain(data: RouteModel, db: Session = Depends(get_db)):
     history shows the honest verified-node prior, never a fabricated stat."""
     import marketplace_insight as mi
     intent = {k: v for k, v in data.model_dump().items() if v is not None}
-    plan = select_plan(db, intent)
+    plan = select_plan(db, intent, _with_caches=True)
     # Reuse the specs + reputation already loaded/computed by select_plan — no per-item
     # spec fetch and no reputation recompute for selected + alternatives (query explosion).
+    # /route is the ONLY opt-in caller of the caches, and pops them here before responding.
     specs = plan.pop("_specs", {})
     rep_cache = plan.pop("_reputation", {})
 
