@@ -31,7 +31,8 @@ from db import (post, DEBIT, CREDIT, EXTERNAL_PAYMENTS, PLATFORM_REVENUE,
                 PaymentOperation, StripeWebhookEvent, Settlement,
                 SellerSpec, Booking, User, spec_is_live, try_reserve_unit,
                 release_unit, create_task, get_user_by_id, update)
-from pricing import PricingConfig, price_per_hour_to_minor, estimate, settle, refund_split
+from pricing import (PricingConfig, PricingError, price_per_hour_to_minor, estimate,
+                     settle, refund_split)
 from stripe_gateway import get_gateway, StripeError
 import observability as _obs
 
@@ -299,10 +300,15 @@ def _spec_price_minor(spec: SellerSpec, currency: str) -> int:
 
 def quote(db, spec: SellerSpec, estimated_seconds: int,
           cfg: PricingConfig = None) -> dict:
-    """Server-side quote. Returns the snapshot + estimate; no Stripe call, no state."""
-    cfg = cfg or PricingConfig()
-    snap = cfg.snapshot(_spec_price_minor(spec, cfg.currency))
-    est = estimate(snap, estimated_seconds)
+    """Server-side quote. Returns the snapshot + estimate; no Stripe call, no state.
+    Invalid pricing config or an amount over the absolute ceiling surfaces as a
+    TransactionError (a 4xx at the endpoint) — never a 500, and never a booking."""
+    try:
+        cfg = cfg or PricingConfig()
+        snap = cfg.snapshot(_spec_price_minor(spec, cfg.currency))
+        est = estimate(snap, estimated_seconds)
+    except PricingError as e:
+        raise TransactionError(str(e))
     return {"snapshot": snap, **est}
 
 

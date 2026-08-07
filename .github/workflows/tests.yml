@@ -26,6 +26,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: money-safety guard (no live Stripe key / live-money switch in CI)
+        run: python scripts/ci_guard_no_live.py
       - run: pip install -r lumaris_api/requirements.txt
       - name: smoke
         working-directory: lumaris_api
@@ -36,6 +38,9 @@ jobs:
       - name: stripe connect (offline, fake gateway)
         working-directory: lumaris_api
         run: python stripe_test.py
+      - name: pricing (config validation + absolute charge ceiling)
+        working-directory: lumaris_api
+        run: python pricing_test.py
       - name: payout routing (provider-neutral, offline)
         working-directory: lumaris_api
         run: python payout_test.py
@@ -124,6 +129,15 @@ jobs:
         #     (without it, every gunicorn worker runs its own reaper)
         #   * 50 threads racing one wallet -> exactly the right number win
         run: python postgres_test.py
+
+      - name: ledger audit — integrity + booking/payout reconciliation (real Postgres ledger)
+        working-directory: lumaris_api
+        env:
+          DATABASE_URL: postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/petabyte_test
+        # Audits the ledger the suite just built on Postgres: every tx balances, the ledger
+        # sums to zero, and captures/transfers reconcile with bookings/payouts. Fails CI on
+        # any financial drift.
+        run: python ../scripts/audit_ledger.py
 
   config:
     # GitHub-config source of truth: manifest freshness, the validator (defaults,
@@ -271,7 +285,12 @@ jobs:
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
-        run: python stripe_integration_test.py
+        # Guard FIRST, in the same step that holds the keys: abort before any Stripe call if
+        # a LIVE key or live-money switch slipped into the environment. (The test itself also
+        # refuses any non-sk_test_ key; this is defence in depth for #46/#47.)
+        run: |
+          python ../scripts/ci_guard_no_live.py
+          python stripe_integration_test.py
 
   email-integration:
     # Sends a REAL transactional email via the Mailgun HTTP API to prove end-to-end

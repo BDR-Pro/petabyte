@@ -4091,7 +4091,10 @@ def payments_quote(data: QuoteModel, user: dict = Depends(get_current_user),
     """Server-side quote. The browser sends only a GPU id + desired seconds; every
     amount is computed here from authoritative values."""
     spec = _spec_or_404(db, data.spec_id)
-    q = _sc.quote(db, spec, data.estimated_seconds)
+    try:
+        q = _sc.quote(db, spec, data.estimated_seconds)
+    except _sc.TransactionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     ready = _sc.seller_payout_ready(db, spec.user_id)
     return {"currency": q["currency"], "price_per_hour_minor": q["price_per_hour_minor"],
             "estimated_seconds": q["estimated_seconds"],

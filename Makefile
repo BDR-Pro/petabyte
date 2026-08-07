@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile payout-test payout-coverage email-test email-integration stripe-integration local-e2e test test-postgres install verify
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e test test-postgres install verify
 
 help:
 	@echo "Petabyte make targets:"
@@ -18,6 +18,7 @@ help:
 	@echo "  make email-integration  Send a REAL Mailgun email (needs MAILGUN_API_KEY; skips otherwise)"
 	@echo "  make local-e2e       Run the whole platform locally + a buyer/seller/admin flow (offline)"
 	@echo "  make reconcile       Reconcile internal ledger + transactions vs Stripe (test mode)"
+	@echo "  make audit-ledger    Ledger integrity + booking/payout cross-checks (read-only; fails on drift)"
 	@echo "  make payout-test     Run the provider-neutral global payout routing suite"
 	@echo "  make payout-coverage Print the honest seller-payout country coverage (fails <100)"
 	@echo "  make test            Run smoke + adversarial + stripe + payout + gateway suites (SQLite)"
@@ -69,6 +70,11 @@ email-integration:
 # Financial reconciliation: internal ledger + ComputeTransactions vs Stripe (test mode).
 reconcile:
 	cd $(API) && python3 reconcile.py
+
+# Ledger integrity + booking/payout cross-checks. Read-only; exits non-zero on any drift,
+# so it can gate a release. Point DATABASE_URL at the DB you want to audit.
+audit-ledger:
+	python3 scripts/audit_ledger.py
 
 # Provider-neutral payout routing/aggregation suite (offline, deterministic).
 payout-test:
