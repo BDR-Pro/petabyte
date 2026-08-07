@@ -21,6 +21,7 @@ import httpx
 import crypto
 from notebook import run_notebook_code
 from vm import launch_vm_task
+import agent_telemetry as _tel
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 
@@ -59,10 +60,15 @@ def heartbeat_loop():
             if r.status_code == 200:
                 _platform_idle["enabled"] = bool(r.json().get("idle_fallback"))
                 logging.debug("heartbeat ok")
+                _tel.event(_tel.EVENTS.HEARTBEAT, message="heartbeat ok", status_code=200)
             else:
                 logging.warning(f"heartbeat {r.status_code}: {r.text[:200]}")
+                _tel.event(_tel.EVENTS.HEARTBEAT_MISSED, message="heartbeat non-200",
+                           status_code=r.status_code)
         except Exception as e:                          # noqa: BLE001
             logging.error(f"heartbeat error: {e}")
+            _tel.event(_tel.EVENTS.HEARTBEAT_MISSED, message="heartbeat error",
+                       reason=str(e)[:120])
         time.sleep(HEARTBEAT_S)
 
 
@@ -527,22 +533,39 @@ def job_loop():
                 logging.info(f"claimed task {task.get('task_id')} ({task.get('task_type')})")
                 stop_idle_miner()   # PAID WORK PREEMPTS: free the GPU first
                 tt = task.get("task_type")
-                if tt == "notebook":
-                    _run_notebook(task)
-                elif tt == "test":
-                    _run_test(task)
-                elif tt == "template":
-                    _run_template(task)
-                elif tt == "benchmark":
-                    _run_benchmark(task)
-                elif tt == "render":
-                    _run_render(task)
-                elif tt == "transcode":
-                    _run_transcode(task)
-                elif tt == "stitch":
-                    _run_stitch(task)
-                else:
-                    _run_vm(task)
+                # Join the SAME trace that started on the platform: the job envelope carries
+                # the W3C trace context (added by the API when the job is dispatched).
+                carrier = task.get("trace_context") or {}
+                _tel.bind(job_id=task.get("task_id"), transaction_id=task.get("transaction_id"))
+                _tel.event(_tel.EVENTS.JOB_RECEIVED, message="job claimed",
+                           task_type=tt, job_id=task.get("task_id"))
+                with _tel.span("gpu.job.execute", carrier=carrier, task_type=str(tt)):
+                    _tel.event(_tel.EVENTS.JOB_EXECUTION_STARTED, message="execution started",
+                               task_type=tt)
+                    try:
+                        if tt == "notebook":
+                            _run_notebook(task)
+                        elif tt == "test":
+                            _run_test(task)
+                        elif tt == "template":
+                            _run_template(task)
+                        elif tt == "benchmark":
+                            _run_benchmark(task)
+                        elif tt == "render":
+                            _run_render(task)
+                        elif tt == "transcode":
+                            _run_transcode(task)
+                        elif tt == "stitch":
+                            _run_stitch(task)
+                        else:
+                            _run_vm(task)
+                        _tel.event(_tel.EVENTS.JOB_EXECUTION_COMPLETED,
+                                   message="execution completed", task_type=tt)
+                    except Exception as _je:             # noqa: BLE001
+                        _tel.event(_tel.EVENTS.JOB_EXECUTION_FAILED,
+                                   message="execution failed", task_type=tt,
+                                   reason=str(_je)[:200])
+                        raise
                 continue  # immediately poll again after finishing
             else:
                 logging.warning(f"/jobs/next {r.status_code}: {r.text[:200]}")
@@ -552,6 +575,9 @@ def job_loop():
 
 
 def run_agent():
+    # Telemetry first — degrade-safe: if the collector is unreachable the agent still runs.
+    _tel.init(agent_id=SPEC_ID, seller_id=os.getenv("PROVIDER"))
+    _tel.event(_tel.EVENTS.STARTUP, message="agent started", api_url=API_URL, spec_id=SPEC_ID)
     logging.info(f"agent -> {API_URL} (spec {SPEC_ID})")
     threading.Thread(target=heartbeat_loop, daemon=True).start()
     job_loop()

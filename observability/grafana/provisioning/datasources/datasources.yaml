@@ -1,0 +1,92 @@
+# Grafana datasource provisioning for Petabyte.
+# -----------------------------------------------------------------------------
+# URLs and credentials come from environment variables rendered at deploy time.
+# NEVER hardcode credentials here. Auth to the backends is via ${GRAFANA_*}
+# secrets injected into the Grafana process environment. All backends live on the
+# private network / WireGuard and are fronted by TLS — nothing is public.
+apiVersion: 1
+
+# Remove stale datasources managed by this file on startup.
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+  - name: Loki
+    orgId: 1
+  - name: Tempo
+    orgId: 1
+
+datasources:
+  # --------------------------------------------------------------------------
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    # Internal compose network, unauthenticated — no auth header.
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      httpMethod: POST
+      manageAlerts: false
+      prometheusType: Prometheus
+      timeInterval: 15s
+      # Correlate metrics -> traces via exemplars carrying trace_id.
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+    editable: false
+
+  # --------------------------------------------------------------------------
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    # Internal compose network, unauthenticated — no auth header.
+    url: http://loki:3100
+    jsonData:
+      # Extract trace_id from the JSON log body and link to Tempo. Business ids
+      # (transaction_id, job_id, ...) live in the log BODY, not as Loki labels.
+      derivedFields:
+        - name: trace_id
+          # Matches "trace_id":"<hex>" in the structured JSON log line.
+          matcherRegex: '"trace_id"\s*:\s*"([a-fA-F0-9]+)"'
+          url: "${__value.raw}"
+          datasourceUid: tempo
+          urlDisplayLabel: "View trace"
+      maxLines: 2000
+    editable: false
+
+  # --------------------------------------------------------------------------
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    # Internal compose network, unauthenticated — no auth header.
+    url: http://tempo:3200
+    jsonData:
+      # Tempo -> Loki: jump from a trace to its correlated logs.
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: "-5m"
+        spanEndTimeShift: "5m"
+        filterByTraceID: true
+        filterBySpanID: false
+        # Map resource attributes to Loki labels for a scoped log query.
+        tags:
+          - key: service.name
+            value: service
+          - key: deployment.environment
+            value: environment
+        customQuery: true
+        query: '{service=~"petabyte-.*"} | json | trace_id="$${__trace.traceId}"'
+      # Tempo -> Prometheus service-graph / span metrics.
+      tracesToMetrics:
+        datasourceUid: prometheus
+        spanStartTimeShift: "-5m"
+        spanEndTimeShift: "5m"
+      serviceMap:
+        datasourceUid: prometheus
+      nodeGraph:
+        enabled: true
+      search:
+        hide: false
+    editable: false

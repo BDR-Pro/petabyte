@@ -1,0 +1,228 @@
+# =============================================================================
+# Petabyte OpenTelemetry Collector configuration
+# -----------------------------------------------------------------------------
+# The app (lumaris_api / lumaris_agent) exports OTLP traces + logs to THIS
+# collector; the collector fans out to Tempo (traces), Loki (logs) and
+# Prometheus (metrics via remote_write / scrape). Prometheus METRICS are scraped
+# directly from the services' /internal/metrics endpoint (see prometheus.yml) —
+# they do NOT flow through this collector.
+#
+# SECURITY (non-negotiable):
+#   * OTLP ingestion MUST NOT be publicly reachable. Bind only to the private
+#     network / WireGuard interface, terminate TLS, and require a bearer token.
+#     The placeholder auth below is enabled via env; never run this open.
+#   * Never hardcode credentials here — everything sensitive comes from env vars
+#     rendered at deploy time (${ENV}) and injected from the secret store.
+# =============================================================================
+
+extensions:
+  # Bearer-token auth for OTLP ingestion. Clients send
+  # OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer <token>".
+  bearertokenauth/server:
+    scheme: Bearer
+    token: "${env:OTLP_INGEST_TOKEN}"
+  # Bearer-token auth used when THIS collector exports onward (Tempo/Loki).
+  bearertokenauth/tempo:
+    scheme: Bearer
+    token: "${env:TEMPO_EXPORT_TOKEN}"
+  bearertokenauth/loki:
+    scheme: Bearer
+    token: "${env:LOKI_EXPORT_TOKEN}"
+  health_check:
+    endpoint: "127.0.0.1:13133"
+  # zpages for local debugging only — bound to loopback, never exposed.
+  zpages:
+    endpoint: "127.0.0.1:55679"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        # Bind to the private interface only; do NOT use 0.0.0.0 on a public host.
+        endpoint: "${env:OTLP_BIND_HOST}:4317"
+        max_recv_msg_size_mib: 16
+        auth:
+          authenticator: bearertokenauth/server
+        tls:
+          cert_file: "${env:OTLP_TLS_CERT_FILE}"
+          key_file: "${env:OTLP_TLS_KEY_FILE}"
+      http:
+        endpoint: "${env:OTLP_BIND_HOST}:4318"
+        auth:
+          authenticator: bearertokenauth/server
+        tls:
+          cert_file: "${env:OTLP_TLS_CERT_FILE}"
+          key_file: "${env:OTLP_TLS_KEY_FILE}"
+
+processors:
+  # memory_limiter MUST be first in every pipeline to shed load before OOM.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
+  batch:
+    timeout: 2s
+    send_batch_size: 512
+    send_batch_max_size: 1024
+
+  # Attach/normalise resource attributes so Loki/Tempo/Prometheus agree on
+  # service.name and deployment.environment (the canonical Petabyte labels).
+  resourcedetection:
+    detectors: [env, system]
+    timeout: 2s
+    override: false
+
+  resource:
+    attributes:
+      - key: service.namespace
+        value: petabyte
+        action: upsert
+      - key: deployment.environment
+        value: "${env:DEPLOYMENT_ENVIRONMENT}"
+        action: insert
+
+  # Tail sampling: KEEP 100% of (a) error traces, (b) traces carrying a
+  # payment.mode span attribute, and (c) traces carrying a run_id span
+  # attribute (financial + job-execution flows are always retained). Everything
+  # else is probabilistically sampled at a low rate to control cost.
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 100000
+    expected_new_traces_per_sec: 500
+    policies:
+      - name: keep-all-errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: keep-payment-traces
+        type: string_attribute
+        string_attribute:
+          key: payment.mode
+          values: [".+"]
+          enabled_regex_matching: true
+          invert_match: false
+      - name: keep-run-id-traces
+        type: string_attribute
+        string_attribute:
+          key: run_id
+          values: [".+"]
+          enabled_regex_matching: true
+          invert_match: false
+      - name: baseline-probabilistic
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+exporters:
+  # --- Metrics ---------------------------------------------------------------
+  # (1) Local Prometheus scrape target for any metrics that DO transit the
+  #     collector; resource attrs become the target_info series (service_version
+  #     etc.) used by dashboards.
+  prometheus:
+    endpoint: "127.0.0.1:9464"
+    namespace: ""
+    send_timestamps: true
+    resource_to_telemetry_conversion:
+      enabled: true
+    enable_open_metrics: true
+  # (2) remote_write to the central Prometheus/Mimir. basic_auth from env.
+  prometheusremotewrite:
+    endpoint: "${env:PROMETHEUS_REMOTE_WRITE_URL}"
+    tls:
+      insecure: false
+    auth:
+      authenticator: bearertokenauth/tempo
+    resource_to_telemetry_conversion:
+      enabled: true
+    remote_write_queue:
+      enabled: true
+      queue_size: 10000
+      num_consumers: 5
+    timeout: 10s
+
+  # --- Traces ----------------------------------------------------------------
+  otlp/tempo:
+    endpoint: "${env:TEMPO_URL}"
+    tls:
+      insecure: false
+    auth:
+      authenticator: bearertokenauth/tempo
+    timeout: 10s
+    sending_queue:
+      enabled: true
+      queue_size: 5000
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  # --- Logs ------------------------------------------------------------------
+  loki:
+    endpoint: "${env:LOKI_URL}"
+    tls:
+      insecure: false
+    auth:
+      authenticator: bearertokenauth/loki
+    default_labels_enabled:
+      # Loki LABELS are bounded on purpose. High-cardinality ids (transaction_id,
+      # job_id, trace_id, ...) stay in the JSON log BODY, never as labels.
+      exporter: false
+      job: true
+      instance: true
+      level: true
+    timeout: 10s
+    sending_queue:
+      enabled: true
+      queue_size: 5000
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  # NOTE (sentry): error-grade spans/logs are also forwarded to Sentry for
+  # alerting/triage. The upstream Sentry exporter is not a core component; deploy
+  # it as a contrib build with SENTRY_DSN from the secret store, e.g.:
+  #   sentry:
+  #     dsn: "${env:SENTRY_DSN}"
+  #     environment: "${env:DEPLOYMENT_ENVIRONMENT}"
+  # It is intentionally left commented so the core config validates on any build.
+
+  debug:
+    verbosity: normal
+
+service:
+  extensions:
+    - bearertokenauth/server
+    - bearertokenauth/tempo
+    - bearertokenauth/loki
+    - health_check
+    - zpages
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: detailed
+      # `address` was deprecated (collector v0.111) and REMOVED (v0.123). Use the
+      # supported OpenTelemetry-SDK `readers:` syntax to expose internal metrics.
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, resource, tail_sampling, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, resource, batch]
+      exporters: [prometheus, prometheusremotewrite]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, resource, batch]
+      exporters: [loki]

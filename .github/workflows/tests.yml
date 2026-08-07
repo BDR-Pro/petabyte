@@ -12,6 +12,11 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: the whole suite only needs to read the repo. No job pushes, comments,
+# or mutates GitHub state — checkouts below also drop the persisted token.
+permissions:
+  contents: read
+
 jobs:
   sqlite:
     name: sqlite (fast signal)
@@ -52,6 +57,9 @@ jobs:
       - name: quorum verification (redundant re-execution)
         working-directory: lumaris_api
         run: python quorum_test.py
+      - name: marketplace intelligence (health/routing/trust/timeline)
+        working-directory: lumaris_api
+        run: python marketplace_test.py
       - name: tunnel (NAT traversal + failover)
         working-directory: lumaris_gateway
         run: python tunnel_test.py
@@ -116,6 +124,59 @@ jobs:
         #     (without it, every gunicorn worker runs its own reaper)
         #   * 50 threads racing one wallet -> exactly the right number win
         run: python postgres_test.py
+
+  config:
+    # GitHub-config source of truth: manifest freshness, the validator (defaults,
+    # formats, test/live separation, fail-closed secrets), the deploy-env generator's
+    # scope isolation (a GPU node NEVER receives platform secrets), drift, and docs
+    # freshness. All offline — no DB, no network.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r lumaris_api/requirements.txt
+      - name: config toolchain tests
+        working-directory: lumaris_api
+        run: python config_test.py
+      - name: ENV_VARS bundle tests (parser / secret-guard / precedence / generated env)
+        working-directory: lumaris_api
+        run: python env_vars_test.py
+      - name: observability (correlation / redaction / cardinality / degrade-safe)
+        working-directory: lumaris_api
+        run: python observability_test.py
+      - name: agent telemetry (span exception-safety / redaction / trace-join / degrade)
+        working-directory: lumaris_agent
+        run: python agent_telemetry_test.py
+      - name: observability smoke (local tier + OTel propagation; remote skipped offline)
+        run: python scripts/observability_smoke_test.py
+      - name: dashboards + alerts + collector configs are valid JSON/YAML
+        run: |
+          python - <<'PY'
+          import json, glob, yaml, sys
+          bad = 0
+          for f in glob.glob("observability/grafana/dashboards/*.json"):
+              try: json.load(open(f))
+              except Exception as e: print(f"::error::{f}: {e}"); bad += 1
+          for f in glob.glob("observability/**/*.y*ml", recursive=True):
+              try: list(yaml.safe_load_all(open(f)))
+              except Exception as e: print(f"::error::{f}: {e}"); bad += 1
+          sys.exit(1 if bad else 0)
+          PY
+      - name: configuration drift (manifest / code / workflows / template.env in sync)
+        run: python scripts/check_configuration_drift.py
+      - name: manifest is up to date (re-generate → no diff)
+        run: |
+          python scripts/build_config_manifest.py
+          git diff --exit-code config/github_configuration_manifest.yaml \
+            || { echo "::error::manifest is stale — run scripts/build_config_manifest.py and commit"; exit 1; }
+      - name: docs are up to date (re-generate → no diff)
+        run: |
+          python scripts/generate_config_docs.py
+          git diff --exit-code docs/GITHUB_CONFIGURATION_REFERENCE.md docs/GITHUB_MANUAL_SETUP_CHECKLIST.md \
+            || { echo "::error::config docs are stale — run scripts/generate_config_docs.py and commit"; exit 1; }
 
   frontend:
     # A broken <script> still returns HTTP 200. Python tests cannot see it.

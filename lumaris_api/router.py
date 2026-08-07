@@ -39,7 +39,7 @@ def gather_candidates(db, intent: dict):
         if intent.get("min_reputation") and rep["score"] < intent["min_reputation"]:
             continue
         jobs_total = (spec.jobs_completed or 0) + (spec.jobs_failed or 0)
-        out.append({"spec": spec, "rep": rep["score"],
+        out.append({"spec": spec, "rep": rep["score"], "rep_full": rep,
                     "price": spec.price_per_hour,
                     "tokens_sec": spec.benchmark_tokens_sec or 0.0,
                     "success_rate": (round(100.0 * (spec.jobs_completed or 0) / jobs_total, 1)
@@ -161,4 +161,8 @@ def select_plan(db, intent: dict):
         "selected_spec_ids": selected_ids,
         "note": "Candidates are our own verified nodes; the scorer is provider-"
                 "agnostic so external-cloud adapters can contribute candidates later.",
+        # Internal request-scoped caches so /route can annotate selected + alternatives
+        # WITHOUT re-fetching specs or recomputing reputation (popped before responding).
+        "_specs": {c["spec"].id: c["spec"] for c in ranked},
+        "_reputation": {c["spec"].id: c["rep_full"] for c in ranked},
     }

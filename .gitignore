@@ -15,6 +15,12 @@ env/
 !*.env.example
 !template.env
 
+# Deploy env files generated at deploy time from GitHub Variables + Secrets.
+# These contain credentials — never commit them, never upload them as artifacts.
+*.generated
+.env.platform.generated
+.env.gpu.generated
+
 # Builds / artifacts
 build/
 dist/

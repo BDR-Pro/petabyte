@@ -1,0 +1,518 @@
+# =============================================================================
+# Petabyte Prometheus recording + alerting rules
+# -----------------------------------------------------------------------------
+# Metric names match exactly what the app emits (see lumaris_api/observability.py).
+# GPU metrics come from the NVIDIA DCGM exporter; infra from node/postgres/redis
+# exporters. Financial data is ALWAYS split by payment_mode — never mix live and
+# test in one expression.
+#
+# Every alert carries: labels {severity, service} and annotations
+# {summary, description, impact, dashboard, runbook, first_check}.
+# =============================================================================
+
+groups:
+  # ===========================================================================
+  # Recording rules
+  # ===========================================================================
+  - name: petabyte.recording
+    interval: 30s
+    rules:
+      - record: petabyte:http_error_ratio
+        expr: |
+          sum by (environment) (
+            rate(petabyte_http_requests_total{status_class="5xx"}[5m])
+          )
+          /
+          clamp_min(
+            sum by (environment) (rate(petabyte_http_requests_total[5m])),
+            1e-9
+          )
+
+      - record: petabyte:http_request_duration_seconds:p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, route, environment) (
+              rate(petabyte_http_request_duration_seconds_bucket[5m])
+            )
+          )
+
+      # Placeholder for oldest-queued age. The app does not directly export a
+      # per-item age histogram; when a petabyte_queue_oldest_timestamp_seconds
+      # gauge (unix ts of the oldest queued item) is exported this becomes real.
+      # Until then it evaluates to 0 (vector(0)) so panels/alerts wire up cleanly.
+      - record: petabyte:queue_oldest_seconds
+        expr: |
+          max by (queue, environment) (
+            (time() - petabyte_queue_oldest_timestamp_seconds)
+            or
+            (petabyte_queue_depth * 0)
+          )
+
+      - record: petabyte:job_success_ratio
+        expr: |
+          sum by (environment) (
+            rate(petabyte_jobs_total{job_status=~"completed|validated"}[30m])
+          )
+          /
+          clamp_min(
+            sum by (environment) (
+              rate(petabyte_jobs_total{job_status=~"completed|validated|failed|invalid"}[30m])
+            ),
+            1e-9
+          )
+
+      - record: petabyte:capture_failure_ratio
+        expr: |
+          sum by (payment_mode, environment) (
+            rate(petabyte_payment_captures_total{outcome="failure"}[10m])
+          )
+          /
+          clamp_min(
+            sum by (payment_mode, environment) (
+              rate(petabyte_payment_captures_total[10m])
+            ),
+            1e-9
+          )
+
+  # ===========================================================================
+  # Availability alerts
+  # ===========================================================================
+  - name: petabyte.availability
+    rules:
+      - alert: PetabyteAPIDown
+        expr: up{job="petabyte-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: petabyte-api
+        annotations:
+          summary: "Petabyte API is not scrapeable"
+          description: "Prometheus target up{job=\"petabyte-api\"} has been 0 for >2m in {{ $labels.environment }}."
+          impact: "Buyers cannot browse, quote, launch jobs, or pay. Full marketplace outage."
+          dashboard: "/d/petabyte-api/petabyte-api"
+          runbook: "docs/runbooks/API_DOWN.md"
+          first_check: "Is the gunicorn/uvicorn process up? Check the service logs and /health."
+
+      - alert: PetabyteDatabaseDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: petabyte-api
+        annotations:
+          summary: "PostgreSQL is unreachable"
+          description: "postgres_exporter reports pg_up==0 for >1m in {{ $labels.environment }}."
+          impact: "Ledger, bookings and settlement halt. No money can move safely."
+          dashboard: "/d/petabyte-infra/petabyte-infrastructure"
+          runbook: "docs/runbooks/DATABASE_DOWN.md"
+          first_check: "Can you psql to the primary? Check disk, connection count and failover state."
+
+      - alert: PetabyteRedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: petabyte-worker
+        annotations:
+          summary: "Redis is unreachable"
+          description: "redis_exporter reports redis_up==0 for >1m in {{ $labels.environment }}."
+          impact: "Job dispatch queue, locks and rate limiting fail. Jobs stop flowing."
+          dashboard: "/d/petabyte-workers/petabyte-workers-queue"
+          runbook: "docs/runbooks/REDIS_DOWN.md"
+          first_check: "Is redis-server up and accepting connections? Check maxmemory eviction."
+
+      - alert: PetabyteOtelCollectorDown
+        expr: up{job="otel-collector"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: petabyte-api
+        annotations:
+          summary: "OpenTelemetry Collector is down"
+          description: "Collector target has been down for >5m; traces/logs are not being ingested."
+          impact: "Loss of traces and structured logs. Metrics via direct scrape are unaffected."
+          dashboard: "/d/petabyte-infra/petabyte-infrastructure"
+          runbook: "docs/runbooks/COLLECTOR_DOWN.md"
+          first_check: "Check collector health_check (:13133) and its own telemetry (:8888)."
+
+      - alert: PetabytePrometheusStale
+        expr: |
+          (time() - max(prometheus_tsdb_head_max_time_seconds)) > 300
+        for: 5m
+        labels:
+          severity: warning
+          service: petabyte-api
+        annotations:
+          summary: "Prometheus is not ingesting fresh samples"
+          description: "Head max time is >5m old; scraping or the TSDB may be stalled."
+          impact: "Dashboards and alerting run on stale data; alerts may not fire."
+          dashboard: "/d/petabyte-infra/petabyte-infrastructure"
+          runbook: "docs/runbooks/PROMETHEUS_STALE.md"
+          first_check: "Check Prometheus targets page and TSDB status / disk."
+
+      - alert: PetabyteLokiDown
+        expr: up{job="loki"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: petabyte-api
+        annotations:
+          summary: "Loki is down"
+          description: "Loki target has been down for >5m; log queries will fail."
+          impact: "Transaction-trace and log-based debugging are unavailable."
+          dashboard: "/d/petabyte-infra/petabyte-infrastructure"
+          runbook: "docs/runbooks/LOKI_DOWN.md"
+          first_check: "Check the Loki process, ingesters and object storage backend."
+
+      - alert: PetabyteTempoDown
+        expr: up{job="tempo"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: petabyte-api
+        annotations:
+          summary: "Tempo is down"
+          description: "Tempo target has been down for >5m; trace lookups will fail."
+          impact: "End-to-end trace navigation from logs is unavailable."
+          dashboard: "/d/petabyte-infra/petabyte-infrastructure"
+          runbook: "docs/runbooks/TEMPO_DOWN.md"
+          first_check: "Check the Tempo process and its object storage backend."
+
+      - alert: PetabyteTelemetryExportFailing
+        expr: |
+          sum by (exporter, environment) (
+            rate(petabyte_telemetry_export_failures_total[10m])
+          ) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: petabyte-api
+        annotations:
+          summary: "Telemetry export failures ({{ $labels.exporter }})"
+          description: "petabyte_telemetry_export_failures_total for {{ $labels.exporter }} is increasing in {{ $labels.environment }}."
+          impact: "Partial telemetry loss; observability degraded (app itself unaffected — degrade mode)."
+          dashboard: "/d/petabyte-infra/petabyte-infrastructure"
+          runbook: "docs/runbooks/TELEMETRY_EXPORT_FAILURE.md"
+          first_check: "Check collector reachability and OTLP auth headers."
+
+  # ===========================================================================
+  # API health alerts
+  # ===========================================================================
+  - name: petabyte.api
+    rules:
+      - alert: PetabyteAPIHighErrorRate
+        expr: petabyte:http_error_ratio > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: petabyte-api
+        annotations:
+          summary: "API 5xx error ratio above 5%"
+          description: "petabyte:http_error_ratio is {{ $value | humanizePercentage }} in {{ $labels.environment }} (>5% for 10m)."
+          impact: "Users are hitting server errors; conversions and job launches are failing."
+          dashboard: "/d/petabyte-api/petabyte-api"
+          runbook: "docs/runbooks/API_HIGH_ERROR_RATE.md"
+          first_check: "Which route dominates? Check recent deploys and exception logs."
+
+      - alert: PetabyteAPIP95LatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, environment) (
+              rate(petabyte_http_request_duration_seconds_bucket[5m])
+            )
+          ) > 1.5
+        for: 10m
+        labels:
+          severity: warning
+          service: petabyte-api
+        annotations:
+          summary: "API p95 latency above 1.5s"
+          description: "p95 request duration is {{ $value }}s in {{ $labels.environment }} (>1.5s for 10m)."
+          impact: "Slow UX; timeouts and abandoned checkouts likely."
+          dashboard: "/d/petabyte-api/petabyte-api"
+          runbook: "docs/runbooks/API_LATENCY_HIGH.md"
+          first_check: "Check DB latency, in-flight requests, and downstream Stripe calls."
+
+      - alert: PetabyteAuthFailureSpike
+        expr: |
+          sum by (reason, environment) (rate(petabyte_auth_failures_total[5m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: petabyte-api
+        annotations:
+          summary: "Authentication failure spike ({{ $labels.reason }})"
+          description: "Auth failures for reason={{ $labels.reason }} exceed 5/s for 10m in {{ $labels.environment }}."
+          impact: "Possible credential stuffing / brute force, or a broken auth dependency."
+          dashboard: "/d/petabyte-api/petabyte-api"
+          runbook: "docs/runbooks/AUTH_FAILURE_SPIKE.md"
+          first_check: "Are failures from few IPs (attack) or broad (broken auth path)?"
+
+  # ===========================================================================
+  # Workers / queue alerts
+  # ===========================================================================
+  - name: petabyte.workers
+    rules:
+      - alert: PetabyteQueueAgeHigh
+        expr: petabyte:queue_oldest_seconds > 300
+        for: 10m
+        labels:
+          severity: warning
+          service: petabyte-worker
+        annotations:
+          summary: "Oldest queued item older than 5 minutes ({{ $labels.queue }})"
+          description: "petabyte:queue_oldest_seconds for queue={{ $labels.queue }} is {{ $value }}s in {{ $labels.environment }}."
+          impact: "Jobs are backing up; buyers wait longer for dispatch."
+          dashboard: "/d/petabyte-workers/petabyte-workers-queue"
+          runbook: "docs/runbooks/QUEUE_BACKLOG.md"
+          first_check: "Are workers alive and consuming? Check petabyte_agents_online and worker logs."
+
+      - alert: PetabyteQueueDepthHigh
+        expr: |
+          sum by (queue, environment) (petabyte_queue_depth) > 500
+        for: 10m
+        labels:
+          severity: warning
+          service: petabyte-worker
+        annotations:
+          summary: "Queue depth above 500 ({{ $labels.queue }})"
+          description: "petabyte_queue_depth for queue={{ $labels.queue }} is {{ $value }} in {{ $labels.environment }}."
+          impact: "Backlog growing faster than it drains; dispatch latency rising."
+          dashboard: "/d/petabyte-workers/petabyte-workers-queue"
+          runbook: "docs/runbooks/QUEUE_BACKLOG.md"
+          first_check: "Compare enqueue vs dequeue rate; scale workers if enqueue dominates."
+
+      - alert: PetabyteJobFailureSpike
+        expr: |
+          sum by (environment) (rate(petabyte_jobs_total{job_status="failed"}[15m]))
+          /
+          clamp_min(sum by (environment) (rate(petabyte_jobs_total[15m])), 1e-9)
+          > 0.20
+        for: 15m
+        labels:
+          severity: critical
+          service: petabyte-gpu-executor
+        annotations:
+          summary: "Job failure ratio above 20%"
+          description: "More than 20% of jobs are failing in {{ $labels.environment }} over 15m."
+          impact: "Buyers not getting results; refunds and churn risk."
+          dashboard: "/d/petabyte-executive/petabyte-executive-marketplace"
+          runbook: "docs/runbooks/JOB_FAILURE_SPIKE.md"
+          first_check: "Group by gpu_class/template; check GPU XID errors and executor logs."
+
+      - alert: PetabyteReservationConflictsHigh
+        expr: |
+          sum by (environment) (rate(petabyte_reservation_conflicts_total[10m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: petabyte-scheduler
+        annotations:
+          summary: "GPU reservation conflicts elevated"
+          description: "Reservation conflicts exceed 1/s for 10m in {{ $labels.environment }}."
+          impact: "Router racing on scarce GPUs; failed launches and retries."
+          dashboard: "/d/petabyte-workers/petabyte-workers-queue"
+          runbook: "docs/runbooks/RESERVATION_CONFLICTS.md"
+          first_check: "Is available supply low (petabyte_gpus_available)? Check locking path."
+
+      - alert: PetabyteResultValidationFailureSpike
+        expr: |
+          sum by (gpu_class, environment) (rate(petabyte_jobs_total{job_status="invalid"}[15m])) > 0.1
+        for: 15m
+        labels:
+          severity: critical
+          service: petabyte-result-validator
+        annotations:
+          summary: "Result validation failure spike ({{ $labels.gpu_class }})"
+          description: "Invalid (validation-failed) jobs rising for gpu_class={{ $labels.gpu_class }} in {{ $labels.environment }}."
+          impact: "Sellers may be returning bad results; trust and payouts at risk."
+          dashboard: "/d/petabyte-seller-fleet/petabyte-seller-agent-fleet"
+          runbook: "docs/runbooks/RESULT_VALIDATION_FAILURE.md"
+          first_check: "Is one seller/gpu_id dominating? Check result.validation.failed logs."
+
+  # ===========================================================================
+  # Payments / settlement alerts (ALWAYS split by payment_mode)
+  # ===========================================================================
+  - name: petabyte.settlement
+    rules:
+      - alert: PetabyteCaptureFailureSpike
+        expr: petabyte:capture_failure_ratio > 0.02
+        for: 10m
+        labels:
+          severity: critical
+          service: petabyte-settlement
+        annotations:
+          summary: "Payment capture failure ratio > 2% ({{ $labels.payment_mode }})"
+          description: "Capture failures are {{ $value | humanizePercentage }} for payment_mode={{ $labels.payment_mode }} in {{ $labels.environment }}."
+          impact: "Delivered compute is not being charged; revenue leakage and stuck settlements."
+          dashboard: "/d/petabyte-settlement/petabyte-stripe-settlement"
+          runbook: "docs/runbooks/PAYMENT_CAPTURE_FAILURE.md"
+          first_check: "Check Stripe status + logs for payment_mode; is it live or test only?"
+
+      - alert: PetabyteSellerTransferFailure
+        expr: |
+          sum by (payment_mode, environment) (
+            rate(petabyte_seller_transfers_total{outcome="failure"}[15m])
+          ) > 0
+        for: 15m
+        labels:
+          severity: critical
+          service: petabyte-settlement
+        annotations:
+          summary: "Seller transfer failures ({{ $labels.payment_mode }})"
+          description: "Seller transfers are failing for payment_mode={{ $labels.payment_mode }} in {{ $labels.environment }}."
+          impact: "Sellers are not being paid; churn and reputational risk."
+          dashboard: "/d/petabyte-settlement/petabyte-stripe-settlement"
+          runbook: "docs/runbooks/SELLER_TRANSFER_FAILURE.md"
+          first_check: "Check Connect account status / requirements and Stripe transfer errors."
+
+      - alert: PetabyteWebhookInvalidSignature
+        expr: |
+          sum by (environment) (rate(petabyte_webhook_invalid_signature_total[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: petabyte-stripe-webhook
+        annotations:
+          summary: "Invalid Stripe webhook signatures"
+          description: "petabyte_webhook_invalid_signature_total is increasing in {{ $labels.environment }}."
+          impact: "Signature mismatch: wrong signing secret, or a spoofing attempt."
+          dashboard: "/d/petabyte-settlement/petabyte-stripe-settlement"
+          runbook: "docs/runbooks/WEBHOOK_INVALID_SIGNATURE.md"
+          first_check: "Verify STRIPE_WEBHOOK_SECRET matches the endpoint; check source IPs."
+
+      - alert: PetabyteReconciliationDiscrepancy
+        expr: |
+          increase(petabyte_reconciliation_discrepancies_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: petabyte-settlement
+        annotations:
+          summary: "Reconciliation discrepancy detected"
+          description: "petabyte_reconciliation_discrepancies_total increased in the last hour in {{ $labels.environment }}."
+          impact: "Internal ledger and Stripe disagree; money may be misbooked."
+          dashboard: "/d/petabyte-settlement/petabyte-stripe-settlement"
+          runbook: "docs/runbooks/RECONCILIATION_DISCREPANCY.md"
+          first_check: "Run reconcile.py; identify the divergent transaction_id in logs."
+
+      - alert: PetabyteLedgerImbalance
+        expr: |
+          increase(petabyte_ledger_imbalance_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: petabyte-settlement
+        annotations:
+          summary: "Double-entry ledger imbalance detected"
+          description: "petabyte_ledger_imbalance_total increased in {{ $labels.environment }} — debits != credits."
+          impact: "Money conservation violated. STOP settlement; this is a P1."
+          dashboard: "/d/petabyte-settlement/petabyte-stripe-settlement"
+          runbook: "docs/runbooks/LEDGER_IMBALANCE.md"
+          first_check: "Engage kill switch. Identify the broken transaction and freeze payouts."
+
+      - alert: PetabyteTestLiveModeMismatch
+        expr: |
+          sum by (environment) (
+            rate(petabyte_payment_captures_total{payment_mode="live", environment!="production"}[10m])
+          ) > 0
+          or
+          sum by (environment) (
+            rate(petabyte_payment_captures_total{payment_mode="test", environment="production"}[10m])
+          ) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: petabyte-settlement
+        annotations:
+          summary: "Stripe test/live mode mismatch"
+          description: "Live-mode captures in a non-production environment, or test-mode captures in production, in {{ $labels.environment }}."
+          impact: "Live and test money may be mixed. Investor-demo integrity and accounting at risk."
+          dashboard: "/d/petabyte-settlement/petabyte-stripe-settlement"
+          runbook: "docs/runbooks/TEST_LIVE_MODE_MISMATCH.md"
+          first_check: "Confirm STRIPE_* keys mode vs DEPLOYMENT_ENVIRONMENT; never run live keys in a demo."
+
+  # ===========================================================================
+  # Infrastructure alerts
+  # ===========================================================================
+  - name: petabyte.infra
+    rules:
+      - alert: PetabyteDBPoolExhaustion
+        expr: |
+          sum by (environment) (pg_stat_activity_count)
+          /
+          clamp_min(max by (environment) (pg_settings_max_connections), 1)
+          > 0.90
+        for: 5m
+        labels:
+          severity: critical
+          service: petabyte-api
+        annotations:
+          summary: "PostgreSQL connection pool > 90% used"
+          description: "Active connections are above 90% of max_connections in {{ $labels.environment }}."
+          impact: "New requests will be refused connections; cascading API errors."
+          dashboard: "/d/petabyte-infra/petabyte-infrastructure"
+          runbook: "docs/runbooks/DB_POOL_EXHAUSTION.md"
+          first_check: "Find idle-in-transaction sessions and long queries; check pool sizing."
+
+      - alert: PetabyteDiskHigh
+        expr: |
+          (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+                / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          service: petabyte-api
+        annotations:
+          summary: "Disk usage above 85% ({{ $labels.mountpoint }})"
+          description: "Filesystem {{ $labels.mountpoint }} on {{ $labels.instance }} is over 85% full."
+          impact: "Risk of write failures for the DB, WAL, logs and Docker layers."
+          dashboard: "/d/petabyte-infra/petabyte-infrastructure"
+          runbook: "docs/runbooks/DISK_HIGH.md"
+          first_check: "Identify the largest consumer; rotate logs / prune images / grow the volume."
+
+      - alert: PetabyteGPUTempHigh
+        expr: DCGM_FI_DEV_GPU_TEMP > 85
+        for: 5m
+        labels:
+          severity: warning
+          service: petabyte-gpu-executor
+        annotations:
+          summary: "GPU temperature above 85C ({{ $labels.gpu }})"
+          description: "DCGM_FI_DEV_GPU_TEMP on gpu={{ $labels.gpu }} host={{ $labels.Hostname }} is {{ $value }}C."
+          impact: "Thermal throttling reduces job throughput; sustained heat risks hardware."
+          dashboard: "/d/petabyte-seller-fleet/petabyte-seller-agent-fleet"
+          runbook: "docs/runbooks/GPU_TEMP_HIGH.md"
+          first_check: "Check cooling/airflow on the seller host; consider draining the node."
+
+      - alert: PetabyteGPUXidErrors
+        expr: increase(DCGM_FI_DEV_XID_ERRORS[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          service: petabyte-gpu-executor
+        annotations:
+          summary: "GPU XID errors detected ({{ $labels.gpu }})"
+          description: "DCGM_FI_DEV_XID_ERRORS increased on gpu={{ $labels.gpu }} host={{ $labels.Hostname }}."
+          impact: "GPU faults can corrupt or fail running jobs on this node."
+          dashboard: "/d/petabyte-seller-fleet/petabyte-seller-agent-fleet"
+          runbook: "docs/runbooks/GPU_XID_ERRORS.md"
+          first_check: "Correlate with failed jobs on the host; drain and reset the GPU if persistent."
+
+      - alert: PetabyteAgentHeartbeatStale
+        expr: |
+          sum by (environment) (petabyte_agents_online) == 0
+          and on (environment) (max by (environment) (petabyte_gpus_online) > 0)
+        for: 5m
+        labels:
+          severity: warning
+          service: petabyte-seller-agent
+        annotations:
+          summary: "No seller agents online despite registered GPUs"
+          description: "petabyte_agents_online is 0 while GPUs are registered in {{ $labels.environment }}."
+          impact: "Cannot dispatch jobs to sellers; effective supply is zero."
+          dashboard: "/d/petabyte-seller-fleet/petabyte-seller-agent-fleet"
+          runbook: "docs/runbooks/AGENT_HEARTBEAT_STALE.md"
+          first_check: "Check agent.heartbeat.missed logs and the websocket/control-plane endpoint."

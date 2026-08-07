@@ -5,7 +5,7 @@ from fastapi import (
 from fastapi.responses import PlainTextResponse, JSONResponse, Response, HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func
+from sqlalchemy import text, func, case, or_, distinct
 from pydantic import BaseModel, Field, field_validator
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -20,6 +20,17 @@ import secrets
 import time
 
 logger = logging.getLogger("petabyte")
+
+# Observability: structured JSON logging + redaction, optional OTel tracing, and
+# bounded-cardinality Prometheus metrics. Import-safe and degrade-safe — if the telemetry
+# libs or the collector are absent the whole thing becomes a cheap no-op and the app runs
+# unchanged (telemetry must never break payments or jobs).
+import observability as obsmod  # noqa: E402
+from observability import (  # noqa: E402
+    obs, EVENTS, bind_context, get_context, new_request_id, sanitize_incoming_request_id,
+    bounded_label,
+)
+obsmod.init_observability(obsmod.SERVICE.API)
 
 from utils import (
     gen_wg_keypair, build_client_wg_config, apply_peer_to_interface,
@@ -96,10 +107,16 @@ PAYMENTS_MODE = os.getenv("PAYMENTS_MODE", "sandbox").lower()      # sandbox|liv
 # fits both calendars. Left blank, we fall back to "we'll email you within a day".
 CAL_BOOKING_URL = os.getenv("CAL_BOOKING_URL", "").strip()
 
-# Mailchimp newsletter. Set these once from your Mailchimp account (Account -> Extras ->
-# API keys, and Audience -> Settings for the audience/list ID). The API key ends with a
-# datacenter suffix like "-us21"; we use that suffix for the API host. Left blank, the
-# newsletter form degrades to a mailto link so it still does something honest.
+# Newsletter. NEWSLETTER_PROVIDER selects the backend:
+#   mailgun   -> add the signup to the Mailgun mailing list at NEWSLETTER_LIST_ADDRESS
+#                (reuses MAILGUN_API_KEY; From/Reply-To are configured on the list in Mailgun,
+#                not here — the sending subdomain is implied by the list address).
+#   mailchimp -> legacy Mailchimp audience (MAILCHIMP_API_KEY + MAILCHIMP_AUDIENCE_ID).
+#   none/blank -> the form returns an honest "not wired up yet" message (no dead POST).
+NEWSLETTER_PROVIDER = os.getenv("NEWSLETTER_PROVIDER", "mailgun").strip().lower()
+NEWSLETTER_LIST_ADDRESS = os.getenv("NEWSLETTER_LIST_ADDRESS", "").strip()
+# Legacy Mailchimp (only used when NEWSLETTER_PROVIDER=mailchimp). The API key ends with a
+# datacenter suffix like "-us21"; we use that suffix for the API host.
 MAILCHIMP_API_KEY = os.getenv("MAILCHIMP_API_KEY", "").strip()
 MAILCHIMP_AUDIENCE_ID = os.getenv("MAILCHIMP_AUDIENCE_ID", "").strip()
 # Fallback video shown until an admin sets one in the panel (your Short's ID).
@@ -203,7 +220,21 @@ def _maintenance_cycle() -> None:
             _maintenance["holder"] = False
             return                       # another worker owns maintenance
         _maintenance["holder"] = True
+        # Ephemeral sellers: detect offline from heartbeat EXPIRY. Count the specs about to
+        # be reaped so the transition is observable (history survives the GPU going away).
+        try:
+            from db import _utcnow as _now_fn
+            _cut = _now_fn() - timedelta(seconds=HEARTBEAT_TIMEOUT_S)
+            _stale_n = db.query(SellerSpec).filter(
+                SellerSpec.status == "online", SellerSpec.last_seen < _cut).count()
+        except Exception:  # noqa: BLE001
+            _stale_n = 0
         reap_and_failover(db, HEARTBEAT_TIMEOUT_S)  # migrate live VMs off dead nodes
+        if _stale_n:
+            obsmod.inc_metric("petabyte_sellers_reaped_total", _stale_n,
+                              environment=obsmod.ENVIRONMENT)
+            obs.event(EVENTS.SELLERS_REAPED, message="stale sellers reaped offline",
+                      count=_stale_n, timeout_s=HEARTBEAT_TIMEOUT_S)
         settle_dead_specs(db)            # refund in-flight bookings on dead nodes
         meter_and_expire(db)             # auto-stop VMs whose prepaid window ended
         reprice_specs(db)                # demand-based auto-pricing for opted-in nodes
@@ -318,13 +349,31 @@ app = FastAPI(
     ],
 )
 
-# Optional error tracking — only active when SENTRY_DSN is set (see HARDENING.md).
+# Error tracking — active only when SENTRY_DSN is set and SENTRY_ENABLED != false.
+# Correlated with our traces (environment + release), PII off, and every event scrubbed
+# through the same redaction policy as our logs so no secret/card/token can leak upstream.
 _SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
-if _SENTRY_DSN:
+if _SENTRY_DSN and os.getenv("SENTRY_ENABLED", "true").strip().lower() != "false":
     try:
         import sentry_sdk
-        sentry_sdk.init(dsn=_SENTRY_DSN, traces_sample_rate=0.1,
-                        environment=os.getenv("PAYMENTS_MODE", "sandbox"))
+
+        def _sentry_scrub(evt, _hint):
+            try:
+                return obsmod.redact(evt)
+            except Exception:  # noqa: BLE001
+                return evt
+
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            environment=obsmod.ENVIRONMENT,
+            release=obsmod.RELEASE,
+            traces_sample_rate=obsmod._f("SENTRY_TRACES_SAMPLE_RATE", 0.1),
+            profiles_sample_rate=obsmod._f("SENTRY_PROFILES_SAMPLE_RATE", 0.0),
+            send_default_pii=False,
+            max_breadcrumbs=int(os.getenv("SENTRY_MAX_BREADCRUMBS", "30")),
+            before_send=_sentry_scrub,
+        )
+        sentry_sdk.set_tag("service", obsmod.SERVICE.API)
     except Exception as _e:  # noqa: BLE001
         import logging as _lg
         _lg.getLogger(__name__).warning(f"Sentry init skipped: {_e}")
@@ -350,15 +399,72 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 # can quote it and we can find the exact request. Headers are set here (not nginx)
 # so they hold no matter what fronts the app.
 # ---------------------------------------------------------------------------
+def _route_label(request: Request) -> str:
+    """Bounded route label for metrics. Prefer the matched route template, else collapse
+    id-like segments so cardinality stays bounded."""
+    route = request.scope.get("route")
+    tmpl = getattr(route, "path", None)
+    return tmpl if tmpl else obsmod.bounded_route(request.url.path)
+
+
+def _dec_in_flight():
+    obsmod.dec_metric("petabyte_http_in_flight_requests", environment=obsmod.ENVIRONMENT)
+
+
+def _safe_path(request: Request) -> str:
+    """Request path safe for logging. JSON logging escapes control chars structurally, so
+    the raw path is kept there for correlation; for plain-text logging we strip C0 control
+    chars (incl. a decoded %0A/%0D) so an attacker-controlled path can't forge a log line."""
+    p = request.url.path
+    if obsmod.LOG_FORMAT == "json":
+        return p
+    return "".join(ch for ch in p if ch >= " " and ch != "\x7f")
+
+
 @app.middleware("http")
 async def _request_context(request: Request, call_next):
-    rid = request.headers.get("X-Request-ID") or secrets.token_hex(8)
+    # Accept a caller-supplied id only after validation; otherwise mint one.
+    rid = sanitize_incoming_request_id(request.headers.get("X-Request-ID")) or new_request_id()
     request.state.request_id = rid
+    method = request.method
+    start = time.time()
+    obsmod.inc_metric("petabyte_http_in_flight_requests", environment=obsmod.ENVIRONMENT)
+    # A SERVER span parented on the incoming W3C trace context (browser/edge), so a single
+    # trace spans browser -> API -> downstream. No-op if OTel is inactive.
     try:
-        response = await call_next(request)
+        with obs.span("http.request", kind="server", carrier=dict(request.headers)):
+            bind_context(request_id=rid)
+            response = await call_next(request)
     except Exception:
-        logger.exception("unhandled error request_id=%s path=%s", rid, request.url.path)
+        _dec_in_flight()
+        obsmod.inc_metric("petabyte_http_requests_total", method=method,
+                          route=_route_label(request), status_class="5xx",
+                          environment=obsmod.ENVIRONMENT)
+        obs.event(EVENTS.UNHANDLED_EXCEPTION, level=logging.ERROR,
+                  message="unhandled error", route=_route_label(request), method=method)
+        logger.exception("unhandled error request_id=%s path=%s", rid, _safe_path(request))
         raise
+    _dec_in_flight()
+    # record request metrics with BOUNDED labels (route template / collapsed ids)
+    route = _route_label(request)
+    dur = time.time() - start
+    sc = response.status_code
+    status_class = f"{sc // 100}xx"
+    obsmod.inc_metric("petabyte_http_requests_total", method=method, route=route,
+                      status_class=status_class, environment=obsmod.ENVIRONMENT)
+    obsmod.observe_metric("petabyte_http_request_duration_seconds", dur,
+                          method=method, route=route, environment=obsmod.ENVIRONMENT)
+    # Log an event only for non-2xx or slow requests (keeps Loki volume bounded); the
+    # metric above covers the happy path. Business ids live in the context, never as labels.
+    if sc >= 400 or dur > 2.0:
+        obs.event(EVENTS.HTTP_REQUEST,
+                  level=logging.WARNING if sc >= 500 else logging.INFO,
+                  message=f"{method} {route} -> {sc}", route=route, method=method,
+                  status_code=sc, duration_ms=round(dur * 1000, 1))
+    # expose the trace id to support (safe, non-secret) for cross-referencing
+    _tid = get_context().get("trace_id")
+    if _tid:
+        response.headers["X-Trace-Id"] = _tid
     # Referral attribution: if the visitor arrived with ?ref=CODE on ANY page, remember it
     # in a cookie so it survives leaving and coming back (people rarely sign up on the first
     # click). Signup reads this as a fallback. First-touch wins: don't overwrite an existing
@@ -401,15 +507,33 @@ async def _request_context(request: Request, call_next):
 # fine for a single instance; move to Redis when we run more than one.
 # ---------------------------------------------------------------------------
 _RL_BUCKETS: dict = {}
-_RL_RULES = {           # path -> (max_FAILED_hits, window_seconds)
+_RL_RULES = {           # path -> (max_hits, window_seconds)
     "/register_user": (10, 3600),  # signup spam
     "/withdraw": (10, 3600),       # money-out probing
+    "/route": (60, 60),            # unauth, DB-backed — cap total volume per IP
 }
+# Paths where EVERY request (not just failures) consumes budget. Credential endpoints
+# count only failures (brute-force guard); an unauthenticated DB-backed endpoint like
+# /route must cap total request volume.
+_RL_COUNT_ALL = {"/route"}
 LOGIN_MAX_FAILS, LOGIN_WINDOW_S = 10, 900
 
 
 def _rl_blocked(key: str, limit: int, window: int):
-    """True (+retry secs) if this key has burned its failure budget."""
+    """True (+retry secs) if this key has burned its failure budget.
+
+    Uses Redis for a SHARED counter across gunicorn workers when Redis is configured (the
+    in-process dict below is per-worker, so with N workers the real limit is N×). Falls
+    back to the in-process window when Redis is unavailable — the limiter never fails open
+    on a Redis outage; it just reverts to per-worker counting."""
+    try:
+        import redis_client
+        if redis_client.available():
+            count = redis_client.read_window(f"rlc:{key}")
+            if count is not None and count >= limit:
+                return window  # conservative retry hint; exact reset not tracked in cache
+    except Exception:  # noqa: BLE001
+        pass
     now = time.time()
     hits = [t for t in _RL_BUCKETS.get(key, []) if now - t < window]
     _RL_BUCKETS[key] = hits
@@ -418,8 +542,18 @@ def _rl_blocked(key: str, limit: int, window: int):
     return None
 
 
-def _rl_record_failure(key: str):
-    _RL_BUCKETS.setdefault(key, []).append(time.time())
+def _rl_record_failure(key: str, window: int = 3600):
+    try:
+        import redis_client
+        if redis_client.available():
+            redis_client.incr_window(f"rlc:{key}", window)
+    except Exception:  # noqa: BLE001
+        pass
+    now = time.time()
+    _RL_BUCKETS.setdefault(key, []).append(now)
+    if len(_RL_BUCKETS) > 10000:      # crude bound; prevents unbounded growth
+        for k in [k for k, v in _RL_BUCKETS.items() if not v or now - v[-1] > 3600]:
+            _RL_BUCKETS.pop(k, None)
 
 
 def _rate_limit_key(request: Request) -> str:
@@ -430,31 +564,34 @@ def _rate_limit_key(request: Request) -> str:
 
 @app.middleware("http")
 async def _rate_limit(request: Request, call_next):
-    rule = _RL_RULES.get(request.url.path)
+    path = request.url.path
+    rule = _RL_RULES.get(path)
     if not rule or request.method != "POST":
         return await call_next(request)
     limit, window = rule
-    now = time.time()
     key = _rate_limit_key(request)
-    hits = [t for t in _RL_BUCKETS.get(key, []) if now - t < window]
-    if len(hits) >= limit:
-        retry = int(window - (now - hits[0])) + 1
+    # Use the SHARED limiter helpers (Redis-backed across workers, in-process fallback) —
+    # no direct _RL_BUCKETS manipulation here.
+    retry = _rl_blocked(key, limit, window)
+    if retry:
+        obsmod.inc_metric("petabyte_ratelimit_blocks_total",
+                          route=obsmod.bounded_route(path),
+                          environment=obsmod.ENVIRONMENT)
+        obs.event(EVENTS.RATELIMIT_BLOCKED, level=logging.WARNING,
+                  message="rate limit exceeded",
+                  route=obsmod.bounded_route(path), retry_after_seconds=int(retry))
         return JSONResponse(
             status_code=429,
-            headers={"Retry-After": str(retry)},
+            headers={"Retry-After": str(int(retry))},
             content={"error": {"code": "RATE_LIMIT_EXCEEDED",
-                               "message": f"Too many attempts. Try again in {retry} seconds.",
-                               "retry_after_seconds": retry}},
+                               "message": f"Too many attempts. Try again in {int(retry)} seconds.",
+                               "retry_after_seconds": int(retry)}},
         )
     response = await call_next(request)
-    # Only FAILED attempts consume budget. Counting successes would lock out a whole
-    # office behind one NAT'd IP — the limiter exists to stop guessing, not usage.
-    if response.status_code >= 400:
-        hits.append(now)
-        _RL_BUCKETS[key] = hits
-        if len(_RL_BUCKETS) > 10000:      # crude bound; prevents unbounded growth
-            for k in [k for k, v in _RL_BUCKETS.items() if not v or now - v[-1] > 3600]:
-                _RL_BUCKETS.pop(k, None)
+    # Credential endpoints consume budget only on FAILURE (brute-force guard); count-all
+    # paths (e.g. /route) consume budget on every request to cap total volume.
+    if response.status_code >= 400 or path in _RL_COUNT_ALL:
+        _rl_record_failure(key, window)
     return response
 
 
@@ -1364,7 +1501,7 @@ async def _structured_http_error(request: Request, exc: HTTPException):
 async def _unhandled_error(request: Request, exc: Exception):
     """Never leak a stack trace or internal exception text to a caller."""
     rid = getattr(request.state, "request_id", None)
-    logger.exception("unhandled request_id=%s path=%s", rid, request.url.path)
+    logger.exception("unhandled request_id=%s path=%s", rid, _safe_path(request))
     return JSONResponse(
         status_code=500,
         content={"error": {"code": "INTERNAL_ERROR",
@@ -1417,6 +1554,154 @@ def readyz(db: Session = Depends(get_db)):
         return {"status": "ready"}
     except Exception:
         raise HTTPException(status_code=503, detail="database unavailable")
+
+
+@app.get("/health/observability", include_in_schema=False)
+def health_observability():
+    """Health of the telemetry integrations (tracing/metrics/logging/redis). Never fails
+    the app — an operator reads this to confirm telemetry is flowing (or degraded)."""
+    h = obsmod.health()
+    try:
+        import redis_client
+        h["redis"] = redis_client.health()
+    except Exception:  # noqa: BLE001
+        h["redis"] = {"configured": False}
+    return h
+
+
+def _metrics_authorized(request: Request) -> bool:
+    """Prometheus scrape auth: allow a valid bearer token (PROMETHEUS_METRICS_TOKEN), or
+    a caller on the trusted/loopback network (Prometheus scrapes over the private net).
+    The endpoint is never anonymous-public when a token is configured."""
+    token = os.getenv("PROMETHEUS_METRICS_TOKEN", "").strip()
+    if token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and secrets.compare_digest(auth[7:], token):
+            return True
+        # a token is configured -> token is required (no silent loopback bypass)
+        return False
+    # no token configured -> restrict to loopback / trusted proxies only
+    ip = _client_ip(request) or ""
+    return ip in ("127.0.0.1", "::1") or ip in TRUSTED_PROXIES
+
+
+# Prometheus scrape endpoint. Path is configurable (defaults to /internal/metrics — NOT
+# /metrics, which already serves the investor HTML dashboard). Protected: money-adjacent
+# counters must not be world-readable.
+_PROM_PATH = os.getenv("PROMETHEUS_METRICS_PATH", "/internal/metrics")
+
+
+@app.get(_PROM_PATH, include_in_schema=False)
+def prometheus_metrics(request: Request):
+    if not _metrics_authorized(request):
+        raise HTTPException(status_code=403, detail="metrics access denied")
+    body, ctype = obsmod.metrics_response()
+    return Response(content=body, media_type=ctype)
+
+
+def _norm_country(*values) -> str:
+    """Normalize a country label: strip → uppercase → first two chars of the FIRST non-empty
+    source, else 'unknown'. Normalizing the source first (not the fallback) means a missing
+    country becomes 'unknown', never 'UN' (which is what truncating the word 'unknown' gave)."""
+    for v in values:
+        if v:
+            cc = str(v).strip().upper()[:2]
+            if cc:
+                return cc
+    return "unknown"
+
+
+def _marketplace_metrics():
+    """Scrape-time marketplace supply/seller gauges, computed LIVE from Postgres. Sellers
+    are ephemeral: a stale heartbeat (older than HEARTBEAT_TIMEOUT_S) drops a spec out of
+    'online' supply automatically here, without scraping the seller machine. Bounded labels
+    only (gpu_class, country); seller ids never become labels. Best-effort — a query error
+    yields no rows rather than breaking the scrape. Real supply excludes seeded demo nodes."""
+    from db import SellerSpec, ComputeTransaction, _utcnow
+    S = SellerSpec
+    env = obsmod.ENVIRONMENT
+    rows = []
+    dbs = SessionLocal()
+    try:
+        # naive-UTC cutoff (matches reap_stale_specs); stored last_seen is naive.
+        cutoff = (_utcnow() - timedelta(seconds=HEARTBEAT_TIMEOUT_S)).replace(tzinfo=None)
+        demo = S.is_demo.is_(False)
+        # "fresh" = online AND heartbeat within the window. Evaluated in SQL — we do NOT
+        # load every SellerSpec row into memory (that was the perf finding).
+        fresh = (demo, S.status == "online", S.last_seen.isnot(None), S.last_seen >= cutoff)
+
+        def _agg(col, *crit):
+            return dbs.query(func.coalesce(func.sum(col), 0)).filter(*crit).scalar() or 0
+
+        def _uids(*crit):
+            return {r[0] for r in dbs.query(distinct(S.user_id)).filter(*crit).all()}
+
+        online_uids = _uids(*fresh)
+        offline_uids = _uids(demo, S.status != "online")
+        registered = dbs.query(func.count(distinct(S.user_id))).filter(demo).scalar() or 0
+        agents_online = dbs.query(func.count(S.id)).filter(*fresh).scalar() or 0
+        stale_specs = dbs.query(func.count(S.id)).filter(
+            demo, S.status == "online",
+            or_(S.last_seen.is_(None), S.last_seen < cutoff)).scalar() or 0
+        reserved = _agg(
+            case((S.total_units > S.available_units, S.total_units - S.available_units),
+                 else_=0), *fresh)
+
+        rows += [
+            {"name": "petabyte_sellers_registered", "doc": "Distinct sellers with a listing",
+             "labels": {"environment": env}, "value": registered},
+            {"name": "petabyte_sellers_online", "doc": "Sellers with a fresh heartbeat",
+             "labels": {"environment": env}, "value": len(online_uids)},
+            {"name": "petabyte_sellers_offline", "doc": "Sellers with all specs offline",
+             "labels": {"environment": env}, "value": len(offline_uids - online_uids)},
+            {"name": "petabyte_sellers_stale", "doc": "Specs online but heartbeat expired",
+             "labels": {"environment": env}, "value": stale_specs},
+            {"name": "petabyte_agents_online", "doc": "Connected seller agents (fresh specs)",
+             "labels": {"environment": env}, "value": agents_online},
+            {"name": "petabyte_gpus_online", "doc": "Online GPUs",
+             "labels": {"environment": env}, "value": _agg(S.gpu_count, *fresh)},
+            {"name": "petabyte_gpus_available", "doc": "Available rentable units",
+             "labels": {"environment": env}, "value": _agg(S.available_units, *fresh)},
+            {"name": "petabyte_gpus_reserved", "doc": "Reserved units",
+             "labels": {"environment": env}, "value": reserved},
+            {"name": "petabyte_available_gpu_hours", "doc": "Available GPU-hours (units x max hrs)",
+             "labels": {"environment": env},
+             "value": _agg(S.available_units * S.duration, *fresh)},
+        ]
+        # GPUs by model (grouped in SQL) -> folded to a bounded gpu_class in Python.
+        by_model = {}
+        for model, n in dbs.query(S.gpu_model, func.coalesce(func.sum(S.gpu_count), 0)) \
+                .filter(*fresh).group_by(S.gpu_model).all():
+            gc = obsmod.gpu_model_to_class(model)
+            by_model[gc] = by_model.get(gc, 0) + int(n or 0)
+        for gc, n in by_model.items():
+            rows.append({"name": "petabyte_gpus_by_model", "doc": "Online GPUs by class",
+                         "labels": {"gpu_class": gc, "environment": env}, "value": n})
+        # GPUs by country (grouped in SQL) -> normalized (strip/upper/[:2], fallback
+        # 'unknown' only when empty, so a MISSING country is never mislabeled 'UN').
+        by_country = {}
+        for country, detected, n in dbs.query(
+                S.country, S.detected_country, func.coalesce(func.sum(S.gpu_count), 0)) \
+                .filter(*fresh).group_by(S.country, S.detected_country).all():
+            cc = _norm_country(country, detected)
+            by_country[cc] = by_country.get(cc, 0) + int(n or 0)
+        for cc, n in by_country.items():
+            rows.append({"name": "petabyte_gpus_by_country", "doc": "Online GPUs by country",
+                         "labels": {"country": cc, "environment": env}, "value": n})
+        # live job count (durable — survives a seller going offline)
+        running = dbs.query(func.count(ComputeTransaction.id)).filter(
+            ComputeTransaction.status == "RUNNING").scalar() or 0
+        rows.append({"name": "petabyte_jobs_running", "doc": "Running jobs",
+                     "labels": {"environment": env}, "value": running})
+    except Exception:  # noqa: BLE001
+        logger.debug("marketplace metrics query failed", exc_info=True)
+    finally:
+        dbs.close()
+    return rows
+
+
+# Register the scrape-time collector once (no-op if prometheus_client is absent).
+obsmod.register_marketplace_collector(_marketplace_metrics)
 
 
 # ------------------- AUTH -------------------
@@ -1692,11 +1977,38 @@ def heartbeat(data: HeartbeatModel, request: Request, owner=Depends(api_key_user
     spec = get_spec_by_id(db, data.spec_id)
     if not spec or spec.user_id != owner.id:
         raise HTTPException(status_code=404, detail="Spec not found")
+    was_offline = spec.status != "online"       # for reconnect detection
+    first_time = spec.last_seen is None
     detected = geolocate_country(_client_ip(request))
     spec.detected_country = detected
     spec.region_verified = bool(detected and spec.country and detected == spec.country)
     touch_spec(db, spec)   # persists detected/verified + online/last_seen
     note_heartbeat(db, spec)
+    # Seller activity is observed HERE (the agent's authenticated OUTBOUND call) — no
+    # inbound port, no direct scrape of the seller machine. Ids live in the log body.
+    try:
+        obsmod.inc_metric("petabyte_seller_heartbeats_total", environment=obsmod.ENVIRONMENT)
+        with obs.ctx(seller_id=str(owner.id), gpu_id=spec.public_id):
+            if first_time:
+                obs.event(EVENTS.GPU_DETECTED, message="gpu detected on heartbeat",
+                          gpu_model=spec.gpu_model, gpu_count=spec.gpu_count,
+                          country=spec.country, detected_country=detected,
+                          region_verified=spec.region_verified)
+            if was_offline and not first_time:
+                obsmod.inc_metric("petabyte_seller_reconnects_total", environment=obsmod.ENVIRONMENT)
+                obs.event(EVENTS.SELLER_RECONNECTED, message="seller agent reconnected",
+                          gpu_model=spec.gpu_model)
+            else:
+                obs.event(EVENTS.SELLER_HEARTBEAT, message="heartbeat", state="online")
+            # region spoofing is suspicious telemetry worth surfacing
+            if detected and spec.country and detected != spec.country:
+                obsmod.inc_metric("petabyte_seller_suspicious_total",
+                                  category="region_mismatch", environment=obsmod.ENVIRONMENT)
+                obs.event(EVENTS.SELLER_SUSPICIOUS, level=logging.WARNING,
+                          message="declared country != detected", category="region_mismatch",
+                          declared=spec.country, detected=detected)
+    except Exception:  # noqa: BLE001
+        pass
     return {"status": "ok", "spec_id": spec.id, "state": "online",
             "detected_country": detected, "region_verified": spec.region_verified,
             "idle_fallback": bool(spec.idle_fallback)}
@@ -1885,11 +2197,31 @@ def jobs_next(agent=Depends(api_key_user), db: Session = Depends(get_db)):
     task = claim_next_task(db, agent)
     if not task:
         return Response(status_code=204)   # 204 must carry no body
+    mark_task_running(db, task)
+    # PRODUCER span across the queue/network boundary: inject the current W3C trace context
+    # into the job envelope so the seller agent's execution joins THIS trace end-to-end.
+    with obs.span("job.dispatch", kind="producer", task_type=str(task.task_type)):
+        payload = _build_job_payload(task)
+        payload["trace_context"] = obs.inject({})
+        tx_pub = getattr(getattr(task, "compute_tx", None), "public_id", None)
+        # A successful claim is the seller ACCEPTING the job (pull model).
+        obsmod.inc_metric("petabyte_seller_job_decisions_total", decision="accepted",
+                          environment=obsmod.ENVIRONMENT)
+        with obs.ctx(seller_id=str(getattr(agent, "id", "")) or None):
+            obs.event(EVENTS.JOB_DISPATCHED, message="job dispatched",
+                      task_type=task.task_type, job_id=task.id, transaction_id=tx_pub)
+            obs.event(EVENTS.JOB_ACCEPTED, message="seller accepted job",
+                      task_type=task.task_type, job_id=task.id)
+    return payload
+
+
+def _build_job_payload(task) -> dict:
+    """Build the job envelope returned to the agent. Never includes platform secrets or
+    full buyer workload inputs beyond what the job type needs to run."""
     _backup = {"backup_enabled": bool(task.backup_enabled),
                "backup_interval_s": task.backup_interval_s,
                "volume": task.volume,
                "restore_from": task.latest_checkpoint_ref}   # restore if a backup exists
-    mark_task_running(db, task)
     if task.task_type == "notebook":
         return {"task_id": task.id, "task_type": "notebook", "code": task.code}
     if task.task_type == "test":
@@ -2446,6 +2778,78 @@ def marketplace_stats(db: Session = Depends(get_db)):
             "contains_demo_data": demo_present}
 
 
+@app.get("/marketplace/health", tags=["marketplace"])
+def marketplace_health(db: Session = Depends(get_db)):
+    """The operational heartbeat: supply / demand / economics / quality, all live DB
+    aggregates for the current money mode. Zeros/nulls mean no data yet (never faked)."""
+    import marketplace_insight as mi
+    return mi.health(db)
+
+
+@app.get("/marketplace/health/summary", tags=["marketplace"])
+def marketplace_health_summary(db: Session = Depends(get_db)):
+    """A plain-language summary generated from the live health numbers (the honest,
+    LLM-swappable substrate for a natural-language exec/investor dashboard)."""
+    import marketplace_insight as mi
+    h = mi.health(db)
+    return {"summary": mi.summarize_health(h), "health": h}
+
+
+class RouteModel(BaseModel):
+    workload: Optional[str] = None
+    gpu_class: Optional[str] = None
+    min_vram: Optional[int] = Field(default=None, ge=0)
+    region: Optional[str] = None
+    country: Optional[str] = None
+    confidential: Optional[bool] = None
+    max_price_per_hour: Optional[float] = Field(default=None, gt=0)
+    min_reputation: Optional[int] = Field(default=None, ge=0, le=100)
+    redundancy: int = Field(default=1, ge=1, le=10)
+    hours: int = Field(default=1, ge=1, le=720)
+
+
+@app.post("/route", tags=["marketplace"])
+def route_explain(data: RouteModel, db: Session = Depends(get_db)):
+    """Explainable routing: pick the best GPU(s) for the stated intent and show WHY —
+    a predicted success probability from real historical signals, plus a plain checklist
+    (price / region / reliability / CUDA / trust / availability / historical success).
+    This is 'sell intelligence, not listings' — every number is real; a node with no
+    history shows the honest verified-node prior, never a fabricated stat."""
+    import marketplace_insight as mi
+    intent = {k: v for k, v in data.model_dump().items() if v is not None}
+    plan = select_plan(db, intent)
+    # Reuse the specs + reputation already loaded/computed by select_plan — no per-item
+    # spec fetch and no reputation recompute for selected + alternatives (query explosion).
+    specs = plan.pop("_specs", {})
+    rep_cache = plan.pop("_reputation", {})
+
+    def annotate(item):
+        spec = specs.get(item["spec_id"]) or _get_spec(db, item["spec_id"])
+        if spec is not None:
+            rep = rep_cache.get(spec.id)
+            if rep is None:
+                rep = compute_reputation(db, spec)
+                rep_cache[spec.id] = rep
+            item["predicted_success"] = mi.predict_success(spec, rep)
+        return item
+    plan["selected"] = [annotate(i) for i in plan.get("selected", [])]
+    plan["alternatives"] = [annotate(i) for i in plan.get("alternatives", [])]
+    plan["checklist"] = mi.route_checklist(plan, intent)
+    return plan
+
+
+@app.get("/sellers/{public_id}/trust", tags=["marketplace"])
+def seller_trust(public_id: str, db: Session = Depends(get_db)):
+    """A seller node's trust score (0-100) + star rating + the real historical signals
+    behind it. Untracked dimensions are null on purpose — surfaced honestly, never faked."""
+    from db import get_spec_by_public_id
+    import marketplace_insight as mi
+    spec = get_spec_by_public_id(db, public_id)
+    if not spec:
+        raise HTTPException(status_code=404, detail="GPU not found")
+    return mi.trust_score(db, spec)
+
+
 @app.get("/metrics/overview", tags=["marketplace"])
 def metrics_overview(db: Session = Depends(get_db),
                      scope: str = "all", since: Optional[str] = None,
@@ -2954,12 +3358,35 @@ def my_referral(request: Request, me=Depends(get_current_user), db: Session = De
     }
 
 
-@app.post("/newsletter/subscribe", tags=["marketing"])
-def newsletter_subscribe(body: NewsletterModel, request: Request):
-    """Add an email to the Mailchimp audience.
+def _newsletter_subscribe_mailgun(email: str):
+    """Add an email to the Mailgun mailing list on the news. sending subdomain.
 
-    Public + IP-rate-limited. If Mailchimp isn't configured yet, we say so honestly
-    rather than pretend it worked."""
+    Reuses MAILGUN_API_KEY (the same transactional key). The list's From/Reply-To are set
+    on the list in Mailgun; replies are forwarded to info@ by a Mailgun Route. The API key
+    is never logged."""
+    api_key = os.getenv("MAILGUN_API_KEY", "").strip()
+    if not (api_key and NEWSLETTER_LIST_ADDRESS):
+        raise HTTPException(status_code=503, detail={
+            "code": "NEWSLETTER_UNCONFIGURED",
+            "message": "The newsletter isn't wired up yet. Email info@petabyte.market to "
+                       "be added."})
+    from email_service import MAILGUN_API_BASE
+    url = f"{MAILGUN_API_BASE}/v3/lists/{NEWSLETTER_LIST_ADDRESS}/members"
+    import httpx
+    r = httpx.post(url, auth=("api", api_key), timeout=10,
+                   data={"address": email, "subscribed": "yes", "upsert": "yes"})
+    if r.status_code in (200, 201):
+        return {"ok": True, "message": "You're subscribed. Thanks!"}
+    # Mailgun returns 400 "Address already exists" when re-adding; that's success to a user.
+    if r.status_code == 400 and "already exists" in (r.text or "").lower():
+        return {"ok": True, "message": "You're already on the list."}
+    logger.warning("mailgun newsletter subscribe failed: %s %s", r.status_code, (r.text or "")[:200])
+    raise HTTPException(status_code=502, detail={"code": "NEWSLETTER_FAILED",
+        "message": "Couldn't subscribe you just now. Please try again later."})
+
+
+def _newsletter_subscribe_mailchimp(email: str):
+    """Legacy Mailchimp audience path (NEWSLETTER_PROVIDER=mailchimp)."""
     if not (MAILCHIMP_API_KEY and MAILCHIMP_AUDIENCE_ID):
         raise HTTPException(status_code=503, detail={
             "code": "NEWSLETTER_UNCONFIGURED",
@@ -2971,22 +3398,38 @@ def newsletter_subscribe(body: NewsletterModel, request: Request):
     dc = MAILCHIMP_API_KEY.rsplit("-", 1)[-1]     # e.g. us21
     url = (f"https://{dc}.api.mailchimp.com/3.0/lists/"
            f"{MAILCHIMP_AUDIENCE_ID}/members")
+    import httpx
+    r = httpx.post(url, auth=("anystring", MAILCHIMP_API_KEY), timeout=10,
+                   json={"email_address": email, "status": "subscribed"})
+    if r.status_code in (200, 201):
+        return {"ok": True, "message": "You're subscribed. Thanks!"}
+    if r.status_code == 400 and "Member Exists" in r.text:
+        return {"ok": True, "message": "You're already on the list."}
+    logger.warning("mailchimp subscribe failed: %s %s", r.status_code, r.text[:200])
+    raise HTTPException(status_code=502, detail={"code": "NEWSLETTER_FAILED",
+        "message": "Couldn't subscribe you just now. Please try again later."})
+
+
+@app.post("/newsletter/subscribe", tags=["marketing"])
+def newsletter_subscribe(body: NewsletterModel, request: Request):
+    """Add an email to the configured newsletter (Mailgun mailing list by default).
+
+    Public + IP-rate-limited. If the newsletter isn't configured yet, we say so honestly
+    rather than pretend it worked."""
+    provider = NEWSLETTER_PROVIDER or "none"
     try:
-        import httpx
-        r = httpx.post(url, auth=("anystring", MAILCHIMP_API_KEY), timeout=10,
-                       json={"email_address": body.email, "status": "subscribed"})
-        if r.status_code in (200, 201):
-            return {"ok": True, "message": "You're subscribed. Thanks!"}
-        # already a member is a success from the user's point of view
-        if r.status_code == 400 and "Member Exists" in r.text:
-            return {"ok": True, "message": "You're already on the list."}
-        logger.warning("mailchimp subscribe failed: %s %s", r.status_code, r.text[:200])
-        raise HTTPException(status_code=502, detail={"code": "NEWSLETTER_FAILED",
-            "message": "Couldn't subscribe you just now. Please try again later."})
+        if provider == "mailgun":
+            return _newsletter_subscribe_mailgun(body.email)
+        if provider == "mailchimp":
+            return _newsletter_subscribe_mailchimp(body.email)
+        raise HTTPException(status_code=503, detail={
+            "code": "NEWSLETTER_UNCONFIGURED",
+            "message": "The newsletter isn't wired up yet. Email info@petabyte.market to "
+                       "be added."})
     except HTTPException:
         raise
     except Exception:
-        logger.exception("mailchimp subscribe error")
+        logger.exception("newsletter subscribe error (provider=%s)", provider)
         raise HTTPException(status_code=502, detail={"code": "NEWSLETTER_FAILED",
             "message": "Couldn't reach the newsletter service. Please try again later."})
 
@@ -3736,6 +4179,43 @@ def payments_receipt(public_id: str, user: dict = Depends(get_current_user),
             "metered_seconds": tx.metering_seconds,
             "is_completed_payment": tx.status in ("PAYMENT_CAPTURED", "SELLER_TRANSFERRED", "COMPLETED"),
             "note": "The authorized maximum is a hold; you are charged only the final captured amount."}
+
+
+@app.get("/payments/{public_id}/timeline", tags=["payments"])
+def payment_timeline(public_id: str, user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """The immutable, append-only timeline for a transaction — nothing hidden. Buyer,
+    seller, and admins each see every state change (who, when, why), plus a plain
+    'why it failed' line when the transaction ended in a failure state."""
+    import marketplace_insight as mi
+    me = get_user_by_username(db, _username(user))
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx or (me.id not in (tx.buyer_id, tx.seller_id) and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="transaction not found")
+    events = (db.query(dbmod.ComputeTxEvent)
+              .filter(dbmod.ComputeTxEvent.tx_id == tx.id)
+              .order_by(dbmod.ComputeTxEvent.id).all())
+    is_admin = _is_admin(me)
+    # A failure `reason` can embed str(StripeError) (gateway/decline/account internals).
+    # Admins get the raw reason for troubleshooting; buyers/sellers get sanitized text.
+    def _reason(e):
+        if is_admin:
+            return e.reason
+        if e.to_state in mi.TX_FAILED and e.reason:
+            return mi.explain_failure(e.to_state)
+        return e.reason
+    timeline = [{"at": e.created_at.isoformat() if e.created_at else None,
+                 "from": e.from_state, "to": e.to_state, "reason": _reason(e), "by": e.actor}
+                for e in events]
+    why_failed = None
+    if tx.status in mi.TX_FAILED:
+        if is_admin:
+            fev = [e for e in events if e.to_state == tx.status and e.reason]
+            why_failed = fev[-1].reason if fev else f"transaction ended in {tx.status}"
+        else:
+            why_failed = mi.explain_failure(tx.status)
+    return {"transaction_id": tx.public_id, "status": tx.status,
+            "timeline": timeline, "why_failed": why_failed}
 
 @app.post("/payments/{public_id}/cancel", tags=["payments"])
 def payments_cancel(public_id: str, request: Request,
