@@ -1504,8 +1504,14 @@ ok("landing page has a newsletter signup form",
 ok("landing page embeds the video with a referrerpolicy + fallback watch link",
    "landingvideoframe" in _home and "referrerpolicy" in _home
    and "landingvideolink" in _home)
-ok("newsletter degrades honestly when Mailchimp is unconfigured",
-   c.post("/newsletter/subscribe", json={"email":"x@y.com"}).status_code == 503)
+# Newsletter now records to Postgres (authoritative) and syncs to the Mailgun list
+# best-effort, so a signup SUCCEEDS even when the list isn't configured in this smoke env
+# (recorded locally + reconciled later). The old "not wired up" placeholder is gone (#14).
+_nl = c.post("/newsletter/subscribe", json={"email": "smoke-nl@example.com"})
+ok("newsletter signup succeeds (DB authoritative, Mailgun best-effort)",
+   _nl.status_code == 200)
+ok("newsletter response no longer shows the 'wired up yet' placeholder",
+   "wired up" not in _nl.text.lower())
 ok("bad email to newsletter is rejected",
    c.post("/newsletter/subscribe", json={"email":"nope"}).status_code == 422)
 _lv=c.get("/landing/video").json()

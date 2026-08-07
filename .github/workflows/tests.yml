@@ -65,6 +65,9 @@ jobs:
       - name: marketplace intelligence (health/routing/trust/timeline)
         working-directory: lumaris_api
         run: python marketplace_test.py
+      - name: newsletter signup (Mailgun mailing list; Mailgun mocked)
+        working-directory: lumaris_api
+        run: python newsletter_test.py
       - name: tunnel (NAT traversal + failover)
         working-directory: lumaris_gateway
         run: python tunnel_test.py

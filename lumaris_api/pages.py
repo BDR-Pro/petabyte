@@ -660,7 +660,7 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
     <p class="mut" style="font-size:13px">One command to list. Weekly payouts — bank, USDC, or gift card.</p></a>
 </div></div>
 
-<!-- NEWSLETTER (Mailchimp via /newsletter/subscribe) -->
+<!-- NEWSLETTER (Mailgun mailing list via /newsletter/subscribe) -->
 <div class="wrap" style="padding:10px 24px 40px">
   <div class="card" style="max-width:560px;margin:0 auto;text-align:center">
     <div class="lbl" data-ar="النشرة البريدية">Newsletter</div>
@@ -676,15 +676,21 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 <script>
 async function subscribeNewsletter(){
   var m=document.getElementById('nl_msg');
-  var e=(document.getElementById('nl_email').value||'').trim();
+  var input=document.getElementById('nl_email');
+  var btn=document.querySelector('[data-act="subscribeNewsletter"]');
+  var e=(input.value||'').trim();
   if(!e){m.style.color='var(--warn)';m.textContent='Enter your email.';return;}
+  if(btn&&btn.disabled)return;                       // guard against duplicate submits
+  if(btn)btn.disabled=true;                          // disable while the request is in flight
   m.style.color='';m.textContent='Subscribing…';
   try{
     var r=await fetch('/newsletter/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:e})});
-    var b=await r.json();
-    if(r.ok){m.style.color='var(--pos)';m.textContent=b.message||'Subscribed. Thanks!';document.getElementById('nl_email').value='';}
-    else{m.style.color='var(--warn)';m.textContent=(b.error&&b.error.message)||b.detail||'Could not subscribe.';}
-  }catch(err){m.style.color='var(--warn)';m.textContent='Network error. Try again.';}
+    var b={};try{b=await r.json();}catch(_){}
+    if(r.ok){m.style.color='var(--pos)';m.textContent=b.message||"Thanks — you're subscribed.";input.value='';}
+    else if(r.status===429){m.style.color='var(--warn)';m.textContent='Too many attempts. Please try again shortly.';}
+    else{m.style.color='var(--warn)';m.textContent=(b.detail&&b.detail.message)||(b.error&&b.error.message)||"We couldn't subscribe you right now. Please try again shortly.";}
+  }catch(err){m.style.color='var(--warn)';m.textContent="We couldn't subscribe you right now. Please try again shortly.";}
+  finally{if(btn)btn.disabled=false;}                 // always re-enable
 }
 </script>
 

@@ -511,11 +511,13 @@ _RL_RULES = {           # path -> (max_hits, window_seconds)
     "/register_user": (10, 3600),  # signup spam
     "/withdraw": (10, 3600),       # money-out probing
     "/route": (60, 60),            # unauth, DB-backed — cap total volume per IP
+    "/newsletter/subscribe": (10, 3600),  # public signup — anti-abuse / no email bombing
 }
 # Paths where EVERY request (not just failures) consumes budget. Credential endpoints
 # count only failures (brute-force guard); an unauthenticated DB-backed endpoint like
-# /route must cap total request volume.
-_RL_COUNT_ALL = {"/route"}
+# /route — and the public newsletter signup — must cap total request volume so they can't
+# be used as a bulk/email-bombing oracle.
+_RL_COUNT_ALL = {"/route", "/newsletter/subscribe"}
 LOGIN_MAX_FAILS, LOGIN_WINDOW_S = 10, 900
 
 
@@ -625,13 +627,20 @@ class RequestVMModel(BaseModel):
 
 
 class NewsletterModel(BaseModel):
-    email: str = Field(min_length=3, max_length=200)
+    email: str = Field(min_length=3, max_length=254)
 
     @field_validator("email")
     @classmethod
     def _ok(cls, v: str) -> str:
-        v = v.strip()
-        if "@" not in v or "." not in v.split("@")[-1]:
+        # Normalize server-side — never trust frontend validation: trim, lowercase, cap
+        # length, and reject anything that is not a plausible address.
+        v = (v or "").strip().lower()
+        if not v:
+            raise ValueError("Enter your email address.")
+        if len(v) > 254:
+            raise ValueError("That email address is too long.")
+        import re as _re
+        if not _re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v):
             raise ValueError("That does not look like an email address.")
         return v
 
@@ -3394,31 +3403,42 @@ def my_referral(request: Request, me=Depends(get_current_user), db: Session = De
     }
 
 
-def _newsletter_subscribe_mailgun(email: str):
-    """Add an email to the Mailgun mailing list on the news. sending subdomain.
+def _hash_email(email: str) -> str:
+    """A short, stable, non-reversible tag for logs/diagnostics — never the raw address."""
+    import hashlib
+    return hashlib.sha256(email.encode("utf-8")).hexdigest()[:12]
 
-    Reuses MAILGUN_API_KEY (the same transactional key). The list's From/Reply-To are set
-    on the list in Mailgun; replies are forwarded to info@ by a Mailgun Route. The API key
-    is never logged."""
+
+def _newsletter_add_to_mailgun(email: str) -> str:
+    """Add an address to the Mailgun mailing list (NEWSLETTER_LIST_ADDRESS). BEST-EFFORT:
+    returns a status string and NEVER raises or leaks provider internals (keys, headers,
+    bodies, stack traces). Honors MAILGUN_API_BASE so US/EU regions both work.
+
+    Returns one of:
+      synced        added / upserted to the list
+      already       already a member (idempotent success)
+      unconfigured  MAILGUN_API_KEY or NEWSLETTER_LIST_ADDRESS not set
+      failed        Mailgun 4xx/5xx, timeout, DNS/network error, or malformed response
+    """
     api_key = os.getenv("MAILGUN_API_KEY", "").strip()
     if not (api_key and NEWSLETTER_LIST_ADDRESS):
-        raise HTTPException(status_code=503, detail={
-            "code": "NEWSLETTER_UNCONFIGURED",
-            "message": "The newsletter isn't wired up yet. Email info@petabyte.market to "
-                       "be added."})
+        return "unconfigured"
     from email_service import MAILGUN_API_BASE
     url = f"{MAILGUN_API_BASE}/v3/lists/{NEWSLETTER_LIST_ADDRESS}/members"
     import httpx
-    r = httpx.post(url, auth=("api", api_key), timeout=10,
-                   data={"address": email, "subscribed": "yes", "upsert": "yes"})
+    try:
+        r = httpx.post(url, auth=("api", api_key), timeout=10,
+                       data={"address": email, "subscribed": "yes", "upsert": "yes"})
+    except Exception as e:  # noqa: BLE001 — timeout, DNS, connect, protocol; never leak detail
+        logger.warning("mailgun newsletter add: transport error (%s)", type(e).__name__)
+        return "failed"
     if r.status_code in (200, 201):
-        return {"ok": True, "message": "You're subscribed. Thanks!"}
-    # Mailgun returns 400 "Address already exists" when re-adding; that's success to a user.
+        return "synced"
     if r.status_code == 400 and "already exists" in (r.text or "").lower():
-        return {"ok": True, "message": "You're already on the list."}
-    logger.warning("mailgun newsletter subscribe failed: %s %s", r.status_code, (r.text or "")[:200])
-    raise HTTPException(status_code=502, detail={"code": "NEWSLETTER_FAILED",
-        "message": "Couldn't subscribe you just now. Please try again later."})
+        return "already"
+    # Log the STATUS only — never the provider body, headers, or the API key.
+    logger.warning("mailgun newsletter add failed: HTTP %s", r.status_code)
+    return "failed"
 
 
 def _newsletter_subscribe_mailchimp(email: str):
@@ -3447,27 +3467,59 @@ def _newsletter_subscribe_mailchimp(email: str):
 
 
 @app.post("/newsletter/subscribe", tags=["marketing"])
-def newsletter_subscribe(body: NewsletterModel, request: Request):
-    """Add an email to the configured newsletter (Mailgun mailing list by default).
+def newsletter_subscribe(body: NewsletterModel, request: Request,
+                         db: Session = Depends(get_db)):
+    """Subscribe an email to the newsletter.
 
-    Public + IP-rate-limited. If the newsletter isn't configured yet, we say so honestly
-    rather than pretend it worked."""
-    provider = NEWSLETTER_PROVIDER or "none"
+    Postgres is the AUTHORITATIVE record; the Mailgun mailing list is synced best-effort and
+    reconciled if it is down. Public + IP rate-limited (anti-abuse, no email bombing).
+    Idempotent + neutral: the same address twice still returns a friendly success and never
+    reveals whether it was already stored. Provider internals are never exposed to the
+    browser — only a safe message is returned."""
+    email = body.email     # already trimmed + lowercased + validated by NewsletterModel
+    env = obsmod.ENVIRONMENT
+    tag = _hash_email(email)
+    obsmod.inc_metric("petabyte_newsletter_subscribe_requests_total", environment=env)
+
+    # 1) Authoritative record (idempotent). A real DB error is the only hard failure.
     try:
-        if provider == "mailgun":
-            return _newsletter_subscribe_mailgun(body.email)
-        if provider == "mailchimp":
-            return _newsletter_subscribe_mailchimp(body.email)
-        raise HTTPException(status_code=503, detail={
-            "code": "NEWSLETTER_UNCONFIGURED",
-            "message": "The newsletter isn't wired up yet. Email info@petabyte.market to "
-                       "be added."})
-    except HTTPException:
-        raise
+        created = dbmod.record_newsletter_signup(db, email, source="homepage")
     except Exception:
-        logger.exception("newsletter subscribe error (provider=%s)", provider)
-        raise HTTPException(status_code=502, detail={"code": "NEWSLETTER_FAILED",
-            "message": "Couldn't reach the newsletter service. Please try again later."})
+        logger.exception("newsletter: DB persist failed (email_sha=%s)", tag)
+        obsmod.inc_metric("petabyte_newsletter_subscribe_failures_total",
+                          reason="db", environment=env)
+        raise HTTPException(status_code=503, detail={
+            "code": "NEWSLETTER_UNAVAILABLE",
+            "message": "We couldn't subscribe you right now. Please try again shortly."})
+
+    # 2) Deliver to the mailing list (best-effort; the DB stays the source of truth).
+    provider = (NEWSLETTER_PROVIDER or "none").lower()
+    synced = False
+    if provider == "mailgun":
+        synced = _newsletter_add_to_mailgun(email) in ("synced", "already")
+        try:
+            dbmod.mark_newsletter_synced(db, email, synced)
+        except Exception:  # noqa: BLE001 — never fail the signup on a bookkeeping update
+            logger.debug("newsletter: sync-flag update failed", exc_info=True)
+    elif provider == "mailchimp":
+        try:
+            _newsletter_subscribe_mailchimp(email)
+            synced = True
+        except Exception:  # noqa: BLE001 — legacy path; best-effort like Mailgun
+            synced = False
+
+    if not synced:
+        # Not fatal: the subscriber is safely in our DB and will be reconciled to the list.
+        logger.warning("newsletter: mailing-list sync deferred (provider=%s, email_sha=%s)",
+                       provider, tag)
+        obsmod.inc_metric("petabyte_newsletter_subscribe_failures_total",
+                          reason="mailgun", environment=env)
+
+    obsmod.inc_metric("petabyte_newsletter_subscribe_success_total",
+                      outcome=("new" if created else "duplicate"), environment=env)
+    obs.event("marketing.newsletter.subscribed", message="newsletter signup",
+              new=created, mailgun_synced=synced, source="homepage", email_sha=tag)
+    return {"ok": True, "message": "Thanks — you're subscribed."}
 
 
 @app.get("/landing/video", tags=["marketing"])

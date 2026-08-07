@@ -607,6 +607,77 @@ def payout_backlog(db: Session) -> dict:
     return {"unbatched": int(count), "oldest_age_seconds": age_s}
 
 
+class NewsletterSubscriber(Base):
+    """Authoritative record of a newsletter signup. Postgres is the source of truth; the
+    Mailgun mailing list is the delivery mechanism kept in sync via `mailgun_synced`.
+
+    Single opt-in today (status jumps straight to 'subscribed', confirmed_at set on signup),
+    but the schema already carries 'pending' + confirmed_at so double opt-in can be layered
+    on later without a breaking change."""
+    __tablename__ = "newsletter_subscribers"
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)   # normalized, lowercased
+    status = Column(String, nullable=False, default="subscribed", index=True)  # pending|subscribed|unsubscribed
+    source = Column(String, nullable=True)                            # e.g. "homepage"
+    mailgun_synced = Column(Boolean, default=False, nullable=False)   # reconciliation flag
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+    confirmed_at = Column(DateTime, nullable=True)                    # when the address opted in
+    unsubscribed_at = Column(DateTime, nullable=True)
+
+
+def record_newsletter_signup(db: Session, email: str, source: str = "homepage") -> bool:
+    """Idempotently record a newsletter signup (single opt-in). Returns True if a NEW
+    subscriber row was created, False if the address was already present (or a concurrent
+    insert won the race). Re-subscribes a previously-unsubscribed address. Never raises on a
+    duplicate — the unique constraint on `email` is the final idempotency guard."""
+    existing = (db.query(NewsletterSubscriber)
+                .filter(NewsletterSubscriber.email == email).first())
+    if existing:
+        if existing.status != "subscribed":
+            existing.status = "subscribed"
+            existing.unsubscribed_at = None
+            if existing.confirmed_at is None:
+                existing.confirmed_at = _utcnow()
+            db.add(existing)
+            db.commit()
+        return False
+    sub = NewsletterSubscriber(email=email, status="subscribed", source=source,
+                               confirmed_at=_utcnow())
+    db.add(sub)
+    try:
+        db.commit()
+        return True
+    except IntegrityError:
+        db.rollback()          # concurrent duplicate insert -> idempotent success
+        return False
+
+
+def mark_newsletter_synced(db: Session, email: str, synced: bool = True) -> None:
+    """Record whether the address has been reflected into the Mailgun mailing list, so a
+    reconciliation job can later re-sync rows that Mailgun rejected/timed out on."""
+    sub = (db.query(NewsletterSubscriber)
+           .filter(NewsletterSubscriber.email == email).first())
+    if sub and sub.mailgun_synced != synced:
+        sub.mailgun_synced = synced
+        db.add(sub)
+        db.commit()
+
+
+def unsubscribe_newsletter(db: Session, email: str) -> bool:
+    """Mark an address unsubscribed locally. Returns False if unknown. Mailgun list removal
+    (if used) is reconciled separately; local state stays authoritative."""
+    sub = (db.query(NewsletterSubscriber)
+           .filter(NewsletterSubscriber.email == email).first())
+    if not sub:
+        return False
+    sub.status = "unsubscribed"
+    sub.unsubscribed_at = _utcnow()
+    db.add(sub)
+    db.commit()
+    return True
+
+
 class Platform(Base):
     __tablename__ = "platform"
     id = Column(Integer, primary_key=True)
