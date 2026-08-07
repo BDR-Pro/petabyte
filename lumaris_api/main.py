@@ -1617,7 +1617,8 @@ def _marketplace_metrics():
     'online' supply automatically here, without scraping the seller machine. Bounded labels
     only (gpu_class, country); seller ids never become labels. Best-effort — a query error
     yields no rows rather than breaking the scrape. Real supply excludes seeded demo nodes."""
-    from db import SellerSpec, ComputeTransaction, _utcnow
+    from db import (SellerSpec, ComputeTransaction, _utcnow,
+                    financial_integrity, payout_backlog)
     S = SellerSpec
     env = obsmod.ENVIRONMENT
     rows = []
@@ -1695,6 +1696,30 @@ def _marketplace_metrics():
                      "labels": {"environment": env}, "value": running})
     except Exception:  # noqa: BLE001
         logger.debug("marketplace metrics query failed", exc_info=True)
+    # Financial-integrity heartbeat (#286): ledger invariants + payout backlog, in SQL.
+    # Isolated in its own try so a failure here never drops the supply gauges above.
+    try:
+        fi = financial_integrity(dbs)
+        pb = payout_backlog(dbs)
+        rows += [
+            {"name": "petabyte_ledger_balanced",
+             "doc": "1 iff the double-entry ledger balances (every tx and overall)",
+             "labels": {"environment": env}, "value": 1 if fi["balanced"] else 0},
+            {"name": "petabyte_ledger_imbalanced_tx",
+             "doc": "Ledger transactions whose debits != credits (must be 0)",
+             "labels": {"environment": env}, "value": fi["imbalanced_tx"]},
+            {"name": "petabyte_ledger_net_minor",
+             "doc": "Signed ledger sum credits-debits across all entries (must be 0)",
+             "labels": {"environment": env}, "value": fi["net_minor"]},
+            {"name": "petabyte_payout_obligations_unbatched",
+             "doc": "Settled obligations owed to sellers but not yet placed in a batch",
+             "labels": {"environment": env}, "value": pb["unbatched"]},
+            {"name": "petabyte_oldest_unbatched_payout_age_seconds",
+             "doc": "Age of the oldest unbatched payout obligation (payout backlog)",
+             "labels": {"environment": env}, "value": pb["oldest_age_seconds"]},
+        ]
+    except Exception:  # noqa: BLE001
+        logger.debug("financial-integrity metrics query failed", exc_info=True)
     finally:
         dbs.close()
     return rows
@@ -2900,6 +2925,16 @@ def require_admin(user: dict = Depends(get_current_user), db: Session = Depends(
 def admin_whoami(me=Depends(require_admin)):
     """200 only for admins — lets the UI reveal the Admin link."""
     return {"admin": True, "username": me.username}
+
+
+@app.get("/admin/financial-integrity", tags=["admin"])
+def admin_financial_integrity(me=Depends(require_admin), db: Session = Depends(get_db)):
+    """On-demand financial-integrity heartbeat (#286): the same SQL ledger invariants +
+    payout backlog Prometheus watches, for the incident runbook. `ok` is false on ANY
+    imbalance — treat that as a P0 (see docs/runbooks/FINANCIAL_INTEGRITY_INCIDENT.md)."""
+    fi = dbmod.financial_integrity(db)
+    pb = dbmod.payout_backlog(db)
+    return {"ok": fi["balanced"], "ledger": fi, "payout_backlog": pb}
 
 
 @app.get("/admin/overview")

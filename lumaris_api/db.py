@@ -563,6 +563,50 @@ def ledger_is_balanced(db: Session):
     return (not broken and q(total) == 0), broken
 
 
+def financial_integrity(db: Session) -> dict:
+    """Index-friendly ledger invariants for the runtime financial heartbeat (#286/#287).
+
+    Computed entirely in SQL — it never loads the ledger into Python, so it stays cheap at
+    10k+ entries per account (#229/#230). Returns:
+      balanced       True iff EVERY transaction balances AND the whole ledger nets to zero
+      net_minor      signed sum (credits - debits) across all entries; must be 0
+      imbalanced_tx  number of ledger transactions whose debits != credits
+    """
+    from sqlalchemy import func, case
+    signed = func.sum(case((LedgerEntry.direction == CREDIT, LedgerEntry.amount),
+                           else_=-LedgerEntry.amount))
+    net = db.query(func.coalesce(signed, 0)).scalar() or 0
+    dr = func.sum(case((LedgerEntry.direction == DEBIT, LedgerEntry.amount), else_=0))
+    cr = func.sum(case((LedgerEntry.direction == CREDIT, LedgerEntry.amount), else_=0))
+    per_tx = (db.query(LedgerEntry.tx_id.label("tid"), dr.label("dr"), cr.label("cr"))
+              .group_by(LedgerEntry.tx_id).subquery())
+    imbalanced = (db.query(func.count()).select_from(per_tx)
+                  .filter(per_tx.c.dr != per_tx.c.cr).scalar()) or 0
+    return {"balanced": bool(D(net) == 0 and int(imbalanced) == 0),
+            "net_minor": float(D(net)), "imbalanced_tx": int(imbalanced)}
+
+
+def payout_backlog(db: Session) -> dict:
+    """Payout-scheduler health (#289/#294): how many settled-but-unpaid obligations are
+    waiting and how old the oldest is. 'accrued'/'available' = owed to a seller but not yet
+    placed in a batch. A growing/aging backlog means the payout scheduler has stalled."""
+    from sqlalchemy import func
+    waiting = ("accrued", "available")
+    count = (db.query(func.count(PayoutObligation.id))
+             .filter(PayoutObligation.state.in_(waiting)).scalar()) or 0
+    oldest = (db.query(func.min(PayoutObligation.created_at))
+              .filter(PayoutObligation.state.in_(waiting)).scalar())
+    age_s = 0
+    if oldest is not None:
+        now = _utcnow()
+        if now.tzinfo is not None:
+            now = now.replace(tzinfo=None)
+        if getattr(oldest, "tzinfo", None) is not None:
+            oldest = oldest.replace(tzinfo=None)
+        age_s = max(0, int((now - oldest).total_seconds()))
+    return {"unbatched": int(count), "oldest_age_seconds": age_s}
+
+
 class Platform(Base):
     __tablename__ = "platform"
     id = Column(Integer, primary_key=True)

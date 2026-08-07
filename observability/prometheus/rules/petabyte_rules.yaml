@@ -434,6 +434,58 @@ groups:
           runbook: "docs/runbooks/TEST_LIVE_MODE_MISMATCH.md"
           first_check: "Confirm STRIPE_* keys mode vs DEPLOYMENT_ENVIRONMENT; never run live keys in a demo."
 
+      # Continuous financial-integrity heartbeat (#286/#287). Unlike the write-time
+      # petabyte_ledger_imbalance_total counter above, this gauge is recomputed in SQL on
+      # every scrape, so it catches an imbalance even with NO write path (data corruption,
+      # a manual DB edit, a partial crash). petabyte_ledger_balanced is 1 iff every tx
+      # balances AND the whole ledger nets to zero.
+      - alert: PetabyteLedgerUnbalancedHeartbeat
+        expr: min by (environment) (petabyte_ledger_balanced) == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: petabyte-settlement
+        annotations:
+          summary: "Ledger heartbeat reports the double-entry ledger is UNBALANCED"
+          description: "petabyte_ledger_balanced==0 in {{ $labels.environment }} — see petabyte_ledger_imbalanced_tx and petabyte_ledger_net_minor for the magnitude."
+          impact: "Money conservation violated. This is a P0 — stop payouts immediately."
+          dashboard: "/d/petabyte-settlement/petabyte-stripe-settlement"
+          runbook: "docs/runbooks/FINANCIAL_INTEGRITY_INCIDENT.md"
+          first_check: "Engage the kill switch; run GET /admin/financial-integrity and scripts/audit_ledger.py to find the broken tx. Do NOT edit ledger rows."
+
+      # Settlement worker silently died: jobs keep COMPLETING but no capture succeeds (#288).
+      - alert: PetabyteSettlementsStalled
+        expr: |
+          sum by (environment) (increase(petabyte_jobs_total{job_status=~"completed|validated"}[30m])) > 0
+          and on (environment)
+          sum by (environment) (increase(petabyte_payment_captures_total{outcome="success"}[30m])) == 0
+        for: 15m
+        labels:
+          severity: critical
+          service: petabyte-settlement
+        annotations:
+          summary: "Jobs are completing but settlements have stopped"
+          description: "Completed jobs increased over 30m while successful captures stayed flat in {{ $labels.environment }}."
+          impact: "Delivered compute is not being charged — revenue leakage; likely a dead settlement worker."
+          dashboard: "/d/petabyte-settlement/petabyte-stripe-settlement"
+          runbook: "docs/runbooks/FINANCIAL_INTEGRITY_INCIDENT.md"
+          first_check: "Is the settlement/reaper worker alive? Check its logs and the PAYMENT_CAPTURED transition rate."
+
+      # Payout scheduler stalled: sellers owed money that never enters a batch (#289/#294).
+      - alert: PetabytePayoutBacklogAging
+        expr: max by (environment) (petabyte_oldest_unbatched_payout_age_seconds) > 1728000
+        for: 30m
+        labels:
+          severity: warning
+          service: petabyte-settlement
+        annotations:
+          summary: "Oldest unbatched payout obligation is >20 days old"
+          description: "petabyte_oldest_unbatched_payout_age_seconds > 20d (unbatched={{ $value }}) in {{ $labels.environment }}."
+          impact: "Sellers are owed settled earnings that are not being paid — the payout scheduler has likely stalled."
+          dashboard: "/d/petabyte-settlement/petabyte-stripe-settlement"
+          runbook: "docs/runbooks/FINANCIAL_INTEGRITY_INCIDENT.md"
+          first_check: "Is the biweekly payout worker/timer running? Check run_biweekly_payouts and petabyte_payout_obligations_unbatched."
+
   # ===========================================================================
   # Infrastructure alerts
   # ===========================================================================

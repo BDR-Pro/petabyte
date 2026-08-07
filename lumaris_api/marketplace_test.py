@@ -127,6 +127,15 @@ ok("health: platform revenue + seller earnings real", hj["economics_minor"]["pla
 sm = c.get("/marketplace/health/summary").json()
 ok("health summary is generated from live numbers", "Marketplace status" in sm["summary"] and "GMV" in sm["summary"])
 
+# ---- financial-integrity heartbeat gauges are emitted by the scrape-time collector (#286) ----
+_gauges = {r["name"]: r["value"] for r in main._marketplace_metrics()}
+for _g in ("petabyte_ledger_balanced", "petabyte_ledger_imbalanced_tx",
+           "petabyte_ledger_net_minor", "petabyte_payout_obligations_unbatched",
+           "petabyte_oldest_unbatched_payout_age_seconds"):
+    ok(f"collector emits {_g}", _g in _gauges)
+ok("ledger heartbeat reports balanced on this marketplace",
+   _gauges.get("petabyte_ledger_balanced") == 1 and _gauges.get("petabyte_ledger_imbalanced_tx") == 0)
+
 # ---- explainable routing + predicted success ----
 r = c.post("/route", json={"min_vram": 8, "hours": 1}).json()
 ok("route selects the bookable node", len(r.get("selected", [])) == 1)

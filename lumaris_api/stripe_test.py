@@ -750,6 +750,28 @@ ok("finding B: ledger stays balanced despite telemetry raising throughout settle
    _balB and not _brokenB)
 
 
+# ============ FINANCIAL-INTEGRITY HEARTBEAT (#286/#287) ============
+# The SQL invariant agrees with ledger_is_balanced on the healthy ledger this suite built,
+# AND detects a deliberately-injected imbalance. Runs LAST — it corrupts the ledger on
+# purpose, and the DB file is deleted immediately after.
+_fs = dbmod.SessionLocal()
+_fi = dbmod.financial_integrity(_fs)
+ok("financial_integrity: the suite's real ledger is balanced (SQL invariant, no row load)",
+   _fi["balanced"] and _fi["imbalanced_tx"] == 0 and _fi["net_minor"] == 0)
+_pb = dbmod.payout_backlog(_fs)
+ok("payout_backlog: non-negative unbatched count + oldest age",
+   _pb["unbatched"] >= 0 and _pb["oldest_age_seconds"] >= 0)
+# Inject a single unbalanced leg into an existing tx -> that tx no longer balances.
+_anytx = _fs.query(dbmod.LedgerTx).first()
+_fs.add(dbmod.LedgerEntry(tx_id=_anytx.id, account=dbmod.PLATFORM_REVENUE,
+                          direction=dbmod.CREDIT, amount=1, entry_type="imbalance_probe"))
+_fs.commit()
+_bad = dbmod.financial_integrity(_fs)
+ok("financial_integrity: a deliberately-injected imbalance is DETECTED",
+   (not _bad["balanced"]) and _bad["imbalanced_tx"] >= 1)
+_fs.close()
+
+
 print(f"\n=== stripe: {PASSES} passed, {FAILS} failed ===")
 for f in ("stripe_test.db", "stripe_test.db-wal", "stripe_test.db-shm"):
     if os.path.exists(f):
