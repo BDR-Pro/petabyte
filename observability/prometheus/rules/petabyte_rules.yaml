@@ -408,7 +408,7 @@ groups:
         annotations:
           summary: "Double-entry ledger imbalance detected"
           description: "petabyte_ledger_imbalance_total increased in {{ $labels.environment }} — debits != credits."
-          impact: "Money conservation violated. STOP settlement; this is a P1."
+          impact: "Money conservation violated. STOP settlement; this is a P0 (severity: critical)."
           dashboard: "/d/petabyte-settlement/petabyte-stripe-settlement"
           runbook: "docs/runbooks/LEDGER_IMBALANCE.md"
           first_check: "Engage kill switch. Identify the broken transaction and freeze payouts."
@@ -453,23 +453,30 @@ groups:
           runbook: "docs/runbooks/FINANCIAL_INTEGRITY_INCIDENT.md"
           first_check: "Engage the kill switch; run GET /admin/financial-integrity and scripts/audit_ledger.py to find the broken tx. Do NOT edit ledger rows."
 
-      # Settlement worker silently died: jobs keep COMPLETING but no capture succeeds (#288).
+      # Settlement worker silently died: metering finalizes but no capture succeeds (#288).
+      # Correlated PER (environment, payment_mode): the "work delivered, must be captured"
+      # signal is transitions INTO METERING_FINALIZED (which carries payment_mode), NOT
+      # environment-wide petabyte_jobs_total (which has no payment_mode and would join one
+      # mode's completing jobs to another mode's idle capture series). Both operands are keyed
+      # by (environment, payment_mode) and joined `on (environment, payment_mode)`, so the
+      # alert only fires for a mode that ACTUALLY finalized metering in the last 30m and did
+      # NOT capture — and it keeps payment_mode on the result (one alert per affected mode).
       - alert: PetabyteSettlementsStalled
         expr: |
-          sum by (environment) (increase(petabyte_jobs_total{job_status=~"completed|validated"}[30m])) > 0
-          and on (environment)
-          sum by (environment) (increase(petabyte_payment_captures_total{outcome="success"}[30m])) == 0
+          sum by (environment, payment_mode) (increase(petabyte_transaction_transitions_total{to_state="METERING_FINALIZED"}[30m])) > 0
+          and on (environment, payment_mode)
+          sum by (environment, payment_mode) (increase(petabyte_payment_captures_total{outcome="success"}[30m])) == 0
         for: 15m
         labels:
           severity: critical
           service: petabyte-settlement
         annotations:
-          summary: "Jobs are completing but settlements have stopped"
-          description: "Completed jobs increased over 30m while successful captures stayed flat in {{ $labels.environment }}."
-          impact: "Delivered compute is not being charged — revenue leakage; likely a dead settlement worker."
+          summary: "Metering finalized but {{ $labels.payment_mode }} settlements have stopped"
+          description: "Metering finalized for {{ $labels.payment_mode }} work over 30m while successful {{ $labels.payment_mode }} captures stayed flat in {{ $labels.environment }} — that mode has delivered, uncharged compute."
+          impact: "Delivered compute is not being charged in {{ $labels.payment_mode }} mode — revenue leakage; likely a dead settlement worker. Correlated per mode, so a separate TEST capture stream can neither mask a LIVE outage nor page for an idle mode."
           dashboard: "/d/petabyte-settlement/petabyte-stripe-settlement"
           runbook: "docs/runbooks/FINANCIAL_INTEGRITY_INCIDENT.md"
-          first_check: "Is the settlement/reaper worker alive? Check its logs and the PAYMENT_CAPTURED transition rate."
+          first_check: "Is the settlement/reaper worker alive for {{ $labels.payment_mode }}? Check its logs and the METERING_FINALIZED -> PAYMENT_CAPTURED transition rate split by payment_mode."
 
       # Payout scheduler stalled: sellers owed money that never enters a batch (#289/#294).
       - alert: PetabytePayoutBacklogAging

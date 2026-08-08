@@ -11,6 +11,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:      # manual trigger — required for the opt-in real Mailgun send job
 
 # Least privilege: the whole suite only needs to read the repo. No job pushes, comments,
 # or mutates GitHub state — checkouts below also drop the persisted token.
@@ -116,6 +117,18 @@ jobs:
         working-directory: lumaris_api
         run: python payout_test.py
 
+      - name: e2e safety — no silent fake gateway / connect-mode / payout-hold clock
+        working-directory: lumaris_api
+        run: python e2e_safety_test.py
+
+      - name: e2e flow — dispatch ONCE -> auto meter+capture -> held payout (idempotent)
+        working-directory: lumaris_api
+        run: python stripe_e2e_flow_test.py
+
+      - name: payout readiness — provider-agnostic seller eligibility (verified rail, not Connect)
+        working-directory: lumaris_api
+        run: python payout_readiness_test.py
+
       - name: matmul result validation (offline)
         working-directory: lumaris_api
         run: python matmul_validation_test.py
@@ -142,6 +155,14 @@ jobs:
         # any financial drift.
         run: python ../scripts/audit_ledger.py
 
+      - name: ledger audit — sign-aware reconciliation (wrong-direction leg)
+        working-directory: lumaris_api
+        # Proves the audit rejects a mis-directed capture leg that still balances — a plain
+        # magnitude sum would have passed it. Offline (forces its own throwaway SQLite DB).
+        env:
+          DATABASE_URL: ""
+        run: python ../scripts/audit_ledger_test.py
+
   config:
     # GitHub-config source of truth: manifest freshness, the validator (defaults,
     # formats, test/live separation, fail-closed secrets), the deploy-env generator's
@@ -155,6 +176,12 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -r lumaris_api/requirements.txt
+      - name: repo-root import (canonical `uvicorn lumaris_api.main:app` works)
+        run: python scripts/repo_root_import_test.py
+      - name: agent dependency/import audit (all hard runtime imports are declared)
+        run: python lumaris_agent/deps_audit_test.py
+      - name: e2e runner safety (refuses live Stripe; masks + redacts secrets)
+        run: python scripts/e2e_marketplace_runner_test.py
       - name: config toolchain tests
         working-directory: lumaris_api
         run: python config_test.py
@@ -297,8 +324,11 @@ jobs:
 
   email-integration:
     # Sends a REAL transactional email via the Mailgun HTTP API to prove end-to-end
-    # delivery (DKIM/SPF, HTML + text). The script self-skips (exit 0) when the secret is
-    # absent (fork PRs, or before the secret is set), so it never blocks unrelated changes.
+    # delivery (DKIM/SPF, HTML + text). MANUAL-ONLY: it runs solely on workflow_dispatch, so it
+    # NEVER fires on a push to main or on a pull request — no email is sent per commit. Trigger
+    # it deliberately from the Actions tab ("tests" -> Run workflow) when you want to verify
+    # delivery. The script also self-skips (exit 0) when MAILGUN_API_KEY is absent.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

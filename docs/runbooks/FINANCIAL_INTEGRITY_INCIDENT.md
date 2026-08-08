@@ -1,12 +1,22 @@
 # Runbook: Financial-integrity incident (ledger imbalance / duplicate payout / stalled settlement)
 
-**Severity: P0.** Fires from `PetabyteLedgerUnbalancedHeartbeat`, `PetabyteLedgerImbalance`,
-`PetabyteSettlementsStalled`, `PetabytePayoutBacklogAging`, or a suspected duplicate payout.
+**P0 (critical) triggers — do the full response below, starting with §1:**
+`PetabyteLedgerUnbalancedHeartbeat`, `PetabyteLedgerImbalance`, `PetabyteSettlementsStalled`,
+`PetabyteTestLiveModeMismatch` (all `severity: critical`), or a suspected duplicate payout.
+
+**Warning trigger — skip §1's kill switch ONLY when it is the SOLE active alert:**
+`PetabytePayoutBacklogAging` is `severity: warning`, not P0. If **any** critical alert above is
+also firing, ignore this paragraph and take the full P0 path (§1 kill switch, pause bookings).
+When `PetabytePayoutBacklogAging` is the only active trigger, it most likely means sellers are
+being paid late rather than a conservation breach — but that is not yet proven. Go to the
+payout-backlog diagnosis in §3, freeze payouts if a duplicate/ambiguous payout is also
+suspected, and run the §5 audit to **establish** whether an imbalance exists. Escalate to the
+full P0 path the moment the audit shows one.
 
 The governing rule for every step below: **preserve evidence and never blindly edit ledger
 rows.** The ledger is append-only; corrections are compensating transactions, not UPDATEs.
 
-## 1. Stop the bleeding (first 5 minutes)
+## 1. Stop the bleeding (first 5 minutes) — P0/critical triggers only
 - Engage the **kill switch** so no NEW bookings start: set `Platform.bookings_paused = true`
   (admin panel) — running rentals finish and settle normally.
 - **Freeze payouts**: stop the biweekly payout worker/timer (`systemctl stop lumaris-payout*`

@@ -48,8 +48,14 @@ def _sqlite_env():
 
 
 def _schema_env():
+    # ABSOLUTE, ROOT-anchored path. The schema_clean gate runs in lumaris_api/ while
+    # financial_audit runs in the repo root; a RELATIVE sqlite path would resolve to two
+    # different files, so financial_audit would audit an empty DB the schema gate never
+    # populated. An absolute path makes both gates share ONE schema DB (built by
+    # schema_clean, then read read-only by financial_audit).
+    db_path = os.path.join(ROOT, "_series_a_schema.db")
     env = dict(os.environ)
-    env["DATABASE_URL"] = "sqlite:///./_series_a_schema.db"
+    env["DATABASE_URL"] = f"sqlite:///{db_path}"
     env.setdefault("SECRET_KEY", "x")
     env.setdefault("SERVER_PRIVATE_KEY", "x")
     return env
@@ -87,6 +93,25 @@ GATES = [
     {"id": "financial_audit", "title": "Ledger integrity + booking/payout reconciliation",
      "prio": "P0", "cwd": ROOT, "quick": True, "env": _schema_env,
      "argv": [PY, "scripts/audit_ledger.py"]},
+    {"id": "audit_ledger_signed", "title": "Ledger audit is sign-aware (wrong-direction leg)",
+     "prio": "P1", "cwd": ROOT, "quick": True, "env": _sqlite_env,
+     "argv": [PY, "scripts/audit_ledger_test.py"]},
+    {"id": "repo_root_import", "title": "API imports from the repo root (canonical uvicorn path)",
+     "prio": "P0", "cwd": ROOT, "quick": True, "argv": [PY, "scripts/repo_root_import_test.py"]},
+    {"id": "agent_deps", "title": "Agent runtime imports are all declared in requirements",
+     "prio": "P0", "cwd": ROOT, "quick": True, "argv": [PY, "lumaris_agent/deps_audit_test.py"]},
+    {"id": "e2e_safety", "title": "E2E safety (no silent fake gw / connect mode / payout clock)",
+     "prio": "P0", "cwd": API, "env": _sqlite_env, "quick": True,
+     "argv": [PY, "e2e_safety_test.py"]},
+    {"id": "e2e_runner_safety", "title": "E2E runner refuses live Stripe + redacts secrets",
+     "prio": "P0", "cwd": ROOT, "quick": True,
+     "argv": [PY, "scripts/e2e_marketplace_runner_test.py"]},
+    {"id": "stripe_e2e_flow", "title": "Dispatch-once auto-capture + idempotency (fake gateway)",
+     "prio": "P1", "cwd": API, "env": _sqlite_env,
+     "argv": [PY, "stripe_e2e_flow_test.py"]},
+    {"id": "payout_readiness", "title": "Provider-agnostic seller payout readiness (verified rail)",
+     "prio": "P0", "cwd": API, "env": _sqlite_env, "quick": True,
+     "argv": [PY, "payout_readiness_test.py"]},
     {"id": "secret_scan", "title": "No obvious committed secrets (best-effort)",
      "prio": "P0", "cwd": ROOT, "quick": True, "kind": "secret_scan"},
     # ---- offline test suites (heavier) ----
@@ -151,15 +176,23 @@ _SECRET_PATTERNS = [
 ]
 
 
-def _run_secret_scan() -> tuple[int, str]:
+def _run_secret_scan() -> tuple[str, int | None, str]:
     """Best-effort scan of TRACKED files for obvious real secrets. Authoritative scanning is
-    gitleaks in CI; this is a fast local backstop that excludes test fixtures/placeholders."""
+    gitleaks in CI; this is a fast local backstop that excludes test fixtures/placeholders.
+
+    Returns (status, exit_code, detail). If the file list can't be obtained the scan did not
+    actually run, so it is reported as SKIP — never PASS. Recording an un-run scan as a pass
+    would let a release claim "no committed secrets" on evidence that was never gathered."""
     import re
     try:
-        files = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True,
-                               text=True, check=True).stdout.split()
+        # NUL-delimited: a tracked filename containing whitespace/newlines would otherwise be
+        # split into invalid paths, whose read errors are swallowed below — silently skipping
+        # that file and letting the scan report "pass" without ever reading it.
+        files = [p for p in subprocess.run(
+            ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True,
+            text=True, check=True).stdout.split("\0") if p]
     except Exception as e:  # noqa: BLE001
-        return 0, f"skip: git ls-files unavailable ({type(e).__name__})"
+        return "skip", None, f"git ls-files unavailable ({type(e).__name__}) — scan not run"
     pats = [re.compile(p) for p in _SECRET_PATTERNS]
     hits = []
     for rel in files:
@@ -184,8 +217,8 @@ def _run_secret_scan() -> tuple[int, str]:
         except (OSError, UnicodeError):
             continue
     if hits:
-        return 1, "POSSIBLE secrets: " + ", ".join(hits[:20])
-    return 0, "no obvious committed secrets"
+        return "fail", 1, "POSSIBLE secrets: " + ", ".join(hits[:20])
+    return "pass", 0, "no obvious committed secrets"
 
 
 def _postgres_available() -> bool:
@@ -211,8 +244,8 @@ def run_gate(g: dict) -> dict:
         return _res(g, "pass" if p.returncode == 0 else "warn", p.returncode, started,
                     _tail(p.stdout + p.stderr))
     if kind == "secret_scan":
-        code, detail = _run_secret_scan()
-        return _res(g, "pass" if code == 0 else "fail", code, started, detail)
+        status, code, detail = _run_secret_scan()
+        return _res(g, status, code, started, detail)
     if kind == "coverage":
         p = subprocess.run([PY, "scripts/verify_payout_country_coverage.py"], cwd=ROOT,
                            capture_output=True, text=True)
@@ -275,8 +308,13 @@ def main(argv=None) -> int:
     p0_failed = _count("P0", "fail")
     p0_skipped = _count("P0", "skip")
     p0_passed = _count("P0", "pass")
-    release_ready = (p0_failed == 0 and p0_skipped == 0
-                     and sum(1 for r in results if r["priority"] == "P0"))
+    # release_ready may ONLY be claimed after a FULL run. A --quick or --only run executes a
+    # subset of P0 gates, so "0 P0 failures" among them says nothing about the gates that
+    # never ran (smoke, adversarial, stripe, postgres invariants, …). Claiming readiness from
+    # a partial run would be the exact "someone said tests passed" failure this tool exists to
+    # prevent.
+    is_full_run = not args.quick and not only
+    release_ready = (is_full_run and p0_failed == 0 and p0_skipped == 0 and p0_passed > 0)
     bundle = {
         "tool": "verify-series-a",
         "generated_at": datetime.datetime.now(datetime.timezone.utc)
@@ -303,8 +341,12 @@ def main(argv=None) -> int:
     out = os.path.join(EVID, f"series-a-{sha}.json")
     with open(out, "w", encoding="utf-8") as f:
         json.dump(bundle, f, indent=2)
-    with open(os.path.join(EVID, "latest.json"), "w", encoding="utf-8") as f:
-        json.dump(bundle, f, indent=2)
+    # latest.json is the canonical "release verdict" pointer, so only a FULL run may write it.
+    # A --quick / --only run would otherwise clobber a real verdict with a partial one that
+    # carries release_ready=false and a subset of gates.
+    if is_full_run:
+        with open(os.path.join(EVID, "latest.json"), "w", encoding="utf-8") as f:
+            json.dump(bundle, f, indent=2)
 
     print(f"\nP0 passed={p0_passed} failed={p0_failed} skipped={p0_skipped} "
           f"| release_ready={bundle['release_ready']}")

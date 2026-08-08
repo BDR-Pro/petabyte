@@ -57,6 +57,11 @@ def _take_rate_bps(default_bps: int = 1000) -> int:
         raise PricingError(f"PLATFORM_TAKE_RATE is not a number: {raw!r}")
     if not math.isfinite(rate):
         raise PricingError(f"PLATFORM_TAKE_RATE must be finite (got {raw!r})")
+    # Enforce the 0..1 domain BEFORE the basis-point conversion — otherwise a finite but
+    # absurd value (e.g. 1e308) overflows int(round(rate*10000)) into an OverflowError that
+    # escapes the PricingError contract, and 1.1 would silently mean a 110% commission.
+    if not (0.0 <= rate <= 1.0):
+        raise PricingError(f"PLATFORM_TAKE_RATE must be between 0 and 1 (got {raw!r})")
     return int(round(rate * 10000))
 
 

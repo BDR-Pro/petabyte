@@ -219,12 +219,48 @@ def _finish_op(db, op, *, state: str, external_id: str | None = None, error: str
 
 
 # ----------------------------------------------------------------- onboarding
+class ConnectedAccountModeMismatch(TransactionError):
+    """The seller's existing connected account was minted by a DIFFERENT gateway (fake vs
+    real) than the one now running. Reusing it would either treat a fake test account as a
+    real Stripe account or vice versa — always fail closed and require a deliberate migration."""
+
+
+def _current_gateway_mode() -> str:
+    """'fake' when the offline FakeStripeGateway is active, else 'real'."""
+    from stripe_gateway import FakeStripeGateway
+    return "fake" if isinstance(get_gateway(), FakeStripeGateway) else "real"
+
+
+def _account_gateway_mode(ca: ConnectedAccount) -> str:
+    """Classify an existing account. The stored marker wins; for legacy rows written before the
+    marker existed, infer from the id prefix — FakeStripeGateway always mints 'acct_fake…'."""
+    stored = getattr(ca, "gateway_mode", None)
+    if stored in ("real", "fake"):
+        return stored
+    return "fake" if str(ca.stripe_account_id or "").startswith("acct_fake") else "real"
+
+
 def get_or_create_connected_account(db, user: User, *, country: str = None,
                                     email: str = None) -> ConnectedAccount:
-    """Idempotent: one connected account per seller. A repeat call returns the same
-    account and never creates a second Stripe account."""
+    """Idempotent: one connected account per seller. A repeat call returns the same account and
+    never creates a second Stripe account — UNLESS the stored account belongs to a different
+    gateway mode than the one now running, in which case it fails closed
+    (ConnectedAccountModeMismatch) so a fake test account can never masquerade as real Stripe."""
+    current = _current_gateway_mode()
     ca = db.query(ConnectedAccount).filter(ConnectedAccount.user_id == user.id).first()
     if ca:
+        existing_mode = _account_gateway_mode(ca)
+        if existing_mode != current:
+            raise ConnectedAccountModeMismatch(
+                f"seller {user.id} already has a {existing_mode}-gateway connected account "
+                f"({ca.stripe_account_id}), but this process is running the {current} gateway. "
+                f"Refusing to reuse it — a {existing_mode} account can never satisfy the "
+                f"{current} gateway. Migrate deliberately: remove this seller's {existing_mode} "
+                f"connected account, then re-onboard under the {current} gateway.")
+        # Backfill the marker on a legacy row of the SAME mode (never a mode change).
+        if getattr(ca, "gateway_mode", None) not in ("real", "fake"):
+            ca.gateway_mode = existing_mode
+            db.add(ca); db.commit()
         return ca
     gw = get_gateway()
     country = (country or os.getenv("PLATFORM_DEFAULT_COUNTRY", "US")).upper()
@@ -234,7 +270,8 @@ def get_or_create_connected_account(db, user: User, *, country: str = None,
     ca = ConnectedAccount(user_id=user.id, stripe_account_id=acct["id"],
                           country=acct.get("country"),
                           default_currency=acct.get("default_currency"),
-                          onboarding_state="created", last_synced_at=_now())
+                          onboarding_state="created", last_synced_at=_now(),
+                          gateway_mode=current)     # stamp the minting gateway
     db.add(ca); db.commit(); db.refresh(ca)
     _sync_from_stripe(db, ca, acct)
     return ca
@@ -279,18 +316,22 @@ def _sync_from_stripe(db, ca: ConnectedAccount, acct: dict) -> ConnectedAccount:
         ca.onboarding_state = "onboarding"
     ca.last_synced_at = _now()
     db.add(ca); db.commit(); db.refresh(ca)
-    # A seller may only offer paid supply when Stripe can actually pay them.
+    # A seller may only offer paid supply when at least one payout rail can actually pay them.
+    # Decided by the provider-agnostic readiness service (Connect is one rail), not by reading
+    # Connect fields directly here — so onboarding any future rail flips this the same way.
     seller = get_user_by_id(db, ca.user_id)
     if seller is not None:
-        seller.can_accept_paid_jobs = bool(ca.payout_ready() and seller.can_accept_paid_jobs
-                                           if False else ca.payout_ready())
+        import payout_readiness
+        seller.can_accept_paid_jobs = payout_readiness.is_seller_payout_ready(db, ca.user_id)
         db.add(seller); db.commit()
     return ca
 
 
 def seller_payout_ready(db, seller_id: int) -> bool:
-    ca = db.query(ConnectedAccount).filter(ConnectedAccount.user_id == seller_id).first()
-    return bool(ca and ca.payout_ready())
+    """Provider-agnostic seller payout readiness. Thin back-compat wrapper that delegates to the
+    centralized payout_readiness service (which considers ALL rails, not just Stripe Connect)."""
+    import payout_readiness
+    return payout_readiness.is_seller_payout_ready(db, seller_id)
 
 
 # ----------------------------------------------------------------- quote
@@ -322,10 +363,18 @@ def authorize(db, buyer: User, spec: SellerSpec, estimated_seconds: int, *,
         raise TransactionError("cannot rent your own hardware")
     if not spec.attested or not spec_is_live(spec) or (spec.available_units or 0) < 1:
         raise TransactionError("GPU is not online/available/eligible")
-    ca = db.query(ConnectedAccount).filter(ConnectedAccount.user_id == spec.user_id).first()
-    if not ca or not ca.payout_ready():
+    # Provider-agnostic eligibility: the seller must have >= 1 verified, enabled, payout-ready
+    # rail (Connect is the one implemented rail today). Marketplace logic asks the centralized
+    # readiness service, never a specific provider's account fields.
+    import payout_readiness
+    if not payout_readiness.is_seller_payout_ready(db, spec.user_id):
         raise TransactionError("seller is not payout-ready")
 
+    # The Connect account (when present) is recorded on the tx as the transfer destination for
+    # the CURRENT Stripe-Connect payout path. Looked up separately from the eligibility check:
+    # readiness is provider-agnostic, while this id is Connect-specific and may be None for a
+    # seller made eligible by a future non-Connect rail (the transfer path would then differ).
+    ca = db.query(ConnectedAccount).filter(ConnectedAccount.user_id == spec.user_id).first()
     q = quote(db, spec, estimated_seconds, cfg)
     snap = q["snapshot"]
     tx = ComputeTransaction(
@@ -334,7 +383,7 @@ def authorize(db, buyer: User, spec: SellerSpec, estimated_seconds: int, *,
         estimated_amount=q["estimated_compute_amount"],
         authorization_amount=q["authorization_amount"],
         status="DRAFT", reconciliation_status="pending",
-        stripe_connected_account_id=ca.stripe_account_id, is_demo=is_demo)
+        stripe_connected_account_id=(ca.stripe_account_id if ca else None), is_demo=is_demo)
     db.add(tx); db.commit(); db.refresh(tx)
 
     key = idem_key("payment-intent", tx)
