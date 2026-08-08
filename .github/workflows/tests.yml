@@ -125,6 +125,10 @@ jobs:
         working-directory: lumaris_api
         run: python stripe_e2e_flow_test.py
 
+      - name: payout readiness — provider-agnostic seller eligibility (verified rail, not Connect)
+        working-directory: lumaris_api
+        run: python payout_readiness_test.py
+
       - name: matmul result validation (offline)
         working-directory: lumaris_api
         run: python matmul_validation_test.py

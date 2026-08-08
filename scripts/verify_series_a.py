@@ -109,6 +109,9 @@ GATES = [
     {"id": "stripe_e2e_flow", "title": "Dispatch-once auto-capture + idempotency (fake gateway)",
      "prio": "P1", "cwd": API, "env": _sqlite_env,
      "argv": [PY, "stripe_e2e_flow_test.py"]},
+    {"id": "payout_readiness", "title": "Provider-agnostic seller payout readiness (verified rail)",
+     "prio": "P0", "cwd": API, "env": _sqlite_env, "quick": True,
+     "argv": [PY, "payout_readiness_test.py"]},
     {"id": "secret_scan", "title": "No obvious committed secrets (best-effort)",
      "prio": "P0", "cwd": ROOT, "quick": True, "kind": "secret_scan"},
     # ---- offline test suites (heavier) ----

@@ -4272,6 +4272,18 @@ def connect_status(user: dict = Depends(get_current_user), db: Session = Depends
             "why_blocked": None if ca.payout_ready() else " ".join(reasons) or "Onboarding incomplete."}
 
 
+@app.get("/payments/payout/readiness", tags=["payments"])
+def payout_readiness_status(user: dict = Depends(get_current_user),
+                            db: Session = Depends(get_db)):
+    """PROVIDER-AGNOSTIC seller payout readiness — the marketplace's single source of truth for
+    "can I accept paid jobs?". Rail-neutral: it reports whichever verified, enabled rail makes
+    the seller eligible (Connect today; future rails plug in without changing this contract).
+    Never exposes provider secrets, bank account numbers, or identity details."""
+    import payout_readiness
+    me = get_user_by_username(db, _username(user))
+    return payout_readiness.get_seller_payout_readiness(db, me)
+
+
 # ---------------- Buyer: quote + authorize + inspect ----------------
 def _spec_or_404(db, public_id):
     from db import get_spec_by_public_id

@@ -316,18 +316,22 @@ def _sync_from_stripe(db, ca: ConnectedAccount, acct: dict) -> ConnectedAccount:
         ca.onboarding_state = "onboarding"
     ca.last_synced_at = _now()
     db.add(ca); db.commit(); db.refresh(ca)
-    # A seller may only offer paid supply when Stripe can actually pay them.
+    # A seller may only offer paid supply when at least one payout rail can actually pay them.
+    # Decided by the provider-agnostic readiness service (Connect is one rail), not by reading
+    # Connect fields directly here — so onboarding any future rail flips this the same way.
     seller = get_user_by_id(db, ca.user_id)
     if seller is not None:
-        seller.can_accept_paid_jobs = bool(ca.payout_ready() and seller.can_accept_paid_jobs
-                                           if False else ca.payout_ready())
+        import payout_readiness
+        seller.can_accept_paid_jobs = payout_readiness.is_seller_payout_ready(db, ca.user_id)
         db.add(seller); db.commit()
     return ca
 
 
 def seller_payout_ready(db, seller_id: int) -> bool:
-    ca = db.query(ConnectedAccount).filter(ConnectedAccount.user_id == seller_id).first()
-    return bool(ca and ca.payout_ready())
+    """Provider-agnostic seller payout readiness. Thin back-compat wrapper that delegates to the
+    centralized payout_readiness service (which considers ALL rails, not just Stripe Connect)."""
+    import payout_readiness
+    return payout_readiness.is_seller_payout_ready(db, seller_id)
 
 
 # ----------------------------------------------------------------- quote
@@ -359,10 +363,18 @@ def authorize(db, buyer: User, spec: SellerSpec, estimated_seconds: int, *,
         raise TransactionError("cannot rent your own hardware")
     if not spec.attested or not spec_is_live(spec) or (spec.available_units or 0) < 1:
         raise TransactionError("GPU is not online/available/eligible")
-    ca = db.query(ConnectedAccount).filter(ConnectedAccount.user_id == spec.user_id).first()
-    if not ca or not ca.payout_ready():
+    # Provider-agnostic eligibility: the seller must have >= 1 verified, enabled, payout-ready
+    # rail (Connect is the one implemented rail today). Marketplace logic asks the centralized
+    # readiness service, never a specific provider's account fields.
+    import payout_readiness
+    if not payout_readiness.is_seller_payout_ready(db, spec.user_id):
         raise TransactionError("seller is not payout-ready")
 
+    # The Connect account (when present) is recorded on the tx as the transfer destination for
+    # the CURRENT Stripe-Connect payout path. Looked up separately from the eligibility check:
+    # readiness is provider-agnostic, while this id is Connect-specific and may be None for a
+    # seller made eligible by a future non-Connect rail (the transfer path would then differ).
+    ca = db.query(ConnectedAccount).filter(ConnectedAccount.user_id == spec.user_id).first()
     q = quote(db, spec, estimated_seconds, cfg)
     snap = q["snapshot"]
     tx = ComputeTransaction(
@@ -371,7 +383,7 @@ def authorize(db, buyer: User, spec: SellerSpec, estimated_seconds: int, *,
         estimated_amount=q["estimated_compute_amount"],
         authorization_amount=q["authorization_amount"],
         status="DRAFT", reconciliation_status="pending",
-        stripe_connected_account_id=ca.stripe_account_id, is_demo=is_demo)
+        stripe_connected_account_id=(ca.stripe_account_id if ca else None), is_demo=is_demo)
     db.add(tx); db.commit(); db.refresh(tx)
 
     key = idem_key("payment-intent", tx)
