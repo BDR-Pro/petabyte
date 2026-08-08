@@ -13,7 +13,11 @@ Run: python e2e_safety_test.py
 """
 import os
 
-os.environ.setdefault("DATABASE_URL", "sqlite:///./e2e_safety_test.db")
+# FORCE an isolated offline SQLite DB. This is an offline safety suite (gateway guards,
+# connect-account mode, payout-hold clock) and MUST NOT inherit a shared DATABASE_URL: on a
+# shared Postgres the FakeStripeGateway's deterministic account ids (acct_fake000001…) collide
+# with rows other suites leave behind. Never `setdefault` here.
+os.environ["DATABASE_URL"] = "sqlite:///./e2e_safety_test.db"
 os.environ["SECRET_KEY"] = "test-jwt-secret"
 os.environ["SERVER_PRIVATE_KEY"] = __import__(
     "cryptography.fernet", fromlist=["Fernet"]).Fernet.generate_key().decode()

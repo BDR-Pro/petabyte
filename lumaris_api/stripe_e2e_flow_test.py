@@ -14,7 +14,7 @@ This locks the highest-priority operator finding from the live run: it looked li
   * the seller payout is a HELD obligation (14-day hold) — PENDING BY DESIGN, not transferred.
 
 Offline: FakeStripeGateway + TestClient + the REAL Ed25519 agent signer. No network.
-Run: python stripe_e2e_flow_test.py   (SQLite by default; set DATABASE_URL for Postgres)
+Run: python stripe_e2e_flow_test.py   (always uses its own isolated SQLite DB)
 """
 import base64
 import os
@@ -22,7 +22,11 @@ import sys
 import tempfile
 import time
 
-os.environ.setdefault("DATABASE_URL", "sqlite:///./stripe_e2e_flow_test.db")
+# FORCE an isolated offline SQLite DB. This functional flow suite uses the FakeStripeGateway,
+# whose deterministic account ids (acct_fake000001…) collide on a SHARED Postgres with rows
+# other suites leave behind. It must own its DB, never inherit one — never `setdefault` here.
+# (Concurrency/race correctness is proven separately in postgres_test.py, not here.)
+os.environ["DATABASE_URL"] = "sqlite:///./stripe_e2e_flow_test.db"
 os.environ["SECRET_KEY"] = "test-jwt-secret"
 os.environ["SERVER_PRIVATE_KEY"] = __import__(
     "cryptography.fernet", fromlist=["Fernet"]).Fernet.generate_key().decode()
