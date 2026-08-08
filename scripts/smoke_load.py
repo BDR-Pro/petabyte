@@ -201,7 +201,10 @@ def sample_loop(stop_evt, spec_ids):
         s = None
         try:
             s = dbmod.SessionLocal()
-            running = s.query(func.count(CT.id)).filter(CT.status == "RUNNING").scalar() or 0
+            # Scope RUNNING to THIS run's specs — a concurrent/unrelated run in a shared DB must
+            # not inflate max_running or block draining (no_orphan_running_jobs).
+            running = s.query(func.count(CT.id)).filter(
+                CT.status == "RUNNING", CT.spec_id.in_(spec_ids)).scalar() or 0
             rows = s.query(S.id, S.available_units, S.total_units).filter(
                 S.id.in_(spec_ids)).all()
             reserved = sum(max(0, (tu or 0) - (au or 0)) for _, au, tu in rows)
@@ -488,7 +491,8 @@ def main():
             _s = dbmod.SessionLocal()
             try:
                 running_now = _s.query(_func.count(dbmod.ComputeTransaction.id)).filter(
-                    dbmod.ComputeTransaction.status == "RUNNING").scalar() or 0
+                    dbmod.ComputeTransaction.status == "RUNNING",
+                    dbmod.ComputeTransaction.spec_id.in_(spec_ids)).scalar() or 0
             except Exception:
                 running_now = -1   # transient read error: keep waiting, don't stop early
             finally:
@@ -508,7 +512,8 @@ def main():
                        s.query(dbmod.SellerSpec).filter(
                            dbmod.SellerSpec.id.in_(spec_ids)).all()}
         running_left = s.query(func.count(dbmod.ComputeTransaction.id)).filter(
-            dbmod.ComputeTransaction.status == "RUNNING").scalar() or 0
+            dbmod.ComputeTransaction.status == "RUNNING",
+            dbmod.ComputeTransaction.spec_id.in_(spec_ids)).scalar() or 0
         held = s.query(func.count(dbmod.Booking.id)).filter(
             dbmod.Booking.spec_id.in_(spec_ids),
             dbmod.Booking.status == "stripe_reserved").scalar() or 0

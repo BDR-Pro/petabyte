@@ -130,7 +130,7 @@ smoke-e2e-gpu:
 # ---- real Stripe TEST + remote GPU marketplace E2E (one command) ------------
 # Preflight only: checks API/DB health, that STRIPE_SECRET_KEY is a sk_test_ key, and that the
 # spec is bookable (payout-ready seller). Creates NO payment. Safe to run anytime.
-#   make e2e-preflight  [SPEC=<public-spec-id>]  [API=http://host:8000]
+#   make e2e-preflight  [SPEC=<public-spec-id>]  [E2E_API=http://host:8000]
 e2e-preflight:
 	python3 scripts/e2e_marketplace_test.py --preflight-only \
 		$(if $(SPEC),--spec $(SPEC),) $(if $(E2E_API),--api $(E2E_API),) $(ARGS)

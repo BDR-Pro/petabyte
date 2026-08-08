@@ -239,7 +239,10 @@ def print_preflight(checks: dict):
 # ------------------------------------------------------------------ main flow
 def run(args) -> dict:
     import httpx  # noqa: F401  (ensures dependency present early)
-    sk = assert_stripe_test_key_or_abort()
+    # A real run REQUIRES a Stripe TEST key up front (aborts on a live/missing key). Preflight
+    # defers the check so it can still render the table and REPORT the key state (Stripe key /
+    # Stripe mode rows) instead of exiting before printing anything.
+    sk = None if args.preflight_only else assert_stripe_test_key_or_abort()
 
     # unique, throwaway buyer — no hard-coded prod creds, password kept only in memory
     run_tag = os.urandom(4).hex()
@@ -259,13 +262,18 @@ def run(args) -> dict:
         print_preflight(pf)
         report["preflight"] = {k: v for k, v in pf.items() if not k.startswith("_")}
         gpu_model = pf.get("_gpu_model")
-        if any(v[0] == "FAIL" for k, v in pf.items()
-               if not k.startswith("_") and k in ("API", "Database", "Stripe key",
-                                                  "Stripe mode", "GPU spec")):
-            raise E2EAbort("preflight failed — refusing to create a payment. See the table above.")
+        required = ["API", "Database", "Stripe key", "Stripe mode"]
+        if getattr(args, "spec_provided", bool(args.spec)):
+            required.append("GPU spec")     # only gate on the spec when one was actually given
+        failed = [k for k, v in pf.items()
+                  if not k.startswith("_") and k in required and v[0] == "FAIL"]
         if args.preflight_only:
-            report["result"] = "PREFLIGHT_OK"
+            # Preflight REPORTS status; it never aborts (so `make e2e-preflight` without a key
+            # or a SPEC still prints the table) — exit code reflects PREFLIGHT_OK vs _FAIL.
+            report["result"] = "PREFLIGHT_OK" if not failed else "PREFLIGHT_FAIL"
             return report
+        if failed:
+            raise E2EAbort("preflight failed — refusing to create a payment. See the table above.")
 
         # ---- auth ---- (register a fresh throwaway buyer, then acquire the JWT internally)
         api._c.post(api.base + "/register_user",
@@ -291,9 +299,13 @@ def run(args) -> dict:
         stripe.api_key = sk
         # The runner holds the Stripe SECRET key, so it confirms the PI server-side BY ID — it
         # never needs (or stores) the client_secret, which is a browser-only credential.
-        ret_url = os.getenv("CONNECT_RETURN_URL") or (os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-                                                      + "/seller/payouts?stripe=return") \
-            or "https://example.com/return"
+        # Build the base URL FIRST, then fall back only when it is empty — otherwise `or`'s
+        # loose binding makes the concatenation (never empty) win and yields a RELATIVE URL
+        # that Stripe rejects. ret_url is always absolute.
+        _base = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+        ret_url = (os.getenv("CONNECT_RETURN_URL")
+                   or (_base + "/seller/payouts?stripe=return" if _base else None)
+                   or "https://example.com/return")
         try:
             stripe.PaymentIntent.confirm(pi_id, payment_method="pm_card_visa",
                                          return_url=ret_url)
@@ -387,9 +399,28 @@ def run(args) -> dict:
     except (E2EAbort, StageError) as e:
         report["error"] = _describe_error(e)
         report["result"] = "ABORT" if isinstance(e, E2EAbort) else "FAIL"
+        _release_on_failure(api, report)
         return report
     finally:
         api.close()
+
+
+def _release_on_failure(api, report):
+    """Best-effort: cancel the transaction so a FAILED run does NOT leak its reservation.
+
+    /payments/{tx}/cancel is the path that releases the `stripe_reserved` booking + GPU unit
+    (and cancels the Stripe authorization). Without this, repeated failed E2E runs would hold
+    marketplace capacity indefinitely. Only runs when a tx was actually created; the endpoint is
+    idempotent and simply 409s a already-captured/terminal tx, which we record and ignore."""
+    tx = report.get("transaction_public_id")
+    if not tx:
+        return                                   # failed before any authorization — nothing held
+    try:
+        r = api.req("post", f"/payments/{tx}/cancel")
+        report["cleanup"] = {"cancel_http": r.status_code,
+                             "reservation_released": r.status_code == 200}
+    except Exception as ex:  # noqa: BLE001 — cleanup must never mask the original failure
+        report["cleanup"] = {"cancel_error": type(ex).__name__}
 
 
 def _safe_json(resp):
@@ -490,6 +521,7 @@ def main(argv=None) -> int:
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args(argv)
 
+    args.spec_provided = bool(args.spec)     # remembered before the placeholder below
     if not args.spec and not args.preflight_only:
         print("error: --spec <public-spec-id> is required (or set E2E_SPEC)", file=sys.stderr)
         return 2

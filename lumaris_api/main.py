@@ -279,6 +279,11 @@ def _assert_production_is_safe() -> None:
         "S3_STUB": os.getenv("S3_STUB", "").lower() == "true",
         "LEGACY_KEYS_FULL_ACCESS": LEGACY_KEYS_ARE_FULL_ACCESS,
         "PAYMENTS_MODE=sandbox": PAYMENTS_MODE != "live",
+        # The manifest/template default is STRIPE_GATEWAY=fake; a production process must run the
+        # REAL gateway regardless of PAYMENTS_LIVE_ENABLED, or it would serve real customers with
+        # the in-process fake (no money moves). This early gate fails closed on fake/unset/typo.
+        "STRIPE_GATEWAY is not 'real'":
+            os.getenv("STRIPE_GATEWAY", "").strip().lower() != "real",
         "SECRET_KEY is a default/dev value": os.getenv("SECRET_KEY", "") in
             ("", "t", "dev", "change-me", "secret"),
     }
@@ -319,17 +324,37 @@ def _assert_gateway_explicit() -> None:
     gw = os.getenv("STRIPE_GATEWAY", "").strip().lower()
     if gw in ("real", "fake"):
         return
-    if os.getenv("PETABYTE_OFFLINE_TEST", "").strip().lower() in ("1", "true", "yes"):
+    # A NON-EMPTY but unrecognized value (e.g. a typo) is a config error — never let the offline
+    # override mask it. The offline override applies ONLY when STRIPE_GATEWAY is unset.
+    if gw:
+        raise RuntimeError(
+            f"STRIPE_GATEWAY={gw!r} is not a valid gateway. Set STRIPE_GATEWAY=real or "
+            "STRIPE_GATEWAY=fake. Refusing to start on an unrecognized gateway value.")
+    # STRIPE_GATEWAY is unset. Validate PETABYTE_OFFLINE_TEST against the DOCUMENTED value set
+    # (unset/0/1/true/false); only '1'/'true' enable the offline fake gateway.
+    offline_raw = os.getenv("PETABYTE_OFFLINE_TEST", "").strip().lower()
+    _OFFLINE_VALID = ("", "0", "1", "true", "false")
+    if offline_raw not in _OFFLINE_VALID:
+        raise RuntimeError(
+            f"PETABYTE_OFFLINE_TEST={offline_raw!r} is invalid. Use one of "
+            f"{list(_OFFLINE_VALID)} — only '1'/'true' enable the offline fake gateway.")
+    offline_on = offline_raw in ("1", "true")
+    is_production = os.getenv("ENVIRONMENT", "development").strip().lower() == "production"
+    if offline_on and is_production:
+        raise RuntimeError(
+            "PETABYTE_OFFLINE_TEST is enabled in production. The offline fake gateway is NEVER "
+            "allowed in production — set STRIPE_GATEWAY=real and unset PETABYTE_OFFLINE_TEST.")
+    if offline_on:
         os.environ["STRIPE_GATEWAY"] = "fake"
-        logger.warning("PETABYTE_OFFLINE_TEST=1 with STRIPE_GATEWAY unset -> pinning the "
+        logger.warning("PETABYTE_OFFLINE_TEST enabled with STRIPE_GATEWAY unset -> pinning the "
                        "offline FakeStripeGateway for this self-test process (no real money).")
         return
     raise RuntimeError(
         "STRIPE_GATEWAY is not set. A served Petabyte API must choose its payment gateway "
         "EXPLICITLY: STRIPE_GATEWAY=real (real Stripe — TEST or LIVE per your keys) or "
         "STRIPE_GATEWAY=fake (offline, no money). Refusing to silently fall back to the fake "
-        "gateway; that once minted a fake Connect account in a real TEST database. For offline "
-        "self-tests set PETABYTE_OFFLINE_TEST=1.")
+        "gateway; that once minted a fake Connect account in a real TEST database. For "
+        "NON-production offline self-tests set PETABYTE_OFFLINE_TEST=1.")
 
 
 @asynccontextmanager
@@ -3440,8 +3465,13 @@ def _hash_email(email: str) -> str:
     HMAC-SHA-256 under the server SECRET_KEY, then truncated for correlation only."""
     import hashlib
     import hmac
-    key = (os.getenv("SECRET_KEY", "") or "petabyte").encode("utf-8")
-    return hmac.new(key, email.encode("utf-8"), hashlib.sha256).hexdigest()[:12]
+    # Require a real secret: a fixed public fallback ("petabyte") would make these tags
+    # enumerable again (hash candidate addresses under the known key). SECRET_KEY is required
+    # config anyway — it also signs JWTs — so a running server always has it.
+    key = os.getenv("SECRET_KEY", "")
+    if not key:
+        raise RuntimeError("SECRET_KEY is required to compute email correlation tags")
+    return hmac.new(key.encode("utf-8"), email.encode("utf-8"), hashlib.sha256).hexdigest()[:12]
 
 
 def _newsletter_add_to_mailgun(email: str) -> str:

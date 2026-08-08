@@ -64,7 +64,8 @@ def login(u):
 
 
 # ========== A. no silent fake-gateway fallback in a served process (#9) ==========
-_saved = {k: os.environ.get(k) for k in ("STRIPE_GATEWAY", "PETABYTE_OFFLINE_TEST")}
+_saved = {k: os.environ.get(k) for k in ("STRIPE_GATEWAY", "PETABYTE_OFFLINE_TEST",
+                                         "ENVIRONMENT")}
 try:
     os.environ.pop("STRIPE_GATEWAY", None)
     os.environ.pop("PETABYTE_OFFLINE_TEST", None)
@@ -87,6 +88,37 @@ try:
         os.environ["STRIPE_GATEWAY"] = g
         main._assert_gateway_explicit()      # must not raise
     ok("explicit STRIPE_GATEWAY=real|fake is accepted", True)
+
+    # an INVALID (non-empty) gateway value is a config error — even with offline set
+    os.environ["STRIPE_GATEWAY"] = "typo"
+    os.environ["PETABYTE_OFFLINE_TEST"] = "1"
+    _raised = False
+    try:
+        main._assert_gateway_explicit()
+    except RuntimeError:
+        _raised = True
+    ok("an invalid STRIPE_GATEWAY value is rejected (offline override cannot mask it)", _raised)
+
+    # an INVALID PETABYTE_OFFLINE_TEST value (outside unset/0/1/true/false) is rejected
+    os.environ.pop("STRIPE_GATEWAY", None)
+    os.environ["PETABYTE_OFFLINE_TEST"] = "yes"
+    _raised = False
+    try:
+        main._assert_gateway_explicit()
+    except RuntimeError:
+        _raised = True
+    ok("an invalid PETABYTE_OFFLINE_TEST value is rejected", _raised)
+
+    # offline test is NEVER allowed to pin fake in production
+    os.environ.pop("STRIPE_GATEWAY", None)
+    os.environ["PETABYTE_OFFLINE_TEST"] = "1"
+    os.environ["ENVIRONMENT"] = "production"
+    _raised = False
+    try:
+        main._assert_gateway_explicit()
+    except RuntimeError:
+        _raised = True
+    ok("PETABYTE_OFFLINE_TEST is refused in production (no fake gateway in prod)", _raised)
 finally:
     for k, v in _saved.items():
         if v is None:

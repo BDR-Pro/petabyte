@@ -1,14 +1,17 @@
 # Runbook: Financial-integrity incident (ledger imbalance / duplicate payout / stalled settlement)
 
 **P0 (critical) triggers — do the full response below, starting with §1:**
-`PetabyteLedgerUnbalancedHeartbeat`, `PetabyteLedgerImbalance`, `PetabyteSettlementsStalled`
-(all `severity: critical`), or a suspected duplicate payout.
+`PetabyteLedgerUnbalancedHeartbeat`, `PetabyteLedgerImbalance`, `PetabyteSettlementsStalled`,
+`PetabyteTestLiveModeMismatch` (all `severity: critical`), or a suspected duplicate payout.
 
-**Warning trigger — skip §1's kill switch:** `PetabytePayoutBacklogAging` is `severity:
-warning`, not P0. Money conservation is intact; sellers are simply being paid late. Do **not**
-pause bookings for it. Go straight to the payout-backlog diagnosis in §3, freeze payouts only
-if a duplicate/ambiguous payout is *also* suspected, and verify with §5. Escalate to the full
-P0 path only if the audit then reveals an actual imbalance.
+**Warning trigger — skip §1's kill switch ONLY when it is the SOLE active alert:**
+`PetabytePayoutBacklogAging` is `severity: warning`, not P0. If **any** critical alert above is
+also firing, ignore this paragraph and take the full P0 path (§1 kill switch, pause bookings).
+When `PetabytePayoutBacklogAging` is the only active trigger, it most likely means sellers are
+being paid late rather than a conservation breach — but that is not yet proven. Go to the
+payout-backlog diagnosis in §3, freeze payouts if a duplicate/ambiguous payout is also
+suspected, and run the §5 audit to **establish** whether an imbalance exists. Escalate to the
+full P0 path the moment the audit shows one.
 
 The governing rule for every step below: **preserve evidence and never blindly edit ledger
 rows.** The ledger is append-only; corrections are compensating transactions, not UPDATEs.

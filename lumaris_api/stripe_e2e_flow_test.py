@@ -185,10 +185,12 @@ ok("transaction reaches PAYMENT_CAPTURED automatically via GET polling (NO 2nd d
 
 s = dbmod.SessionLocal()
 txr = sc.get_tx_by_public_id(s, tx)
-cap = txr.captured_amount
-fee = txr.platform_fee_amount
-net = txr.seller_net_amount
-transferred = txr.transferred_amount
+# Coerce nullable money columns to 0: if capture never happened these stay None, and a bare
+# `0 < None` would raise TypeError, aborting the harness before it can print a clean FAIL.
+cap = txr.captured_amount or 0
+fee = txr.platform_fee_amount or 0
+net = txr.seller_net_amount or 0
+transferred = txr.transferred_amount or 0
 n_cap = s.query(dbmod.LedgerEntry).filter(
     dbmod.LedgerEntry.entry_type == "compute_capture",
     dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS,

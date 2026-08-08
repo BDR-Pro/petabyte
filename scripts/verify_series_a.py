@@ -182,8 +182,12 @@ def _run_secret_scan() -> tuple[str, int | None, str]:
     would let a release claim "no committed secrets" on evidence that was never gathered."""
     import re
     try:
-        files = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True,
-                               text=True, check=True).stdout.split()
+        # NUL-delimited: a tracked filename containing whitespace/newlines would otherwise be
+        # split into invalid paths, whose read errors are swallowed below — silently skipping
+        # that file and letting the scan report "pass" without ever reading it.
+        files = [p for p in subprocess.run(
+            ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True,
+            text=True, check=True).stdout.split("\0") if p]
     except Exception as e:  # noqa: BLE001
         return "skip", None, f"git ls-files unavailable ({type(e).__name__}) — scan not run"
     pats = [re.compile(p) for p in _SECRET_PATTERNS]
