@@ -949,11 +949,15 @@ def reclaim_abandoned_reservations(db, *, stuck_after_s: int = None) -> int:
       * tx in a TERMINAL failure/cancel state (marketplace_insight.TX_FAILED, e.g. JOB_FAILED /
         CAPTURE_FAILED / DISPATCH_FAILED / CANCELLED) -> release the unit immediately; the
         rental is over and nothing was successfully captured for it.
-      * tx STUCK pre-capture (a dead seller that never settled) and untouched for longer than
-        `stuck_after_s` (default RESERVATION_RECLAIM_STUCK_S, 26h) -> cancel the authorization
-        (void the PI hold) and release.
+      * tx STUCK pre-capture on a DEAD node (a seller that never settled) — untouched for longer
+        than `stuck_after_s` (default RESERVATION_RECLAIM_STUCK_S, 26h) AND the seller's node is no
+        longer live (no recent heartbeat) -> cancel the authorization (void the PI hold) and
+        release. The node-dead check is what prevents oversubscription: a live node running a
+        legitimately long job is left alone, so its GPU unit is never handed to a second buyer
+        while the first job is still executing.
 
-    It NEVER touches a recently-active pre-capture tx or a successfully PAYMENT_CAPTURED rental.
+    It NEVER touches a recently-active pre-capture tx, a stuck pre-capture tx whose node is still
+    live, or a successfully PAYMENT_CAPTURED rental.
     Idempotent — it only ever acts on a still-`stripe_reserved` booking, and the release helpers
     are no-ops once released. Returns the number of reservations reclaimed. Best-effort: one bad
     row is logged and skipped, never blocking the rest (safe to call from the maintenance loop)."""
@@ -984,11 +988,21 @@ def reclaim_abandoned_reservations(db, *, stuck_after_s: int = None) -> int:
                 ts = tx.updated_at or tx.created_at
                 if ts is not None and ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
-                if ts is not None and ts < cutoff:                 # dead seller: abandoned/stuck
-                    # Free the unit + void the buyer's authorization hold DIRECTLY — decoupled
-                    # from the full cancel FSM so an FSM-disallowed transition can never leave
-                    # the unit held. Releasing capacity is the goal; the exact terminal state is
-                    # best-effort.
+                if ts is not None and ts < cutoff:                 # untouched past the stuck window
+                    # A stuck pre-capture reservation is only SAFE to reclaim when the workload is
+                    # genuinely NOT running — i.e. the seller's node is DEAD (no recent heartbeat).
+                    # A live, heartbeating node with a long-running job (RUNNING past the stuck
+                    # window is legitimate — e.g. a multi-day training run) is NOT an abandoned
+                    # reservation: releasing its unit here would let another buyer land on the SAME
+                    # live GPU (oversubscription) while the original job is still executing. Leave
+                    # it held; it settles when the job finishes, or gets reclaimed above once the tx
+                    # reaches a terminal-failed state (incl. AUTHORIZATION_EXPIRED).
+                    spec = db.query(SellerSpec).filter(SellerSpec.id == tx.spec_id).first()
+                    if spec is not None and spec_is_live(spec):
+                        continue                                   # node alive -> job may still run
+                    # dead seller / offline node: the GPU is not executing this job. Free the unit +
+                    # void the buyer's authorization hold DIRECTLY — decoupled from the full cancel
+                    # FSM so an FSM-disallowed transition can never leave the unit held.
                     try:
                         if tx.stripe_payment_intent_id:
                             get_gateway().cancel_payment_intent(
@@ -999,7 +1013,7 @@ def reclaim_abandoned_reservations(db, *, stuck_after_s: int = None) -> int:
                     _release_reservation(db, tx)
                     try:
                         transition(db, tx, "CANCELLED",
-                                   reason="reservation reclaimed (abandoned/stuck)")
+                                   reason="reservation reclaimed (dead node / abandoned)")
                     except TransactionError:
                         pass                                        # unit already freed
                     reclaimed += 1

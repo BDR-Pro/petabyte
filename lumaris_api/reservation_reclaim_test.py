@@ -58,14 +58,15 @@ s.commit()
 _OLD = _dt.datetime(2000, 1, 1, tzinfo=_dt.timezone.utc)
 
 
-def reserved_tx(status, updated_at):
-    assert dbmod.try_reserve_unit(s, spec.id), "spec ran out of units in the fixture"
-    b = dbmod.Booking(buyer_id=buyer.id, seller_id=seller.id, spec_id=spec.id, hours=1,
+def reserved_tx(status, updated_at, sp=None):
+    sp = sp or spec
+    assert dbmod.try_reserve_unit(s, sp.id), "spec ran out of units in the fixture"
+    b = dbmod.Booking(buyer_id=buyer.id, seller_id=seller.id, spec_id=sp.id, hours=1,
                       price_per_hour=Decimal("2"), gross_amount=Decimal("2"),
                       platform_fee=Decimal("0"), seller_payout=Decimal("2"),
                       status="stripe_reserved", test=True)
     s.add(b); s.commit()
-    tx = dbmod.ComputeTransaction(buyer_id=buyer.id, seller_id=seller.id, spec_id=spec.id,
+    tx = dbmod.ComputeTransaction(buyer_id=buyer.id, seller_id=seller.id, spec_id=sp.id,
                                   booking_id=b.id, pricing_snapshot="{}", status=status,
                                   updated_at=updated_at)
     s.add(tx); s.commit()
@@ -78,14 +79,26 @@ def avail():
 
 
 txA, bA = reserved_tx("JOB_FAILED", _OLD)          # terminal failed -> reclaim now
-txB, bB = reserved_tx("RUNNING", _OLD)             # stuck pre-capture -> reclaim
+txB, bB = reserved_tx("RUNNING", _OLD)             # stuck on a DEAD node (spec offline) -> reclaim
 txC, bC = reserved_tx("RUNNING", _dt.datetime.now(_dt.timezone.utc))  # fresh -> keep
 txD, bD = reserved_tx("PAYMENT_CAPTURED", _OLD)    # successful rental -> keep
 
 ok("fixture reserved 4 units (available dropped from 5 to 1)", avail() == 1)
 
+# A LONG-RUNNING job on a LIVE (heartbeating) node: its updated_at is old, but the node is alive
+# and the workload is still executing. Reclaiming it would hand the GPU unit to another buyer while
+# the first job runs (oversubscription). It MUST be preserved regardless of the stuck window.
+spec_live = dbmod.save_specs(s, seller, {"cpu": 8, "ram": 32, "duration": 240, "price_per_hour": 2.0,
+                                         "provider": "rr_seller", "gpu_model": "NVIDIA L4",
+                                         "gpu_count": 1, "vram_gb": 24, "units": 2})
+spec_live.status = "online"
+spec_live.last_seen = _dt.datetime.now(_dt.timezone.utc)
+s.add(spec_live); s.commit()
+txLive, bLive = reserved_tx("RUNNING", _OLD, sp=spec_live)
+
 n = sc.reclaim_abandoned_reservations(s, stuck_after_s=3600)
-ok("reclaim released exactly the 2 abandoned reservations (JOB_FAILED + stuck RUNNING)", n == 2)
+ok("reclaim released exactly the 2 abandoned reservations (JOB_FAILED + stuck RUNNING on a dead node)",
+   n == 2)
 
 s.expire_all()
 ok("terminal-FAILED reservation booking is released", dbmod.get_booking_by_id(s, bA.id).status == "released_unused")
@@ -95,6 +108,8 @@ ok("fresh RUNNING reservation is PRESERVED (job may be in flight)",
    dbmod.get_booking_by_id(s, bC.id).status == "stripe_reserved")
 ok("successful PAYMENT_CAPTURED rental is PRESERVED",
    dbmod.get_booking_by_id(s, bD.id).status == "stripe_reserved")
+ok("stuck RUNNING on a LIVE node is PRESERVED (no oversubscription of an actively-running GPU)",
+   dbmod.get_booking_by_id(s, bLive.id).status == "stripe_reserved")
 ok("freed units returned to the spec (available back to 3)", avail() == 3)
 
 # idempotent: a second pass reclaims nothing new
