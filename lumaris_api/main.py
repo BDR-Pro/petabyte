@@ -4318,8 +4318,13 @@ def payments_config():
     from stripe_gateway import get_gateway, FakeStripeGateway
     fake = isinstance(get_gateway(), FakeStripeGateway)
     pk = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+    # Report the mode from what the SERVER enforces, not just the publishable-key prefix: a real
+    # gateway running live with a missing/misconfigured publishable key must NOT show the buyer a
+    # "test mode — no real money" notice. Live iff payments-live is enabled or a live key is set.
+    live = (os.getenv("PAYMENTS_LIVE_ENABLED", "").strip().lower() == "true"
+            or pk.startswith("pk_live_"))
     return {"gateway": "fake" if fake else "real",
-            "test_mode": not pk.startswith("pk_live_"),
+            "test_mode": fake or not live,
             "publishable_key": pk}
 
 @app.post("/payments/quote", tags=["payments"])

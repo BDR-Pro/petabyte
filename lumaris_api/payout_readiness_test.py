@@ -122,6 +122,40 @@ r = pr.get_seller_payout_readiness(dbmod_session, s_stale)
 ok("stale provider state -> not ready, reason=readiness_stale (fail closed)",
    r["ready"] is False and r["reason"] == "readiness_stale" and r["stale"] is True)
 
+# ---- FUTURE provider sync time -> NOT fresh (a negative age must never read as fresh) ----
+s_future = new_seller()
+mk_ca(s_future.id, details_submitted=True, charges_enabled=True, payouts_enabled=True,
+      transfers_capability="active",
+      last_synced_at=_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=3650))
+r = pr.get_seller_payout_readiness(dbmod_session, s_future)
+ok("FUTURE sync timestamp -> not ready, reason=readiness_stale (fail closed on negative age)",
+   r["ready"] is False and r["reason"] == "readiness_stale" and r["stale"] is True)
+
+# ---- LEGACY row with gateway_mode=None -> mode classified by id prefix, NEVER left null ----
+# A null rail_mode would bypass the TEST/LIVE mode gate in seller_eligibility (mode_ok stays
+# True), letting a fake account pass under the real gateway. It must resolve to 'fake'/'real'.
+s_legacy = new_seller()
+lca = dbmod.ConnectedAccount(
+    user_id=s_legacy.id, stripe_account_id=f"acct_fake_legacy{s_legacy.id}",
+    gateway_mode=None, onboarding_state="enabled", details_submitted=True,
+    charges_enabled=True, payouts_enabled=True, transfers_capability="active", country="US",
+    last_synced_at=_dt.datetime.now(_dt.timezone.utc))
+dbmod_session.add(lca); dbmod_session.commit()
+r = pr.get_seller_payout_readiness(dbmod_session, s_legacy)
+ok("legacy gateway_mode=None (acct_fake…) -> rail_mode='fake', never null (mode gate holds)",
+   r["rail_mode"] == "fake")
+
+s_legacy_real = new_seller()
+lca2 = dbmod.ConnectedAccount(
+    user_id=s_legacy_real.id, stripe_account_id=f"acct_1RealLegacy{s_legacy_real.id}",
+    gateway_mode=None, onboarding_state="enabled", details_submitted=True,
+    charges_enabled=True, payouts_enabled=True, transfers_capability="active", country="US",
+    last_synced_at=_dt.datetime.now(_dt.timezone.utc))
+dbmod_session.add(lca2); dbmod_session.commit()
+r = pr.get_seller_payout_readiness(dbmod_session, s_legacy_real)
+ok("legacy gateway_mode=None (non-fake id) -> rail_mode='real' (classified, not null)",
+   r["rail_mode"] == "real")
+
 # ---- EXTENSIBILITY: a future rail makes a seller eligible with NO Connect account ----
 s5 = new_seller()   # no ConnectedAccount at all
 def _future_rail(db, seller_id, **_):

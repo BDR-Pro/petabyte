@@ -401,6 +401,13 @@ def run(args) -> dict:
         report["result"] = "ABORT" if isinstance(e, E2EAbort) else "FAIL"
         _release_on_failure(api, report)
         return report
+    except Exception as e:  # noqa: BLE001 — an HTTP/JSON/shape error after /reserve must NOT
+        # skip cleanup and leak the reservation. Record only the exception TYPE (never the
+        # message — it could carry a secret) and run the same release path.
+        report["error"] = {"stage": "UNEXPECTED", "actual": type(e).__name__}
+        report["result"] = "FAIL"
+        _release_on_failure(api, report)
+        return report
     finally:
         api.close()
 

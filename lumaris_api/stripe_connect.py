@@ -924,8 +924,8 @@ def release_failed_reservation(db, tx: ComputeTransaction, *,
         if tx.stripe_payment_intent_id:
             get_gateway().cancel_payment_intent(pi_id=tx.stripe_payment_intent_id,
                                                 idempotency_key=idem_key("cancel", tx))
-    except StripeError:
-        pass                                # PI void is best-effort; freeing the unit is the goal
+    except Exception:  # noqa: BLE001 — the real gateway may raise a raw SDK/HTTP error, not
+        pass           # StripeError; the PI void is best-effort and must never block the release
     if tx.booking_id:
         _release_reservation(db, tx)
     tx.reconciliation_status = "reconciled"
@@ -958,8 +958,18 @@ def reclaim_abandoned_reservations(db, *, stuck_after_s: int = None) -> int:
     are no-ops once released. Returns the number of reservations reclaimed. Best-effort: one bad
     row is logged and skipped, never blocking the rest (safe to call from the maintenance loop)."""
     import marketplace_insight as mi
+    _default_stuck_s = 26 * 3600
     if stuck_after_s is None:
-        stuck_after_s = int(os.getenv("RESERVATION_RECLAIM_STUCK_S", str(26 * 3600)))
+        try:
+            stuck_after_s = int(os.getenv("RESERVATION_RECLAIM_STUCK_S", str(_default_stuck_s)))
+        except (TypeError, ValueError):
+            stuck_after_s = _default_stuck_s
+    if stuck_after_s <= 0:
+        # A zero/negative timeout would make EVERY stuck pre-capture reservation immediately
+        # reclaimable — tearing down a job that may still be in flight. Fall back to the default.
+        logger.warning("RESERVATION_RECLAIM_STUCK_S=%s is not positive; using default %ss",
+                       stuck_after_s, _default_stuck_s)
+        stuck_after_s = _default_stuck_s
     cutoff = _now() - timedelta(seconds=stuck_after_s)
     rows = (db.query(ComputeTransaction)
             .join(Booking, Booking.id == ComputeTransaction.booking_id)

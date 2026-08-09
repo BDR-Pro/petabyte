@@ -372,9 +372,13 @@ jobs:
     # charged" is backed by a REAL server-side capture and does NOT fake GPU work. The real
     # self-hosted GPU hardware proof is a SEPARATE, independent job — see
     # .github/workflows/load_test.yml (smoke-gpu / scripts/smoke_gpu.py).
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -r lumaris_api/requirements.txt

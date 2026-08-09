@@ -50,7 +50,11 @@ def _is_fresh(synced_at, now, max_age_s) -> bool:
         synced_at = synced_at.replace(tzinfo=timezone.utc)
     if getattr(now, "tzinfo", None) is None:
         now = now.replace(tzinfo=timezone.utc)
-    return (now - synced_at).total_seconds() <= max_age_s
+    # Fail closed on a FUTURE timestamp too: a synced_at later than `now` yields a negative
+    # age, which a one-sided `<= max_age_s` check would treat as fresh forever. Only an age
+    # within [0, max_age_s] counts as fresh.
+    age_s = (now - synced_at).total_seconds()
+    return 0 <= age_s <= max_age_s
 
 
 def _connect_rail_readiness(db, seller_id, *, now, max_age_s) -> dict | None:
@@ -58,6 +62,7 @@ def _connect_rail_readiness(db, seller_id, *, now, max_age_s) -> dict | None:
     account at all. Uses the SAME capability gate as before (ConnectedAccount.payout_ready())
     and fails closed when the synced state is stale/unknown."""
     import db as _dbm
+    import stripe_connect as _sc
     ca = (db.query(_dbm.ConnectedAccount)
           .filter(_dbm.ConnectedAccount.user_id == seller_id).first())
     if ca is None:
@@ -97,7 +102,11 @@ def _connect_rail_readiness(db, seller_id, *, now, max_age_s) -> dict | None:
         "ready": ready,
         "provider": "stripe",
         "rail": "stripe_connect",
-        "rail_mode": ca.gateway_mode,      # 'real' | 'fake' | None (legacy) — for the mode gate
+        # 'real' | 'fake' for the TEST/LIVE mode gate. Never None: a legacy row written before
+        # the marker existed is classified by id prefix (FakeStripeGateway mints 'acct_fake…'),
+        # so a fake account can never pass the mode gate under the real gateway by having a null
+        # mode. Same canonical classifier used when creating/reusing the account.
+        "rail_mode": _sc._account_gateway_mode(ca),
         "country": ca.country,
         "stale": not fresh,
         "synced_at": ca.last_synced_at.isoformat() if ca.last_synced_at else None,

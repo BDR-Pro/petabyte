@@ -2374,7 +2374,8 @@ var FRIENDLY={
  'SELLER_TRANSFERRED':'Done — charged for actual usage.','COMPLETED':'Done — charged for actual usage.'};
 var SETTLED={'PAYMENT_CAPTURED':1,'SELLER_TRANSFER_PENDING':1,'SELLER_TRANSFERRED':1,'COMPLETED':1};
 var FAILED={'PAYMENT_FAILED':1,'AUTHORIZATION_EXPIRED':1,'RESERVATION_FAILED':1,'DISPATCH_FAILED':1,
- 'JOB_FAILED':1,'CAPTURE_FAILED':1,'TRANSFER_FAILED':1,'CANCELLED':1,'REFUNDED':1};
+ 'JOB_FAILED':1,'CAPTURE_FAILED':1,'TRANSFER_FAILED':1,'CANCELLED':1,'REFUNDED':1,
+ 'REFUND_PENDING':1,'DISPUTED':1};
 var STEPS=[['pay','Card authorized'],['reserve','GPU reserved'],['run','Workload ran on the GPU'],['charge','Charged for actual usage']];
 
 function setMsg(t){var m=el('buy_msg');if(m)m.textContent=t;}
@@ -2546,7 +2547,9 @@ function failTerminal(st){
   'AUTHORIZATION_EXPIRED':'The card authorization expired before the job ran. Nothing was charged.',
   'PAYMENT_FAILED':'The card was not authorized. Nothing was charged.',
   'CANCELLED':'This rental was cancelled. Nothing was charged.',
-  'REFUNDED':'This rental was refunded.'};
+  'REFUNDED':'This rental was refunded.',
+  'REFUND_PENDING':'This rental is being refunded — the charge will be returned to your card.',
+  'DISPUTED':'This charge is under dispute. Our team will follow up; nothing more is needed here.'};
  el('buy_cancel').style.display=(st==='JOB_FAILED'||st==='CAPTURE_FAILED'||st==='DISPATCH_FAILED')?'':'none';
  showError(MSG[st]||'The rental ended early.');setMsg('Ended.');
 }
