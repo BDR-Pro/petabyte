@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e browser-e2e test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real
 
 help:
 	@echo "Petabyte make targets:"
@@ -17,6 +17,7 @@ help:
 	@echo "  make email-test      Run the Mailgun email suite (offline, mocked)"
 	@echo "  make email-integration  Send a REAL Mailgun email (needs MAILGUN_API_KEY; skips otherwise)"
 	@echo "  make local-e2e       Run the whole platform locally + a buyer/seller/admin flow (offline)"
+	@echo "  make browser-e2e     Drive the full buyer+seller journey through the real browser UI (Playwright)"
 	@echo "  make reconcile       Reconcile internal ledger + transactions vs Stripe (test mode)"
 	@echo "  make audit-ledger    Ledger integrity + booking/payout cross-checks (read-only; fails on drift)"
 	@echo "  make payout-test     Run the provider-neutral global payout routing suite"
@@ -66,6 +67,12 @@ stripe-integration:
 # gateway, SQLite, no GPU). Traces bugs; exits non-zero if any step misbehaves.
 local-e2e:
 	python3 scripts/e2e/local_e2e.py
+
+# The YC-demo journey through the REAL browser UI (Chromium via Playwright), offline +
+# hermetic. Proves the buyer+seller can complete the whole lifecycle from the browser.
+# Needs Playwright's Chromium: python -m playwright install chromium
+browser-e2e:
+	python3 scripts/e2e/browser_e2e.py
 
 # Mailgun transactional email: offline unit suite, and an opt-in real send.
 email-test:

@@ -85,7 +85,7 @@ from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
                    PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TEMPLATES_HTML,
                    CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML,
-                   SELLER_EARNINGS_HTML, RESET_HTML)
+                   SELLER_EARNINGS_HTML, RESET_HTML, BUY_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -1233,6 +1233,14 @@ def status_page():
 def metrics_page():
     """Investor / operations metrics dashboard (data from /metrics/overview)."""
     return HTMLResponse(METRICS_HTML)
+
+@app.get("/buy/{public_id}", response_class=HTMLResponse)
+def buy_page(public_id: str):
+    """Browser checkout + run experience for one GPU: the buyer completes the entire
+    Stripe compute-tx lifecycle (authorize -> card -> reserve -> dispatch -> run ->
+    capture -> receipt) without touching an internal endpoint by hand. The spec id is
+    read client-side from the path."""
+    return HTMLResponse(BUY_HTML)
 
 @app.get("/seller/payouts", response_class=HTMLResponse)
 def seller_payouts_page():
@@ -4300,6 +4308,20 @@ def _spec_or_404(db, public_id):
         raise HTTPException(status_code=404, detail="GPU not found")
     return spec
 
+@app.get("/payments/config", tags=["payments"])
+def payments_config():
+    """Public checkout config for the browser. Returns which Stripe mode is live and the
+    PUBLISHABLE key only (safe to expose by Stripe's design — never the secret key, client
+    secret, or webhook secret). The buyer UI uses this to choose between the real Stripe.js
+    card element (real gateway) and the offline sandbox card confirmation (fake gateway,
+    used only in tests/CI, and 404 under real Stripe). No secrets are returned."""
+    from stripe_gateway import get_gateway, FakeStripeGateway
+    fake = isinstance(get_gateway(), FakeStripeGateway)
+    pk = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+    return {"gateway": "fake" if fake else "real",
+            "test_mode": not pk.startswith("pk_live_"),
+            "publishable_key": pk}
+
 @app.post("/payments/quote", tags=["payments"])
 def payments_quote(data: QuoteModel, user: dict = Depends(get_current_user),
                    db: Session = Depends(get_db)):
@@ -4506,7 +4528,9 @@ def payments_dispatch(public_id: str, data: DispatchModel,
         _sc.dispatch_job(db, tx, task_type=data.task_type, code=data.code)
     except _sc.TransactionError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    return _ctx_view(db, tx, viewer=me)
+    v = _ctx_view(db, tx, viewer=me)
+    v["task_id"] = tx.task_id          # so the browser can poll the workload's result
+    return v
 
 
 # ---------------- Internal job/settlement ops (admin-gated in this build) ----------------

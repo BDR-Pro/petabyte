@@ -364,6 +364,26 @@ jobs:
       - name: local buyer→seller→settlement E2E (offline full flow)
         run: python scripts/e2e/local_e2e.py
 
+  browser-e2e:
+    # Drives the ENTIRE marketplace lifecycle through the real browser UI (Chromium via
+    # Playwright) against uvicorn + SQLite + the offline fake Stripe gateway — the exact
+    # YC-demo buyer+seller journey, without curling any internal /payments endpoint.
+    # Hermetic: no secrets, no network, no GPU. It asserts the buyer's on-screen "you were
+    # charged" is backed by a REAL server-side capture and does NOT fake GPU work. The real
+    # self-hosted GPU hardware proof is a SEPARATE, independent job — see
+    # .github/workflows/load_test.yml (smoke-gpu / scripts/smoke_gpu.py).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r lumaris_api/requirements.txt
+      - run: pip install playwright
+      - name: install Chromium for Playwright
+        run: python -m playwright install --with-deps chromium
+      - name: browser UI E2E (buyer + seller full journey)
+        run: python scripts/e2e/browser_e2e.py
+
   payout-coverage:
     # Honest seller-payout country coverage. The script EXITS NON-ZERO until we reach
     # 100 genuinely verified + implemented + approved + active countries. Today that is
