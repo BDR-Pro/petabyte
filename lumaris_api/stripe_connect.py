@@ -905,6 +905,34 @@ def _release_reservation(db, tx):
         release_unit(db, tx.spec_id)
 
 
+def release_failed_reservation(db, tx: ComputeTransaction, *,
+                              reason: str = "released after failure") -> ComputeTransaction:
+    """Free the GPU reservation + void the buyer's authorization hold for a tx that has ALREADY
+    reached a terminal failure state (JOB_FAILED / CAPTURE_FAILED / DISPATCH_FAILED / ...).
+
+    Unlike cancel_authorization this drives NO FSM transition: a failed job keeps its terminal
+    state (the job genuinely failed — we only reclaim capacity). This is what the buyer-cancel
+    path calls once a job is dispatched but has since failed, so the reservation is freed
+    immediately instead of waiting for the next abandoned-reservation reaper cycle. Voiding the PI
+    and releasing the unit are both idempotent, so this is safe to call repeatedly (and safe for a
+    tx that failed before it was ever dispatched). Mirrors the reaper's terminal-failed branch."""
+    import marketplace_insight as mi
+    if tx.status not in mi.TX_FAILED:
+        raise TransactionError(
+            f"release_failed_reservation requires a terminal-failed tx, got {tx.status}")
+    try:
+        if tx.stripe_payment_intent_id:
+            get_gateway().cancel_payment_intent(pi_id=tx.stripe_payment_intent_id,
+                                                idempotency_key=idem_key("cancel", tx))
+    except StripeError:
+        pass                                # PI void is best-effort; freeing the unit is the goal
+    if tx.booking_id:
+        _release_reservation(db, tx)
+    tx.reconciliation_status = "reconciled"
+    db.add(tx); db.commit()
+    return tx
+
+
 # Pre-capture states in which a reservation is legitimately held while the job is in flight.
 _PRE_CAPTURE_ACTIVE = ("GPU_RESERVED", "DISPATCHING", "RUNNING",
                        "METERING_FINALIZED", "PAYMENT_CAPTURE_PENDING")

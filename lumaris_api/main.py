@@ -4451,14 +4451,24 @@ def payment_timeline(public_id: str, user: dict = Depends(get_current_user),
 @app.post("/payments/{public_id}/cancel", tags=["payments"])
 def payments_cancel(public_id: str, request: Request,
                     user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Buyer cancels before dispatch: void the authorization, release the GPU, charge $0."""
+    """Buyer cancels: void the authorization, release the GPU, charge $0.
+
+    Pre-dispatch this cancels the authorization outright. An ACTIVELY running/settling dispatched
+    job can't be cancelled (409). But a dispatched job that has since reached a TERMINAL failure
+    state (JOB_FAILED / CAPTURE_FAILED / DISPATCH_FAILED / ...) is no longer running, so we release
+    its reservation IMMEDIATELY here instead of leaving the GPU unit + authorization hold pinned
+    until the next abandoned-reservation reaper cycle."""
+    import marketplace_insight as mi
     me = get_user_by_username(db, _username(user))
     tx = _sc.get_tx_by_public_id(db, public_id)
     if not tx or tx.buyer_id != me.id:
         raise HTTPException(status_code=404, detail="transaction not found")
-    if tx.task_id:
+    if tx.task_id and tx.status not in mi.TX_FAILED:
         raise HTTPException(status_code=409, detail="job already dispatched; cannot cancel")
-    _sc.cancel_authorization(db, tx, reason="buyer cancelled")
+    if tx.status in mi.TX_FAILED:
+        _sc.release_failed_reservation(db, tx, reason="buyer cancelled after failure")
+    else:
+        _sc.cancel_authorization(db, tx, reason="buyer cancelled")
     audit(db, "payment.cancel", actor=me.username, resource_type="compute_tx",
           resource_id=tx.public_id, ip=_client_ip(request))
     return _ctx_view(db, tx, viewer=me)

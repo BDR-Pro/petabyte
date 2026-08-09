@@ -264,6 +264,59 @@ ok("duplicate capture is a no-op (amount unchanged, one capture per tx across su
 s.close()
 
 
+# ============================ CANCEL: prompt release of a FAILED dispatched job ===========
+# Once a job is dispatched, POST /payments/{tx}/cancel must still refuse an ACTIVELY running job
+# (409) — but a dispatched job that has since FAILED (JOB_FAILED / CAPTURE_FAILED) is no longer
+# running, so cancel releases its GPU reservation IMMEDIATELY instead of pinning the unit +
+# authorization hold until the next abandoned-reservation reaper cycle.
+spec_cx = make_online_spec("seller_a", price=2.0, units=3)
+
+
+def _run_to_running(spec_pub):
+    a = c.post("/payments/authorize", headers=login("buyer1"),
+               json={"spec_id": spec_pub, "estimated_seconds": 3600}).json()
+    tid = a["transaction_id"]
+    pid = sc.get_tx_by_public_id(dbmod.SessionLocal(), tid).stripe_payment_intent_id
+    GW.confirm_payment_intent(pid)
+    c.post(f"/payments/{tid}/confirm", headers=login("buyer1"))
+    c.post(f"/admin/payments/{tid}/reserve", headers=admin)
+    c.post(f"/admin/payments/{tid}/dispatch", headers=admin, json={})
+    return tid
+
+
+def _avail_cx():
+    s = dbmod.SessionLocal()
+    v = dbmod.get_spec_by_public_id(s, spec_cx).available_units
+    s.close()
+    return v
+
+
+base_avail = _avail_cx()
+tid_run = _run_to_running(spec_cx)
+ok("dispatched job holds a reserved unit", _avail_cx() == base_avail - 1)
+ok("cancel refuses an ACTIVELY running dispatched job (409)",
+   c.post(f"/payments/{tid_run}/cancel", headers=login("buyer1")).status_code == 409)
+ok("refused cancel did NOT release the running job's unit", _avail_cx() == base_avail - 1)
+
+# the job fails after dispatch (seller crash / capture failure) -> now terminal, not running
+_s = dbmod.SessionLocal()
+_tx = sc.get_tx_by_public_id(_s, tid_run)
+sc.transition(_s, _tx, "JOB_FAILED", reason="seller crashed mid-run")
+_s.close()
+cx = c.post(f"/payments/{tid_run}/cancel", headers=login("buyer1"))
+ok("cancel of a FAILED dispatched job succeeds (200) — no waiting for the reaper",
+   cx.status_code == 200)
+ok("failed job's GPU reservation is released immediately", _avail_cx() == base_avail)
+_s = dbmod.SessionLocal()
+ok("failed tx keeps its terminal state (cancel did NOT rewrite it to CANCELLED)",
+   sc.get_tx_by_public_id(_s, tid_run).status == "JOB_FAILED")
+_s.close()
+# idempotent: a second cancel is a harmless no-op, never a double release
+c2 = c.post(f"/payments/{tid_run}/cancel", headers=login("buyer1"))
+ok("cancel of an already-released failed job is idempotent (200, no double release)",
+   c2.status_code == 200 and _avail_cx() == base_avail)
+
+
 # ============================ TRANSFER ============================
 # transfer before capture is impossible: use a fresh tx still pre-capture
 tid_pre = run_to_metered(600)

@@ -408,14 +408,16 @@ def run(args) -> dict:
 def _release_on_failure(api, report):
     """Best-effort cleanup so a FAILED run does not leak its reservation.
 
-    POST /payments/{tx}/cancel releases a PRE-DISPATCH reservation (frees the `stripe_reserved`
-    booking + GPU unit and voids the Stripe hold). Two failure modes this must handle correctly:
+    POST /payments/{tx}/cancel frees the `stripe_reserved` booking + GPU unit and voids the Stripe
+    hold. It succeeds (200) for a pre-dispatch tx AND for a dispatched tx that has since reached a
+    terminal failure state (JOB_FAILED / CAPTURE_FAILED / DISPATCH_FAILED), which covers most E2E
+    failure modes. Two cases this must still handle:
 
       * transient/unreachable API — a SINGLE request that can't reach the API must not give up
         and leak. We RETRY with bounded backoff.
-      * post-dispatch — once a job is dispatched the endpoint returns 409 ("cannot cancel"); the
-        buyer path genuinely cannot release it. We record that honestly (no fake "released") and
-        rely on the server-side abandoned-reservation reaper
+      * dispatched and still actively running/settling — the endpoint returns 409 ("cannot
+        cancel") because the job is genuinely in flight. We record that honestly (no fake
+        "released") and rely on the server-side abandoned-reservation reaper
         (stripe_connect.reclaim_abandoned_reservations, run by the maintenance loop) to reclaim
         the unit once the tx fails or goes stale — so it is NOT held indefinitely.
 
@@ -432,12 +434,12 @@ def _release_on_failure(api, report):
                 report["cleanup"] = {"cancel_http": 200, "reservation_released": True}
                 return
             if r.status_code == 409:
-                # dispatched: buyer cancel cannot release it — the reaper reclaims it server-side.
+                # dispatched and still actively running/settling — the reaper reclaims it server-side.
                 report["cleanup"] = {
                     "cancel_http": 409, "reservation_released": False, "needs_reclaim": True,
-                    "note": "tx already dispatched; buyer cancel cannot release it. The "
-                            "abandoned-reservation reaper reclaims the GPU unit once the job "
-                            "fails or goes stale."}
+                    "note": "tx dispatched and still active; buyer cancel cannot release a running "
+                            "job. The abandoned-reservation reaper reclaims the GPU unit once the "
+                            "job fails or goes stale."}
                 return
             # other 4xx/5xx may be transient — fall through and retry
         except Exception as ex:  # noqa: BLE001 — network error: retry, never mask the original failure

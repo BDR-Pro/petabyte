@@ -101,6 +101,30 @@ ok("freed units returned to the spec (available back to 3)", avail() == 3)
 ok("reclaim is idempotent (second pass frees nothing)",
    sc.reclaim_abandoned_reservations(s, stuck_after_s=3600) == 0 and avail() == 3)
 
+# release_failed_reservation: the prompt buyer-cancel path for a dispatched-then-failed job.
+# It frees a terminal-failed reservation WITHOUT an FSM transition (the job stays failed) and
+# REFUSES a still-active pre-capture tx so a running job can never be torn down under it.
+txE, bE = reserved_tx("JOB_FAILED", _dt.datetime.now(_dt.timezone.utc))
+ok("fixture reserved a fresh terminal-failed unit (available 3 -> 2)", avail() == 2)
+sc.release_failed_reservation(s, txE, reason="buyer cancelled after failure")
+s.expire_all()
+ok("release_failed_reservation frees the failed job's unit immediately",
+   dbmod.get_booking_by_id(s, bE.id).status == "released_unused" and avail() == 3)
+ok("release_failed_reservation leaves the terminal state untouched",
+   sc.get_tx_by_public_id(s, txE.public_id).status == "JOB_FAILED")
+ok("release_failed_reservation is idempotent (second call frees nothing new)",
+   (sc.release_failed_reservation(s, txE) or True) and avail() == 3)
+
+txF, bF = reserved_tx("RUNNING", _dt.datetime.now(_dt.timezone.utc))
+_refused = False
+try:
+    sc.release_failed_reservation(s, txF)
+except sc.TransactionError:
+    _refused = True
+s.expire_all()
+ok("release_failed_reservation REFUSES an actively-running tx (guards a live job)",
+   _refused and dbmod.get_booking_by_id(s, bF.id).status == "stripe_reserved")
+
 s.close()
 for f in ("reservation_reclaim_test.db", "reservation_reclaim_test.db-wal",
           "reservation_reclaim_test.db-shm"):
