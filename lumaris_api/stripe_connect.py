@@ -937,6 +937,34 @@ def release_failed_reservation(db, tx: ComputeTransaction, *,
 _PRE_CAPTURE_ACTIVE = ("GPU_RESERVED", "DISPATCHING", "RUNNING",
                        "METERING_FINALIZED", "PAYMENT_CAPTURE_PENDING")
 
+# Shortest VALID FSM path from each pre-capture state to the terminal CANCELLED. Several states
+# (RUNNING/DISPATCHING/PAYMENT_CAPTURE_PENDING) cannot jump straight to CANCELLED — that edge does
+# not exist — so a naive transition(..., "CANCELLED") would raise and, if suppressed, leave the tx
+# stuck in a pre-capture state with no reservation. We bridge through the matching failure edge
+# first. Keep in sync with TRANSITIONS.
+_RECLAIM_CANCEL_PATH = {
+    "GPU_RESERVED": ("CANCELLED",),
+    "DISPATCHING": ("JOB_FAILED", "CANCELLED"),
+    "RUNNING": ("JOB_FAILED", "CANCELLED"),
+    "METERING_FINALIZED": ("CANCELLED",),
+    "PAYMENT_CAPTURE_PENDING": ("CAPTURE_FAILED", "CANCELLED"),
+}
+
+
+def _cancel_reclaimed(db, tx, *, reason):
+    """Drive an abandoned pre-capture tx to the terminal CANCELLED state via a VALID FSM path, so a
+    reclaimed job never lingers in RUNNING/DISPATCHING/etc. with no reservation. The reservation is
+    already freed by the caller; this only fixes the tx's terminal state. Best-effort: a step that
+    can't apply is logged, not raised (the unit is freed either way, and the booking is no longer
+    `stripe_reserved`, so the row is not revisited)."""
+    for st in _RECLAIM_CANCEL_PATH.get(tx.status, ("CANCELLED",)):
+        try:
+            transition(db, tx, st, reason=reason)
+        except TransactionError:
+            logger.warning("reclaim: could not advance tx %s to %s from %s",
+                           getattr(tx, "public_id", "?"), st, tx.status)
+            return
+
 
 def reclaim_abandoned_reservations(db, *, stuck_after_s: int = None) -> int:
     """Release GPU units held by `stripe_reserved` bookings whose compute-tx is ABANDONED, so a
@@ -1011,11 +1039,9 @@ def reclaim_abandoned_reservations(db, *, stuck_after_s: int = None) -> int:
                     except Exception:  # noqa: BLE001 — PI void is best-effort
                         pass
                     _release_reservation(db, tx)
-                    try:
-                        transition(db, tx, "CANCELLED",
-                                   reason="reservation reclaimed (dead node / abandoned)")
-                    except TransactionError:
-                        pass                                        # unit already freed
+                    # Move the tx to a terminal state via a valid path (RUNNING->CANCELLED is
+                    # illegal; bridge through JOB_FAILED) so it doesn't linger pre-capture.
+                    _cancel_reclaimed(db, tx, reason="reservation reclaimed (dead node / abandoned)")
                     reclaimed += 1
         except Exception:  # noqa: BLE001 — one bad row must never block the rest
             logger.exception("reclaim_abandoned_reservations: failed for tx %s",

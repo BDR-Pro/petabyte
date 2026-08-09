@@ -104,6 +104,8 @@ s.expire_all()
 ok("terminal-FAILED reservation booking is released", dbmod.get_booking_by_id(s, bA.id).status == "released_unused")
 ok("stuck pre-capture reservation booking is released",
    dbmod.get_booking_by_id(s, bB.id).status == "released_unused")
+ok("reclaimed stale RUNNING tx reaches terminal CANCELLED (not left stuck in RUNNING)",
+   sc.get_tx_by_public_id(s, txB.public_id).status == "CANCELLED")
 ok("fresh RUNNING reservation is PRESERVED (job may be in flight)",
    dbmod.get_booking_by_id(s, bC.id).status == "stripe_reserved")
 ok("successful PAYMENT_CAPTURED rental is PRESERVED",
@@ -142,12 +144,14 @@ ok("release_failed_reservation REFUSES an actively-running tx (guards a live job
 
 # A non-positive stuck timeout must NOT make a fresh in-flight reservation reclaimable — a
 # 0/negative RESERVATION_RECLAIM_STUCK_S would otherwise tear down a job that may still be running.
-# It is clamped to the default instead. bF (fresh RUNNING) must survive.
+# It is clamped to the default instead. bF (fresh RUNNING) must survive both -1 and 0.
 before = avail()
-n_bad = sc.reclaim_abandoned_reservations(s, stuck_after_s=-1)
-s.expire_all()
-ok("non-positive stuck_after_s is clamped (fresh RUNNING reservation NOT reclaimed)",
-   n_bad == 0 and dbmod.get_booking_by_id(s, bF.id).status == "stripe_reserved" and avail() == before)
+for _bad in (-1, 0):
+    n_bad = sc.reclaim_abandoned_reservations(s, stuck_after_s=_bad)
+    s.expire_all()
+    ok("non-positive stuck_after_s=" + str(_bad) + " is clamped (fresh RUNNING NOT reclaimed)",
+       n_bad == 0 and dbmod.get_booking_by_id(s, bF.id).status == "stripe_reserved"
+       and avail() == before)
 
 s.close()
 for f in ("reservation_reclaim_test.db", "reservation_reclaim_test.db-wal",
