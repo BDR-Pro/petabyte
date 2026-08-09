@@ -112,6 +112,9 @@ GATES = [
     {"id": "payout_readiness", "title": "Provider-agnostic seller payout readiness (verified rail)",
      "prio": "P0", "cwd": API, "env": _sqlite_env, "quick": True,
      "argv": [PY, "payout_readiness_test.py"]},
+    {"id": "seller_eligibility", "title": "Live authoritative paid-job gate (payout+rep+fraud+mode)",
+     "prio": "P0", "cwd": API, "env": _sqlite_env, "quick": True,
+     "argv": [PY, "seller_eligibility_test.py"]},
     {"id": "secret_scan", "title": "No obvious committed secrets (best-effort)",
      "prio": "P0", "cwd": ROOT, "quick": True, "kind": "secret_scan"},
     # ---- offline test suites (heavier) ----

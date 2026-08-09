@@ -187,6 +187,9 @@ CURATED = {
     "REAPER_INTERVAL_S": {"format": "int"},
     "EMAIL_TOKEN_TTL_MIN": {"format": "int"},
     "PAYOUT_HOLD_DAYS": {"format": "int", "description": "Earnings risk-hold before biweekly payout."},
+    "PAYOUT_READINESS_MAX_AGE_S": {"format": "int",
+        "description": "Max age (s) of provider-synced payout readiness before it fails closed "
+                       "at paid-job authorization (default 30d)."},
     "PAYOUT_COOLING_OFF_H": {"format": "int"},
     "PAYOUT_HOLD_ON_REPORT": {"allowed": ["true", "false"], "format": "bool"},
     "AUTO_SETTLE_ON_RESULT": {"allowed": ["true", "false"], "format": "bool"},

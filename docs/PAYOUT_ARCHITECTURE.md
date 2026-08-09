@@ -49,6 +49,58 @@ rail makes sellers eligible **without changing any marketplace code**. `payout_r
 proves this (a synthetic future rail makes a seller with no Connect account eligible), and proves
 `authorize` refuses whenever the service says not-ready even with a fully-ready Connect account.
 
+## Authoritative paid-job eligibility (live, never a cached boolean)
+
+Payout readiness is one of several **independent** conditions. The authoritative gate at every
+financially-meaningful entry point is `seller_eligibility.get_seller_job_eligibility(db, seller,
+spec=…)`, which composes — never collapses into one opaque boolean:
+
+| Condition | Source | Reason code on failure |
+|-----------|--------|------------------------|
+| `payout_ready` | `payout_readiness` (bounded freshness, fail-closed) | `PAYOUT_NOT_READY` / `PAYOUT_READINESS_STALE` / `NO_PAYOUT_RAIL` |
+| `reputation_ok` | `seller.reputation >= MIN_REPUTATION` | `REPUTATION_TOO_LOW` |
+| `fraud_ok` | no active `risk` compliance hold (`payout_hold_active`) | `FRAUD_HOLD` |
+| `availability_ok` | spec attested + live + capacity | `NOT_AVAILABLE` |
+| `mode_ok` | rail's gateway mode == current gateway (TEST/LIVE isolation) | `MODE_MISMATCH` |
+
+Result: `{eligible, payout_ready, reputation_ok, fraud_ok, availability_ok, mode_ok,
+reason_code, rail, provider}` — buyer-safe, no provider/KYC internals.
+
+**`users.can_accept_paid_jobs` is a cache/projection for UI and marketplace search only.** It is
+**never** the authoritative gate. `stripe_connect.authorize` (the Stripe paid-compute money
+entry point, which creates a payout obligation) calls the eligibility service **live**, so:
+
+- a seller whose payout readiness dropped after the cache said `true` **cannot** start a new paid
+  tx (fail closed);
+- a seller the cache still says `false` for **is** authorized once the live conditions pass;
+- reputation and fraud checks are preserved exactly and are **never** overwritten by payout
+  readiness.
+
+### Freshness / fail-closed policy
+
+Readiness is read from the DB-cached, provider-synced account state (kept current by Stripe
+`account.updated` webhooks + on-demand refresh) — the provider is **not** called on the hot
+authorization path. A state not confirmed within `PAYOUT_READINESS_MAX_AGE_S` (default 30 days)
+is treated as **unknown** and fails closed (`PAYOUT_READINESS_STALE`). Stale readiness can never
+authorize a new paid job.
+
+### Which paths use the live gate vs the cache
+
+- **Live authoritative gate:** `stripe_connect.authorize` (`POST /payments/authorize`) — the
+  point where buyer money is committed and a seller payout obligation is created.
+- **Cache (`can_accept_paid_jobs`) for fast filtering only:** marketplace listing
+  (`/marketplace/specs`), `router.gather_candidates` (`/solve`), and quick-launch candidate
+  scans. These are discovery/search, not the money-commit point; the authoritative re-check
+  happens at `authorize`.
+- **Legacy wallet/escrow bookings** (`request_vm` / `/launch`) accrue *internal* seller earnings
+  and enforce reputation at booking; payout readiness for that path is enforced at **withdrawal**
+  (the seller must be payout-ready to be paid), not at job acceptance — so those paths keep their
+  existing reputation gate and are not changed here.
+
+An already-authorized transaction is never retroactively invalidated when a seller's readiness
+changes afterward — the tx follows the existing state machine (`seller_eligibility_test.py`
+case 10).
+
 ## Funds flow (buyer payment is decoupled from seller payout)
 
 ```

@@ -361,14 +361,16 @@ def authorize(db, buyer: User, spec: SellerSpec, estimated_seconds: int, *,
     transient attribute (never persisted)."""
     if spec.user_id == buyer.id:
         raise TransactionError("cannot rent your own hardware")
-    if not spec.attested or not spec_is_live(spec) or (spec.available_units or 0) < 1:
-        raise TransactionError("GPU is not online/available/eligible")
-    # Provider-agnostic eligibility: the seller must have >= 1 verified, enabled, payout-ready
-    # rail (Connect is the one implemented rail today). Marketplace logic asks the centralized
-    # readiness service, never a specific provider's account fields.
-    import payout_readiness
-    if not payout_readiness.is_seller_payout_ready(db, spec.user_id):
-        raise TransactionError("seller is not payout-ready")
+    # AUTHORITATIVE, LIVE eligibility at the money entry point. Re-checks ALL independent
+    # conditions (payout readiness with bounded freshness, reputation, fraud/risk hold, node
+    # availability, and gateway/mode) through the centralized service — NEVER the cached
+    # can_accept_paid_jobs boolean. Fail closed. A seller whose payout readiness dropped after
+    # the cache said "true" cannot start a paid tx here.
+    import seller_eligibility
+    seller = get_user_by_id(db, spec.user_id)
+    elig = seller_eligibility.get_seller_job_eligibility(db, seller, spec=spec)
+    if not elig["eligible"]:
+        raise TransactionError(seller_eligibility.message_for(elig["reason_code"]))
 
     # The Connect account (when present) is recorded on the tx as the transfer destination for
     # the CURRENT Stripe-Connect payout path. Looked up separately from the eligibility check:

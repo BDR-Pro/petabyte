@@ -667,6 +667,14 @@ variables:
     - 'true'
     - 'false'
     format: bool
+  PAYOUT_READINESS_MAX_AGE_S:
+    required: false
+    default: '2592000'
+    scope:
+    - platform
+    description: Max age (s) of provider-synced payout readiness before it fails closed at paid-job authorization
+      (default 30d).
+    format: int
   PAYOUT_STUB:
     required: false
     default: 'true'

@@ -129,6 +129,10 @@ jobs:
         working-directory: lumaris_api
         run: python payout_readiness_test.py
 
+      - name: seller eligibility — live authoritative paid-job gate (payout+rep+fraud+mode)
+        working-directory: lumaris_api
+        run: python seller_eligibility_test.py
+
       - name: matmul result validation (offline)
         working-directory: lumaris_api
         run: python matmul_validation_test.py

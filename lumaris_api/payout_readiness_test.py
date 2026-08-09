@@ -59,6 +59,9 @@ dbmod_session = dbmod.SessionLocal()
 
 
 def mk_ca(seller_id, **fields):
+    # Default to a FRESH sync time so capability-based reasons surface (a None/old sync would
+    # fail closed as readiness_stale). The stale case below overrides last_synced_at explicitly.
+    fields.setdefault("last_synced_at", _dt.datetime.now(_dt.timezone.utc))
     ca = dbmod.ConnectedAccount(
         user_id=seller_id, stripe_account_id=f"acct_fake_pr{seller_id}",
         gateway_mode="fake", onboarding_state="created", **fields)
@@ -110,9 +113,18 @@ ok("Connect not onboarded -> not ready, reason=verification_required",
    r["ready"] is False and r["reason"] == "verification_required"
    and "individual.id_number" in r["requirements_due"])
 
+# ---- STALE provider state (capable, but last synced long ago) -> FAIL CLOSED ----
+s_stale = new_seller()
+mk_ca(s_stale.id, details_submitted=True, charges_enabled=True, payouts_enabled=True,
+      transfers_capability="active",
+      last_synced_at=_dt.datetime(2000, 1, 1, tzinfo=_dt.timezone.utc))
+r = pr.get_seller_payout_readiness(dbmod_session, s_stale)
+ok("stale provider state -> not ready, reason=readiness_stale (fail closed)",
+   r["ready"] is False and r["reason"] == "readiness_stale" and r["stale"] is True)
+
 # ---- EXTENSIBILITY: a future rail makes a seller eligible with NO Connect account ----
 s5 = new_seller()   # no ConnectedAccount at all
-def _future_rail(db, seller_id):
+def _future_rail(db, seller_id, **_):
     if seller_id == s5.id:
         return {"ready": True, "provider": "future", "rail": "future_rail",
                 "country": "SA", "reason": None, "why_blocked": None,
@@ -138,7 +150,8 @@ buyer = dbmod.create_user(s, "pr_auth_buyer", PW)
 mk_ca_seller = dbmod.ConnectedAccount(
     user_id=seller.id, stripe_account_id="acct_fake_prauth", gateway_mode="fake",
     onboarding_state="enabled", details_submitted=True, charges_enabled=True,
-    payouts_enabled=True, transfers_capability="active", country="US")
+    payouts_enabled=True, transfers_capability="active", country="US",
+    last_synced_at=_dt.datetime.now(_dt.timezone.utc))
 s.add(mk_ca_seller)
 spec = dbmod.save_specs(s, seller, {"cpu": 8, "ram": 32, "duration": 24, "price_per_hour": 2.0,
                                     "provider": "pr_auth_seller", "gpu_model": "NVIDIA L4",
@@ -157,15 +170,18 @@ ok("authorize SUCCEEDS for a service-ready seller", tx is not None and tx.status
 
 # now the service says NOT ready (e.g. a rail-level restriction) even though Connect looks fine:
 # authorize must refuse — proving marketplace eligibility flows through the service.
-_orig_is_ready = pr.is_seller_payout_ready
-pr.is_seller_payout_ready = lambda db, sid: False
+_orig_ready = pr.get_seller_payout_readiness
+pr.get_seller_payout_readiness = lambda db, seller, **kw: {
+    "ready": False, "provider": "stripe", "rail": "stripe_connect", "rail_mode": "fake",
+    "country": "US", "stale": False, "synced_at": None, "reason": "capabilities_pending",
+    "why_blocked": "x", "requirements_due": [], "requirements_past_due": []}
 _refused = False
 try:
     sc.authorize(s, buyer, spec, 60)
 except sc.TransactionError as e:
     _refused = "payout-ready" in str(e)
 finally:
-    pr.is_seller_payout_ready = _orig_is_ready
+    pr.get_seller_payout_readiness = _orig_ready
 ok("authorize REFUSES when the readiness SERVICE says not-ready (even with a ready Connect acct)",
    _refused)
 s.close()
