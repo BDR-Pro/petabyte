@@ -406,21 +406,48 @@ def run(args) -> dict:
 
 
 def _release_on_failure(api, report):
-    """Best-effort: cancel the transaction so a FAILED run does NOT leak its reservation.
+    """Best-effort cleanup so a FAILED run does not leak its reservation.
 
-    /payments/{tx}/cancel is the path that releases the `stripe_reserved` booking + GPU unit
-    (and cancels the Stripe authorization). Without this, repeated failed E2E runs would hold
-    marketplace capacity indefinitely. Only runs when a tx was actually created; the endpoint is
-    idempotent and simply 409s a already-captured/terminal tx, which we record and ignore."""
+    POST /payments/{tx}/cancel releases a PRE-DISPATCH reservation (frees the `stripe_reserved`
+    booking + GPU unit and voids the Stripe hold). Two failure modes this must handle correctly:
+
+      * transient/unreachable API — a SINGLE request that can't reach the API must not give up
+        and leak. We RETRY with bounded backoff.
+      * post-dispatch — once a job is dispatched the endpoint returns 409 ("cannot cancel"); the
+        buyer path genuinely cannot release it. We record that honestly (no fake "released") and
+        rely on the server-side abandoned-reservation reaper
+        (stripe_connect.reclaim_abandoned_reservations, run by the maintenance loop) to reclaim
+        the unit once the tx fails or goes stale — so it is NOT held indefinitely.
+
+    Only runs when a tx was actually created."""
     tx = report.get("transaction_public_id")
     if not tx:
         return                                   # failed before any authorization — nothing held
-    try:
-        r = api.req("post", f"/payments/{tx}/cancel")
-        report["cleanup"] = {"cancel_http": r.status_code,
-                             "reservation_released": r.status_code == 200}
-    except Exception as ex:  # noqa: BLE001 — cleanup must never mask the original failure
-        report["cleanup"] = {"cancel_error": type(ex).__name__}
+    last = None
+    for attempt in range(5):
+        try:
+            r = api.req("post", f"/payments/{tx}/cancel")
+            last = r.status_code
+            if r.status_code == 200:
+                report["cleanup"] = {"cancel_http": 200, "reservation_released": True}
+                return
+            if r.status_code == 409:
+                # dispatched: buyer cancel cannot release it — the reaper reclaims it server-side.
+                report["cleanup"] = {
+                    "cancel_http": 409, "reservation_released": False, "needs_reclaim": True,
+                    "note": "tx already dispatched; buyer cancel cannot release it. The "
+                            "abandoned-reservation reaper reclaims the GPU unit once the job "
+                            "fails or goes stale."}
+                return
+            # other 4xx/5xx may be transient — fall through and retry
+        except Exception as ex:  # noqa: BLE001 — network error: retry, never mask the original failure
+            last = f"error:{type(ex).__name__}"
+        time.sleep(min(2 ** attempt, 8))
+    # exhausted retries without a definitive release — report honestly; the reaper backstops it.
+    report["cleanup"] = {
+        "cancel_http": last, "reservation_released": False, "needs_reclaim": True,
+        "note": "cancel did not succeed after retries; the server-side abandoned-reservation "
+                "reaper will reclaim the GPU unit."}
 
 
 def _safe_json(resp):

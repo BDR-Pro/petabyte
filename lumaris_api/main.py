@@ -237,6 +237,14 @@ def _maintenance_cycle() -> None:
                       count=_stale_n, timeout_s=HEARTBEAT_TIMEOUT_S)
         settle_dead_specs(db)            # refund in-flight bookings on dead nodes
         meter_and_expire(db)             # auto-stop VMs whose prepaid window ended
+        try:
+            # release GPU units held by abandoned/failed compute-tx reservations (the buyer
+            # cancel path can't release a dispatched tx, so a post-dispatch failure would
+            # otherwise leak its unit forever).
+            import stripe_connect as _sc_reclaim
+            _sc_reclaim.reclaim_abandoned_reservations(db)
+        except Exception:  # noqa: BLE001 — never let cleanup break the maintenance cycle
+            logger.exception("reclaim_abandoned_reservations cycle failed")
         reprice_specs(db)                # demand-based auto-pricing for opted-in nodes
         _maintenance["last_success"] = time.time()
     finally:

@@ -133,6 +133,10 @@ jobs:
         working-directory: lumaris_api
         run: python seller_eligibility_test.py
 
+      - name: reservation reclaim — abandoned/failed reservations never leak GPU capacity
+        working-directory: lumaris_api
+        run: python reservation_reclaim_test.py
+
       - name: matmul result validation (offline)
         working-directory: lumaris_api
         run: python matmul_validation_test.py

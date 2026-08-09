@@ -190,6 +190,9 @@ CURATED = {
     "PAYOUT_READINESS_MAX_AGE_S": {"format": "int",
         "description": "Max age (s) of provider-synced payout readiness before it fails closed "
                        "at paid-job authorization (default 30d)."},
+    "RESERVATION_RECLAIM_STUCK_S": {"format": "int",
+        "description": "How long (s) a compute-tx may sit stuck pre-capture before the reaper "
+                       "reclaims its reserved GPU unit (default 26h)."},
     "PAYOUT_COOLING_OFF_H": {"format": "int"},
     "PAYOUT_HOLD_ON_REPORT": {"allowed": ["true", "false"], "format": "bool"},
     "AUTO_SETTLE_ON_RESULT": {"allowed": ["true", "false"], "format": "bool"},

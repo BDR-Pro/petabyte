@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (143)
+## Variables (non-sensitive) (144)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -122,6 +122,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `REDIS_NAMESPACE` | no | platform | `petabyte` | `petabyte` | api/redis_client.py | — | Key namespace prefix for Redis (petabyte). |
 | `REFERRAL_MONTHLY_CAP` | no | platform | `25` | `25` | api/db.py | — | — |
 | `REFERRAL_REWARD_USD` | no | platform | `20` | `20` | api/db.py | — | — |
+| `RESERVATION_RECLAIM_STUCK_S` | no | platform | `93600` | `93600` | api/stripe_connect.py | format: int | How long (s) a compute-tx may sit stuck pre-capture before the reaper reclaims its reserved GPU unit (default 26h). |
 | `S3_BUCKET` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 | `S3_ENDPOINT` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 | `S3_REGION` | no | platform | `us-east-1` | `us-east-1` | api/utils.py | — | — |

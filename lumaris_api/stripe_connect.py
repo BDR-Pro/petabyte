@@ -905,6 +905,73 @@ def _release_reservation(db, tx):
         release_unit(db, tx.spec_id)
 
 
+# Pre-capture states in which a reservation is legitimately held while the job is in flight.
+_PRE_CAPTURE_ACTIVE = ("GPU_RESERVED", "DISPATCHING", "RUNNING",
+                       "METERING_FINALIZED", "PAYMENT_CAPTURE_PENDING")
+
+
+def reclaim_abandoned_reservations(db, *, stuck_after_s: int = None) -> int:
+    """Release GPU units held by `stripe_reserved` bookings whose compute-tx is ABANDONED, so a
+    failed or stuck rental can never hold capacity indefinitely.
+
+    This is the safety net for the case the buyer cancel path cannot handle: once a job is
+    dispatched, POST /payments/{tx}/cancel returns 409, so a post-dispatch failure would
+    otherwise leak its reserved unit forever. Two SAFE cases are reclaimed:
+
+      * tx in a TERMINAL failure/cancel state (marketplace_insight.TX_FAILED, e.g. JOB_FAILED /
+        CAPTURE_FAILED / DISPATCH_FAILED / CANCELLED) -> release the unit immediately; the
+        rental is over and nothing was successfully captured for it.
+      * tx STUCK pre-capture (a dead seller that never settled) and untouched for longer than
+        `stuck_after_s` (default RESERVATION_RECLAIM_STUCK_S, 26h) -> cancel the authorization
+        (void the PI hold) and release.
+
+    It NEVER touches a recently-active pre-capture tx or a successfully PAYMENT_CAPTURED rental.
+    Idempotent — it only ever acts on a still-`stripe_reserved` booking, and the release helpers
+    are no-ops once released. Returns the number of reservations reclaimed. Best-effort: one bad
+    row is logged and skipped, never blocking the rest (safe to call from the maintenance loop)."""
+    import marketplace_insight as mi
+    if stuck_after_s is None:
+        stuck_after_s = int(os.getenv("RESERVATION_RECLAIM_STUCK_S", str(26 * 3600)))
+    cutoff = _now() - timedelta(seconds=stuck_after_s)
+    rows = (db.query(ComputeTransaction)
+            .join(Booking, Booking.id == ComputeTransaction.booking_id)
+            .filter(Booking.status == "stripe_reserved").all())
+    reclaimed = 0
+    for tx in rows:
+        try:
+            if tx.status in mi.TX_FAILED:
+                _release_reservation(db, tx)                       # rental over -> free the unit
+                reclaimed += 1
+            elif tx.status in _PRE_CAPTURE_ACTIVE:
+                ts = tx.updated_at or tx.created_at
+                if ts is not None and ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if ts is not None and ts < cutoff:                 # dead seller: abandoned/stuck
+                    # Free the unit + void the buyer's authorization hold DIRECTLY — decoupled
+                    # from the full cancel FSM so an FSM-disallowed transition can never leave
+                    # the unit held. Releasing capacity is the goal; the exact terminal state is
+                    # best-effort.
+                    try:
+                        if tx.stripe_payment_intent_id:
+                            get_gateway().cancel_payment_intent(
+                                pi_id=tx.stripe_payment_intent_id,
+                                idempotency_key=idem_key("reclaim", tx))
+                    except Exception:  # noqa: BLE001 — PI void is best-effort
+                        pass
+                    _release_reservation(db, tx)
+                    try:
+                        transition(db, tx, "CANCELLED",
+                                   reason="reservation reclaimed (abandoned/stuck)")
+                    except TransactionError:
+                        pass                                        # unit already freed
+                    reclaimed += 1
+        except Exception:  # noqa: BLE001 — one bad row must never block the rest
+            logger.exception("reclaim_abandoned_reservations: failed for tx %s",
+                             getattr(tx, "public_id", "?"))
+            db.rollback()
+    return reclaimed
+
+
 def refund(db, tx: ComputeTransaction, *, amount: int = None, actor: str = "admin",
            reason: str = "refund") -> ComputeTransaction:
     """Refund a captured charge. If the seller was already transferred, claw back the

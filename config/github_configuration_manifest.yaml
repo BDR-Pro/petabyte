@@ -872,6 +872,14 @@ variables:
     scope:
     - platform
     description: ''
+  RESERVATION_RECLAIM_STUCK_S:
+    required: false
+    default: '93600'
+    scope:
+    - platform
+    description: How long (s) a compute-tx may sit stuck pre-capture before the reaper reclaims its reserved
+      GPU unit (default 26h).
+    format: int
   S3_BUCKET:
     required: false
     default: null
