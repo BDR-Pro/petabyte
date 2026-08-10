@@ -26,6 +26,9 @@ jobs:
     # Parses + validates ENV_VARS, refuses secrets inside it, detects legacy individual
     # Variables, and runs every existing safety check. Blocking only when the gate is on.
     runs-on: ubuntu-latest
+    # ENV_VARS (and the deploy Secrets) live in the TEST GitHub Environment; bind to it so
+    # environment-scoped config resolves. Repo-level vars/secrets stay visible too.
+    environment: TEST
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,7 +40,7 @@ jobs:
         id: validate
         continue-on-error: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB != 'true' }}
         env:
-          ENV_VARS: ${{ vars.ENV_VARS }}
+          ENV_VARS: ${{ vars.ENV_VARS || secrets.ENV_VARS }}
           DEPLOY_CONFIG_FROM_GITHUB: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB }}
           VARS_JSON: ${{ toJSON(vars) }}       # only to DETECT legacy individual Variables
           SECRETS_JSON: ${{ toJSON(secrets) }}
@@ -62,6 +65,8 @@ jobs:
   deploy:
     needs: configuration-preflight
     runs-on: ubuntu-latest
+    # Bind to the TEST GitHub Environment so ENV_VARS + Secrets (which live there) resolve.
+    environment: TEST
     env:
       # Rollout gate exposed once, via env (never interpolated into a run: script body).
       ROLLOUT_GATE: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB }}
@@ -77,7 +82,7 @@ jobs:
 
       - name: Resolve deploy host + user from ENV_VARS
         env:
-          ENV_VARS: ${{ vars.ENV_VARS }}
+          ENV_VARS: ${{ vars.ENV_VARS || secrets.ENV_VARS }}
         run: |
           python3 - <<'PY' >> "$GITHUB_ENV"
           import os, sys
@@ -123,7 +128,7 @@ jobs:
       - name: generate + push server env (atomic; backup for rollback)
         if: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB == 'true' }}
         env:
-          ENV_VARS: ${{ vars.ENV_VARS }}
+          ENV_VARS: ${{ vars.ENV_VARS || secrets.ENV_VARS }}
           DEPLOY_CONFIG_FROM_GITHUB: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB }}
           VARS_JSON: ${{ toJSON(vars) }}
           SECRETS_JSON: ${{ toJSON(secrets) }}

@@ -92,6 +92,23 @@ ok("secret VALUE never appears in the error", not any("sk_test_LEAKME" in x for 
 ok("denylist refuses an undocumented *_PASSWORD",
    ev.is_secret_name("SOME_NEW_PASSWORD", MANIFEST))
 
+# ---- manifest is AUTHORITATIVE: keys explicitly classified as Variables are allowed in
+#      ENV_VARS even when their NAME matches a denylist heuristic. These are exactly the keys
+#      the deploy workflows resolve from ENV_VARS (DROPLET_HOST/USER + observ host, SENTRY_DSN).
+for name in ("DROPLET_HOST", "DROPLET_HOST_OBSERV", "DROPLET_USER", "SENTRY_DSN"):
+    ok(f"{name} is a non-secret Variable (permitted in ENV_VARS)",
+       ev.is_secret_name(name, MANIFEST) is False)
+v, _ = ev.parse_bundle(
+    "DROPLET_HOST=1.2.3.4; DROPLET_HOST_OBSERV=5.6.7.8; DROPLET_USER=root; "
+    "SENTRY_DSN=https://k@o0.ingest.us.sentry.io/1;")
+ok("deploy/observability bundle is not flagged as containing secrets",
+   ev.check_no_secrets(v, MANIFEST) == [])
+ok("deploy/observability bundle keys are all known (in the manifest)",
+   ev.check_known(v, MANIFEST) == [])
+# ...but an UNKNOWN *_DSN (e.g. a DB DSN with embedded credentials) is still refused.
+ok("denylist still refuses an undocumented *_DSN key",
+   ev.is_secret_name("SOME_DB_DSN", MANIFEST))
+
 # ---- unknown keys reported ----
 v, _ = ev.parse_bundle("TOTALLY_MADE_UP=1; LOG_LEVEL=INFO;")
 ok("unknown key reported", any("TOTALLY_MADE_UP" in x for x in ev.check_known(v, MANIFEST)))

@@ -68,9 +68,14 @@ jobs:
   deploy:
     needs: validate
     runs-on: ubuntu-latest
+    # ENV_VARS and the deploy Secrets live in the TEST GitHub Environment. Bind to it so the job
+    # can read environment-scoped config (repo-level vars/secrets stay visible too — binding is
+    # purely additive). Without this, `vars.ENV_VARS` resolves empty and the resolve step below
+    # fails with "DROPLET_HOST_OBSERV and DROPLET_USER must be in ENV_VARS".
+    environment: TEST
     env:
-      # DROPLET_HOST_OBSERV + DROPLET_USER are NON-secret config; they live in the ENV_VARS
-      # bundle (Repository Variable), resolved below. Only DEPLOY_SSH_KEY stays a Secret.
+      # DROPLET_HOST_OBSERV + DROPLET_USER are NON-secret config in the ENV_VARS bundle, resolved
+      # below. Only DEPLOY_SSH_KEY (and the host pin) stay Secrets.
       REMOTE_DIR: /opt/petabyte-observability
       SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts
     steps:
@@ -80,7 +85,8 @@ jobs:
 
       - name: Resolve host + user from ENV_VARS
         env:
-          ENV_VARS: ${{ vars.ENV_VARS }}
+          # Works whether the bundle is stored under the TEST environment's Variables or Secrets.
+          ENV_VARS: ${{ vars.ENV_VARS || secrets.ENV_VARS }}
         run: |
           python3 - <<'PY' >> "$GITHUB_ENV"
           import os, sys

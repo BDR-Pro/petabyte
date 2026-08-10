@@ -26,6 +26,7 @@ CONNECT_RETURN_URL=;
 DEFAULT_LANDING_VIDEO_ID=UUSWYaxboDA;
 EMAIL_FROM=no-reply@petabyte.market;
 EMAIL_PROVIDER=mailgun;
+EMAIL_TOKEN_TTL_MIN=15;
 ENABLE_ELASTIC=true;
 ENABLE_GRAFANA=true;
 ENABLE_OTEL=true;
@@ -106,6 +107,7 @@ S3_STUB=true;
 SANCTIONS_SCREEN_PROVIDER=;
 SELLER_AUDIT_SAMPLE_RATE=0.25;
 SELLER_FRAUD_PENALTY=40;
+SENTRY_DSN=;
 SENTRY_ENABLED=true;
 SENTRY_ENVIRONMENT=;
 SENTRY_MAX_BREADCRUMBS=30;
@@ -165,7 +167,6 @@ Create each under **Secrets**. Required ones (🔴) must exist before the first 
 - **`REDIS_URL`** — ⚪ optional. See the reference doc.
 - **`SECRET_KEY`** — 🔴 required. Generate once: `openssl rand -hex 32`. Rotating it logs everyone out.
 - **`SENDGRID_API_KEY`** — ⚪ optional. SendGrid (only if EMAIL_PROVIDER=sendgrid).
-- **`SENTRY_DSN`** — ⚪ optional. Sentry → project → Settings → Client Keys (DSN).
 - **`SERVER_PRIVATE_KEY`** — 🔴 required. Generate a Fernet key: `python -c 'from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())'`. Rotating it makes existing encrypted API keys undecryptable — migrate the current value.
 - **`STRIPE_API_KEY`** — ⚪ optional. Legacy deposits key — same source as STRIPE_SECRET_KEY.
 - **`STRIPE_PUBLISHABLE_KEY`** — ⚪ optional. Stripe Dashboard → API keys (pk_test_… / pk_live_…).

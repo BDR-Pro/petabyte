@@ -34,7 +34,8 @@ jobs:
       # the following steps. The value is never echoed.
       - name: Resolve + mask SENTRY_DSN from ENV_VARS
         env:
-          ENV_VARS: ${{ vars.ENV_VARS }}
+          # The bundle may be stored under the TEST environment's Variables or Secrets section.
+          ENV_VARS: ${{ vars.ENV_VARS || secrets.ENV_VARS }}
         run: |
           python3 - <<'PY'
           import os, sys
