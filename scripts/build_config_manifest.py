@@ -138,12 +138,13 @@ AGENT_VARS = {
                                            "Non-secret: lives in ENV_VARS."},
     "DROPLET_SSH_KNOWN_HOSTS_OBSERV": {"required": False, "default": None, "secret": True,
                                        "scope": ["deployment"],
-                                       "description": "Optional pinned SSH host key(s) for the "
-                                                      "observability VM (ssh-keyscan -t "
-                                                      "ed25519,rsa <host>). If unset, the "
-                                                      "observability deploy pins via ssh-keyscan "
-                                                      "(trust-on-first-use); only non-secret "
-                                                      "config is shipped, never .env."},
+                                       "description": "Pinned SSH host key(s) for the observability "
+                                                      "VM. REQUIRED by deploy-observability.yml, "
+                                                      "which fails closed without it (no "
+                                                      "trust-on-first-use). Generate with "
+                                                      "`ssh-keyscan -t ed25519,rsa <observ-host>` "
+                                                      "and verify the fingerprint out-of-band "
+                                                      "(provider console) before pinning."},
 }
 
 # ---- Curated metadata for important platform vars (allowed values / validation / notes) --

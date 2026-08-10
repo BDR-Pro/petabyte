@@ -17,3 +17,10 @@ regexes = [
   '''sk_test_ok''',
   '''pk_live_XYZ''',
 ]
+# Pure redaction-test fixtures: this file deliberately contains fake secret-SHAPED strings
+# (fake Stripe keys, JWTs, bearer tokens, passwords) so the tests can PROVE the Sentry
+# before_send scrubber removes them. None are real credentials — every value is asserted to be
+# redacted. Allowlist the whole file so gitleaks stops flagging these intentional fakes.
+paths = [
+  '''lumaris_api/sentry_test.py''',
+]

@@ -43,6 +43,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
+      - run: pip install pyyaml          # setup-python ships CPython only; the YAML step needs PyYAML
       - name: dashboards — metric existence + generator determinism
         run: |
           set -euo pipefail
@@ -107,13 +108,18 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          if [ -n "${KNOWN_HOSTS_OBSERV//[[:space:]]/}" ]; then
-            printf '%s\n' "$KNOWN_HOSTS_OBSERV" > ~/.ssh/known_hosts
-          else
-            echo "::warning::DROPLET_SSH_KNOWN_HOSTS_OBSERV not set — pinning via ssh-keyscan (trust-on-first-use)." \
-                 "Add that secret (ssh-keyscan -t ed25519,rsa <host>) for strict verification."
-            ssh-keyscan -t ed25519,rsa "$OBS_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          # Fail CLOSED on a missing pin — never trust-on-first-use. An unauthenticated
+          # ssh-keyscan lets an active network attacker impersonate the VM and receive the
+          # deploy. Pin the host key (verify the fingerprint out-of-band via the provider
+          # console first), same posture as the platform deploy.
+          if [ -z "${KNOWN_HOSTS_OBSERV//[[:space:]]/}" ]; then
+            echo "::error::DROPLET_SSH_KNOWN_HOSTS_OBSERV secret is empty — refusing to deploy" \
+                 "without a pinned host key. Generate it with: ssh-keyscan -t ed25519,rsa <observ-host>," \
+                 "verify the fingerprint via the provider console, then store it as the" \
+                 "DROPLET_SSH_KNOWN_HOSTS_OBSERV Secret." >&2
+            exit 1
           fi
+          printf '%s\n' "$KNOWN_HOSTS_OBSERV" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
       - name: Preflight — remote dir + .env present
@@ -144,26 +150,19 @@ jobs:
             ls -1dt backups/*/ 2>/dev/null | tail -n +11 | xargs -r rm -rf
             echo "backed up config to backups/$ts"'
 
-      # Whole-tree sync WITHOUT --delete: never removes VM-only files or named-volume data,
-      # never overwrites .env or the backups dir.
-      - name: Rsync observability/ -> VM (repo is source of truth)
+      # Whole-tree sync WITH --delete so a file removed from the repo is pruned on the VM too
+      # (stale Prometheus rules, provisioning, dashboards, service configs). Excludes only
+      # VM-owned paths: .env (secret — never shipped) and backups/. All stack DATA lives in
+      # docker NAMED VOLUMES outside REMOTE_DIR, so --delete never touches metric/log/trace
+      # history; the pre-deploy backup above snapshots the config for rollback.
+      - name: Rsync observability/ -> VM (repo is source of truth; prune stale files)
         run: |
           set -euo pipefail
-          rsync -az \
+          rsync -az --delete \
             --exclude ".env" --exclude "backups/" --exclude "__pycache__/" \
             --exclude ".ruff_cache/" --exclude "*.pyc" \
             -e "$SSH" \
             observability/ "$OBS_USER@$OBS_HOST:$REMOTE_DIR/"
-
-      # Dashboards are JSON only (no data): prune the folder so a dashboard removed in git is
-      # also removed on the VM. Scoped --delete keeps this safe.
-      - name: Sync dashboards with pruning
-        run: |
-          set -euo pipefail
-          rsync -az --delete \
-            -e "$SSH" \
-            observability/grafana/dashboards/ \
-            "$OBS_USER@$OBS_HOST:$REMOTE_DIR/grafana/dashboards/"
 
       - name: docker compose up + apply config changes
         run: |
@@ -193,11 +192,18 @@ jobs:
               fi
               sleep 5
             done
-            echo "::error::Grafana health check failed after deploy — restoring the last compose backup"
+            echo "::error::Grafana health check failed after deploy — restoring the last FULL backup"
             last=$(ls -1dt backups/*/ 2>/dev/null | head -1)
-            if [ -n "$last" ] && [ -f "$last/docker-compose.yml" ]; then
-              cp -a "$last/docker-compose.yml" docker-compose.yml
+            if [ -n "$last" ]; then
+              # Restore every backed-up path (not just docker-compose.yml): the bind-mounted
+              # grafana/prometheus/loki/tempo/otel/compose configs were overwritten by rsync, so
+              # a compose-only rollback would leave the broken config active.
+              for p in docker-compose.yml grafana prometheus loki tempo otel-collector compose; do
+                if [ -e "$last/$p" ]; then rm -rf "./$p"; cp -a "$last/$p" "./$p"; fi
+              done
               docker compose up -d --remove-orphans
+              docker compose kill -s HUP prometheus 2>/dev/null || true
+              docker compose restart loki tempo otel-collector grafana 2>/dev/null || true
             fi
             docker compose logs --tail=60 grafana || true
             exit 1'

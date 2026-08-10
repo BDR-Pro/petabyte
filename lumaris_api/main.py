@@ -3032,7 +3032,7 @@ def admin_sentry_test(request: Request, me=Depends(require_admin), db: Session =
     event_id = obsmod.capture_message(
         "Petabyte Sentry selftest (admin-triggered)", level="error",
         selftest="true", triggered_by=me.username)
-    audit(db, "observability.sentry_test", actor=me.username, resource_type="observability",
+    audit(db, "observability.sentry_test", actor=me, resource_type="observability",
           resource_id=str(event_id or "none"), ip=_client_ip(request))
     return {"sent": bool(event_id), "event_id": event_id,
             "environment": obsmod.SENTRY_ENVIRONMENT, "release": obsmod.SENTRY_RELEASE}

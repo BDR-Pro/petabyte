@@ -63,7 +63,7 @@ jobs:
         run: python scripts/sentry_selftest.py --send
 
       - name: Result (no secrets)
-        if: always()
+        if: success()
         run: |
           {
             echo "## Sentry TEST verification"

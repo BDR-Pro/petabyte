@@ -72,10 +72,11 @@ def scrub(event, hint=None):
 evt = {
     "message": "boom for buyer with Authorization: Bearer abc.def.ghi and sk_test_deadbeef123",
     "request": {
+        "url": "https://petabyte.market/pay?password=hunter2&token=eyJabc.def.ghi",
         "headers": {"Authorization": "Bearer eyJhbGciOi.JWT.sig", "X-Api-Key": "pk_x",
                     "Content-Type": "application/json"},
         "cookies": {"session": "s3cr3t"},
-        "query_string": "token=eyJabc.def.ghi&spec_id=e1qdx",
+        "query_string": "token=eyJabc.def.ghi&password=hunter2&spec_id=e1qdx",
         "data": {"password": "hunter2", "client_secret": "pi_123_secret_ZZZ",
                  "api_key": "sk_live_zzz", "transaction_id": "ctx_pub_123",
                  "nested": {"seller_api_key": "key_should_go", "spec_id": "e1qdx"}},
@@ -84,7 +85,11 @@ evt = {
     "tags": {"transaction_id": "ctx_pub_123"},
     "user": {"id": "42", "email": "buyer@example.com"},
     "exception": {"values": [{"type": "ValueError",
-                              "value": "failed with token Bearer zzz.yyy.xxx"}]},
+                              "value": "failed with token Bearer zzz.yyy.xxx",
+                              "stacktrace": {"frames": [
+                                  {"function": "capture",
+                                   "vars": {"secret_key": "SK", "password": "hunter2",
+                                            "spec_id": "e1qdx"}}]}}]},
 }
 out = scrub(dict(evt), {})
 req = out["request"]
@@ -97,7 +102,14 @@ ok("5b. cookies are dropped entirely", "cookies" not in req)
 ok("5c. api-key header is redacted", req["headers"]["X-Api-Key"] == o._REDACTED)
 # 6) JWT/token fields
 ok("6. jwt field is redacted (nested extra)", extra["jwt"] == o._REDACTED)
-ok("6b. token in query_string is masked", "eyJabc.def.ghi" not in req["query_string"])
+ok("6b. query_string is dropped entirely (names like password=/token= aren't secret-shaped)",
+   "query_string" not in req)
+ok("6c. URL query component is stripped (no ?password=/token= reaches Sentry)",
+   "?" not in req.get("url", "") and "hunter2" not in req.get("url", ""))
+# frame locals never leave (include_local_variables=False + defence-in-depth scrub)
+_fr = out["exception"]["values"][0]["stacktrace"]["frames"][0]["vars"]
+ok("frame-local secrets are redacted (secret_key + password)",
+   _fr["secret_key"] == o._REDACTED and _fr["password"] == o._REDACTED and _fr["spec_id"] == "e1qdx")
 # 7) Stripe client_secret
 ok("7. client_secret is redacted", data["client_secret"] == o._REDACTED)
 # 8) passwords

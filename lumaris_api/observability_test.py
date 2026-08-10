@@ -256,8 +256,15 @@ if o.health()["metrics"]["active"]:
                                 "petabyte_seller_earnings_minor_total")))
     ok("money counters carry a bounded payment_mode label (TEST vs LIVE never merged)",
        'payment_mode="live"' in mtext and 'payment_mode="test"' in mtext)
-    ok("money counter increments by the AMOUNT, not by 1 (live GMV == 250)",
-       'petabyte_gmv_captured_minor_total{environment="test",payment_mode="live"} 250' in mtext)
+    # Every counter must increment by the AMOUNT (250 live / 99 test), not by 1 — a regression in
+    # fees or earnings would otherwise pass while dashboard financials are wrong.
+    _amounts_ok = all(
+        (n + '{environment="test",payment_mode="live"} 250') in mtext
+        and (n + '{environment="test",payment_mode="test"} 99') in mtext
+        for n in ("petabyte_gmv_captured_minor_total", "petabyte_platform_fees_minor_total",
+                  "petabyte_seller_earnings_minor_total"))
+    ok("all 3 money counters increment by the AMOUNT for BOTH modes (live 250 / test 99)",
+       _amounts_ok)
 else:
     ok("money counters (skipped: no client)", True)
     ok("money counters payment_mode label (skipped)", True)

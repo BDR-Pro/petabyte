@@ -804,16 +804,19 @@ def _sentry_scrub(event, hint):
             if code is not None and 400 <= code < 500:
                 return None
 
-        # 2) Request: never send cookies; redact headers, body and query string.
+        # 2) Request: never send cookies or the query string (names like password=/token= aren't
+        #    secret-SHAPED so masking alone wouldn't catch them — drop the query entirely), and
+        #    strip the query component off the URL. Redact headers + body.
         req = event.get("request")
         if isinstance(req, dict):
             req.pop("cookies", None)
+            req.pop("query_string", None)
+            if isinstance(req.get("url"), str):
+                req["url"] = req["url"].split("?", 1)[0]
             if isinstance(req.get("headers"), dict):
                 req["headers"] = redact(req["headers"])
             if "data" in req:
                 req["data"] = redact(req["data"])
-            if isinstance(req.get("query_string"), str):
-                req["query_string"] = _mask_value(req["query_string"])
 
         # 3) No user identity unless we deliberately add safe fields elsewhere.
         event.pop("user", None)
@@ -827,8 +830,16 @@ def _sentry_scrub(event, hint):
         if isinstance(event.get("message"), str):
             event["message"] = _mask_value(event["message"])
         for v in ((event.get("exception") or {}).get("values") or []):
-            if isinstance(v, dict) and isinstance(v.get("value"), str):
+            if not isinstance(v, dict):
+                continue
+            if isinstance(v.get("value"), str):
                 v["value"] = _mask_value(v["value"])
+            # Defence in depth (init already sets include_local_variables=False): if frame locals
+            # are ever re-enabled, still redact them so secrets can't ride out in stack-frame vars.
+            st = v.get("stacktrace")
+            for fr in ((st.get("frames") if isinstance(st, dict) else None) or []):
+                if isinstance(fr, dict) and isinstance(fr.get("vars"), (dict, list)):
+                    fr["vars"] = redact(fr["vars"])
 
         # 6) Breadcrumbs can carry log messages/data — redact them too.
         crumbs = event.get("breadcrumbs")
@@ -879,6 +890,7 @@ def init_sentry() -> bool:
             profiles_sample_rate=SENTRY_PROFILES_SAMPLE_RATE,
             max_breadcrumbs=SENTRY_MAX_BREADCRUMBS,
             send_default_pii=False,               # never auto-attach headers/cookies/IP/body
+            include_local_variables=False,        # frame locals can hold secrets/PII — never capture them
             attach_stacktrace=True,
             integrations=[
                 StarletteIntegration(failed_request_status_codes=only_5xx),
