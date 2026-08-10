@@ -50,10 +50,18 @@ run_suite "marketplace intelligence (health/routing/trust/timeline)" python mark
 run_suite "github config (manifest/validator/generator/drift)" python config_test.py
 run_suite "ENV_VARS bundle (parser/secret-guard/precedence)" python env_vars_test.py
 run_suite "observability (correlation/redaction/cardinality/degrade)" python observability_test.py
+run_suite "sentry (degrade-safe init + before_send redaction)" python sentry_test.py
+run_suite "seller payable metric (mode-separated payout gauge)" python seller_payable_metric_test.py
+run_suite "reservation reclaim (abandoned GPU capacity)" python reservation_reclaim_test.py
 run_suite "observability smoke (local tier; remote skipped offline)" \
           bash -c "cd .. && python scripts/observability_smoke_test.py"
+run_suite "grafana dashboards (metric-existence + generator determinism)" \
+          bash -c "cd .. && python observability/grafana/validate_dashboards.py && \
+                   python observability/grafana/build_dashboards.py && \
+                   git diff --exit-code observability/grafana/dashboards"
 run_suite "tunnel (nat + failover)" bash -c "cd ../lumaris_gateway && python tunnel_test.py"
-rm -f smoke.db* adv.db* stripe_test.db* payout_test.db* ../lumaris_gateway/tunnel.db*
+rm -f smoke.db* adv.db* stripe_test.db* payout_test.db* seller_payable_metric_test.db* \
+      reservation_reclaim_test.db* ../lumaris_gateway/tunnel.db*
 
 # Informational: honest seller-payout country coverage. This deliberately reports a
 # SHORTFALL (0/100) today and is NOT a gate — coverage grows only through real provider

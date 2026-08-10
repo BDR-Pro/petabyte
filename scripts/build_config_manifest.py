@@ -112,10 +112,11 @@ AGENT_VARS = {
     # deployment (GitHub Actions -> server) — all SECRETS
     "DEPLOY_SSH_KEY": {"required": True, "default": None, "secret": True, "scope": ["deployment"],
                        "description": "Private SSH key GitHub Actions uses to deploy to the server."},
-    "DROPLET_HOST": {"required": True, "default": None, "secret": True, "scope": ["deployment"],
-                     "description": "Deploy target host (IP/DNS)."},
-    "DROPLET_USER": {"required": True, "default": None, "secret": True, "scope": ["deployment"],
-                     "description": "Deploy SSH user."},
+    "DROPLET_HOST": {"required": True, "default": None, "secret": False, "scope": ["deployment"],
+                     "description": "Platform deploy target host (IP/DNS). Non-secret: lives in ENV_VARS."},
+    "DROPLET_USER": {"required": True, "default": None, "secret": False, "scope": ["deployment"],
+                     "description": "Deploy SSH user (shared by platform + observability deploys). "
+                                    "Non-secret: lives in ENV_VARS."},
     "DROPLET_SSH_KNOWN_HOSTS": {"required": True, "default": None, "secret": True,
                                 "scope": ["deployment"],
                                 "description": "Pinned SSH host key(s) for the deploy target. "
@@ -131,6 +132,19 @@ AGENT_VARS = {
                                                "trusts-on-first-use. Verifies the server before "
                                                "any secret is transferred; the deploy fails "
                                                "closed if unset."},
+    "DROPLET_HOST_OBSERV": {"required": False, "default": None, "secret": False,
+                            "scope": ["deployment"],
+                            "description": "Observability VM host (IP/DNS) for deploy-observability.yml. "
+                                           "Non-secret: lives in ENV_VARS."},
+    "DROPLET_SSH_KNOWN_HOSTS_OBSERV": {"required": False, "default": None, "secret": True,
+                                       "scope": ["deployment"],
+                                       "description": "Pinned SSH host key(s) for the observability "
+                                                      "VM. REQUIRED by deploy-observability.yml, "
+                                                      "which fails closed without it (no "
+                                                      "trust-on-first-use). Generate with "
+                                                      "`ssh-keyscan -t ed25519,rsa <observ-host>` "
+                                                      "and verify the fingerprint out-of-band "
+                                                      "(provider console) before pinning."},
 }
 
 # ---- Curated metadata for important platform vars (allowed values / validation / notes) --
@@ -278,6 +292,8 @@ OBSERVABILITY_EXTRA = {
                  "format": "url", "description": "Loki base URL."},
     "TEMPO_URL": {"default": None, "scope": ["observability"], "secret": False,
                   "format": "url", "description": "Tempo base URL."},
+    "SENTRY_RELEASE": {"default": None, "scope": ["observability"], "secret": False,
+                       "description": "Sentry release tag (defaults to RELEASE / GITHUB_SHA)."},
     "SENTRY_ENVIRONMENT": {"default": None, "scope": ["observability"], "secret": False,
                            "description": "Sentry environment label (defaults to ENVIRONMENT)."},
     "OTEL_LOGS_ENABLED": {"default": "true", "scope": ["observability"], "secret": False,

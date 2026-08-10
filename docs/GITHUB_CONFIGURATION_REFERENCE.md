@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (144)
+## Variables (non-sensitive) (148)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -27,6 +27,9 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `CONNECT_RETURN_URL` | no | platform | *(empty)* | `https://…` | api/main.py | format: url_or_empty | Absolute Stripe Connect onboarding return URL; falls back to PUBLIC_BASE_URL when unset. |
 | `DEFAULT_LANDING_VIDEO_ID` | no | platform | `UUSWYaxboDA` | `UUSWYaxboDA` | api/main.py | — | — |
 | `DEPLOY_CONFIG_FROM_GITHUB` | no | deployment | `false` | `false` | GitHub Actions deploy | — | Rollout gate. When 'true' the deploy generates the server env from GitHub config and pushes it; until then deploys stay code-only. Flip to true after entering all Secrets. |
+| `DROPLET_HOST` | **yes** | deployment | *(empty)* | `…` | GitHub Actions deploy | — | Platform deploy target host (IP/DNS). Non-secret: lives in ENV_VARS. |
+| `DROPLET_HOST_OBSERV` | no | deployment | *(empty)* | `…` | GitHub Actions deploy | — | Observability VM host (IP/DNS) for deploy-observability.yml. Non-secret: lives in ENV_VARS. |
+| `DROPLET_USER` | **yes** | deployment | *(empty)* | `…` | GitHub Actions deploy | — | Deploy SSH user (shared by platform + observability deploys). Non-secret: lives in ENV_VARS. |
 | `EMAIL_FROM` | no | platform | `no-reply@petabyte.market` | `no-reply@petabyte.market` | api/notify_providers.py | — | — |
 | `EMAIL_PROVIDER` | no | platform | `mailgun` | `mailgun` | api/notify_providers.py | one of: mailgun / ses / sendgrid / postmark | Notification email provider. |
 | `EMAIL_TOKEN_TTL_MIN` | no | platform | `15` | `15` | api/db.py | format: int | — |
@@ -136,6 +139,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `SENTRY_ENVIRONMENT` | no | observability | *(empty)* | `…` | — | — | Sentry environment label (defaults to ENVIRONMENT). |
 | `SENTRY_MAX_BREADCRUMBS` | no | platform | `30` | `30` | api/main.py | format: int | — |
 | `SENTRY_PROFILES_SAMPLE_RATE` | no | platform | `0.0` | `0.0` | — | format: float | — |
+| `SENTRY_RELEASE` | no | observability | *(empty)* | `…` | — | — | Sentry release tag (defaults to RELEASE / GITHUB_SHA). |
 | `SENTRY_TRACES_SAMPLE_RATE` | no | platform | `0.1` | `0.1` | — | format: float | — |
 | `STRIPE_ALLOW_LIVE` | no | platform | `false` | `false` | api/stripe_gateway.py | format: bool; one of: true / false | Second live gate; live keys refused unless true. |
 | `STRIPE_API_VERSION` | no | platform | *(empty)* | `…` | api/stripe_gateway.py | — | — |
@@ -157,7 +161,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `WG_INTERFACE` | no | platform | `wg0` | `wg0` | api/utils.py | — | — |
 | `WG_PUBLIC_KEY` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 
-## Secrets (credentials — never printed, no defaults) (46)
+## Secrets (credentials — never printed, no defaults) (45)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -168,9 +172,8 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `CIRCLE_WALLET_ID` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/payout_providers.py | — | — |
 | `DATABASE_URL` | **yes** | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/alembic/env.py, api/db.py | format: url | SQLAlchemy database URL (Postgres in prod). |
 | `DEPLOY_SSH_KEY` | **yes** | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Private SSH key GitHub Actions uses to deploy to the server. |
-| `DROPLET_HOST` | **yes** | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Deploy target host (IP/DNS). |
 | `DROPLET_SSH_KNOWN_HOSTS` | **yes** | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Pinned SSH host key(s) for the deploy target. Generate with `ssh-keyscan -t ed25519,rsa <host>`, then VERIFY the fingerprint out-of-band before pinning — compare `ssh-keygen -lf` of the scanned key against the fingerprint from the droplet's own console (e.g. `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` over the provider console). ssh-keyscan output is unauthenticated and can be MITM'd, so pinning it unverified only trusts-on-first-use. Verifies the server before any secret is transferred; the deploy fails closed if unset. |
-| `DROPLET_USER` | **yes** | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Deploy SSH user. |
+| `DROPLET_SSH_KNOWN_HOSTS_OBSERV` | no | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Pinned SSH host key(s) for the observability VM. REQUIRED by deploy-observability.yml, which fails closed without it (no trust-on-first-use). Generate with `ssh-keyscan -t ed25519,rsa <observ-host>` and verify the fingerprint out-of-band (provider console) before pinning. |
 | `GATEWAY_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, gateway/gateway.py | — | — |
 | `GOOGLE_CLIENT_ID` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
 | `GOOGLE_CLIENT_SECRET` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
@@ -195,7 +198,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `REDIS_URL` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/redis_client.py | — | — |
 | `SECRET_KEY` | **yes** | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/auth.py, api/main.py, api/stripe_demo.py | — | — |
 | `SENDGRID_API_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/notify_providers.py | — | — |
-| `SENTRY_DSN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
+| `SENTRY_DSN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, api/observability.py | — | — |
 | `SERVER_PRIVATE_KEY` | **yes** | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/audit_js.py, api/stripe_demo.py, api/utils.py | — | — |
 | `STRIPE_API_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/payout_providers.py | — | — |
 | `STRIPE_PUBLISHABLE_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, api/stripe_gateway.py, api/wallet_funding.py | — | — |

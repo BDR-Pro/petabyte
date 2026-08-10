@@ -108,6 +108,24 @@ variables:
     - deployment
     description: Rollout gate. When 'true' the deploy generates the server env from GitHub config and
       pushes it; until then deploys stay code-only. Flip to true after entering all Secrets.
+  DROPLET_HOST:
+    required: true
+    default: null
+    scope:
+    - deployment
+    description: 'Platform deploy target host (IP/DNS). Non-secret: lives in ENV_VARS.'
+  DROPLET_HOST_OBSERV:
+    required: false
+    default: null
+    scope:
+    - deployment
+    description: 'Observability VM host (IP/DNS) for deploy-observability.yml. Non-secret: lives in ENV_VARS.'
+  DROPLET_USER:
+    required: true
+    default: null
+    scope:
+    - deployment
+    description: 'Deploy SSH user (shared by platform + observability deploys). Non-secret: lives in ENV_VARS.'
   EMAIL_FROM:
     required: false
     default: no-reply@petabyte.market
@@ -970,6 +988,12 @@ variables:
     - platform
     description: ''
     format: float
+  SENTRY_RELEASE:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Sentry release tag (defaults to RELEASE / GITHUB_SHA).
   SENTRY_TRACES_SAMPLE_RATE:
     required: false
     default: '0.1'
@@ -1158,12 +1182,6 @@ secrets:
     scope:
     - deployment
     description: Private SSH key GitHub Actions uses to deploy to the server.
-  DROPLET_HOST:
-    required: true
-    default: null
-    scope:
-    - deployment
-    description: Deploy target host (IP/DNS).
   DROPLET_SSH_KNOWN_HOSTS:
     required: true
     default: null
@@ -1175,12 +1193,14 @@ secrets:
       \ /etc/ssh/ssh_host_ed25519_key.pub` over the provider console). ssh-keyscan output is unauthenticated\
       \ and can be MITM'd, so pinning it unverified only trusts-on-first-use. Verifies the server before\
       \ any secret is transferred; the deploy fails closed if unset."
-  DROPLET_USER:
-    required: true
+  DROPLET_SSH_KNOWN_HOSTS_OBSERV:
+    required: false
     default: null
     scope:
     - deployment
-    description: Deploy SSH user.
+    description: Pinned SSH host key(s) for the observability VM. REQUIRED by deploy-observability.yml,
+      which fails closed without it (no trust-on-first-use). Generate with `ssh-keyscan -t ed25519,rsa
+      <observ-host>` and verify the fingerprint out-of-band (provider console) before pinning.
   GATEWAY_TOKEN:
     required: false
     default: null

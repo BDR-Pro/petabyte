@@ -110,6 +110,7 @@ SENTRY_ENABLED=true;
 SENTRY_ENVIRONMENT=;
 SENTRY_MAX_BREADCRUMBS=30;
 SENTRY_PROFILES_SAMPLE_RATE=0.0;
+SENTRY_RELEASE=;
 SENTRY_TRACES_SAMPLE_RATE=0.1;
 STRIPE_ALLOW_LIVE=false;
 STRIPE_API_VERSION=;
@@ -178,9 +179,8 @@ Create each under **Secrets**. Required ones (🔴) must exist before the first 
 ### Deployment secrets (GitHub Actions → server; never in the runtime env)
 
 - **`DEPLOY_SSH_KEY`** — 🔴 required. The PRIVATE SSH key authorized on the server (e.g. id_ed25519). Never commit it.
-- **`DROPLET_HOST`** — 🔴 required. The API server's public IP or DNS name.
 - **`DROPLET_SSH_KNOWN_HOSTS`** — 🔴 required. Pinned SSH host key(s) for the deploy target. Generate with `ssh-keyscan -t ed25519,rsa <host>`, then VERIFY the fingerprint out-of-band before pinning — compare `ssh-keygen -lf` of the scanned key against the fingerprint from the droplet's own console (e.g. `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` over the provider console). ssh-keyscan output is unauthenticated and can be MITM'd, so pinning it unverified only trusts-on-first-use. Verifies the server before any secret is transferred; the deploy fails closed if unset.
-- **`DROPLET_USER`** — 🔴 required. The deploy SSH user on the server (e.g. root or a deploy user).
+- **`DROPLET_SSH_KNOWN_HOSTS_OBSERV`** — ⚪ optional. Pinned SSH host key(s) for the observability VM. REQUIRED by deploy-observability.yml, which fails closed without it (no trust-on-first-use). Generate with `ssh-keyscan -t ed25519,rsa <observ-host>` and verify the fingerprint out-of-band (provider console) before pinning.
 
 ## 4. GPU node (seller agent) — configured on the node, not the platform
 

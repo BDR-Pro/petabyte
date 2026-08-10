@@ -1,9 +1,10 @@
 {
-  "uid": "petabyte-infra",
-  "title": "Petabyte — Infrastructure",
+  "uid": "petabyte-seller-fleet",
+  "title": "Petabyte — Seller GPU Fleet",
   "tags": [
     "petabyte",
-    "infrastructure"
+    "gpu",
+    "sellers"
   ],
   "schemaVersion": 39,
   "version": 1,
@@ -45,6 +46,29 @@
         "hide": 0,
         "current": {},
         "options": []
+      },
+      {
+        "name": "gpu_model",
+        "label": "GPU model (DCGM)",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "qryType": 1,
+          "query": "label_values(DCGM_FI_DEV_GPU_TEMP, modelName)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "definition": "label_values(DCGM_FI_DEV_GPU_TEMP, modelName)",
+        "refresh": 2,
+        "sort": 1,
+        "includeAll": true,
+        "multi": true,
+        "hide": 0,
+        "current": {},
+        "options": [],
+        "allValue": ".*"
       }
     ]
   },
@@ -53,7 +77,7 @@
     {
       "id": 1,
       "type": "row",
-      "title": "Component availability",
+      "title": "Fleet (platform view)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -66,7 +90,7 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "API",
+      "title": "Agents online",
       "description": "",
       "datasource": {
         "type": "prometheus",
@@ -85,8 +109,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "min(up{job=\"petabyte-api\"})",
-          "legendFormat": "up",
+          "expr": "sum(petabyte_agents_online{environment=\"$environment\"})",
+          "legendFormat": "agents",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -124,7 +148,7 @@
         },
         "orientation": "auto",
         "textMode": "auto",
-        "colorMode": "background",
+        "colorMode": "value",
         "graphMode": "area",
         "justifyMode": "auto"
       }
@@ -132,7 +156,7 @@
     {
       "id": 3,
       "type": "stat",
-      "title": "PostgreSQL",
+      "title": "Sellers online",
       "description": "",
       "datasource": {
         "type": "prometheus",
@@ -151,8 +175,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "min(pg_up)",
-          "legendFormat": "up",
+          "expr": "sum(petabyte_sellers_online{environment=\"$environment\"})",
+          "legendFormat": "sellers",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -162,18 +186,14 @@
         "defaults": {
           "unit": "short",
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
-              },
-              {
                 "color": "green",
-                "value": 1
+                "value": null
               }
             ]
           }
@@ -190,7 +210,7 @@
         },
         "orientation": "auto",
         "textMode": "auto",
-        "colorMode": "background",
+        "colorMode": "value",
         "graphMode": "area",
         "justifyMode": "auto"
       }
@@ -198,7 +218,7 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Redis",
+      "title": "Sellers stale",
       "description": "",
       "datasource": {
         "type": "prometheus",
@@ -217,8 +237,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "min(redis_up)",
-          "legendFormat": "up",
+          "expr": "sum(petabyte_sellers_stale{environment=\"$environment\"})",
+          "legendFormat": "stale",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -234,12 +254,16 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
+                "color": "green",
                 "value": null
               },
               {
-                "color": "green",
+                "color": "orange",
                 "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
               }
             ]
           }
@@ -264,7 +288,7 @@
     {
       "id": 5,
       "type": "stat",
-      "title": "OTel collector",
+      "title": "GPUs online",
       "description": "",
       "datasource": {
         "type": "prometheus",
@@ -283,8 +307,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "min(up{job=\"otel-collector\"})",
-          "legendFormat": "up",
+          "expr": "sum(petabyte_gpus_online{environment=\"$environment\"})",
+          "legendFormat": "gpus",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -294,18 +318,14 @@
         "defaults": {
           "unit": "short",
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
-              },
-              {
                 "color": "green",
-                "value": 1
+                "value": null
               }
             ]
           }
@@ -322,7 +342,7 @@
         },
         "orientation": "auto",
         "textMode": "auto",
-        "colorMode": "background",
+        "colorMode": "value",
         "graphMode": "area",
         "justifyMode": "auto"
       }
@@ -330,7 +350,7 @@
     {
       "id": 6,
       "type": "stat",
-      "title": "Loki",
+      "title": "GPUs reserved",
       "description": "",
       "datasource": {
         "type": "prometheus",
@@ -349,8 +369,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "min(up{job=\"loki\"})",
-          "legendFormat": "up",
+          "expr": "sum(petabyte_gpus_reserved{environment=\"$environment\"})",
+          "legendFormat": "reserved",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -360,18 +380,14 @@
         "defaults": {
           "unit": "short",
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
-              },
-              {
                 "color": "green",
-                "value": 1
+                "value": null
               }
             ]
           }
@@ -388,7 +404,7 @@
         },
         "orientation": "auto",
         "textMode": "auto",
-        "colorMode": "background",
+        "colorMode": "value",
         "graphMode": "area",
         "justifyMode": "auto"
       }
@@ -396,7 +412,7 @@
     {
       "id": 7,
       "type": "stat",
-      "title": "Tempo",
+      "title": "Available GPU-hours",
       "description": "",
       "datasource": {
         "type": "prometheus",
@@ -415,8 +431,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "min(up{job=\"tempo\"})",
-          "legendFormat": "up",
+          "expr": "sum(petabyte_available_gpu_hours{environment=\"$environment\"})",
+          "legendFormat": "GPU-h",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -426,18 +442,14 @@
         "defaults": {
           "unit": "short",
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
-              },
-              {
                 "color": "green",
-                "value": 1
+                "value": null
               }
             ]
           }
@@ -454,38 +466,25 @@
         },
         "orientation": "auto",
         "textMode": "auto",
-        "colorMode": "background",
+        "colorMode": "value",
         "graphMode": "area",
         "justifyMode": "auto"
       }
     },
     {
       "id": 8,
-      "type": "row",
-      "title": "PostgreSQL & Redis",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 5
-      },
-      "panels": []
-    },
-    {
-      "id": 9,
-      "type": "gauge",
-      "title": "PG connection pool used",
-      "description": "Alert-ready: PetabyteDBPoolExhaustion >90%.",
+      "type": "barchart",
+      "title": "GPUs online by class",
+      "description": "",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 6,
-        "w": 8,
+        "h": 8,
+        "w": 12,
         "x": 0,
-        "y": 6
+        "y": 5
       },
       "targets": [
         {
@@ -494,8 +493,302 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "100 * sum(pg_stat_activity_count) / clamp_min(max(pg_settings_max_connections), 1)",
-          "legendFormat": "used",
+          "expr": "sum by (gpu_class) (petabyte_gpus_by_model{environment=\"$environment\"})",
+          "legendFormat": "{{gpu_class}}",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 80
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Job execution p95 by GPU class",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, gpu_class) (rate(petabyte_job_duration_seconds_bucket{environment=\"$environment\"}[10m])))",
+          "legendFormat": "{{gpu_class}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Job startup p95 by GPU class",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, gpu_class) (rate(petabyte_job_startup_seconds_bucket{environment=\"$environment\"}[10m])))",
+          "legendFormat": "{{gpu_class}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Jobs by class & status",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (gpu_class, job_status) (rate(petabyte_jobs_total{environment=\"$environment\"}[$__rate_interval]))",
+          "legendFormat": "{{gpu_class}} {{job_status}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "row",
+      "title": "GPU hardware — NVIDIA DCGM exporter (per-device)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "panels": []
+    },
+    {
+      "id": 13,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Per-device GPU metrics come from the **DCGM exporter** (`DCGM_FI_DEV_*`). These panels are empty until a `dcgm-exporter` scrape target is live (see `prometheus.yml` job `dcgm-exporter`). Per-node identity stays on the exporter's `Hostname`/`gpu` labels — never in an app metric."
+      }
+    },
+    {
+      "id": 14,
+      "type": "gauge",
+      "title": "Avg GPU utilization",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 24
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "avg(DCGM_FI_DEV_GPU_UTIL{modelName=~\"$gpu_model\"})",
+          "legendFormat": "util",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -518,11 +811,11 @@
               },
               {
                 "color": "orange",
-                "value": 75
+                "value": 85
               },
               {
                 "color": "red",
-                "value": 90
+                "value": 95
               }
             ]
           }
@@ -542,85 +835,19 @@
       }
     },
     {
-      "id": 10,
-      "type": "stat",
-      "title": "Postgres up",
-      "description": "Alert-ready: PetabyteDatabaseDown (pg_up==0).",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 8,
-        "y": 6
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "min(pg_up)",
-          "legendFormat": "pg_up",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      }
-    },
-    {
-      "id": 11,
-      "type": "stat",
-      "title": "Redis up",
+      "id": 15,
+      "type": "gauge",
+      "title": "Avg VRAM used",
       "description": "",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 6
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 24
       },
       "targets": [
         {
@@ -629,87 +856,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "min(redis_up)",
-          "legendFormat": "redis_up",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      }
-    },
-    {
-      "id": 12,
-      "type": "row",
-      "title": "Host resources (node_exporter)",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 12
-      },
-      "panels": []
-    },
-    {
-      "id": 13,
-      "type": "timeseries",
-      "title": "Disk used % by mountpoint",
-      "description": "Alert-ready: PetabyteDiskHigh >85%.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 13
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "100 * (1 - node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay\"} / node_filesystem_size_bytes{fstype!~\"tmpfs|overlay\"})",
-          "legendFormat": "{{instance}} {{mountpoint}}",
+          "expr": "100 * sum(DCGM_FI_DEV_FB_USED{modelName=~\"$gpu_model\"}) / clamp_min(sum(DCGM_FI_DEV_FB_USED{modelName=~\"$gpu_model\"}) + sum(DCGM_FI_DEV_FB_FREE{modelName=~\"$gpu_model\"}), 1)",
+          "legendFormat": "vram",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -718,92 +866,10 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true
-          },
+          "min": 0,
+          "max": 100,
           "color": {
-            "mode": "palette-classic"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 80
-              },
-              {
-                "color": "red",
-                "value": 85
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 14,
-      "type": "timeseries",
-      "title": "Memory used %",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 13
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "100 * (1 - node_memory_MemAvailable_bytes / clamp_min(node_memory_MemTotal_bytes, 1))",
-          "legendFormat": "{{instance}}",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true
-          },
-          "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
           },
           "thresholds": {
             "mode": "absolute",
@@ -826,107 +892,22 @@
         "overrides": []
       },
       "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
+        "reduceOptions": {
           "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 15,
-      "type": "timeseries",
-      "title": "Load average (1m)",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 21
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "node_load1",
-          "legendFormat": "{{instance}}",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
       }
     },
     {
       "id": 16,
-      "type": "row",
-      "title": "Telemetry pipeline & queues",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 29
-      },
-      "panels": []
-    },
-    {
-      "id": 17,
       "type": "stat",
-      "title": "Prometheus freshness",
-      "description": "Alert-ready: PetabytePrometheusStale >5m.",
+      "title": "Max GPU temperature",
+      "description": "Alert-ready: PetabyteGPUTempHigh fires >85C.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -934,8 +915,8 @@
       "gridPos": {
         "h": 4,
         "w": 6,
-        "x": 0,
-        "y": 30
+        "x": 12,
+        "y": 24
       },
       "targets": [
         {
@@ -944,8 +925,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "time() - max(prometheus_tsdb_head_max_time_seconds)",
-          "legendFormat": "staleness",
+          "expr": "max(DCGM_FI_DEV_GPU_TEMP{modelName=~\"$gpu_model\"})",
+          "legendFormat": "temp",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -953,7 +934,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
+          "unit": "celsius",
           "color": {
             "mode": "thresholds"
           },
@@ -966,11 +947,77 @@
               },
               {
                 "color": "orange",
-                "value": 120
+                "value": 80
               },
               {
                 "color": "red",
-                "value": 300
+                "value": 85
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "GPU XID errors (10m)",
+      "description": "Alert-ready: PetabyteGPUXidErrors.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 24
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(DCGM_FI_DEV_XID_ERRORS{modelName=~\"$gpu_model\"}[10m]))",
+          "legendFormat": "xid",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
               }
             ]
           }
@@ -994,17 +1041,17 @@
     },
     {
       "id": 18,
-      "type": "stat",
-      "title": "OTel collector up",
-      "description": "Alert-ready: PetabyteOtelCollectorDown.",
+      "type": "timeseries",
+      "title": "GPU utilization by model",
+      "description": "",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
+        "h": 8,
+        "w": 12,
+        "x": 0,
         "y": 30
       },
       "targets": [
@@ -1014,8 +1061,307 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "min(up{job=\"otel-collector\"})",
-          "legendFormat": "up",
+          "expr": "avg by (modelName) (DCGM_FI_DEV_GPU_UTIL{modelName=~\"$gpu_model\"})",
+          "legendFormat": "{{modelName}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "GPU temperature by host",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 30
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max by (Hostname) (DCGM_FI_DEV_GPU_TEMP{modelName=~\"$gpu_model\"})",
+          "legendFormat": "{{Hostname}}",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "table",
+      "title": "Per-GPU snapshot (util / temp / VRAM used)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "avg by (Hostname, gpu, modelName) (DCGM_FI_DEV_GPU_UTIL{modelName=~\"$gpu_model\"})",
+          "legendFormat": "util",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max by (Hostname, gpu, modelName) (DCGM_FI_DEV_GPU_TEMP{modelName=~\"$gpu_model\"})",
+          "legendFormat": "temp",
+          "range": false,
+          "instant": true,
+          "refId": "B",
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (Hostname, gpu, modelName) (DCGM_FI_DEV_FB_USED{modelName=~\"$gpu_model\"})",
+          "legendFormat": "vram_used_mib",
+          "range": false,
+          "instant": true,
+          "refId": "C",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "row",
+      "title": "Seller agent health (logs)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "panels": []
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Heartbeats received",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 47
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(petabyte_seller_heartbeats_total{environment=\"$environment\"}[$__rate_interval]))",
+          "legendFormat": "beats/s",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "type": "stat",
+      "title": "Agents online vs GPUs registered (0 = fleet dark)",
+      "description": "Alert-ready: PetabyteAgentHeartbeatStale (agents==0 while GPUs>0).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 47
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(petabyte_agents_online{environment=\"$environment\"})",
+          "legendFormat": "agents",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -1059,19 +1405,19 @@
       }
     },
     {
-      "id": 19,
-      "type": "timeseries",
-      "title": "Telemetry export failures",
+      "id": 24,
+      "type": "stat",
+      "title": "Sellers reaped (1h)",
       "description": "",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 30
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 47
       },
       "targets": [
         {
@@ -1080,81 +1426,8 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (exporter) (rate(petabyte_telemetry_export_failures_total{environment=\"$environment\"}[$__rate_interval]))",
-          "legendFormat": "{{exporter}}",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 0.0001
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 20,
-      "type": "timeseries",
-      "title": "Queue depth",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 38
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "sum by (queue) (petabyte_queue_depth{environment=\"$environment\"})",
-          "legendFormat": "{{queue}}",
+          "expr": "sum(increase(petabyte_sellers_reaped_total{environment=\"$environment\"}[1h]))",
+          "legendFormat": "reaped",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -1163,86 +1436,6 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 500
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 21,
-      "type": "timeseries",
-      "title": "Oldest queued item (recording rule)",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 38
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max by (queue) (petabyte:queue_oldest_seconds{environment=\"$environment\"})",
-          "legendFormat": "{{queue}}",
-          "range": true,
-          "instant": false,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true
-          },
           "color": {
             "mode": "palette-classic"
           },
@@ -1259,87 +1452,54 @@
         "overrides": []
       },
       "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
+        "reduceOptions": {
           "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
       }
     },
     {
-      "id": 22,
-      "type": "timeseries",
-      "title": "Redis lock outcomes",
+      "id": 25,
+      "type": "logs",
+      "title": "Seller-agent errors & missed heartbeats",
       "description": "",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 9,
+        "w": 24,
         "x": 0,
-        "y": 46
+        "y": 55
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
           "editorMode": "code",
-          "expr": "sum by (outcome) (rate(petabyte_lock_acquisitions_total{environment=\"$environment\"}[$__rate_interval]))",
-          "legendFormat": "{{outcome}}",
-          "range": true,
-          "instant": false,
+          "expr": "{service=\"petabyte-seller-agent\"} | json | event_name=~\"agent.heartbeat.missed|job.execution.failed|result.validation.failed|seller.suspicious\" or level=\"error\"",
+          "queryType": "range",
           "refId": "A"
         }
       ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "smooth",
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
       "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
       }
     }
   ]

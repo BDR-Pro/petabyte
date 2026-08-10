@@ -1699,7 +1699,7 @@ def _marketplace_metrics():
     only (gpu_class, country); seller ids never become labels. Best-effort — a query error
     yields no rows rather than breaking the scrape. Real supply excludes seeded demo nodes."""
     from db import (SellerSpec, ComputeTransaction, _utcnow,
-                    financial_integrity, payout_backlog)
+                    financial_integrity, payout_backlog, seller_payable_by_mode)
     S = SellerSpec
     env = obsmod.ENVIRONMENT
     rows = []
@@ -1799,6 +1799,12 @@ def _marketplace_metrics():
              "doc": "Age of the oldest unbatched payout obligation (payout backlog)",
              "labels": {"environment": env}, "value": pb["oldest_age_seconds"]},
         ]
+        # Outstanding seller payable (minor units) split by money mode — never mix TEST/LIVE.
+        for _mode, _minor in seller_payable_by_mode(dbs).items():
+            rows.append({"name": "petabyte_seller_payable_minor",
+                         "doc": "Outstanding seller payable (minor units) owed but not yet paid",
+                         "labels": {"payment_mode": _mode or "unknown", "environment": env},
+                         "value": _minor})
     except Exception:  # noqa: BLE001
         logger.debug("financial-integrity metrics query failed", exc_info=True)
     finally:
@@ -3006,6 +3012,33 @@ def require_admin(user: dict = Depends(get_current_user), db: Session = Depends(
 def admin_whoami(me=Depends(require_admin)):
     """200 only for admins — lets the UI reveal the Admin link."""
     return {"admin": True, "username": me.username}
+
+
+@app.post("/admin/observability/sentry-test", tags=["admin"])
+def admin_sentry_test(request: Request, me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Deliberately send ONE test event to Sentry, to verify the pipeline end-to-end.
+
+    Guarded three ways so it can never be an abuse surface:
+      * admin-only (require_admin);
+      * REFUSED in production (404) — this is a TEST/staging verification tool only;
+      * a no-op 409 if Sentry isn't actually active (no DSN configured).
+    It captures a benign message (never raises, never crashes the process) and returns the
+    Sentry event id — never the DSN or any secret."""
+    if obsmod.ENVIRONMENT == "production":
+        raise HTTPException(status_code=404, detail="not found")
+    if not obsmod.health()["sentry"]["active"]:
+        raise HTTPException(status_code=409,
+                            detail="Sentry is not active (no SENTRY_DSN configured)")
+    # Do NOT tag the event with the admin's identity — that would ship a user identifier to an
+    # external service (Sentry runs send_default_pii=False for exactly this reason). Who triggered
+    # the selftest is recorded locally in the audit log below instead.
+    event_id = obsmod.capture_message(
+        "Petabyte Sentry selftest (admin-triggered)", level="error",
+        selftest="true")
+    audit(db, "observability.sentry_test", actor=me, resource_type="observability",
+          resource_id=str(event_id or "none"), ip=_client_ip(request))
+    return {"sent": bool(event_id), "event_id": event_id,
+            "environment": obsmod.SENTRY_ENVIRONMENT, "release": obsmod.SENTRY_RELEASE}
 
 
 @app.get("/admin/financial-integrity", tags=["admin"])

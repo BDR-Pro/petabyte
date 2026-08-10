@@ -662,6 +662,14 @@ def capture(db, tx: ComputeTransaction) -> ComputeTransaction:
                       charge_id=getattr(tx, "stripe_charge_id", None)):
             _obs.inc_metric("petabyte_payment_captures_total", outcome="success",
                             payment_mode=_mode, environment=_obs.ENVIRONMENT)
+            # Money moved, in minor units, per payment_mode (never mix TEST/LIVE). Feeds the
+            # executive GMV / platform-fees / seller-earnings tiles via increase(...[window]).
+            _obs.inc_metric("petabyte_gmv_captured_minor_total", captured,
+                            payment_mode=_mode, environment=_obs.ENVIRONMENT)
+            _obs.inc_metric("petabyte_platform_fees_minor_total", tx.platform_fee_amount or 0,
+                            payment_mode=_mode, environment=_obs.ENVIRONMENT)
+            _obs.inc_metric("petabyte_seller_earnings_minor_total", tx.seller_net_amount or 0,
+                            payment_mode=_mode, environment=_obs.ENVIRONMENT)
             _obs.event(_obs.EVENTS.COMMISSION_RECORDED, message="commission recorded",
                        payment_mode=_mode, currency=tx.currency,
                        gross_amount=captured, commission_amount=tx.platform_fee_amount,

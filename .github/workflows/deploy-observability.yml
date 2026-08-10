@@ -1,0 +1,223 @@
+name: Deploy observability
+
+# Keep the observability VM (/opt/petabyte-observability) in sync with this repo's
+# observability/ tree — Grafana dashboards, provisioning, docker-compose and the backend
+# configs — and reload the stack. Fires automatically whenever anything under observability/
+# changes, plus manual dispatch.
+#
+# The REPO is the source of truth. The deploy is non-destructive to data: it backs up the
+# current config on the VM first, rsyncs WITHOUT --delete for the whole tree (so named-volume
+# data and VM-only files survive), and only prunes the grafana/dashboards folder (JSON only, no
+# data) so a dashboard deleted in git is also removed on the VM.
+#
+# Secrets used (never printed):
+#   DROPLET_HOST_OBSERV            host of the observability VM
+#   DROPLET_USER                   ssh user with write access to /opt/petabyte-observability + docker
+#   DEPLOY_SSH_KEY                 private key for that user
+#   DROPLET_SSH_KNOWN_HOSTS_OBSERV (optional) pinned host key; if unset we ssh-keyscan (TOFU) — only
+#                                  non-secret config is shipped (never .env), so the blast radius is low.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "observability/**"
+      - ".github/workflows/deploy-observability.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-observability
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    # Fail BEFORE touching the VM if a dashboard references a non-existent metric, the generated
+    # JSON drifted from the generator, or any YAML is invalid.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pyyaml          # setup-python ships CPython only; the YAML step needs PyYAML
+      - name: dashboards — metric existence + generator determinism
+        run: |
+          set -euo pipefail
+          python observability/grafana/validate_dashboards.py
+          python observability/grafana/build_dashboards.py
+          git diff --exit-code observability/grafana/dashboards
+      - name: compose + configs — YAML validity
+        run: |
+          python - <<'PY'
+          import glob, yaml
+          bad = 0
+          for f in glob.glob("observability/**/*.yml", recursive=True) + \
+                   glob.glob("observability/**/*.yaml", recursive=True):
+              try:
+                  list(yaml.safe_load_all(open(f)))
+              except Exception as e:
+                  bad += 1; print(f"FAIL {f}: {e}")
+          print("yaml ok" if not bad else "yaml errors")
+          raise SystemExit(1 if bad else 0)
+          PY
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    env:
+      # DROPLET_HOST_OBSERV + DROPLET_USER are NON-secret config; they live in the ENV_VARS
+      # bundle (Repository Variable), resolved below. Only DEPLOY_SSH_KEY stays a Secret.
+      REMOTE_DIR: /opt/petabyte-observability
+      SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve host + user from ENV_VARS
+        env:
+          ENV_VARS: ${{ vars.ENV_VARS }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import os, sys
+          sys.path.insert(0, "scripts")
+          import env_vars as ev
+          vals, _ = ev.parse_bundle(os.environ.get("ENV_VARS", "") or "")
+          host, user = vals.get("DROPLET_HOST_OBSERV", ""), vals.get("DROPLET_USER", "")
+          if not host or not user:
+              sys.stderr.write("::error::DROPLET_HOST_OBSERV and DROPLET_USER must be in ENV_VARS\n")
+              sys.exit(1)
+          print(f"OBS_HOST={host}")
+          print(f"OBS_USER={user}")
+          PY
+
+      - name: Set up SSH key + host pin
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS_OBSERV: ${{ secrets.DROPLET_SSH_KNOWN_HOSTS_OBSERV }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OBS_HOST:-}" ] || [ -z "${OBS_USER:-}" ]; then
+            echo "::error::DROPLET_HOST_OBSERV and DROPLET_USER must be set in the ENV_VARS bundle." >&2
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Fail CLOSED on a missing pin — never trust-on-first-use. An unauthenticated
+          # ssh-keyscan lets an active network attacker impersonate the VM and receive the
+          # deploy. Pin the host key (verify the fingerprint out-of-band via the provider
+          # console first), same posture as the platform deploy.
+          if [ -z "${KNOWN_HOSTS_OBSERV//[[:space:]]/}" ]; then
+            echo "::error::DROPLET_SSH_KNOWN_HOSTS_OBSERV secret is empty — refusing to deploy" \
+                 "without a pinned host key. Generate it with: ssh-keyscan -t ed25519,rsa <observ-host>," \
+                 "verify the fingerprint via the provider console, then store it as the" \
+                 "DROPLET_SSH_KNOWN_HOSTS_OBSERV Secret." >&2
+            exit 1
+          fi
+          printf '%s\n' "$KNOWN_HOSTS_OBSERV" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Preflight — remote dir + .env present
+        run: |
+          set -euo pipefail
+          $SSH "$OBS_USER@$OBS_HOST" '
+            set -e
+            cd '"$REMOTE_DIR"' || { echo "::error::'"$REMOTE_DIR"' does not exist on the VM"; exit 1; }
+            if [ ! -f .env ]; then
+              echo "::error::'"$REMOTE_DIR"'/.env is missing — it must define GF_SECURITY_ADMIN_PASSWORD (see observability/.env.example). Not shipped by CI on purpose."
+              exit 1
+            fi
+            command -v docker >/dev/null || { echo "::error::docker not found for '"$OBS_USER"'"; exit 1; }
+            command -v rsync >/dev/null || { echo "::error::rsync not installed on the VM (apt-get install -y rsync)"; exit 1; }
+            echo "preflight ok"'
+
+      - name: Backup current config on the VM (keep last 10)
+        run: |
+          set -euo pipefail
+          $SSH "$OBS_USER@$OBS_HOST" '
+            set -e
+            cd '"$REMOTE_DIR"'
+            ts=$(date -u +%Y%m%dT%H%M%SZ)
+            mkdir -p backups/"$ts"
+            for p in docker-compose.yml grafana prometheus loki tempo otel-collector compose; do
+              [ -e "$p" ] && cp -a "$p" backups/"$ts"/ || true
+            done
+            ls -1dt backups/*/ 2>/dev/null | tail -n +11 | xargs -r rm -rf
+            echo "backed up config to backups/$ts"'
+
+      # Whole-tree sync WITH --delete so a file removed from the repo is pruned on the VM too
+      # (stale Prometheus rules, provisioning, dashboards, service configs). Excludes only
+      # VM-owned paths: .env (secret — never shipped) and backups/. All stack DATA lives in
+      # docker NAMED VOLUMES outside REMOTE_DIR, so --delete never touches metric/log/trace
+      # history; the pre-deploy backup above snapshots the config for rollback.
+      - name: Rsync observability/ -> VM (repo is source of truth; prune stale files)
+        run: |
+          set -euo pipefail
+          rsync -az --delete \
+            --exclude ".env" --exclude "backups/" --exclude "__pycache__/" \
+            --exclude ".ruff_cache/" --exclude "*.pyc" \
+            -e "$SSH" \
+            observability/ "$OBS_USER@$OBS_HOST:$REMOTE_DIR/"
+
+      - name: docker compose up + apply config changes
+        run: |
+          set -euo pipefail
+          $SSH "$OBS_USER@$OBS_HOST" '
+            set -e
+            cd '"$REMOTE_DIR"'
+            docker compose config >/dev/null
+            docker compose up -d --remove-orphans
+            # Bind-mounted config changes need a nudge to take effect:
+            #  - Prometheus reloads rules/config on SIGHUP (no downtime).
+            #  - Loki/Tempo/OTel/Grafana pick up their mounted configs + datasource provisioning
+            #    on restart (Grafana dashboards also hot-reload via the file provider).
+            docker compose kill -s HUP prometheus 2>/dev/null || true
+            docker compose restart loki tempo otel-collector grafana
+            echo "compose applied"'
+
+      - name: Health check (Grafana) + rollback compose on failure
+        run: |
+          set -euo pipefail
+          $SSH "$OBS_USER@$OBS_HOST" '
+            set +e
+            cd '"$REMOTE_DIR"'
+            for i in $(seq 1 24); do
+              if curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
+                echo "grafana healthy"; exit 0
+              fi
+              sleep 5
+            done
+            echo "::error::Grafana health check failed after deploy — restoring the last FULL backup"
+            last=$(ls -1dt backups/*/ 2>/dev/null | head -1)
+            if [ -n "$last" ]; then
+              # Restore every backed-up path (not just docker-compose.yml): the bind-mounted
+              # grafana/prometheus/loki/tempo/otel/compose configs were overwritten by rsync, so
+              # a compose-only rollback would leave the broken config active.
+              for p in docker-compose.yml grafana prometheus loki tempo otel-collector compose; do
+                if [ -e "$last/$p" ]; then rm -rf "./$p"; cp -a "$last/$p" "./$p"; fi
+              done
+              docker compose up -d --remove-orphans
+              docker compose kill -s HUP prometheus 2>/dev/null || true
+              docker compose restart loki tempo otel-collector grafana 2>/dev/null || true
+            fi
+            docker compose logs --tail=60 grafana || true
+            exit 1'
+
+      - name: Deploy summary (no secrets)
+        if: always()
+        run: |
+          {
+            echo "## Observability deploy"
+            echo ""
+            echo "Synced \`observability/\` -> \`$REMOTE_DIR\` and reloaded the stack."
+            echo "Grafana: https://data.petabyte.market  ·  dashboards auto-provisioned from files."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
