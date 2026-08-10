@@ -970,6 +970,12 @@ variables:
     - platform
     description: ''
     format: float
+  SENTRY_RELEASE:
+    required: false
+    default: null
+    scope:
+    - observability
+    description: Sentry release tag (defaults to RELEASE / GITHUB_SHA).
   SENTRY_TRACES_SAMPLE_RATE:
     required: false
     default: '0.1'

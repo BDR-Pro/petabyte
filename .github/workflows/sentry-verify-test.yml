@@ -1,0 +1,60 @@
+name: Verify Sentry (TEST)
+
+# Deliberately send ONE test event to the TEST Sentry project and confirm the whole path works:
+#   GitHub Environment TEST -> vars.SENTRY_DSN -> job env -> observability.init_observability
+#   -> sentry_sdk.init -> capture_message -> flush.
+#
+# Manual only (workflow_dispatch). The DSN comes from the TEST Environment Variable and is
+# masked; it is never echoed, summarised, or written to an artifact.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-sentry-test:
+    # Binds to the GitHub Environment named TEST, where SENTRY_DSN is stored as an
+    # Environment Variable (referenced as vars.SENTRY_DSN, NOT secrets.SENTRY_DSN).
+    environment: TEST
+    runs-on: ubuntu-latest
+    env:
+      SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+      SENTRY_ENVIRONMENT: test
+      SENTRY_RELEASE: ${{ github.sha }}
+      SENTRY_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Defence in depth: register the DSN value as a masked string so it can never appear in
+      # any later log line, even accidentally. Reads it from env — never interpolated into the
+      # script body — so the value itself is not written into the workflow command.
+      - name: Mask the Sentry DSN in all logs
+        run: |
+          if [ -n "${SENTRY_DSN:-}" ]; then echo "::add-mask::$SENTRY_DSN"; fi
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r lumaris_api/requirements.txt
+
+      # 1) Offline unit gate — proves init is degrade-safe and redaction works. No network.
+      - name: Sentry unit tests (mocked; no network)
+        run: cd lumaris_api && python sentry_test.py
+
+      # 2) Real one-shot verification against the TEST Sentry project.
+      - name: Send ONE test event to Sentry (TEST)
+        run: python scripts/sentry_selftest.py --send
+
+      - name: Result (no secrets)
+        if: always()
+        run: |
+          {
+            echo "## Sentry TEST verification"
+            echo ""
+            echo "Sent one test event to the TEST Sentry project (environment=\`test\`,"
+            echo "release=\`${GITHUB_SHA}\`). Open Sentry -> project -> environment \`test\` to confirm."
+            echo "The DSN is never printed."
+          } >> "$GITHUB_STEP_SUMMARY"

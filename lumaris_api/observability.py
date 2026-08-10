@@ -81,6 +81,18 @@ ENVIRONMENT = _first("DEPLOYMENT_ENVIRONMENT", "ENVIRONMENT", "APP_ENV",
 RELEASE = _first("RELEASE_VERSION", "PETABYTE_RELEASE_SHA", "GITHUB_SHA", default="dev")
 HOST_ROLE = _first("PETABYTE_HOST_ROLE")
 
+# --- Sentry (error tracking) ------------------------------------------------------------
+# Complements — never replaces — OTel/Prometheus/Loki/Tempo. Safe policy: Sentry is active
+# ONLY when a DSN is present AND not explicitly disabled. No DSN -> Sentry is OFF and the app
+# starts normally. Sentry is NEVER a hard dependency of any business path.
+SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
+SENTRY_ENABLED = _b("SENTRY_ENABLED", True)
+SENTRY_ENVIRONMENT = _first("SENTRY_ENVIRONMENT", default=ENVIRONMENT)
+SENTRY_RELEASE = _first("SENTRY_RELEASE", default=RELEASE)
+SENTRY_TRACES_SAMPLE_RATE = _f("SENTRY_TRACES_SAMPLE_RATE", 0.1)
+SENTRY_PROFILES_SAMPLE_RATE = _f("SENTRY_PROFILES_SAMPLE_RATE", 0.0)
+SENTRY_MAX_BREADCRUMBS = _i("SENTRY_MAX_BREADCRUMBS", 30)
+
 
 class _Service:
     """Canonical service names (also OTLP service.name)."""
@@ -265,7 +277,7 @@ _REDACT_KEYS = {
     "api_key", "apikey", "private_key", "client_secret", "webhook_secret", "database_url",
     "redis_url", "card", "cvc", "cvv", "account_number", "routing_number", "ssn",
     "access_token", "refresh_token", "id_token", "set-cookie", "x-api-key",
-    "stripe_secret_key", "server_private_key", "secret_key", "dsn",
+    "stripe_secret_key", "server_private_key", "secret_key", "dsn", "jwt",
 }
 _REDACT_SUBSTR = ("secret", "password", "passwd", "token", "api_key", "apikey",
                   "private_key", "client_secret", "webhook_secret", "cookie",
@@ -278,6 +290,7 @@ _VALUE_PATTERNS = [
     re.compile(r"whsec_[A-Za-z0-9]+"),                 # Stripe webhook secret
     re.compile(r"(pi|seti|cs|ch)_[A-Za-z0-9]+_secret_[A-Za-z0-9]+"),  # client secrets
     re.compile(r"Bearer\s+[A-Za-z0-9._\-]+"),          # bearer tokens
+    re.compile(r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"),  # JWTs (header.payload.sig)
     re.compile(r"\b\d{13,19}\b"),                       # PAN-like long digit runs
     re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),  # emails (PII)
 ]
@@ -767,6 +780,141 @@ def metrics_response():
 
 
 # --------------------------------------------------------------------------- lifecycle
+# --------------------------------------------------------------------------- Sentry
+_sentry_ok = False
+
+
+def _http_status_of(exc) -> int | None:
+    """Best-effort HTTP status for an exception (FastAPI/Starlette HTTPException)."""
+    code = getattr(exc, "status_code", None)
+    return code if isinstance(code, int) else None
+
+
+def _sentry_scrub(event, hint):
+    """before_send: the single privacy boundary for Sentry. Reuses the SAME central
+    redactor as our structured logs (no competing sanitizer). Drops expected client-error
+    (4xx) noise, strips request headers/cookies/body, masks secrets in messages, exception
+    values and breadcrumbs, and adds safe correlation tags. FAILS CLOSED: if scrubbing itself
+    raises, the event is DROPPED rather than sent unsanitised."""
+    try:
+        # 1) Expected 4xx HTTPExceptions are normal control flow, not incidents — drop them.
+        exc_info = (hint or {}).get("exc_info")
+        if exc_info:
+            code = _http_status_of(exc_info[1])
+            if code is not None and 400 <= code < 500:
+                return None
+
+        # 2) Request: never send cookies; redact headers, body and query string.
+        req = event.get("request")
+        if isinstance(req, dict):
+            req.pop("cookies", None)
+            if isinstance(req.get("headers"), dict):
+                req["headers"] = redact(req["headers"])
+            if "data" in req:
+                req["data"] = redact(req["data"])
+            if isinstance(req.get("query_string"), str):
+                req["query_string"] = _mask_value(req["query_string"])
+
+        # 3) No user identity unless we deliberately add safe fields elsewhere.
+        event.pop("user", None)
+
+        # 4) Recursively redact structured containers by the central rules.
+        for key in ("extra", "contexts", "tags"):
+            if isinstance(event.get(key), (dict, list)):
+                event[key] = redact(event[key])
+
+        # 5) Mask secret-shaped values in free text (message + exception values).
+        if isinstance(event.get("message"), str):
+            event["message"] = _mask_value(event["message"])
+        for v in ((event.get("exception") or {}).get("values") or []):
+            if isinstance(v, dict) and isinstance(v.get("value"), str):
+                v["value"] = _mask_value(v["value"])
+
+        # 6) Breadcrumbs can carry log messages/data — redact them too.
+        crumbs = event.get("breadcrumbs")
+        crumbs = crumbs.get("values") if isinstance(crumbs, dict) else crumbs
+        for c in (crumbs or []):
+            if isinstance(c, dict):
+                if isinstance(c.get("message"), str):
+                    c["message"] = _mask_value(c["message"])
+                if isinstance(c.get("data"), (dict, list)):
+                    c["data"] = redact(c["data"])
+
+        # 7) Correlation with the rest of the stack (safe ids only; these are Sentry TAGS,
+        #    not Prometheus labels, so business ids are allowed here). Never a secret.
+        tags = event.setdefault("tags", {})
+        for k in ("trace_id", "request_id", "transaction_id", "task_id", "payment_mode"):
+            val = get_context().get(k)
+            if val and k not in tags:
+                tags[k] = val
+        tags.setdefault("service", SERVICE_NAME)
+        return event
+    except Exception:  # noqa: BLE001 — fail CLOSED: drop rather than risk leaking an event
+        return None
+
+
+def init_sentry() -> bool:
+    """Initialise Sentry error tracking. Idempotent, degrade-safe, and OFF unless a DSN is
+    configured. Never raises in degrade mode — Sentry must never block API startup, payments,
+    GPU jobs, auth, the DB, or payouts."""
+    global _sentry_ok
+    if _sentry_ok:
+        return True
+    if not (SENTRY_ENABLED and SENTRY_DSN):
+        return False
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+        from sentry_sdk.integrations.logging import LoggingIntegration
+        from sentry_sdk.integrations.threading import ThreadingIntegration
+
+        only_5xx = set(range(500, 600))          # 4xx are expected; only 5xx are incidents
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            environment=SENTRY_ENVIRONMENT,
+            release=SENTRY_RELEASE,
+            traces_sample_rate=SENTRY_TRACES_SAMPLE_RATE,
+            profiles_sample_rate=SENTRY_PROFILES_SAMPLE_RATE,
+            max_breadcrumbs=SENTRY_MAX_BREADCRUMBS,
+            send_default_pii=False,               # never auto-attach headers/cookies/IP/body
+            attach_stacktrace=True,
+            integrations=[
+                StarletteIntegration(failed_request_status_codes=only_5xx),
+                FastApiIntegration(failed_request_status_codes=only_5xx),
+                SqlalchemyIntegration(),
+                LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
+                ThreadingIntegration(),
+            ],
+            before_send=_sentry_scrub,
+        )
+        sentry_sdk.set_tag("service", SERVICE_NAME)
+        sentry_sdk.set_tag("petabyte.namespace", SERVICE_NAMESPACE)
+        _sentry_ok = True
+        return True
+    except Exception as e:  # noqa: BLE001 — a broken Sentry must never break the app
+        if FAILURE_MODE != "degrade":
+            raise
+        logging.getLogger("petabyte.obs").warning(f"sentry init degraded: {e}")
+        return False
+
+
+def capture_message(message: str, level: str = "info", **tags) -> str | None:
+    """Send one message to Sentry if active (used by the admin selftest). Returns the event id
+    or None. Never raises."""
+    if not _sentry_ok:
+        return None
+    try:
+        import sentry_sdk
+        with sentry_sdk.push_scope() as scope:
+            for k, v in tags.items():
+                scope.set_tag(k, v)
+            return sentry_sdk.capture_message(message, level=level)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 _started = False
 
 
@@ -782,9 +930,10 @@ def init_observability(service_name: str | None = None) -> dict:
         configure_logging()
         init_metrics()
         init_tracing()
+        init_sentry()
         _logger.info("observability initialised",
                      extra={"event_name": "observability.initialised",
-                            "otel": _otel_ok, "metrics": _prom_ok,
+                            "otel": _otel_ok, "metrics": _prom_ok, "sentry": _sentry_ok,
                             "endpoint_configured": bool(OTLP_ENDPOINT)})
     except Exception as e:  # noqa: BLE001
         if FAILURE_MODE != "degrade":
@@ -804,6 +953,8 @@ def health() -> dict:
                     "endpoint_configured": bool(OTLP_ENDPOINT),
                     "protocol": OTLP_PROTOCOL, "sample_ratio": TRACE_SAMPLE_RATIO},
         "metrics": {"enabled": METRICS_ENABLED, "active": _prom_ok},
+        "sentry": {"enabled": bool(SENTRY_ENABLED and SENTRY_DSN), "active": _sentry_ok,
+                   "environment": SENTRY_ENVIRONMENT},
         "service": SERVICE_NAME, "environment": ENVIRONMENT, "release": RELEASE,
     }
 

@@ -3014,6 +3014,30 @@ def admin_whoami(me=Depends(require_admin)):
     return {"admin": True, "username": me.username}
 
 
+@app.post("/admin/observability/sentry-test", tags=["admin"])
+def admin_sentry_test(request: Request, me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Deliberately send ONE test event to Sentry, to verify the pipeline end-to-end.
+
+    Guarded three ways so it can never be an abuse surface:
+      * admin-only (require_admin);
+      * REFUSED in production (404) — this is a TEST/staging verification tool only;
+      * a no-op 409 if Sentry isn't actually active (no DSN configured).
+    It captures a benign message (never raises, never crashes the process) and returns the
+    Sentry event id — never the DSN or any secret."""
+    if obsmod.ENVIRONMENT == "production":
+        raise HTTPException(status_code=404, detail="not found")
+    if not obsmod.health()["sentry"]["active"]:
+        raise HTTPException(status_code=409,
+                            detail="Sentry is not active (no SENTRY_DSN configured)")
+    event_id = obsmod.capture_message(
+        "Petabyte Sentry selftest (admin-triggered)", level="error",
+        selftest="true", triggered_by=me.username)
+    audit(db, "observability.sentry_test", actor=me.username, resource_type="observability",
+          resource_id=str(event_id or "none"), ip=_client_ip(request))
+    return {"sent": bool(event_id), "event_id": event_id,
+            "environment": obsmod.SENTRY_ENVIRONMENT, "release": obsmod.SENTRY_RELEASE}
+
+
 @app.get("/admin/financial-integrity", tags=["admin"])
 def admin_financial_integrity(me=Depends(require_admin), db: Session = Depends(get_db)):
     """On-demand financial-integrity heartbeat (#286): the same SQL ledger invariants +

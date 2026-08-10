@@ -278,6 +278,8 @@ OBSERVABILITY_EXTRA = {
                  "format": "url", "description": "Loki base URL."},
     "TEMPO_URL": {"default": None, "scope": ["observability"], "secret": False,
                   "format": "url", "description": "Tempo base URL."},
+    "SENTRY_RELEASE": {"default": None, "scope": ["observability"], "secret": False,
+                       "description": "Sentry release tag (defaults to RELEASE / GITHUB_SHA)."},
     "SENTRY_ENVIRONMENT": {"default": None, "scope": ["observability"], "secret": False,
                            "description": "Sentry environment label (defaults to ENVIRONMENT)."},
     "OTEL_LOGS_ENABLED": {"default": "true", "scope": ["observability"], "secret": False,

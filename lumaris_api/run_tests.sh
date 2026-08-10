@@ -50,6 +50,7 @@ run_suite "marketplace intelligence (health/routing/trust/timeline)" python mark
 run_suite "github config (manifest/validator/generator/drift)" python config_test.py
 run_suite "ENV_VARS bundle (parser/secret-guard/precedence)" python env_vars_test.py
 run_suite "observability (correlation/redaction/cardinality/degrade)" python observability_test.py
+run_suite "sentry (degrade-safe init + before_send redaction)" python sentry_test.py
 run_suite "seller payable metric (mode-separated payout gauge)" python seller_payable_metric_test.py
 run_suite "reservation reclaim (abandoned GPU capacity)" python reservation_reclaim_test.py
 run_suite "observability smoke (local tier; remote skipped offline)" \
