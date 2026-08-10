@@ -131,6 +131,18 @@ AGENT_VARS = {
                                                "trusts-on-first-use. Verifies the server before "
                                                "any secret is transferred; the deploy fails "
                                                "closed if unset."},
+    "DROPLET_HOST_OBSERV": {"required": False, "default": None, "secret": True,
+                            "scope": ["deployment"],
+                            "description": "Observability VM host (IP/DNS) for the observability "
+                                           "deploy workflow (deploy-observability.yml)."},
+    "DROPLET_SSH_KNOWN_HOSTS_OBSERV": {"required": False, "default": None, "secret": True,
+                                       "scope": ["deployment"],
+                                       "description": "Optional pinned SSH host key(s) for the "
+                                                      "observability VM (ssh-keyscan -t "
+                                                      "ed25519,rsa <host>). If unset, the "
+                                                      "observability deploy pins via ssh-keyscan "
+                                                      "(trust-on-first-use); only non-secret "
+                                                      "config is shipped, never .env."},
 }
 
 # ---- Curated metadata for important platform vars (allowed values / validation / notes) --
