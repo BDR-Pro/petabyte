@@ -1,0 +1,95 @@
+# =============================================================================
+# Petabyte observability stack — one-command local/self-hosted deployment.
+#
+#   cd observability && docker compose up -d
+#
+# Grafana comes up already wired to Prometheus, Loki and Tempo, with ALL Petabyte
+# dashboards provisioned from ./grafana/dashboards (no manual "Import dashboard").
+#
+# SECURITY — Grafana is the ONLY public surface (data.petabyte.market):
+#   * Grafana is published on 127.0.0.1:3000 ONLY, so it is reachable solely by the
+#     host's reverse proxy (which terminates TLS for data.petabyte.market). It is not
+#     bound to 0.0.0.0.
+#   * Prometheus, Loki, Tempo and the OTel collector publish NO host ports at all —
+#     they are reachable only on the internal `obs` docker network. They are never
+#     exposed to the public internet.
+# =============================================================================
+
+name: petabyte-observability
+
+networks:
+  obs:
+    driver: bridge
+
+volumes:
+  grafana-data:
+  prometheus-data:
+  loki-data:
+  tempo-data:
+
+services:
+  grafana:
+    image: grafana/grafana:11.4.0
+    restart: unless-stopped
+    depends_on: [prometheus, loki, tempo]
+    environment:
+      # Correct root_url avoids the "storage partition" class of frontend errors
+      # (e.g. localStorage.getItem failures) behind a reverse proxy.
+      GF_SERVER_ROOT_URL: "${GF_SERVER_ROOT_URL:-https://data.petabyte.market}"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "false"
+      GF_SECURITY_ADMIN_USER: "${GF_SECURITY_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GF_SECURITY_ADMIN_PASSWORD:?set GF_SECURITY_ADMIN_PASSWORD in observability/.env}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"   # loopback only — front with the TLS reverse proxy
+    networks: [obs]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./compose/prometheus.compose.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    networks: [obs]          # no `ports:` — internal only, never public
+
+  loki:
+    image: grafana/loki:3.2.1
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    volumes:
+      - ./compose/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki-data:/loki
+    networks: [obs]          # no `ports:` — internal only, never public
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo-config.yaml"]
+    volumes:
+      - ./compose/tempo-config.yaml:/etc/tempo/tempo-config.yaml:ro
+      - tempo-data:/var/tempo
+    networks: [obs]          # no `ports:` — internal only, never public
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    restart: unless-stopped
+    depends_on: [tempo, loki]
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      DEPLOYMENT_ENVIRONMENT: "${DEPLOYMENT_ENVIRONMENT:-staging}"
+    volumes:
+      - ./compose/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    networks: [obs]          # OTLP ingest is internal-only on this network

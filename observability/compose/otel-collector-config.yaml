@@ -1,0 +1,82 @@
+# OpenTelemetry Collector config for the local/self-hosted compose stack.
+# -----------------------------------------------------------------------------
+# COMPOSE-LOCAL: plain internal networking, no TLS/bearer auth (the collector is
+# only reachable on the private `obs` docker network — it publishes no host port).
+# The PRODUCTION scaffold (../otel-collector/config.yaml) adds TLS + bearer auth and
+# MUST be used on any host where OTLP could be reached off-box.
+#
+# The app (lumaris_api) and seller agent send OTLP here; the collector fans traces to
+# Tempo and logs to Loki. Prometheus METRICS are scraped directly from the app's
+# /internal/metrics (see prometheus.compose.yml) and do not transit the collector.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  batch:
+    timeout: 2s
+    send_batch_size: 512
+  resource:
+    attributes:
+      - key: service.namespace
+        value: petabyte
+        action: upsert
+      - key: deployment.environment
+        value: "${env:DEPLOYMENT_ENVIRONMENT}"
+        action: insert
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  # Loki labels are bounded on purpose (job/instance/level); high-cardinality ids
+  # stay in the JSON log body. service.name / deployment.environment become the
+  # `service` / `environment` labels the dashboards + datasource correlation rely on.
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+    default_labels_enabled:
+      exporter: false
+      job: true
+      instance: true
+      level: true
+  prometheus:
+    endpoint: 0.0.0.0:9464
+    resource_to_telemetry_conversion:
+      enabled: true
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp/tempo]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [loki]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [prometheus]

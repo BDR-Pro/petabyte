@@ -10,27 +10,69 @@ here is internally consistent with the telemetry the platform already emits
 
 ```text
 observability/
+├── docker-compose.yml              # one-command local/self-hosted stack (Grafana public ONLY)
+├── .env.example                    # copy to .env; Grafana admin password + root_url + env
+├── compose/                        # compose-local backend configs (plain HTTP, internal net)
+│   ├── prometheus.compose.yml      # scrapes self/loki/tempo/collector (loads the same rules)
+│   ├── loki-config.yaml            # single-binary Loki, filesystem storage
+│   ├── tempo-config.yaml           # Tempo, OTLP in, filesystem storage
+│   └── otel-collector-config.yaml  # OTLP in -> Tempo(traces)/Loki(logs)/Prometheus(metrics)
 ├── grafana/
-│   ├── dashboards/                 # 9 version-controlled dashboards (JSON)
-│   │   ├── executive_marketplace.json   uid: petabyte-executive
-│   │   ├── transaction_trace.json       uid: petabyte-transaction-trace
+│   ├── build_dashboards.py         # generator — emits the 7 canonical dashboards (source of truth)
+│   ├── validate_dashboards.py      # guard — every panel metric must exist; unique uids; balanced PromQL
+│   ├── dashboards/                 # version-controlled dashboards (JSON), auto-provisioned
+│   │   │                           #  --- the 7 canonical (generated) ---
+│   │   ├── executive.json               uid: petabyte-executive
+│   │   ├── marketplace.json             uid: petabyte-marketplace
+│   │   ├── payments.json                uid: petabyte-settlement       (Payments & Stripe)
+│   │   ├── gpu-fleet.json               uid: petabyte-seller-fleet     (Seller GPU Fleet)
 │   │   ├── api.json                     uid: petabyte-api
-│   │   ├── workers_queue.json           uid: petabyte-workers
-│   │   ├── seller_agent_fleet.json      uid: petabyte-seller-fleet
-│   │   ├── marketplace_sellers.json     uid: petabyte-marketplace-sellers
-│   │   ├── stripe_settlement.json       uid: petabyte-settlement
 │   │   ├── infrastructure.json          uid: petabyte-infra
-│   │   └── investor_demo.json           uid: petabyte-investor-demo (read-only)
+│   │   ├── security.json                uid: petabyte-security
+│   │   │                           #  --- retained auxiliaries ---
+│   │   ├── workers_queue.json           uid: petabyte-workers          (queue alert links)
+│   │   ├── transaction_trace.json       uid: petabyte-transaction-trace
+│   │   └── investor_demo.json           uid: petabyte-investor-demo
 │   └── provisioning/
 │       ├── dashboards/petabyte.yaml     # file provider -> /var/lib/grafana/dashboards
 │       └── datasources/datasources.yaml # Prometheus(uid=prometheus), Loki(uid=loki), Tempo(uid=tempo)
 ├── otel-collector/
-│   └── config.yaml                 # OTLP in (grpc :4317 / http :4318) -> Tempo/Loki/Prometheus
+│   └── config.yaml                 # PRODUCTION collector scaffold (TLS + bearer auth)
 ├── prometheus/
-│   ├── prometheus.yml              # scrape config + remote_write scaffold
-│   └── rules/petabyte_rules.yaml   # recording + alerting rules
+│   ├── prometheus.yml              # PRODUCTION scrape config + remote_write scaffold
+│   └── rules/petabyte_rules.yaml   # recording + alerting rules (shared by both stacks)
 └── README.md
 ```
+
+## Quickstart — `docker compose up -d`
+
+```bash
+cd observability
+cp .env.example .env          # set GF_SECURITY_ADMIN_PASSWORD (required)
+docker compose up -d          # Grafana + Prometheus + Loki + Tempo + OTel collector
+# Grafana -> http://127.0.0.1:3000  (front it with the TLS reverse proxy for data.petabyte.market)
+```
+
+Grafana comes up with the three datasources **and all dashboards already loaded** from
+`grafana/dashboards/` — no manual "Import dashboard". Point your app/agent's
+`OTEL_EXPORTER_OTLP_ENDPOINT` at the collector, and add the `petabyte-api` scrape target in
+`compose/prometheus.compose.yml` (commented example included) to light up the app panels.
+
+**Editing a dashboard:** change `grafana/build_dashboards.py`, run
+`python observability/grafana/build_dashboards.py`, then
+`python observability/grafana/validate_dashboards.py`. CI regenerates and `git diff --exit-code`s
+the output, so the committed JSON can never drift from the generator, and every referenced metric
+is checked to actually exist.
+
+### Only Grafana is public
+
+- **Grafana** is the sole public UI (`data.petabyte.market`). In compose it binds to
+  `127.0.0.1:3000` (loopback) so only the host's TLS reverse proxy can reach it.
+- **Prometheus, Loki, Tempo and the OTel collector publish NO host ports** — they are reachable
+  only on the internal `obs` docker network. They are never exposed to the public internet.
+- Set `GF_SERVER_ROOT_URL=https://data.petabyte.market` (in `.env`). A correct root URL behind the
+  proxy avoids the reverse-proxy storage-partition class of Grafana frontend errors
+  (e.g. `localStorage.getItem is not a function`).
 
 ## How it's provisioned
 

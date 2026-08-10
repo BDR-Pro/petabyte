@@ -243,6 +243,26 @@ else:
     ok("gpu_model_to_class maps to a bounded class",
        o.gpu_model_to_class("NVIDIA H100 80GB") == "h100")
 
+# ---- money-moved counters exist, are mode-separated, and never mix TEST/LIVE ----
+if o.health()["metrics"]["active"]:
+    for _n in ("petabyte_gmv_captured_minor_total", "petabyte_platform_fees_minor_total",
+               "petabyte_seller_earnings_minor_total"):
+        o.inc_metric(_n, 250, payment_mode="live", environment="test")
+        o.inc_metric(_n, 99, payment_mode="test", environment="test")
+    mtext = o.metrics_response()[0].decode()
+    ok("GMV/fees/earnings money counters are registered (executive $ tiles)",
+       all(n in mtext for n in ("petabyte_gmv_captured_minor_total",
+                                "petabyte_platform_fees_minor_total",
+                                "petabyte_seller_earnings_minor_total")))
+    ok("money counters carry a bounded payment_mode label (TEST vs LIVE never merged)",
+       'payment_mode="live"' in mtext and 'payment_mode="test"' in mtext)
+    ok("money counter increments by the AMOUNT, not by 1 (live GMV == 250)",
+       'petabyte_gmv_captured_minor_total{environment="test",payment_mode="live"} 250' in mtext)
+else:
+    ok("money counters (skipped: no client)", True)
+    ok("money counters payment_mode label (skipped)", True)
+    ok("money counter increments by amount (skipped)", True)
+
 # ---- observability can be disabled only in approved environments (validator) ----
 import validate_github_configuration as V  # noqa: E402
 r = V.Result()

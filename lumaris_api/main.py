@@ -1699,7 +1699,7 @@ def _marketplace_metrics():
     only (gpu_class, country); seller ids never become labels. Best-effort — a query error
     yields no rows rather than breaking the scrape. Real supply excludes seeded demo nodes."""
     from db import (SellerSpec, ComputeTransaction, _utcnow,
-                    financial_integrity, payout_backlog)
+                    financial_integrity, payout_backlog, seller_payable_by_mode)
     S = SellerSpec
     env = obsmod.ENVIRONMENT
     rows = []
@@ -1799,6 +1799,12 @@ def _marketplace_metrics():
              "doc": "Age of the oldest unbatched payout obligation (payout backlog)",
              "labels": {"environment": env}, "value": pb["oldest_age_seconds"]},
         ]
+        # Outstanding seller payable (minor units) split by money mode — never mix TEST/LIVE.
+        for _mode, _minor in seller_payable_by_mode(dbs).items():
+            rows.append({"name": "petabyte_seller_payable_minor",
+                         "doc": "Outstanding seller payable (minor units) owed but not yet paid",
+                         "labels": {"payment_mode": _mode or "unknown", "environment": env},
+                         "value": _minor})
     except Exception:  # noqa: BLE001
         logger.debug("financial-integrity metrics query failed", exc_info=True)
     finally:

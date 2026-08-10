@@ -607,6 +607,20 @@ def payout_backlog(db: Session) -> dict:
     return {"unbatched": int(count), "oldest_age_seconds": age_s}
 
 
+def seller_payable_by_mode(db: Session) -> dict:
+    """Outstanding seller payable (MINOR units) per money mode: net earned by sellers but not
+    yet paid out. Owed = states accrued/available/batched (paid/reversed/failed are excluded).
+    Keyed by lowercased mode ('test'|'live') so it lines up with the payment_mode metric label —
+    TEST and LIVE money are never summed into one figure."""
+    from sqlalchemy import func
+    owed = ("accrued", "available", "batched")
+    rows = (db.query(PayoutObligation.mode,
+                     func.coalesce(func.sum(PayoutObligation.net_amount_minor), 0))
+            .filter(PayoutObligation.state.in_(owed))
+            .group_by(PayoutObligation.mode).all())
+    return {str(mode or "unknown").lower(): int(total or 0) for mode, total in rows}
+
+
 class NewsletterSubscriber(Base):
     """Authoritative record of a newsletter signup. Postgres is the source of truth; the
     Mailgun mailing list is the delivery mechanism kept in sync via `mailgun_synced`.

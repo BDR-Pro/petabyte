@@ -1,0 +1,32 @@
+# Minimal Tempo for the local/self-hosted compose stack (filesystem storage).
+# Internal-only: reachable at http://tempo:3200 (Grafana query) on the obs network;
+# receives OTLP from the collector at tempo:4317/4318. No host port is published.
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 168h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+usage_report:
+  reporting_enabled: false

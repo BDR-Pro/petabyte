@@ -600,6 +600,16 @@ def init_metrics() -> bool:
         C("petabyte_seller_transfers_total", "Seller transfers",
           ("outcome", "payment_mode", "environment"))
         C("petabyte_refunds_total", "Refunds", ("payment_mode", "environment"))
+        # Money moved, in MINOR units, split by payment_mode so a LIVE panel can never sum
+        # TEST money (and vice-versa). Incremented by the exact captured/fee/seller-net amount
+        # at each successful capture — see stripe_connect.capture(). GMV/fees/earnings "today"
+        # are then increase(...[24h]) over these counters.
+        C("petabyte_gmv_captured_minor_total", "Gross captured amount (minor units)",
+          ("payment_mode", "environment"))
+        C("petabyte_platform_fees_minor_total", "Platform commission captured (minor units)",
+          ("payment_mode", "environment"))
+        C("petabyte_seller_earnings_minor_total", "Seller net earned at capture (minor units)",
+          ("payment_mode", "environment"))
         C("petabyte_webhooks_total", "Stripe webhooks",
           ("category", "outcome", "environment"))
         C("petabyte_webhook_invalid_signature_total", "Invalid webhook signatures",
