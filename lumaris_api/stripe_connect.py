@@ -219,12 +219,48 @@ def _finish_op(db, op, *, state: str, external_id: str | None = None, error: str
 
 
 # ----------------------------------------------------------------- onboarding
+class ConnectedAccountModeMismatch(TransactionError):
+    """The seller's existing connected account was minted by a DIFFERENT gateway (fake vs
+    real) than the one now running. Reusing it would either treat a fake test account as a
+    real Stripe account or vice versa — always fail closed and require a deliberate migration."""
+
+
+def _current_gateway_mode() -> str:
+    """'fake' when the offline FakeStripeGateway is active, else 'real'."""
+    from stripe_gateway import FakeStripeGateway
+    return "fake" if isinstance(get_gateway(), FakeStripeGateway) else "real"
+
+
+def _account_gateway_mode(ca: ConnectedAccount) -> str:
+    """Classify an existing account. The stored marker wins; for legacy rows written before the
+    marker existed, infer from the id prefix — FakeStripeGateway always mints 'acct_fake…'."""
+    stored = getattr(ca, "gateway_mode", None)
+    if stored in ("real", "fake"):
+        return stored
+    return "fake" if str(ca.stripe_account_id or "").startswith("acct_fake") else "real"
+
+
 def get_or_create_connected_account(db, user: User, *, country: str = None,
                                     email: str = None) -> ConnectedAccount:
-    """Idempotent: one connected account per seller. A repeat call returns the same
-    account and never creates a second Stripe account."""
+    """Idempotent: one connected account per seller. A repeat call returns the same account and
+    never creates a second Stripe account — UNLESS the stored account belongs to a different
+    gateway mode than the one now running, in which case it fails closed
+    (ConnectedAccountModeMismatch) so a fake test account can never masquerade as real Stripe."""
+    current = _current_gateway_mode()
     ca = db.query(ConnectedAccount).filter(ConnectedAccount.user_id == user.id).first()
     if ca:
+        existing_mode = _account_gateway_mode(ca)
+        if existing_mode != current:
+            raise ConnectedAccountModeMismatch(
+                f"seller {user.id} already has a {existing_mode}-gateway connected account "
+                f"({ca.stripe_account_id}), but this process is running the {current} gateway. "
+                f"Refusing to reuse it — a {existing_mode} account can never satisfy the "
+                f"{current} gateway. Migrate deliberately: remove this seller's {existing_mode} "
+                f"connected account, then re-onboard under the {current} gateway.")
+        # Backfill the marker on a legacy row of the SAME mode (never a mode change).
+        if getattr(ca, "gateway_mode", None) not in ("real", "fake"):
+            ca.gateway_mode = existing_mode
+            db.add(ca); db.commit()
         return ca
     gw = get_gateway()
     country = (country or os.getenv("PLATFORM_DEFAULT_COUNTRY", "US")).upper()
@@ -234,7 +270,8 @@ def get_or_create_connected_account(db, user: User, *, country: str = None,
     ca = ConnectedAccount(user_id=user.id, stripe_account_id=acct["id"],
                           country=acct.get("country"),
                           default_currency=acct.get("default_currency"),
-                          onboarding_state="created", last_synced_at=_now())
+                          onboarding_state="created", last_synced_at=_now(),
+                          gateway_mode=current)     # stamp the minting gateway
     db.add(ca); db.commit(); db.refresh(ca)
     _sync_from_stripe(db, ca, acct)
     return ca
@@ -279,18 +316,22 @@ def _sync_from_stripe(db, ca: ConnectedAccount, acct: dict) -> ConnectedAccount:
         ca.onboarding_state = "onboarding"
     ca.last_synced_at = _now()
     db.add(ca); db.commit(); db.refresh(ca)
-    # A seller may only offer paid supply when Stripe can actually pay them.
+    # A seller may only offer paid supply when at least one payout rail can actually pay them.
+    # Decided by the provider-agnostic readiness service (Connect is one rail), not by reading
+    # Connect fields directly here — so onboarding any future rail flips this the same way.
     seller = get_user_by_id(db, ca.user_id)
     if seller is not None:
-        seller.can_accept_paid_jobs = bool(ca.payout_ready() and seller.can_accept_paid_jobs
-                                           if False else ca.payout_ready())
+        import payout_readiness
+        seller.can_accept_paid_jobs = payout_readiness.is_seller_payout_ready(db, ca.user_id)
         db.add(seller); db.commit()
     return ca
 
 
 def seller_payout_ready(db, seller_id: int) -> bool:
-    ca = db.query(ConnectedAccount).filter(ConnectedAccount.user_id == seller_id).first()
-    return bool(ca and ca.payout_ready())
+    """Provider-agnostic seller payout readiness. Thin back-compat wrapper that delegates to the
+    centralized payout_readiness service (which considers ALL rails, not just Stripe Connect)."""
+    import payout_readiness
+    return payout_readiness.is_seller_payout_ready(db, seller_id)
 
 
 # ----------------------------------------------------------------- quote
@@ -320,12 +361,22 @@ def authorize(db, buyer: User, spec: SellerSpec, estimated_seconds: int, *,
     transient attribute (never persisted)."""
     if spec.user_id == buyer.id:
         raise TransactionError("cannot rent your own hardware")
-    if not spec.attested or not spec_is_live(spec) or (spec.available_units or 0) < 1:
-        raise TransactionError("GPU is not online/available/eligible")
-    ca = db.query(ConnectedAccount).filter(ConnectedAccount.user_id == spec.user_id).first()
-    if not ca or not ca.payout_ready():
-        raise TransactionError("seller is not payout-ready")
+    # AUTHORITATIVE, LIVE eligibility at the money entry point. Re-checks ALL independent
+    # conditions (payout readiness with bounded freshness, reputation, fraud/risk hold, node
+    # availability, and gateway/mode) through the centralized service — NEVER the cached
+    # can_accept_paid_jobs boolean. Fail closed. A seller whose payout readiness dropped after
+    # the cache said "true" cannot start a paid tx here.
+    import seller_eligibility
+    seller = get_user_by_id(db, spec.user_id)
+    elig = seller_eligibility.get_seller_job_eligibility(db, seller, spec=spec)
+    if not elig["eligible"]:
+        raise TransactionError(seller_eligibility.message_for(elig["reason_code"]))
 
+    # The Connect account (when present) is recorded on the tx as the transfer destination for
+    # the CURRENT Stripe-Connect payout path. Looked up separately from the eligibility check:
+    # readiness is provider-agnostic, while this id is Connect-specific and may be None for a
+    # seller made eligible by a future non-Connect rail (the transfer path would then differ).
+    ca = db.query(ConnectedAccount).filter(ConnectedAccount.user_id == spec.user_id).first()
     q = quote(db, spec, estimated_seconds, cfg)
     snap = q["snapshot"]
     tx = ComputeTransaction(
@@ -334,7 +385,7 @@ def authorize(db, buyer: User, spec: SellerSpec, estimated_seconds: int, *,
         estimated_amount=q["estimated_compute_amount"],
         authorization_amount=q["authorization_amount"],
         status="DRAFT", reconciliation_status="pending",
-        stripe_connected_account_id=ca.stripe_account_id, is_demo=is_demo)
+        stripe_connected_account_id=(ca.stripe_account_id if ca else None), is_demo=is_demo)
     db.add(tx); db.commit(); db.refresh(tx)
 
     key = idem_key("payment-intent", tx)
@@ -852,6 +903,151 @@ def _release_reservation(db, tx):
     if b and b.status == "stripe_reserved":
         b.status = "released_unused"; db.add(b); db.commit()
         release_unit(db, tx.spec_id)
+
+
+def release_failed_reservation(db, tx: ComputeTransaction, *,
+                              reason: str = "released after failure") -> ComputeTransaction:
+    """Free the GPU reservation + void the buyer's authorization hold for a tx that has ALREADY
+    reached a terminal failure state (JOB_FAILED / CAPTURE_FAILED / DISPATCH_FAILED / ...).
+
+    Unlike cancel_authorization this drives NO FSM transition: a failed job keeps its terminal
+    state (the job genuinely failed — we only reclaim capacity). This is what the buyer-cancel
+    path calls once a job is dispatched but has since failed, so the reservation is freed
+    immediately instead of waiting for the next abandoned-reservation reaper cycle. Voiding the PI
+    and releasing the unit are both idempotent, so this is safe to call repeatedly (and safe for a
+    tx that failed before it was ever dispatched). Mirrors the reaper's terminal-failed branch."""
+    import marketplace_insight as mi
+    if tx.status not in mi.TX_FAILED:
+        raise TransactionError(
+            f"release_failed_reservation requires a terminal-failed tx, got {tx.status}")
+    try:
+        if tx.stripe_payment_intent_id:
+            get_gateway().cancel_payment_intent(pi_id=tx.stripe_payment_intent_id,
+                                                idempotency_key=idem_key("cancel", tx))
+    except Exception:  # noqa: BLE001 — the real gateway may raise a raw SDK/HTTP error, not
+        pass           # StripeError; the PI void is best-effort and must never block the release
+    if tx.booking_id:
+        _release_reservation(db, tx)
+    tx.reconciliation_status = "reconciled"
+    db.add(tx); db.commit()
+    return tx
+
+
+# Pre-capture states in which a reservation is legitimately held while the job is in flight.
+_PRE_CAPTURE_ACTIVE = ("GPU_RESERVED", "DISPATCHING", "RUNNING",
+                       "METERING_FINALIZED", "PAYMENT_CAPTURE_PENDING")
+
+# Shortest VALID FSM path from each pre-capture state to the terminal CANCELLED. Several states
+# (RUNNING/DISPATCHING/PAYMENT_CAPTURE_PENDING) cannot jump straight to CANCELLED — that edge does
+# not exist — so a naive transition(..., "CANCELLED") would raise and, if suppressed, leave the tx
+# stuck in a pre-capture state with no reservation. We bridge through the matching failure edge
+# first. Keep in sync with TRANSITIONS.
+_RECLAIM_CANCEL_PATH = {
+    "GPU_RESERVED": ("CANCELLED",),
+    "DISPATCHING": ("JOB_FAILED", "CANCELLED"),
+    "RUNNING": ("JOB_FAILED", "CANCELLED"),
+    "METERING_FINALIZED": ("CANCELLED",),
+    "PAYMENT_CAPTURE_PENDING": ("CAPTURE_FAILED", "CANCELLED"),
+}
+
+
+def _cancel_reclaimed(db, tx, *, reason):
+    """Drive an abandoned pre-capture tx to the terminal CANCELLED state via a VALID FSM path, so a
+    reclaimed job never lingers in RUNNING/DISPATCHING/etc. with no reservation. The reservation is
+    already freed by the caller; this only fixes the tx's terminal state. Best-effort: a step that
+    can't apply is logged, not raised (the unit is freed either way, and the booking is no longer
+    `stripe_reserved`, so the row is not revisited)."""
+    for st in _RECLAIM_CANCEL_PATH.get(tx.status, ("CANCELLED",)):
+        try:
+            transition(db, tx, st, reason=reason)
+        except TransactionError:
+            logger.warning("reclaim: could not advance tx %s to %s from %s",
+                           getattr(tx, "public_id", "?"), st, tx.status)
+            return
+
+
+def reclaim_abandoned_reservations(db, *, stuck_after_s: int = None) -> int:
+    """Release GPU units held by `stripe_reserved` bookings whose compute-tx is ABANDONED, so a
+    failed or stuck rental can never hold capacity indefinitely.
+
+    This is the safety net for the case the buyer cancel path cannot handle: once a job is
+    dispatched, POST /payments/{tx}/cancel returns 409, so a post-dispatch failure would
+    otherwise leak its reserved unit forever. Two SAFE cases are reclaimed:
+
+      * tx in a TERMINAL failure/cancel state (marketplace_insight.TX_FAILED, e.g. JOB_FAILED /
+        CAPTURE_FAILED / DISPATCH_FAILED / CANCELLED) -> release the unit immediately; the
+        rental is over and nothing was successfully captured for it.
+      * tx STUCK pre-capture on a DEAD node (a seller that never settled) — untouched for longer
+        than `stuck_after_s` (default RESERVATION_RECLAIM_STUCK_S, 26h) AND the seller's node is no
+        longer live (no recent heartbeat) -> cancel the authorization (void the PI hold) and
+        release. The node-dead check is what prevents oversubscription: a live node running a
+        legitimately long job is left alone, so its GPU unit is never handed to a second buyer
+        while the first job is still executing.
+
+    It NEVER touches a recently-active pre-capture tx, a stuck pre-capture tx whose node is still
+    live, or a successfully PAYMENT_CAPTURED rental.
+    Idempotent — it only ever acts on a still-`stripe_reserved` booking, and the release helpers
+    are no-ops once released. Returns the number of reservations reclaimed. Best-effort: one bad
+    row is logged and skipped, never blocking the rest (safe to call from the maintenance loop)."""
+    import marketplace_insight as mi
+    _default_stuck_s = 26 * 3600
+    if stuck_after_s is None:
+        try:
+            stuck_after_s = int(os.getenv("RESERVATION_RECLAIM_STUCK_S", str(_default_stuck_s)))
+        except (TypeError, ValueError):
+            stuck_after_s = _default_stuck_s
+    if stuck_after_s <= 0:
+        # A zero/negative timeout would make EVERY stuck pre-capture reservation immediately
+        # reclaimable — tearing down a job that may still be in flight. Fall back to the default.
+        logger.warning("RESERVATION_RECLAIM_STUCK_S=%s is not positive; using default %ss",
+                       stuck_after_s, _default_stuck_s)
+        stuck_after_s = _default_stuck_s
+    cutoff = _now() - timedelta(seconds=stuck_after_s)
+    rows = (db.query(ComputeTransaction)
+            .join(Booking, Booking.id == ComputeTransaction.booking_id)
+            .filter(Booking.status == "stripe_reserved").all())
+    reclaimed = 0
+    for tx in rows:
+        try:
+            if tx.status in mi.TX_FAILED:
+                _release_reservation(db, tx)                       # rental over -> free the unit
+                reclaimed += 1
+            elif tx.status in _PRE_CAPTURE_ACTIVE:
+                ts = tx.updated_at or tx.created_at
+                if ts is not None and ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if ts is not None and ts < cutoff:                 # untouched past the stuck window
+                    # A stuck pre-capture reservation is only SAFE to reclaim when the workload is
+                    # genuinely NOT running — i.e. the seller's node is DEAD (no recent heartbeat).
+                    # A live, heartbeating node with a long-running job (RUNNING past the stuck
+                    # window is legitimate — e.g. a multi-day training run) is NOT an abandoned
+                    # reservation: releasing its unit here would let another buyer land on the SAME
+                    # live GPU (oversubscription) while the original job is still executing. Leave
+                    # it held; it settles when the job finishes, or gets reclaimed above once the tx
+                    # reaches a terminal-failed state (incl. AUTHORIZATION_EXPIRED).
+                    spec = db.query(SellerSpec).filter(SellerSpec.id == tx.spec_id).first()
+                    if spec is not None and spec_is_live(spec):
+                        continue                                   # node alive -> job may still run
+                    # dead seller / offline node: the GPU is not executing this job. Free the unit +
+                    # void the buyer's authorization hold DIRECTLY — decoupled from the full cancel
+                    # FSM so an FSM-disallowed transition can never leave the unit held.
+                    try:
+                        if tx.stripe_payment_intent_id:
+                            get_gateway().cancel_payment_intent(
+                                pi_id=tx.stripe_payment_intent_id,
+                                idempotency_key=idem_key("reclaim", tx))
+                    except Exception:  # noqa: BLE001 — PI void is best-effort
+                        pass
+                    _release_reservation(db, tx)
+                    # Move the tx to a terminal state via a valid path (RUNNING->CANCELLED is
+                    # illegal; bridge through JOB_FAILED) so it doesn't linger pre-capture.
+                    _cancel_reclaimed(db, tx, reason="reservation reclaimed (dead node / abandoned)")
+                    reclaimed += 1
+        except Exception:  # noqa: BLE001 — one bad row must never block the rest
+            logger.exception("reclaim_abandoned_reservations: failed for tx %s",
+                             getattr(tx, "public_id", "?"))
+            db.rollback()
+    return reclaimed
 
 
 def refund(db, tx: ComputeTransaction, *, amount: int = None, actor: str = "admin",

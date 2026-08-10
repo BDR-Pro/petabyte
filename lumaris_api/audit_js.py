@@ -33,7 +33,8 @@ c = TestClient(main.app)
 
 PAGES = ["/", "/marketplace", "/pricing", "/install", "/security", "/developers",
          "/account", "/login", "/keys", "/status", "/catalog", "/gamers", "/artists",
-         "/privacy", "/terms", "/acceptable-use", "/demo", "/contact", "/app"]   # HTML pages only; the rest are JSON APIs
+         "/privacy", "/terms", "/acceptable-use", "/demo", "/contact", "/app",
+         "/seller/payouts", "/buy/demo-spec"]   # HTML pages only; the rest are JSON APIs
 
 fail = 0
 checked = 0

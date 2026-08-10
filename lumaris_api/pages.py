@@ -433,6 +433,7 @@ document.addEventListener('keydown',function(e){
 });
 window._PBCMDS={};
 function pbGoGpu(id){ location.href='/gpu/'+id; }
+function pbBuy(id){ location.href='/buy/'+id; }
 function pbCloseModal(a1, el){ var m = el && el.closest ? el.closest('div') : null; while(m && m.parentNode !== document.body) m = m.parentNode; if(m) m.remove(); }
 
 // One delegated click handler for everything. No nested quotes in generated HTML,
@@ -2008,7 +2009,7 @@ async function loadGpu(){
      (s.savings_pct?'<div class="mini" style="color:var(--pos);margin-top:4px">'+s.savings_pct+'% below the on-demand cloud rate for this GPU class ($'+Number(s.cloud_reference).toFixed(2)+'/hr)</div>':'<div class="mini" style="margin-top:4px">No comparable public cloud rate for this GPU — we don\'t quote a saving we can\'t back up.</div>')+
      (s.auto_price?'<div class="mini" style="margin-top:6px"><span class="badge cc">auto-priced</span> moves with demand, within the host\\'s limits</div>':'')+
      '<div style="margin-top:16px">'+
-      (bookable?'<a class="btn btn-amber" style="width:100%;justify-content:center" href="/account">Launch on this GPU →</a>':'<button class="btn btn-ghost" style="width:100%;justify-content:center" disabled>Not bookable right now</button>')+
+      (bookable?'<button class="btn btn-amber" style="width:100%;justify-content:center" data-act="pbBuy" data-a1="'+SPEC_ID+'">Rent &amp; run on this GPU →</button>':'<button class="btn btn-ghost" style="width:100%;justify-content:center" disabled>Not bookable right now</button>')+
      '</div>'+
      '<div class="divider" style="margin:16px 0"></div>'+
      '<div class="lbl" style="margin-bottom:8px">If something goes wrong</div>'+
@@ -2233,6 +2234,13 @@ SELLER_EARNINGS_HTML = _page("Petabyte — seller earnings",
 
   <div id="setup" style="display:none">
     <div class="card" style="margin-top:16px">
+      <div class="lbl">Your GPUs</div>
+      <p class="mini" style="margin:6px 0 12px">A GPU earns once it is <b>online</b> and <b>verified</b> — then it is visible to buyers and can take paid jobs.</p>
+      <div id="nodes_box"><div class="mut mono" style="padding:8px 0">loading…</div></div>
+      <div id="nodes_blockers"></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
       <div class="lbl">Stripe payout account</div>
       <div id="stripe_state" class="mut mono" style="padding:10px 0">Checking…</div>
       <div id="stripe_why" class="mini" style="color:var(--warn);margin-bottom:10px"></div>
@@ -2289,7 +2297,272 @@ async function scLoad(){
 async function scConnect(){var r=await api('/payments/connect/account',{method:'POST',body:'{}'});if(r.ok)scOnboard();else alert('Could not create account');}
 async function scOnboard(){var r=await api('/payments/connect/onboarding-link',{method:'POST',body:'{}'});if(r.ok&&r.body.url)location.href=r.body.url;else alert('Could not start onboarding');}
 async function scRefresh(){await api('/payments/connect/refresh',{method:'POST',body:'{}'});scLoad();}
-scLoad();
+// Your GPUs: online/verified -> visible to buyers -> earning. Answers "my GPU is on,
+// why is nothing running?" with the actual blocker, not a zero.
+async function scNodes(){
+  var r=await api('/seller/dashboard');if(!r.ok)return;var b=r.body;var box=document.getElementById('nodes_box');
+  var ns=b.nodes||[];
+  if(!ns.length){box.innerHTML='<p class="mut" style="font-size:13px">No GPUs listed yet. <a class="teal" href="/install">List your hardware →</a></p>';}
+  else{
+    box.innerHTML=ns.map(function(n){
+      var visible=n.online&&n.attested;
+      function chip(ok,on,off){return '<span class="badge '+(ok?'ok':'')+'">'+(ok?on:off)+'</span>';}
+      return '<div class="panel" style="padding:12px;margin-bottom:10px">'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">'+
+          '<b class="mono">'+(n.gpu_model||'GPU')+'</b>'+
+          '<div style="display:flex;gap:6px;flex-wrap:wrap">'+
+            chip(n.online,'online','offline')+
+            chip(n.attested,'verified','unverified')+
+            chip(visible,'visible to buyers','hidden')+
+          '</div>'+
+        '</div>'+
+        '<div class="mini" style="margin-top:8px">$'+Number(n.price_per_hour).toFixed(2)+'/hr · '+
+          (n.utilization_pct||0)+'% utilized · '+n.jobs_completed+' jobs done'+
+          (n.success_rate!=null?(' · '+n.success_rate+'% success'):'')+' · earned $'+Number(n.earned_total||0).toFixed(2)+'</div>'+
+      '</div>';}).join('');
+  }
+  var bl=b.blockers||[];var wb=document.getElementById('nodes_blockers');
+  wb.innerHTML=bl.length?('<div class="lbl" style="margin-top:6px">To start earning</div>'+bl.map(function(x){
+    return '<p class="mini" style="color:var(--warn);margin-top:6px">• '+(x.issue||'')+' <span class="mut">'+(x.fix||'')+'</span></p>';}).join('')):'';
+}
+scLoad();scNodes();
+</script>""")
+
+
+DEFAULT_WORKLOAD = ("import torch\\n"
+ "print('cuda available:', torch.cuda.is_available())\\n"
+ "if torch.cuda.is_available():\\n"
+ "    print('gpu:', torch.cuda.get_device_name(0))\\n"
+ "    x = torch.randn(4096, 4096, device='cuda')\\n"
+ "    y = (x @ x).mean()\\n"
+ "    torch.cuda.synchronize()\\n"
+ "    print('matmul mean:', float(y))\\n"
+ "else:\\n"
+ "    print('no CUDA device visible')\\n")
+
+
+BUY_HTML = _page("Petabyte — rent & run on a GPU",
+    desc="Rent a verified GPU by the hour and run your workload from the browser. Pay by card; charged only for the GPU time you actually use.",
+    path="/buy", body="""
+<div class="wrap" style="padding:34px 24px 44px;max-width:960px">
+  <a class="mini" href="/marketplace" style="color:var(--mut)">← Back to marketplace</a>
+  <p class="mut" id="buy_signedout" style="display:none;margin-top:18px">Please <a class="teal" href="/login">sign in</a> to rent a GPU.</p>
+  <div id="buywrap" style="margin-top:14px"><div class="mut mono" style="padding:40px 0">Loading GPU…</div></div>
+</div>
+<script>
+var SPEC_ID=location.pathname.split('/').pop();
+var CFG={gateway:'fake',test_mode:true,publishable_key:''};
+var GPU=null,TX=null,SECRET=null,TASKID=null,QUOTE=null,POLL=null,STRIPE=null,CARDEL=null,PHASE='idle';
+var DEFAULT_CODE=\"""" + DEFAULT_WORKLOAD + """\";
+
+function el(id){return document.getElementById(id);}
+function m2(x){return '$'+(Number(x||0)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function row2(k,v){return '<div style="display:flex;justify-content:space-between;gap:16px;padding:8px 0;border-bottom:1px solid var(--hair)"><span class="mut" style="font-size:13px">'+k+'</span><span class="mono" style="font-size:13px;text-align:end">'+v+'</span></div>';}
+
+// Buyer-facing labels — the primary message NEVER exposes a raw state-machine name.
+var FRIENDLY={
+ 'DRAFT':'Starting…','PAYMENT_REQUIRES_ACTION':'Waiting for card confirmation…',
+ 'PAYMENT_AUTHORIZED':'Card authorized — reserving your GPU…',
+ 'GPU_RESERVED':'GPU reserved — sending your workload…',
+ 'DISPATCHING':'Sending your workload to the GPU…',
+ 'RUNNING':'Running on the GPU…',
+ 'METERING_FINALIZED':'Measuring exactly what you used…',
+ 'PAYMENT_CAPTURE_PENDING':'Finalizing your charge…',
+ 'PAYMENT_CAPTURED':'Done — charged for actual usage.',
+ 'SELLER_TRANSFER_PENDING':'Done — charged for actual usage.',
+ 'SELLER_TRANSFERRED':'Done — charged for actual usage.','COMPLETED':'Done — charged for actual usage.'};
+var SETTLED={'PAYMENT_CAPTURED':1,'SELLER_TRANSFER_PENDING':1,'SELLER_TRANSFERRED':1,'COMPLETED':1};
+var FAILED={'PAYMENT_FAILED':1,'AUTHORIZATION_EXPIRED':1,'RESERVATION_FAILED':1,'DISPATCH_FAILED':1,
+ 'JOB_FAILED':1,'CAPTURE_FAILED':1,'TRANSFER_FAILED':1,'CANCELLED':1,'REFUNDED':1,
+ 'REFUND_PENDING':1,'DISPUTED':1};
+var STEPS=[['pay','Card authorized'],['reserve','GPU reserved'],['run','Workload ran on the GPU'],['charge','Charged for actual usage']];
+
+function setMsg(t){var m=el('buy_msg');if(m)m.textContent=t;}
+function renderSteps(done){done=done||{};var s=el('buy_steps');if(!s)return;
+ s.innerHTML=STEPS.map(function(p){var ok=done[p[0]];
+  return '<div style="display:flex;gap:8px;align-items:center;padding:3px 0">'+
+   '<span style="color:'+(ok?'var(--teal)':'var(--mut)')+'">'+(ok?'✓':'○')+'</span>'+
+   '<span class="'+(ok?'':'mut')+'" style="font-size:13px">'+p[1]+'</span></div>';}).join('');}
+
+async function loadBuy(){
+ if(typeof authed==='function'&&!authed()){el('buy_signedout').style.display='';el('buywrap').style.display='none';return;}
+ var c=await api('/payments/config');if(c.ok)CFG=c.body;
+ var r=await fetch('/marketplace/specs/'+SPEC_ID);var w=el('buywrap');
+ if(!r.ok){w.innerHTML='<div class="empty"><div class="et">GPU not found</div><div class="es">It may have gone offline or been delisted.</div><a class="btn btn-teal" href="/marketplace">Browse available GPUs</a></div>';return;}
+ GPU=await r.json();renderShell(GPU);
+}
+
+function renderShell(s){
+ var bookable=s.online&&s.available_units>0&&s.can_accept_paid_jobs;
+ var mode=CFG.gateway==='fake'?'Sandbox mode — no card needed for this test run.':(CFG.test_mode?'Stripe TEST mode — use card 4242 4242 4242 4242, any future date, any CVC. No real money moves.':'Live payment.');
+ el('buywrap').innerHTML=
+  '<h1 style="font-size:clamp(24px,3.4vw,34px);margin:6px 0 4px">Rent '+(s.gpu_count>1?s.gpu_count+'× ':'')+esc(s.gpu_model)+'</h1>'+
+  '<p class="mut" style="margin-bottom:18px;max-width:60ch">Pay by card. You are authorized up to a maximum and charged only for the GPU time you actually use — the rest of the hold is released automatically.</p>'+
+  '<div class="cols" style="gap:18px;align-items:flex-start">'+
+   '<div style="flex:1.25 1 360px;min-width:300px">'+
+    '<div class="card">'+
+     '<div class="lbl">This GPU</div>'+
+     row2('Model',(s.gpu_count>1?s.gpu_count+'× ':'')+esc(s.gpu_model))+
+     row2('VRAM',s.vram_gb?s.vram_gb+' GB':'—')+
+     row2('Price','$'+Number(s.price_per_hour).toFixed(2)+' /hour')+
+     row2('Capacity',s.available_units+' of '+s.total_units+' free')+
+     (bookable?'':'<p class="mini" style="color:var(--warn);margin-top:8px">This GPU is not bookable right now (offline, full, or the host is not payout-ready).</p>')+
+    '</div>'+
+    '<div class="card" style="margin-top:16px">'+
+     '<div class="lbl">Your workload</div>'+
+     '<label class="mini" style="display:block;margin-top:10px">Max runtime (hours)</label>'+
+     '<input id="buy_hours" type="number" min="1" max="24" value="1" style="width:120px;padding:9px;margin-top:4px"/>'+
+     '<label class="mini" style="display:block;margin-top:12px">Code to run on the GPU</label>'+
+     '<textarea id="buy_code" rows="9" class="mono" style="width:100%;margin-top:4px;padding:10px;font-size:12.5px">'+esc(DEFAULT_CODE)+'</textarea>'+
+     '<div id="card-row" style="display:none;margin-top:14px">'+
+       '<label class="mini" style="display:block">Card details</label>'+
+       '<div id="card-element" style="padding:12px;border:1px solid var(--line);border-radius:8px;margin-top:4px"></div>'+
+       '<div id="card-errors" class="mini" style="color:var(--warn);margin-top:6px"></div>'+
+     '</div>'+
+     '<button class="btn btn-amber" id="buy_pay" data-act="buyRun" style="width:100%;margin-top:16px"'+(bookable?'':' disabled')+'>Rent &amp; run →</button>'+
+     '<button class="btn btn-ghost" id="buy_cancel" data-act="buyCancel" style="width:100%;margin-top:8px;display:none">Cancel &amp; release</button>'+
+     '<p class="mini" id="buy_note" style="margin-top:10px">'+mode+'</p>'+
+    '</div>'+
+   '</div>'+
+   '<div style="flex:1 1 320px;min-width:280px">'+
+    '<div class="card" id="buy_progress" style="display:none">'+
+     '<div class="lbl">Progress</div>'+
+     '<div id="buy_msg" style="font-family:var(--disp);font-size:16px;margin:10px 0">Starting…</div>'+
+     '<div id="buy_steps" class="mini"></div>'+
+    '</div>'+
+    '<div class="card" id="buy_result" style="display:none;margin-top:16px">'+
+     '<div class="lbl">Result &amp; receipt</div>'+
+     '<div id="buy_result_body" style="margin-top:8px"></div>'+
+    '</div>'+
+    '<div class="card" id="buy_error" style="display:none;margin-top:16px">'+
+     '<div class="lbl" style="color:var(--warn)">Heads up</div>'+
+     '<div id="buy_error_body" class="mut" style="font-size:13px;margin-top:6px"></div>'+
+    '</div>'+
+   '</div>'+
+  '</div>';
+}
+
+function showError(msg){el('buy_error').style.display='';el('buy_error_body').textContent=msg;}
+function fail(msg){var b=el('buy_pay');if(b){b.disabled=false;b.style.display='';}showError(msg);setMsg('Stopped.');PHASE='idle';return null;}
+
+async function buyRun(){
+ if(PHASE==='awaiting_card')return realConfirm();
+ if(PHASE!=='idle')return;
+ PHASE='pricing';
+ el('buy_error').style.display='none';el('buy_pay').disabled=true;
+ el('buy_progress').style.display='';setMsg('Getting a price…');renderSteps({});
+ var hours=Math.max(1,Math.min(24,parseInt((el('buy_hours').value||'1'),10)||1));
+ var secs=hours*3600;
+ var q=await api('/payments/quote',{method:'POST',body:JSON.stringify({spec_id:SPEC_ID,estimated_seconds:secs})});
+ if(!q.ok)return fail(q.status===409?'This GPU can’t take paid jobs right now.':'Could not price this job.');
+ QUOTE=q.body;
+ if(!QUOTE.seller_payout_ready)return fail('This host isn’t set up to receive payouts yet, so it can’t take paid jobs.');
+ setMsg('Authorizing your card for up to '+m2(QUOTE.authorization_amount)+'…');
+ var a=await api('/payments/authorize',{method:'POST',body:JSON.stringify({spec_id:SPEC_ID,estimated_seconds:secs})});
+ if(!a.ok||!a.body.transaction_id)return fail(a.status===409?'This GPU can’t take paid jobs right now.':'Could not start the payment.');
+ TX=a.body.transaction_id;SECRET=a.body.client_secret;
+ el('buy_cancel').style.display='';
+ if(CFG.gateway==='real'){
+   PHASE='awaiting_card';
+   var okc=await mountCard();
+   if(!okc)return;
+   setMsg('Enter your test card above, then press Pay.');
+   var b=el('buy_pay');b.disabled=false;b.textContent='Pay '+m2(QUOTE.authorization_amount)+' & run';
+   return;
+ }
+ PHASE='running';
+ var sc=await api('/payments/'+TX+'/simulate-card',{method:'POST'});
+ if(!sc.ok)return fail('Card confirmation failed.');
+ await afterCard();
+}
+
+async function mountCard(){
+ el('card-row').style.display='';
+ await new Promise(function(res){if(window.Stripe)return res();var sc=document.createElement('script');sc.src='https://js.stripe.com/v3/';sc.onload=res;sc.onerror=res;document.head.appendChild(sc);});
+ if(!window.Stripe||!CFG.publishable_key){fail('Card entry is unavailable (Stripe.js did not load).');return false;}
+ STRIPE=Stripe(CFG.publishable_key);var elements=STRIPE.elements();
+ CARDEL=elements.create('card');CARDEL.mount('#card-element');
+ CARDEL.on('change',function(ev){el('card-errors').textContent=(ev.error&&ev.error.message)||'';});
+ return true;
+}
+
+async function realConfirm(){
+ var b=el('buy_pay');b.disabled=true;setMsg('Confirming your card with Stripe…');
+ var res=await STRIPE.confirmCardPayment(SECRET,{payment_method:{card:CARDEL}});
+ if(res.error){el('card-errors').textContent=res.error.message||'Card was declined.';b.disabled=false;PHASE='awaiting_card';setMsg('Card was not accepted — try again.');return;}
+ PHASE='running';b.style.display='none';
+ await afterCard();
+}
+
+async function afterCard(){
+ renderSteps({pay:1});setMsg('Card authorized — reserving your GPU…');
+ var cf=await api('/payments/'+TX+'/confirm',{method:'POST'});
+ if(!cf.ok)return fail('We could not confirm the authorization.');
+ var rv=await api('/payments/'+TX+'/reserve',{method:'POST'});
+ if(!rv.ok)return fail(rv.status===409?'No capacity is free on this GPU right now.':'Could not reserve the GPU.');
+ renderSteps({pay:1,reserve:1});setMsg('Sending your workload to the GPU…');
+ var code=(el('buy_code').value)||\"print('hello gpu')\";
+ var dp=await api('/payments/'+TX+'/dispatch',{method:'POST',body:JSON.stringify({task_type:'notebook',code:code})});
+ if(!dp.ok)return fail('Could not start the job on the GPU.');
+ TASKID=dp.body.task_id||null;
+ el('buy_pay').style.display='none';
+ startPoll();
+}
+
+function startPoll(){
+ if(POLL)clearInterval(POLL);var t0=Date.now();
+ POLL=setInterval(async function(){
+  var pr=await api('/payments/'+TX);if(!pr.ok)return;var st=pr.body.status;
+  setMsg(FRIENDLY[st]||'Working…');
+  if(st==='GPU_RESERVED'||st==='DISPATCHING')renderSteps({pay:1,reserve:1});
+  if(st==='RUNNING'||st==='METERING_FINALIZED'||st==='PAYMENT_CAPTURE_PENDING')renderSteps({pay:1,reserve:1,run:1});
+  if(SETTLED[st]){clearInterval(POLL);renderSteps({pay:1,reserve:1,run:1,charge:1});return complete(pr.body);}
+  if(FAILED[st]){clearInterval(POLL);return failTerminal(st);}
+  if(Date.now()-t0>240000){clearInterval(POLL);setMsg('Still working — this is taking longer than usual. You can leave this page; the job keeps running.');}
+ },2000);
+}
+
+async function complete(tx){
+ el('buy_cancel').style.display='none';
+ setMsg('Done — you were charged '+m2(tx.captured_amount)+' for actual usage.');
+ var out='';
+ if(TASKID){var tk=await api('/tasks/'+TASKID);if(tk.ok&&tk.body.result)out=tk.body.result;}
+ var rc=await api('/payments/'+TX+'/receipt');var r=rc.ok?rc.body:{};
+ el('buy_result').style.display='';
+ el('buy_result_body').innerHTML=
+  '<div class="stat"><div class="n teal">'+m2(tx.captured_amount)+'</div><div class="l">Charged for actual usage</div></div>'+
+  '<p class="mini" style="margin-top:8px">Authorized up to '+m2(tx.authorization_amount)+' — the unused hold was released. You only pay for GPU time used.</p>'+
+  (out?('<div class="lbl" style="margin-top:14px">Workload output</div><pre style="white-space:pre-wrap;font-size:12px;max-height:280px;overflow:auto;background:var(--panel);padding:10px;border-radius:8px">'+esc(out)+'</pre>'):'<p class="mut" style="font-size:13px;margin-top:12px">The job finished. No text output was returned.</p>')+
+  '<div class="mini" style="margin-top:12px">Receipt '+esc(r.transaction_id||TX)+' · '+(r.is_completed_payment?'payment complete':'processing')+'</div>';
+}
+
+function failTerminal(st){
+ var b=el('buy_pay');if(b)b.style.display='none';
+ var MSG={
+  'JOB_FAILED':'The workload failed on the GPU. Release the reservation below — you’re only charged for actual usage.',
+  'CAPTURE_FAILED':'The job ran but finalizing the charge failed. Release the reservation below and contact support if your card was not charged correctly.',
+  'DISPATCH_FAILED':'We couldn’t start the job on the GPU. Release the reservation below; nothing was captured.',
+  'RESERVATION_FAILED':'The GPU’s capacity was taken before we could reserve it. Nothing was charged.',
+  'AUTHORIZATION_EXPIRED':'The card authorization expired before the job ran. Nothing was charged.',
+  'PAYMENT_FAILED':'The card was not authorized. Nothing was charged.',
+  'CANCELLED':'This rental was cancelled. Nothing was charged.',
+  'REFUNDED':'This rental was refunded.',
+  'REFUND_PENDING':'This rental is being refunded — the charge will be returned to your card.',
+  'DISPUTED':'This charge is under dispute. Our team will follow up; nothing more is needed here.'};
+ el('buy_cancel').style.display=(st==='JOB_FAILED'||st==='CAPTURE_FAILED'||st==='DISPATCH_FAILED')?'':'none';
+ showError(MSG[st]||'The rental ended early.');setMsg('Ended.');
+}
+
+async function buyCancel(){
+ if(!TX)return;var b=el('buy_cancel');b.disabled=true;setMsg('Releasing…');
+ var r=await api('/payments/'+TX+'/cancel',{method:'POST'});
+ if(r.ok){setMsg('Released. Nothing further will be charged.');b.style.display='none';}
+ else if(r.status===409){setMsg('The job is still running and can’t be cancelled right now.');b.disabled=false;}
+ else{setMsg('Couldn’t release it here — it will be reclaimed automatically shortly.');b.disabled=false;}
+}
+
+loadBuy();
 </script>""")
 
 

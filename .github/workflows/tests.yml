@@ -11,6 +11,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:      # manual trigger — required for the opt-in real Mailgun send job
 
 # Least privilege: the whole suite only needs to read the repo. No job pushes, comments,
 # or mutates GitHub state — checkouts below also drop the persisted token.
@@ -116,6 +117,26 @@ jobs:
         working-directory: lumaris_api
         run: python payout_test.py
 
+      - name: e2e safety — no silent fake gateway / connect-mode / payout-hold clock
+        working-directory: lumaris_api
+        run: python e2e_safety_test.py
+
+      - name: e2e flow — dispatch ONCE -> auto meter+capture -> held payout (idempotent)
+        working-directory: lumaris_api
+        run: python stripe_e2e_flow_test.py
+
+      - name: payout readiness — provider-agnostic seller eligibility (verified rail, not Connect)
+        working-directory: lumaris_api
+        run: python payout_readiness_test.py
+
+      - name: seller eligibility — live authoritative paid-job gate (payout+rep+fraud+mode)
+        working-directory: lumaris_api
+        run: python seller_eligibility_test.py
+
+      - name: reservation reclaim — abandoned/failed reservations never leak GPU capacity
+        working-directory: lumaris_api
+        run: python reservation_reclaim_test.py
+
       - name: matmul result validation (offline)
         working-directory: lumaris_api
         run: python matmul_validation_test.py
@@ -142,6 +163,14 @@ jobs:
         # any financial drift.
         run: python ../scripts/audit_ledger.py
 
+      - name: ledger audit — sign-aware reconciliation (wrong-direction leg)
+        working-directory: lumaris_api
+        # Proves the audit rejects a mis-directed capture leg that still balances — a plain
+        # magnitude sum would have passed it. Offline (forces its own throwaway SQLite DB).
+        env:
+          DATABASE_URL: ""
+        run: python ../scripts/audit_ledger_test.py
+
   config:
     # GitHub-config source of truth: manifest freshness, the validator (defaults,
     # formats, test/live separation, fail-closed secrets), the deploy-env generator's
@@ -155,6 +184,12 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -r lumaris_api/requirements.txt
+      - name: repo-root import (canonical `uvicorn lumaris_api.main:app` works)
+        run: python scripts/repo_root_import_test.py
+      - name: agent dependency/import audit (all hard runtime imports are declared)
+        run: python lumaris_agent/deps_audit_test.py
+      - name: e2e runner safety (refuses live Stripe; masks + redacts secrets)
+        run: python scripts/e2e_marketplace_runner_test.py
       - name: config toolchain tests
         working-directory: lumaris_api
         run: python config_test.py
@@ -297,8 +332,11 @@ jobs:
 
   email-integration:
     # Sends a REAL transactional email via the Mailgun HTTP API to prove end-to-end
-    # delivery (DKIM/SPF, HTML + text). The script self-skips (exit 0) when the secret is
-    # absent (fork PRs, or before the secret is set), so it never blocks unrelated changes.
+    # delivery (DKIM/SPF, HTML + text). MANUAL-ONLY: it runs solely on workflow_dispatch, so it
+    # NEVER fires on a push to main or on a pull request — no email is sent per commit. Trigger
+    # it deliberately from the Actions tab ("tests" -> Run workflow) when you want to verify
+    # delivery. The script also self-skips (exit 0) when MAILGUN_API_KEY is absent.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -325,6 +363,30 @@ jobs:
       - run: pip install -r lumaris_api/requirements.txt
       - name: local buyer→seller→settlement E2E (offline full flow)
         run: python scripts/e2e/local_e2e.py
+
+  browser-e2e:
+    # Drives the ENTIRE marketplace lifecycle through the real browser UI (Chromium via
+    # Playwright) against uvicorn + SQLite + the offline fake Stripe gateway — the exact
+    # YC-demo buyer+seller journey, without curling any internal /payments endpoint.
+    # Hermetic: no secrets, no network, no GPU. It asserts the buyer's on-screen "you were
+    # charged" is backed by a REAL server-side capture and does NOT fake GPU work. The real
+    # self-hosted GPU hardware proof is a SEPARATE, independent job — see
+    # .github/workflows/load_test.yml (smoke-gpu / scripts/smoke_gpu.py).
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r lumaris_api/requirements.txt
+      - run: pip install playwright
+      - name: install Chromium for Playwright
+        run: python -m playwright install --with-deps chromium
+      - name: browser UI E2E (buyer + seller full journey)
+        run: python scripts/e2e/browser_e2e.py
 
   payout-coverage:
     # Honest seller-payout country coverage. The script EXITS NON-ZERO until we reach

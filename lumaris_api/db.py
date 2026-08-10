@@ -626,31 +626,44 @@ class NewsletterSubscriber(Base):
     unsubscribed_at = Column(DateTime, nullable=True)
 
 
-def record_newsletter_signup(db: Session, email: str, source: str = "homepage") -> bool:
-    """Idempotently record a newsletter signup (single opt-in). Returns True if a NEW
-    subscriber row was created, False if the address was already present (or a concurrent
-    insert won the race). Re-subscribes a previously-unsubscribed address. Never raises on a
-    duplicate — the unique constraint on `email` is the final idempotency guard."""
+def record_newsletter_signup(db: Session, email: str, source: str = "homepage") -> str:
+    """Idempotently record a newsletter signup (single opt-in). Returns a status:
+
+      'new'          a new subscriber row was created
+      'active'       already subscribed (idempotent no-op)
+      'reactivated'  a still-PENDING (never-confirmed) signup was confirmed to subscribed
+      'suppressed'   the address was previously UNSUBSCRIBED — its opt-out is PRESERVED and
+                     is NOT silently reactivated by an (unauthenticated) public request.
+                     Re-subscription must go through a confirmed / double-opt-in flow, so the
+                     caller MUST NOT re-add a suppressed address to the Mailgun list.
+
+    Never raises on a duplicate — the unique constraint on `email` is the final guard."""
     existing = (db.query(NewsletterSubscriber)
                 .filter(NewsletterSubscriber.email == email).first())
     if existing:
-        if existing.status != "subscribed":
-            existing.status = "subscribed"
-            existing.unsubscribed_at = None
-            if existing.confirmed_at is None:
-                existing.confirmed_at = _utcnow()
-            db.add(existing)
-            db.commit()
-        return False
+        if existing.status == "subscribed":
+            return "active"
+        if existing.status == "unsubscribed":
+            # Consent boundary: a recipient who opted out is not resubscribed by anyone who
+            # merely knows their address. Leave the row untouched (no Mailgun re-add).
+            return "suppressed"
+        # status == "pending": they signed up and never opted out -> confirm it.
+        existing.status = "subscribed"
+        existing.unsubscribed_at = None
+        if existing.confirmed_at is None:
+            existing.confirmed_at = _utcnow()
+        db.add(existing)
+        db.commit()
+        return "reactivated"
     sub = NewsletterSubscriber(email=email, status="subscribed", source=source,
                                confirmed_at=_utcnow())
     db.add(sub)
     try:
         db.commit()
-        return True
+        return "new"
     except IntegrityError:
         db.rollback()          # concurrent duplicate insert -> idempotent success
-        return False
+        return "active"
 
 
 def mark_newsletter_synced(db: Session, email: str, synced: bool = True) -> None:
@@ -673,6 +686,9 @@ def unsubscribe_newsletter(db: Session, email: str) -> bool:
         return False
     sub.status = "unsubscribed"
     sub.unsubscribed_at = _utcnow()
+    # The Mailgun list still has this member until removal completes; flag it so
+    # reconciliation can detect the pending removal (local state stays authoritative).
+    sub.mailgun_synced = False
     db.add(sub)
     db.commit()
     return True
@@ -994,6 +1010,11 @@ class ConnectedAccount(Base):
     requirements_past_due = Column(Text, nullable=True)         # JSON list
     disabled_reason = Column(String, nullable=True)
     last_synced_at = Column(DateTime, nullable=True)
+    # Which Stripe gateway minted this account: 'real' (Stripe API) or 'fake' (offline
+    # FakeStripeGateway). A fake account (acct_fake…) must NEVER be reused once the process
+    # switches to the real gateway, or the real Stripe Connect account is never created. Nullable
+    # for legacy rows; the account-id prefix ('acct_fake') is the fallback classifier.
+    gateway_mode = Column(String, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -1301,6 +1322,34 @@ def create_payout_obligation(db: Session, *, seller_id: int, compute_tx_id: int,
     return obl
 
 
+def payout_hold_elapsed(obligation, now=None) -> bool:
+    """CLOCK-INJECTABLE risk-hold check: True iff this obligation's hold window has elapsed.
+
+    This is the pure, testable core of the 14-day seller payout hold. Production calls it with
+    ``now=None`` (a trusted UTC clock); tests inject ``now=captured_at + timedelta(days=15)`` to
+    verify the exact boundary WITHOUT changing wall-clock time or exposing any clock override to
+    a runtime HTTP request. The hold is satisfied at or after ``available_at``
+    (== captured_at + PAYOUT_HOLD_DAYS), so day 13 is held and day 14 onward is eligible.
+
+    It checks ONLY the time-based hold. Batch state, sanctions, and admin review holds are
+    enforced separately (see payout_hold_active / payout_routing), so a True here does NOT by
+    itself release money — it is one necessary condition, never the whole gate."""
+    if obligation is None:
+        return False
+    if getattr(obligation, "state", None) in ("paid", "reversed", "cancelled"):
+        return False
+    now = now or _utcnow()
+    avail = getattr(obligation, "available_at", None)
+    if avail is None:
+        return True                      # no hold configured (PAYOUT_HOLD_DAYS=0)
+    # Normalize naive datetimes (SQLite round-trips lose tzinfo) to UTC before comparing.
+    if getattr(avail, "tzinfo", None) is None:
+        avail = avail.replace(tzinfo=timezone.utc)
+    if getattr(now, "tzinfo", None) is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now >= avail
+
+
 # A seller under one of these risk decisions has their payouts HELD: matured earnings
 # do not become batchable until an admin clears the review. (Separate from the sanctions
 # gate in payout_routing.compliance_ok.)
@@ -1436,6 +1485,7 @@ def _ensure_columns():
         "compute_transactions": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
         "payout_obligations": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
         "payout_batches": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
+        "connected_accounts": [("gateway_mode", "VARCHAR")],
     }
     try:
         insp = _inspect(engine)

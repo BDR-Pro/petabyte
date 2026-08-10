@@ -81,6 +81,20 @@ variables:
     scope:
     - platform
     description: ''
+  CONNECT_REFRESH_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: Absolute Stripe Connect onboarding refresh URL; falls back to PUBLIC_BASE_URL when unset.
+    format: url_or_empty
+  CONNECT_RETURN_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: Absolute Stripe Connect onboarding return URL; falls back to PUBLIC_BASE_URL when unset.
+    format: url_or_empty
   DEFAULT_LANDING_VIDEO_ID:
     required: false
     default: UUSWYaxboDA
@@ -653,6 +667,14 @@ variables:
     - 'true'
     - 'false'
     format: bool
+  PAYOUT_READINESS_MAX_AGE_S:
+    required: false
+    default: '2592000'
+    scope:
+    - platform
+    description: Max age (s) of provider-synced payout readiness before it fails closed at paid-job authorization
+      (default 30d).
+    format: int
   PAYOUT_STUB:
     required: false
     default: 'true'
@@ -676,6 +698,20 @@ variables:
     scope:
     - platform
     description: OTel resource attribute petabyte.host_role (e.g. api, worker).
+  PETABYTE_OFFLINE_TEST:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: 'Offline self-test toggle: ''1'' lets a served API run the fake gateway with STRIPE_GATEWAY
+      unset. Never set in production.'
+    allowed:
+    - ''
+    - '0'
+    - '1'
+    - 'true'
+    - 'false'
+    production_notes: Must be unset/0 in production.
   PETABYTE_SPEC_ID:
     required: true
     default: null
@@ -836,6 +872,14 @@ variables:
     scope:
     - platform
     description: ''
+  RESERVATION_RECLAIM_STUCK_S:
+    required: false
+    default: '93600'
+    scope:
+    - platform
+    description: How long (s) a compute-tx may sit stuck pre-capture before the reaper reclaims its reserved
+      GPU unit (default 26h).
+    format: int
   S3_BUCKET:
     required: false
     default: null
@@ -1125,8 +1169,12 @@ secrets:
     default: null
     scope:
     - deployment
-    description: Pinned SSH host key(s) for the deploy target (output of `ssh-keyscan -t ed25519,rsa <host>`).
-      Verifies the server before any secret is transferred; the deploy fails closed if unset.
+    description: "Pinned SSH host key(s) for the deploy target. Generate with `ssh-keyscan -t ed25519,rsa\
+      \ <host>`, then VERIFY the fingerprint out-of-band before pinning \u2014 compare `ssh-keygen -lf`\
+      \ of the scanned key against the fingerprint from the droplet's own console (e.g. `ssh-keygen -lf\
+      \ /etc/ssh/ssh_host_ed25519_key.pub` over the provider console). ssh-keyscan output is unauthenticated\
+      \ and can be MITM'd, so pinning it unverified only trusts-on-first-use. Verifies the server before\
+      \ any secret is transferred; the deploy fails closed if unset."
   DROPLET_USER:
     required: true
     default: null

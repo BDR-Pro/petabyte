@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (139)
+## Variables (non-sensitive) (144)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -23,6 +23,8 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `BIND` | no | platform | `127.0.0.1:8000` | `127.0.0.1:8000` | api/deploy/gunicorn_conf.py | — | gunicorn bind address; keep 127.0.0.1 behind nginx (never public). |
 | `CAL_BOOKING_URL` | no | platform | *(empty)* | `…` | api/main.py | — | — |
 | `CIRCLE_API` | no | platform | `https://api.circle.com/v1` | `https://api.circle.com/v1` | api/payout_providers.py | — | — |
+| `CONNECT_REFRESH_URL` | no | platform | *(empty)* | `https://…` | api/main.py | format: url_or_empty | Absolute Stripe Connect onboarding refresh URL; falls back to PUBLIC_BASE_URL when unset. |
+| `CONNECT_RETURN_URL` | no | platform | *(empty)* | `https://…` | api/main.py | format: url_or_empty | Absolute Stripe Connect onboarding return URL; falls back to PUBLIC_BASE_URL when unset. |
 | `DEFAULT_LANDING_VIDEO_ID` | no | platform | `UUSWYaxboDA` | `UUSWYaxboDA` | api/main.py | — | — |
 | `DEPLOY_CONFIG_FROM_GITHUB` | no | deployment | `false` | `false` | GitHub Actions deploy | — | Rollout gate. When 'true' the deploy generates the server env from GitHub config and pushes it; until then deploys stay code-only. Flip to true after entering all Secrets. |
 | `EMAIL_FROM` | no | platform | `no-reply@petabyte.market` | `no-reply@petabyte.market` | api/notify_providers.py | — | — |
@@ -92,9 +94,11 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `PAYOUT_COOLING_OFF_H` | no | platform | `24` | `24` | api/db.py, api/stripe_connect.py | format: int | — |
 | `PAYOUT_HOLD_DAYS` | no | platform | `14` | `14` | api/stripe_connect.py | format: int | Earnings risk-hold before biweekly payout. |
 | `PAYOUT_HOLD_ON_REPORT` | no | platform | `true` | `true` | api/main.py | format: bool; one of: true / false | — |
+| `PAYOUT_READINESS_MAX_AGE_S` | no | platform | `2592000` | `2592000` | api/payout_readiness.py | format: int | Max age (s) of provider-synced payout readiness before it fails closed at paid-job authorization (default 30d). |
 | `PAYOUT_STUB` | no | platform | `true` | `true` | api/main.py, api/payout_providers.py | format: bool; one of: true / false | Payout provider stub. |
 | `PETABYTE_API_URL` | **yes** | gpu | `https://petabyte.market` | `https://petabyte.market` | agent/attest_node.py, agent/provision.py, agent/task_fetcher.py, agent/ui.py, api/cli/petabyte.py, gateway/gateway.py | format: url | Public Petabyte API base URL the agent talks to. |
 | `PETABYTE_HOST_ROLE` | no | platform | *(empty)* | `…` | — | — | OTel resource attribute petabyte.host_role (e.g. api, worker). |
+| `PETABYTE_OFFLINE_TEST` | no | platform | *(empty)* | `` | api/main.py | one of:  / 0 / 1 / true / false | Must be unset/0 in production. |
 | `PETABYTE_SPEC_ID` | **yes** | gpu | *(empty)* | `60` | agent/task_fetcher.py, agent/ui.py | format: int | The spec id this node serves. |
 | `PETABYTE_UPDATE_INTERVAL_S` | no | gpu | `3600` | `3600` | GPU node agent | format: int | Agent self-update check interval (s). |
 | `PETABYTE_UPDATE_REPO` | no | gpu | *(empty)* | `…` | GPU node agent | — | Agent self-update source repo (optional). |
@@ -118,6 +122,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `REDIS_NAMESPACE` | no | platform | `petabyte` | `petabyte` | api/redis_client.py | — | Key namespace prefix for Redis (petabyte). |
 | `REFERRAL_MONTHLY_CAP` | no | platform | `25` | `25` | api/db.py | — | — |
 | `REFERRAL_REWARD_USD` | no | platform | `20` | `20` | api/db.py | — | — |
+| `RESERVATION_RECLAIM_STUCK_S` | no | platform | `93600` | `93600` | api/stripe_connect.py | format: int | How long (s) a compute-tx may sit stuck pre-capture before the reaper reclaims its reserved GPU unit (default 26h). |
 | `S3_BUCKET` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 | `S3_ENDPOINT` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 | `S3_REGION` | no | platform | `us-east-1` | `us-east-1` | api/utils.py | — | — |
@@ -164,7 +169,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `DATABASE_URL` | **yes** | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/alembic/env.py, api/db.py | format: url | SQLAlchemy database URL (Postgres in prod). |
 | `DEPLOY_SSH_KEY` | **yes** | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Private SSH key GitHub Actions uses to deploy to the server. |
 | `DROPLET_HOST` | **yes** | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Deploy target host (IP/DNS). |
-| `DROPLET_SSH_KNOWN_HOSTS` | **yes** | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Pinned SSH host key(s) for the deploy target (output of `ssh-keyscan -t ed25519,rsa <host>`). Verifies the server before any secret is transferred; the deploy fails closed if unset. |
+| `DROPLET_SSH_KNOWN_HOSTS` | **yes** | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Pinned SSH host key(s) for the deploy target. Generate with `ssh-keyscan -t ed25519,rsa <host>`, then VERIFY the fingerprint out-of-band before pinning — compare `ssh-keygen -lf` of the scanned key against the fingerprint from the droplet's own console (e.g. `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` over the provider console). ssh-keyscan output is unauthenticated and can be MITM'd, so pinning it unverified only trusts-on-first-use. Verifies the server before any secret is transferred; the deploy fails closed if unset. |
 | `DROPLET_USER` | **yes** | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Deploy SSH user. |
 | `GATEWAY_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, gateway/gateway.py | — | — |
 | `GOOGLE_CLIENT_ID` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |

@@ -21,6 +21,8 @@ BASE_DOMAIN=petabyte.market;
 BIND=127.0.0.1:8000;
 CAL_BOOKING_URL=;
 CIRCLE_API=https://api.circle.com/v1;
+CONNECT_REFRESH_URL=;
+CONNECT_RETURN_URL=;
 DEFAULT_LANDING_VIDEO_ID=UUSWYaxboDA;
 EMAIL_FROM=no-reply@petabyte.market;
 EMAIL_PROVIDER=mailgun;
@@ -73,8 +75,10 @@ PAYOUT_CAPABILITIES_PATH=;
 PAYOUT_COOLING_OFF_H=24;
 PAYOUT_HOLD_DAYS=14;
 PAYOUT_HOLD_ON_REPORT=true;
+PAYOUT_READINESS_MAX_AGE_S=2592000;
 PAYOUT_STUB=true;
 PETABYTE_HOST_ROLE=;
+PETABYTE_OFFLINE_TEST=;
 PLATFORM_AUTH_MARGIN_BPS=2000;
 PLATFORM_COMMISSION_BPS=;
 PLATFORM_CURRENCY=usd;
@@ -93,6 +97,7 @@ REDIS_ENABLED=false;
 REDIS_NAMESPACE=petabyte;
 REFERRAL_MONTHLY_CAP=25;
 REFERRAL_REWARD_USD=20;
+RESERVATION_RECLAIM_STUCK_S=93600;
 S3_BUCKET=;
 S3_ENDPOINT=;
 S3_REGION=us-east-1;
@@ -174,7 +179,7 @@ Create each under **Secrets**. Required ones (🔴) must exist before the first 
 
 - **`DEPLOY_SSH_KEY`** — 🔴 required. The PRIVATE SSH key authorized on the server (e.g. id_ed25519). Never commit it.
 - **`DROPLET_HOST`** — 🔴 required. The API server's public IP or DNS name.
-- **`DROPLET_SSH_KNOWN_HOSTS`** — 🔴 required. Pinned SSH host key(s) for the deploy target (output of `ssh-keyscan -t ed25519,rsa <host>`). Verifies the server before any secret is transferred; the deploy fails closed if unset.
+- **`DROPLET_SSH_KNOWN_HOSTS`** — 🔴 required. Pinned SSH host key(s) for the deploy target. Generate with `ssh-keyscan -t ed25519,rsa <host>`, then VERIFY the fingerprint out-of-band before pinning — compare `ssh-keygen -lf` of the scanned key against the fingerprint from the droplet's own console (e.g. `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` over the provider console). ssh-keyscan output is unauthenticated and can be MITM'd, so pinning it unverified only trusts-on-first-use. Verifies the server before any secret is transferred; the deploy fails closed if unset.
 - **`DROPLET_USER`** — 🔴 required. The deploy SSH user on the server (e.g. root or a deploy user).
 
 ## 4. GPU node (seller agent) — configured on the node, not the platform

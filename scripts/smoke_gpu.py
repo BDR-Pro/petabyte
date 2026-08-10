@@ -45,7 +45,19 @@ CFG = {
 
 
 def _run(cmd, timeout=30):
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    """Run a command, but NEVER raise on timeout/missing-binary. A cold multi-GB image pull
+    can exceed the timeout; letting subprocess.TimeoutExpired propagate would abort the smoke
+    run before any report is written. Surface it instead as a non-zero result the callers
+    already handle, so a report is always produced."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        out = e.output.decode() if isinstance(e.output, bytes) else (e.output or "")
+        err = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
+        return subprocess.CompletedProcess(
+            cmd, 124, out, (err + f"\n[command timed out after {timeout}s]").strip())
+    except (FileNotFoundError, OSError) as e:
+        return subprocess.CompletedProcess(cmd, 127, "", str(e))
 
 
 def _have(bin_):
@@ -67,11 +79,14 @@ def host_gpu():
 
 
 def container_sees_gpu():
-    """Verify the GPU is visible INSIDE the Petabyte workload runtime (not host-only)."""
+    """Verify the GPU is visible INSIDE the Petabyte workload runtime (not host-only).
+    Returns (ok, detail); detail surfaces a pull timeout / toolkit error for the report."""
     r = _run(["docker", "run", "--rm", "--gpus", "all",
               "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
               CFG["image"], "nvidia-smi", "-L"], timeout=CFG["timeout_s"])
-    return r.returncode == 0 and "GPU" in (r.stdout or "")
+    ok = r.returncode == 0 and "GPU" in (r.stdout or "")
+    detail = "" if ok else (r.stderr or r.stdout or "")[-300:]
+    return ok, detail
 
 
 _WORKLOAD = (
@@ -157,7 +172,16 @@ def _write(report):
 def main():
     report = {"tool": "smoke_gpu", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
               "min_util_threshold": CFG["min_util"], "image": CFG["image"]}
+    try:
+        return _execute(report)
+    except Exception as e:  # noqa: BLE001 — never exit without a report on disk
+        report.update({"status": "FAIL", "reason": f"unexpected error: {type(e).__name__}: {e}"})
+        _write(report)
+        print(f"FAIL: unexpected error: {type(e).__name__}: {e}")
+        return 1
 
+
+def _execute(report):
     gpus = host_gpu()
     docker_ok = _have("docker")
     # ---- honest skip when hardware/runtime is absent ----
@@ -180,11 +204,15 @@ def main():
     print(f"host GPUs: {gpus}")
 
     # ---- GPU must be visible INSIDE the Petabyte workload runtime (no host-only) ----
-    if not container_sees_gpu():
+    sees, sees_detail = container_sees_gpu()
+    if not sees:
         report.update({"status": "FAIL", "reason": "GPU not visible inside the container "
-                       "runtime (nvidia container toolkit missing / --gpus not honored)"})
+                       "runtime (nvidia container toolkit missing / --gpus not honored / "
+                       "image pull timed out)", "detail": sees_detail})
         _write(report)
         print("FAIL: GPU not visible inside the container runtime (no host fallback).")
+        if sees_detail:
+            print(f"  detail: {sees_detail}")
         return 1
     print("GPU visible inside the container runtime (--gpus all).")
 

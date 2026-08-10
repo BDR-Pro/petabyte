@@ -49,17 +49,35 @@ def _load(name):
         return {}
 
 
+def _clear(name):
+    """Remove a stale report so a run can only ever read the report IT produced. Without this,
+    a crashed sub-run would leave last run's report on disk and we'd read a false PASS."""
+    try:
+        os.remove(os.path.join(ARTIFACTS, name))
+    except OSError:
+        pass
+
+
 def main():
+    # Never trust a report from a previous run: delete both before we start, so a sub-run that
+    # crashes without writing leaves NO report and is scored as a failure, not a stale pass.
+    os.makedirs(ARTIFACTS, exist_ok=True)
+    _clear("SMOKE_LOAD_REPORT.json")
+    _clear("SMOKE_GPU_REPORT.json")
+
     load_rc = _run("smoke_load.py")
-    _run("smoke_gpu.py")
+    gpu_rc = _run("smoke_gpu.py")
     load = _load("SMOKE_LOAD_REPORT.json")
     gpu = _load("SMOKE_GPU_REPORT.json")
 
     gpu_status = gpu.get("status", "UNKNOWN")
     gpu_required = os.getenv("SMOKE_GPU_REQUIRED", "0") == "1"
-    load_pass = load.get("final") == "PASS" and load_rc == 0
-    gpu_ok = (gpu_status == "PASS") or (gpu_status == "EXTERNAL_GPU_TEST_REQUIRED"
-                                        and not gpu_required)
+    # A report is only trusted if the sub-run actually produced one THIS run (dict non-empty)
+    # AND its exit code agrees. A missing report (crash) or non-zero exit is never a pass.
+    load_pass = bool(load) and load.get("final") == "PASS" and load_rc == 0
+    gpu_ok = (bool(gpu) and gpu_status == "PASS" and gpu_rc == 0) or \
+             (bool(gpu) and gpu_status == "EXTERNAL_GPU_TEST_REQUIRED"
+              and gpu_rc == 0 and not gpu_required)
     final = "PASS" if (load_pass and gpu_ok) else "FAIL"
 
     report = {
@@ -71,8 +89,9 @@ def main():
                  "buyer": load.get("buyer"), "seller": load.get("seller"),
                  "invariants": load.get("invariants"), "caveats": load.get("caveats")},
         "gpu": gpu,
-        "gpu_hardware_executed": gpu_status == "PASS",
+        "gpu_hardware_executed": gpu_status == "PASS" and gpu_rc == 0,
         "external_gpu_test_required": gpu_status == "EXTERNAL_GPU_TEST_REQUIRED",
+        "exit_codes": {"smoke_load": load_rc, "smoke_gpu": gpu_rc},
         "final": final,
     }
     os.makedirs(ARTIFACTS, exist_ok=True)

@@ -40,9 +40,11 @@ ok("non-positive max charge is rejected", _raises(lambda: PricingConfig(max_char
 ok("a negative take rate is refused at config time (no negative-fee path)",
    _raises(lambda: PricingConfig(commission_bps=-500)))
 
-# NaN / inf / non-numeric PLATFORM_TAKE_RATE is rejected, not crashed-through or accepted.
+# NaN / inf / non-numeric / out-of-range PLATFORM_TAKE_RATE is rejected as a PricingError,
+# never crashed-through (a finite-but-huge 1e308 would overflow the bps conversion) or
+# silently accepted (1.1 would mean a 110% commission).
 os.environ.pop("PLATFORM_COMMISSION_BPS", None)
-for bad in ("nan", "inf", "-inf", "abc"):
+for bad in ("nan", "inf", "-inf", "abc", "1e308", "1.1", "-0.5"):
     os.environ["PLATFORM_TAKE_RATE"] = bad
     ok(f"PLATFORM_TAKE_RATE={bad!r} is rejected", _raises(lambda: PricingConfig()))
 os.environ.pop("PLATFORM_TAKE_RATE", None)
