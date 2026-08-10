@@ -3029,9 +3029,12 @@ def admin_sentry_test(request: Request, me=Depends(require_admin), db: Session =
     if not obsmod.health()["sentry"]["active"]:
         raise HTTPException(status_code=409,
                             detail="Sentry is not active (no SENTRY_DSN configured)")
+    # Do NOT tag the event with the admin's identity — that would ship a user identifier to an
+    # external service (Sentry runs send_default_pii=False for exactly this reason). Who triggered
+    # the selftest is recorded locally in the audit log below instead.
     event_id = obsmod.capture_message(
         "Petabyte Sentry selftest (admin-triggered)", level="error",
-        selftest="true", triggered_by=me.username)
+        selftest="true")
     audit(db, "observability.sentry_test", actor=me, resource_type="observability",
           resource_id=str(event_id or "none"), ip=_client_ip(request))
     return {"sent": bool(event_id), "event_id": event_id,
