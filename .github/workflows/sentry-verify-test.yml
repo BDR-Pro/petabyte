@@ -1,11 +1,12 @@
 name: Verify Sentry (TEST)
 
 # Deliberately send ONE test event to the TEST Sentry project and confirm the whole path works:
-#   GitHub Environment TEST -> vars.SENTRY_DSN -> job env -> observability.init_observability
+#   ENV_VARS bundle (SENTRY_DSN=...) -> resolved+masked -> job env -> init_observability
 #   -> sentry_sdk.init -> capture_message -> flush.
 #
-# Manual only (workflow_dispatch). The DSN comes from the TEST Environment Variable and is
-# masked; it is never echoed, summarised, or written to an artifact.
+# Manual only (workflow_dispatch). Binds environment: TEST. The DSN is a non-secret key inside
+# the ENV_VARS Repository Variable; it is resolved, masked (::add-mask::), and never echoed,
+# summarised, or written to an artifact.
 
 on:
   workflow_dispatch:
@@ -15,12 +16,11 @@ permissions:
 
 jobs:
   verify-sentry-test:
-    # Binds to the GitHub Environment named TEST, where SENTRY_DSN is stored as an
-    # Environment Variable (referenced as vars.SENTRY_DSN, NOT secrets.SENTRY_DSN).
+    # Binds to the GitHub Environment named TEST. SENTRY_DSN is a non-secret key inside the
+    # ENV_VARS Repository Variable bundle (resolved in the step below), not an individual var/secret.
     environment: TEST
     runs-on: ubuntu-latest
     env:
-      SENTRY_DSN: ${{ vars.SENTRY_DSN }}
       SENTRY_ENVIRONMENT: test
       SENTRY_RELEASE: ${{ github.sha }}
       SENTRY_ENABLED: "true"
@@ -29,12 +29,26 @@ jobs:
         with:
           persist-credentials: false
 
-      # Defence in depth: register the DSN value as a masked string so it can never appear in
-      # any later log line, even accidentally. Reads it from env — never interpolated into the
-      # script body — so the value itself is not written into the workflow command.
-      - name: Mask the Sentry DSN in all logs
+      # SENTRY_DSN is a NON-secret key inside the ENV_VARS bundle. Resolve it, register it as a
+      # masked value (so it can never appear in a later log line), and export it to the env for
+      # the following steps. The value is never echoed.
+      - name: Resolve + mask SENTRY_DSN from ENV_VARS
+        env:
+          ENV_VARS: ${{ vars.ENV_VARS }}
         run: |
-          if [ -n "${SENTRY_DSN:-}" ]; then echo "::add-mask::$SENTRY_DSN"; fi
+          python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, "scripts")
+          import env_vars as ev
+          vals, _ = ev.parse_bundle(os.environ.get("ENV_VARS", "") or "")
+          dsn = vals.get("SENTRY_DSN", "")
+          if dsn:
+              print(f"::add-mask::{dsn}")          # GitHub masks the value even in this command
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write(f"SENTRY_DSN={dsn}\n")
+          else:
+              sys.stderr.write("::warning::SENTRY_DSN not found in ENV_VARS — the send step will fail.\n")
+          PY
 
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }

@@ -90,22 +90,29 @@ platform DSN.
 
 ## TEST configuration (test.petabyte.market)
 
-`SENTRY_DSN` is a GitHub **Environment Variable** in the `TEST` environment, referenced as
-`${{ vars.SENTRY_DSN }}` (not `secrets.`). The TEST verification workflow binds to it:
+`SENTRY_DSN` is a **non-secret key inside the `ENV_VARS` bundle** (Repository Variable) — the same
+place all non-secret config lives — not an individual `vars.SENTRY_DSN` and not a Secret. Because
+`SENTRY_DSN` is a platform-scoped manifest variable, the normal platform deploy
+(`generate_deploy_env.py --target platform`) already writes it into the server env file, so the
+running service picks it up automatically. Set `SENTRY_ENVIRONMENT=test` (and, if you want, a fixed
+`SENTRY_RELEASE`) alongside it in `ENV_VARS` for the TEST server.
+
+The TEST verification workflow (`sentry-verify-test.yml`) binds to `environment: TEST`, resolves
+`SENTRY_DSN` out of `${{ vars.ENV_VARS }}`, masks it, then sends one event:
 
 ```yaml
 jobs:
   verify-sentry-test:
     environment: TEST
     env:
-      SENTRY_DSN: ${{ vars.SENTRY_DSN }}
       SENTRY_ENVIRONMENT: test
       SENTRY_RELEASE: ${{ github.sha }}
+    steps:
+      - name: Resolve + mask SENTRY_DSN from ENV_VARS   # parses vars.ENV_VARS, ::add-mask::, GITHUB_ENV
+        ...
 ```
 
-For the running test.petabyte.market service, set the same three variables in its env file (via the
-normal deploy config). Production is configured independently — do not point production at the TEST
-DSN.
+Production is configured independently — do not point production at the TEST DSN.
 
 ## How to verify (send ONE test event)
 

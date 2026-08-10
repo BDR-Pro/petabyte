@@ -68,14 +68,31 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     env:
-      OBS_HOST: ${{ secrets.DROPLET_HOST_OBSERV }}
-      OBS_USER: ${{ secrets.DROPLET_USER }}
+      # DROPLET_HOST_OBSERV + DROPLET_USER are NON-secret config; they live in the ENV_VARS
+      # bundle (Repository Variable), resolved below. Only DEPLOY_SSH_KEY stays a Secret.
       REMOTE_DIR: /opt/petabyte-observability
       SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Resolve host + user from ENV_VARS
+        env:
+          ENV_VARS: ${{ vars.ENV_VARS }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import os, sys
+          sys.path.insert(0, "scripts")
+          import env_vars as ev
+          vals, _ = ev.parse_bundle(os.environ.get("ENV_VARS", "") or "")
+          host, user = vals.get("DROPLET_HOST_OBSERV", ""), vals.get("DROPLET_USER", "")
+          if not host or not user:
+              sys.stderr.write("::error::DROPLET_HOST_OBSERV and DROPLET_USER must be in ENV_VARS\n")
+              sys.exit(1)
+          print(f"OBS_HOST={host}")
+          print(f"OBS_USER={user}")
+          PY
 
       - name: Set up SSH key + host pin
         env:
@@ -84,7 +101,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${OBS_HOST:-}" ] || [ -z "${OBS_USER:-}" ]; then
-            echo "::error::DROPLET_HOST_OBSERV and DROPLET_USER secrets must be set." >&2
+            echo "::error::DROPLET_HOST_OBSERV and DROPLET_USER must be set in the ENV_VARS bundle." >&2
             exit 1
           fi
           mkdir -p ~/.ssh && chmod 700 ~/.ssh

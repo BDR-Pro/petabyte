@@ -112,10 +112,11 @@ AGENT_VARS = {
     # deployment (GitHub Actions -> server) — all SECRETS
     "DEPLOY_SSH_KEY": {"required": True, "default": None, "secret": True, "scope": ["deployment"],
                        "description": "Private SSH key GitHub Actions uses to deploy to the server."},
-    "DROPLET_HOST": {"required": True, "default": None, "secret": True, "scope": ["deployment"],
-                     "description": "Deploy target host (IP/DNS)."},
-    "DROPLET_USER": {"required": True, "default": None, "secret": True, "scope": ["deployment"],
-                     "description": "Deploy SSH user."},
+    "DROPLET_HOST": {"required": True, "default": None, "secret": False, "scope": ["deployment"],
+                     "description": "Platform deploy target host (IP/DNS). Non-secret: lives in ENV_VARS."},
+    "DROPLET_USER": {"required": True, "default": None, "secret": False, "scope": ["deployment"],
+                     "description": "Deploy SSH user (shared by platform + observability deploys). "
+                                    "Non-secret: lives in ENV_VARS."},
     "DROPLET_SSH_KNOWN_HOSTS": {"required": True, "default": None, "secret": True,
                                 "scope": ["deployment"],
                                 "description": "Pinned SSH host key(s) for the deploy target. "
@@ -131,10 +132,10 @@ AGENT_VARS = {
                                                "trusts-on-first-use. Verifies the server before "
                                                "any secret is transferred; the deploy fails "
                                                "closed if unset."},
-    "DROPLET_HOST_OBSERV": {"required": False, "default": None, "secret": True,
+    "DROPLET_HOST_OBSERV": {"required": False, "default": None, "secret": False,
                             "scope": ["deployment"],
-                            "description": "Observability VM host (IP/DNS) for the observability "
-                                           "deploy workflow (deploy-observability.yml)."},
+                            "description": "Observability VM host (IP/DNS) for deploy-observability.yml. "
+                                           "Non-secret: lives in ENV_VARS."},
     "DROPLET_SSH_KNOWN_HOSTS_OBSERV": {"required": False, "default": None, "secret": True,
                                        "scope": ["deployment"],
                                        "description": "Optional pinned SSH host key(s) for the "

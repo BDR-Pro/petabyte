@@ -65,8 +65,8 @@ jobs:
     env:
       # Rollout gate exposed once, via env (never interpolated into a run: script body).
       ROLLOUT_GATE: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB }}
-      DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
-      DROPLET_USER: ${{ secrets.DROPLET_USER }}
+      # DROPLET_HOST + DROPLET_USER are NON-secret config in the ENV_VARS bundle (resolved below).
+      # Only DEPLOY_SSH_KEY + DROPLET_SSH_KNOWN_HOSTS remain Secrets.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,6 +74,23 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install pyyaml
+
+      - name: Resolve deploy host + user from ENV_VARS
+        env:
+          ENV_VARS: ${{ vars.ENV_VARS }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import os, sys
+          sys.path.insert(0, "scripts")
+          import env_vars as ev
+          vals, _ = ev.parse_bundle(os.environ.get("ENV_VARS", "") or "")
+          host, user = vals.get("DROPLET_HOST", ""), vals.get("DROPLET_USER", "")
+          if not host or not user:
+              sys.stderr.write("::error::DROPLET_HOST and DROPLET_USER must be in ENV_VARS\n")
+              sys.exit(1)
+          print(f"DROPLET_HOST={host}")
+          print(f"DROPLET_USER={user}")
+          PY
 
       # Single SSH-key setup (deduplicated): write the deploy key once; later steps reuse
       # ~/.ssh/deploy_key. The final cleanup step removes it. The secret is never printed.
