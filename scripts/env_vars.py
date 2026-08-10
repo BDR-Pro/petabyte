@@ -122,10 +122,19 @@ def variable_names(manifest: dict) -> set:
 
 
 def is_secret_name(name: str, manifest: dict | None = None) -> bool:
-    """True if `name` is a secret per the manifest OR the defense-in-depth denylist."""
+    """True if `name` is a secret per the manifest OR the defense-in-depth denylist.
+
+    The manifest is AUTHORITATIVE: a key explicitly classified as a Variable is NOT a secret,
+    even if its name matches the denylist heuristic (e.g. SENTRY_DSN — a low-sensitivity,
+    write-only ingest key deliberately carried in ENV_VARS). Secrets are checked first, so a
+    name can never be downgraded out of the secret set. The denylist + `_bcm.is_secret`
+    heuristic only decide keys the manifest doesn't classify at all, so an unknown `*_DSN` /
+    `*_TOKEN` / `*_SECRET` key smuggled into ENV_VARS is still refused."""
     manifest = manifest or _load_manifest()
     if name in secret_names(manifest):
         return True
+    if name in variable_names(manifest):
+        return False
     if any(s in name for s in _DENY_SUBSTR):
         return True
     return _bcm.is_secret(name)

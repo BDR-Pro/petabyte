@@ -958,6 +958,14 @@ variables:
     - platform
     description: ''
     format: int
+  SENTRY_DSN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: "Sentry ingest DSN (activates Sentry when SENTRY_ENABLED=true). Low-sensitivity write-only\
+      \ ingest key \u2014 a non-secret Variable carried in ENV_VARS, not a GitHub Secret. Kept off GPU\
+      \ nodes by the deploy-env deny-list; masked in CI logs as defence in depth."
   SENTRY_ENABLED:
     required: false
     default: 'true'
@@ -1340,12 +1348,6 @@ secrets:
     - platform
     description: ''
   SENDGRID_API_KEY:
-    required: false
-    default: null
-    scope:
-    - platform
-    description: ''
-  SENTRY_DSN:
     required: false
     default: null
     scope:

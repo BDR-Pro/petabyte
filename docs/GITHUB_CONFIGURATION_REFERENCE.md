@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (148)
+## Variables (non-sensitive) (149)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -135,6 +135,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `SANDBOX_IMAGE` | no | gpu | `python:3.12-slim` | `python:3.12-slim` | agent/notebook.py | — | Container image for the notebook sandbox. |
 | `SELLER_AUDIT_SAMPLE_RATE` | no | platform | `0.25` | `0.25` | api/seller_audit.py | format: float | — |
 | `SELLER_FRAUD_PENALTY` | no | platform | `40` | `40` | api/seller_audit.py | format: int | — |
+| `SENTRY_DSN` | no | platform | *(empty)* | `…` | api/main.py, api/observability.py | — | Sentry ingest DSN (activates Sentry when SENTRY_ENABLED=true). Low-sensitivity write-only ingest key — a non-secret Variable carried in ENV_VARS, not a GitHub Secret. Kept off GPU nodes by the deploy-env deny-list; masked in CI logs as defence in depth. |
 | `SENTRY_ENABLED` | no | platform | `true` | `true` | api/main.py | format: bool; one of: true / false | Enable Sentry (needs SENTRY_DSN). |
 | `SENTRY_ENVIRONMENT` | no | observability | *(empty)* | `…` | — | — | Sentry environment label (defaults to ENVIRONMENT). |
 | `SENTRY_MAX_BREADCRUMBS` | no | platform | `30` | `30` | api/main.py | format: int | — |
@@ -161,7 +162,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `WG_INTERFACE` | no | platform | `wg0` | `wg0` | api/utils.py | — | — |
 | `WG_PUBLIC_KEY` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 
-## Secrets (credentials — never printed, no defaults) (45)
+## Secrets (credentials — never printed, no defaults) (44)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -198,7 +199,6 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `REDIS_URL` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/redis_client.py | — | — |
 | `SECRET_KEY` | **yes** | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/auth.py, api/main.py, api/stripe_demo.py | — | — |
 | `SENDGRID_API_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/notify_providers.py | — | — |
-| `SENTRY_DSN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, api/observability.py | — | — |
 | `SERVER_PRIVATE_KEY` | **yes** | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/audit_js.py, api/stripe_demo.py, api/utils.py | — | — |
 | `STRIPE_API_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/payout_providers.py | — | — |
 | `STRIPE_PUBLISHABLE_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, api/stripe_gateway.py, api/wallet_funding.py | — | — |

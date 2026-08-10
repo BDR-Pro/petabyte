@@ -27,8 +27,8 @@ SECRET_EXACT = {
     "TREMENDOUS_API_KEY", "TREMENDOUS_FUNDING_ID", "TREMENDOUS_PRODUCT_ID",
     "NICEHASH_API_KEY", "NICEHASH_API_SECRET", "NICEHASH_ORG_ID",
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "GATEWAY_TOKEN", "CAL_WEBHOOK_SECRET",
-    "SENTRY_DSN", "TEE_TRUSTED_ROOT", "PETABYTE_API_KEY", "PETABYTE_AGENT_KEY",
-    "DEPLOY_SSH_KEY", "DROPLET_HOST", "DROPLET_USER",
+    "TEE_TRUSTED_ROOT", "PETABYTE_API_KEY", "PETABYTE_AGENT_KEY",
+    "DEPLOY_SSH_KEY",
     # observability credentials
     "OTEL_EXPORTER_OTLP_HEADERS", "REDIS_URL", "PROMETHEUS_METRICS_TOKEN",
     "GRAFANA_SERVICE_ACCOUNT_TOKEN", "PROMETHEUS_REMOTE_WRITE_PASSWORD",
@@ -36,9 +36,12 @@ SECRET_EXACT = {
     "TEMPO_USERNAME", "TEMPO_PASSWORD",
 }
 # Public-looking values that are NOT secrets even though the name matches the heuristic.
+# SENTRY_DSN matches the `_DSN$` pattern but is a low-sensitivity, write-only ingest key
+# (safe to embed in clients) — carried as non-secret config in ENV_VARS, kept off GPU nodes
+# by the deploy-env deny-list.
 NON_SECRET_EXACT = {"WG_PUBLIC_KEY", "GOOGLE_REDIRECT_URI", "STRIPE_API_VERSION",
                     "PAYOUT_CAPABILITIES_PATH", "MAILGUN_DOMAIN", "GEOIP_DB",
-                    "EMAIL_TOKEN_TTL_MIN"}
+                    "EMAIL_TOKEN_TTL_MIN", "SENTRY_DSN"}
 
 
 def is_secret(name: str) -> bool:
@@ -292,6 +295,11 @@ OBSERVABILITY_EXTRA = {
                  "format": "url", "description": "Loki base URL."},
     "TEMPO_URL": {"default": None, "scope": ["observability"], "secret": False,
                   "format": "url", "description": "Tempo base URL."},
+    "SENTRY_DSN": {"default": None, "scope": ["platform"], "secret": False,
+                   "description": "Sentry ingest DSN (activates Sentry when SENTRY_ENABLED=true). "
+                                  "Low-sensitivity write-only ingest key — a non-secret Variable "
+                                  "carried in ENV_VARS, not a GitHub Secret. Kept off GPU nodes by "
+                                  "the deploy-env deny-list; masked in CI logs as defence in depth."},
     "SENTRY_RELEASE": {"default": None, "scope": ["observability"], "secret": False,
                        "description": "Sentry release tag (defaults to RELEASE / GITHUB_SHA)."},
     "SENTRY_ENVIRONMENT": {"default": None, "scope": ["observability"], "secret": False,
