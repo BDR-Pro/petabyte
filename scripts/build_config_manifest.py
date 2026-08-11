@@ -152,6 +152,20 @@ AGENT_VARS = {
                                                       "`ssh-keyscan -t ed25519,rsa <observ-host>` "
                                                       "and verify the fingerprint out-of-band "
                                                       "(provider console) before pinning."},
+    # desktop-agent release signing (GitHub Actions). See docs/RELEASE_SIGNING.md.
+    "RELEASE_SIGNING_KEY": {"required": False, "default": None, "secret": True,
+                            "scope": ["deployment"],
+                            "description": "Ed25519 PEM PRIVATE key that signs desktop-agent "
+                                           "releases (release-desktop.yml -> scripts/sign_release.py). "
+                                           "Offline key; generate via the release-keygen workflow. "
+                                           "Unset -> the exe publishes UNSIGNED and auto-update is "
+                                           "fail-closed."},
+    "PETABYTE_RELEASE_PUBKEY": {"required": False, "default": None, "secret": False,
+                                "scope": ["deployment"],
+                                "description": "Base64 Ed25519 PUBLIC release key — a repo VARIABLE "
+                                               "(not a secret). Pinned into the exe at build time so "
+                                               "the updater verifies signed auto-updates; pairs with "
+                                               "RELEASE_SIGNING_KEY."},
     # browser E2E (GitHub Actions -> test.petabyte.market). Optional: absent personas skip.
     "E2E_BASE_URL": {"required": False, "default": "https://test.petabyte.market",
                      "secret": False, "scope": ["ci"], "format": "url",

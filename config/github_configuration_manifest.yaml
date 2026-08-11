@@ -804,6 +804,13 @@ variables:
     - 'true'
     - 'false'
     production_notes: Must be unset/0 in production.
+  PETABYTE_RELEASE_PUBKEY:
+    required: false
+    default: null
+    scope:
+    - deployment
+    description: "Base64 Ed25519 PUBLIC release key \u2014 a repo VARIABLE (not a secret). Pinned into\
+      \ the exe at build time so the updater verifies signed auto-updates; pairs with RELEASE_SIGNING_KEY."
   PETABYTE_SPEC_ID:
     required: true
     default: null
@@ -1541,6 +1548,14 @@ secrets:
     scope:
     - platform
     description: ''
+  RELEASE_SIGNING_KEY:
+    required: false
+    default: null
+    scope:
+    - deployment
+    description: Ed25519 PEM PRIVATE key that signs desktop-agent releases (release-desktop.yml -> scripts/sign_release.py).
+      Offline key; generate via the release-keygen workflow. Unset -> the exe publishes UNSIGNED and auto-update
+      is fail-closed.
   SECRET_KEY:
     required: true
     default: null
