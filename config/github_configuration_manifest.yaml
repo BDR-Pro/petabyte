@@ -844,6 +844,12 @@ variables:
     - platform
     description: ''
     format: float
+  POSTHOG_HOST:
+    required: false
+    default: https://us.i.posthog.com
+    scope:
+    - platform
+    description: ''
   PRICE_PER_HOUR:
     required: false
     default: null
@@ -851,6 +857,12 @@ variables:
     - gpu
     description: Seller's offered price per GPU-hour (USD).
     format: float
+  PRODUCT_ANALYTICS_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
   PROMETHEUS_ENABLED:
     required: false
     default: 'true'
@@ -1421,6 +1433,12 @@ secrets:
     scope:
     - gpu
     description: Encrypted node API key (X-API-KEY) minted at /create_api_key.
+  POSTHOG_API_KEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   POSTMARK_TOKEN:
     required: false
     default: null

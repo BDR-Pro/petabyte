@@ -19,15 +19,22 @@ import os
 import re
 import sys
 
+import glob
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 pages = open(os.path.join(HERE, "pages.py")).read()
 main = open(os.path.join(HERE, "main.py")).read()
+# Domain routers extracted from main.py (staged monolith split): each `*_routes.py` defines an
+# APIRouter mounted via app.include_router. Scan them too so extracting a route never trips the
+# contract audit — the endpoint still exists, just in a router module.
+router_src = "\n".join(open(f).read() for f in sorted(glob.glob(os.path.join(HERE, "*_routes.py"))))
 
 # ---------------------------------------------------------------- backend routes
 routes = set()
-for m in re.finditer(r'@(?:app|v1)\.(get|post|put|delete)\(\s*"([^"]+)"', main):
-    verb, path = m.group(1).upper(), m.group(2)
-    routes.add((verb, path))
+for src in (main, router_src):
+    for m in re.finditer(r'@(?:app|v1|router)\.(get|post|put|delete)\(\s*"([^"]+)"', src):
+        verb, path = m.group(1).upper(), m.group(2)
+        routes.add((verb, path))
 # v1 aliases registered via add_api_route
 for m in re.finditer(r'v1\.add_api_route\(\s*"([^"]+)"[^)]*?methods=\["(\w+)"\]', main, re.S):
     routes.add((m.group(2).upper(), "/api/v1" + m.group(1)))

@@ -108,10 +108,8 @@ from auth import create_access_token, verify_token
 from static_dashboard import DASHBOARD_HTML
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
-                   GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
-                   PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TRUST_HTML, TEMPLATES_HTML,
-                   CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML,
-                   SELLER_EARNINGS_HTML, RESET_HTML, BUY_HTML, FUNDING_VIEW_HTML, REFUNDS_HTML)
+                   NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML)
+from web_routes import router as web_router   # static public pages (extracted router)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -1318,99 +1316,9 @@ def login_page():
 def account_page():
     return ACCOUNT_HTML
 
-@app.get("/trust", response_class=HTMLResponse)
-def trust_page():
-    return HTMLResponse(TRUST_HTML)
-
-@app.get("/.well-known/security.txt", response_class=PlainTextResponse)
-@app.get("/security.txt", response_class=PlainTextResponse)
-def security_txt():
-    """RFC 9116 security contact — the file security researchers look for first."""
-    return (
-        "# Petabyte vulnerability disclosure — see /security and the repo SECURITY.md\n"
-        "Contact: mailto:security@petabyte.market\n"
-        "Contact: https://github.com/BDR-Pro/petabyte/security/advisories/new\n"
-        "Policy: https://petabyte.market/security\n"
-        "Expires: 2027-08-01T00:00:00Z\n"
-        "Preferred-Languages: en\n"
-    )
-
-@app.get("/status", response_class=HTMLResponse)
-def status_page():
-    """Plain service status — honest, generated from live heartbeats."""
-    return HTMLResponse(STATUS_HTML)
-
-@app.get("/metrics", response_class=HTMLResponse)
-def metrics_page():
-    """Investor / operations metrics dashboard (data from /metrics/overview)."""
-    return HTMLResponse(METRICS_HTML)
-
-@app.get("/buy/{public_id}", response_class=HTMLResponse)
-def buy_page(public_id: str):
-    """Browser checkout + run experience for one GPU: the buyer completes the entire
-    Stripe compute-tx lifecycle (authorize -> card -> reserve -> dispatch -> run ->
-    capture -> receipt) without touching an internal endpoint by hand. The spec id is
-    read client-side from the path."""
-    return HTMLResponse(BUY_HTML)
-
-@app.get("/seller/payouts", response_class=HTMLResponse)
-def seller_payouts_page():
-    """Seller Stripe onboarding + earnings/transfers/payouts (data from /payments/*).
-    Distinct from the JSON API at /seller/earnings and /seller/earnings/stripe."""
-    return HTMLResponse(SELLER_EARNINGS_HTML)
-
-@app.get("/templates-catalog", response_class=HTMLResponse)
-@app.get("/catalog", response_class=HTMLResponse)
-def templates_page():
-    return TEMPLATES_HTML
-
-@app.get("/demo", response_class=HTMLResponse)
-@app.get("/book-a-demo", response_class=HTMLResponse)
-def demo_page():
-    return DEMO_HTML
-
-
-@app.get("/contact", response_class=HTMLResponse)
-def contact_page():
-    return CONTACT_HTML
-
-
-@app.get("/pricing", response_class=HTMLResponse)
-def pricing_page():
-    return PRICING_HTML
-
-@app.get("/security", response_class=HTMLResponse)
-def security_page():
-    return SECURITY_HTML
-
-@app.get("/privacy", response_class=HTMLResponse)
-def privacy_page():
-    return PRIVACY_HTML
-
-@app.get("/terms", response_class=HTMLResponse)
-def terms_page():
-    return TERMS_HTML
-
-@app.get("/acceptable-use", response_class=HTMLResponse)
-def aup_page():
-    return AUP_HTML
-
-@app.get("/refunds", response_class=HTMLResponse)
-@app.get("/refund-policy", response_class=HTMLResponse)
-def refunds_page():
-    return REFUNDS_HTML
-
-@app.get("/gpu/{public_id}", response_class=HTMLResponse)
-def gpu_detail_page(public_id: str):
-    return GPU_DETAIL_HTML
-
-@app.get("/gamers", response_class=HTMLResponse)
-def gamers_page():
-    return GAMERS_HTML
-
-@app.get("/artists", response_class=HTMLResponse)
-def artists_page():
-    return ARTISTS_HTML
+# Static public web surface (marketing / legal / trust / status / info) lives in web_routes.py
+# as the first slice of the staged main.py -> domain-routers extraction. Zero DB/auth coupling.
+app.include_router(web_router)
 
 def _find_installer(name: str):
     """Locate a bundled installer script across dev + deployed layouts."""
@@ -1945,6 +1853,9 @@ def register_user(data: UserRegisterModel, request: Request, db: Session = Depen
     if ref_code:
         from db import apply_referral
         apply_referral(db, user, ref_code, signup_meta=_client_ip(request))
+    # top of the growth funnel — mirrored to product analytics via observability.event()
+    obs.event(EVENTS.USER_SIGNED_UP, message="user registered",
+              user_id=user.id, referred=bool(ref_code))
     resp = JSONResponse({"status": "ok", "msg": "User registered"})
     # consume the attribution cookie so a later signup on a shared machine isn't mis-credited
     if request.cookies.get("pb_ref"):
@@ -4281,6 +4192,8 @@ def deposit_funds(data: DepositModel, user: dict = Depends(get_current_user),
                             detail="Direct deposit disabled; use checkout (payment webhook)")
     me = get_user_by_username(db, _username(user))
     balance = deposit(db, me, data.amount)
+    obs.event(EVENTS.WALLET_FUNDED, message="wallet funded (sandbox deposit)",
+              user_id=me.id, source="deposit")
     return {"status": "ok", "balance": balance}
 
 
