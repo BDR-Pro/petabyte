@@ -1,53 +1,68 @@
+````yaml
 name: Deploy server
 
 # GitHub is the source of truth for deployment configuration.
-#   * NON-SECRET config lives in ONE Repository Variable, ENV_VARS (KEY=value; pairs).
-#   * SECRETS stay as individual GitHub Secrets.
-#   * The deploy parses/validates ENV_VARS, injects Secrets, and generates the server env
-#     atomically (validate -> 0600 temp -> install), with health check + auto-rollback.
-# Only two standalone Variables remain: ENV_VARS and DEPLOY_CONFIG_FROM_GITHUB.
+#
+# - NON-SECRET config lives in ONE Repository Variable: ENV_VARS
+#   using KEY=value; pairs.
+# - SECRETS stay as individual GitHub Secrets.
+# - The deploy parses/validates ENV_VARS, injects Secrets, generates the
+#   server env atomically, deploys it, restarts the app, health-checks it,
+#   and automatically rolls the env back on failure.
+#
+# Only two standalone Variables remain:
+#   ENV_VARS
+#   DEPLOY_CONFIG_FROM_GITHUB
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - "lumaris_api/**"
       - "scripts/**"
       - "config/**"
       - ".github/workflows/deploy-server.yml"
+
   workflow_dispatch:
 
-# Least privilege: this workflow only reads the repo (deploy happens over SSH with a Secret).
 permissions:
   contents: read
 
 jobs:
   configuration-preflight:
-    # Parses + validates ENV_VARS, refuses secrets inside it, detects legacy individual
-    # Variables, and runs every existing safety check. Blocking only when the gate is on.
+    # Parse + validate ENV_VARS, reject secrets inside it, detect legacy
+    # individual Variables, and run configuration safety checks.
     runs-on: ubuntu-latest
-    # ENV_VARS (and the deploy Secrets) live in the TEST GitHub Environment; bind to it so
-    # environment-scoped config resolves. Repo-level vars/secrets stay visible too.
     environment: TEST
+
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
       - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - run: pip install pyyaml
-      - name: validate ENV_VARS + Secrets
+        with:
+          python-version: "3.12"
+
+      - name: Install configuration validation dependencies
+        run: pip install pyyaml
+
+      - name: Validate ENV_VARS + Secrets
         id: validate
         continue-on-error: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB != 'true' }}
         env:
           ENV_VARS: ${{ vars.ENV_VARS || secrets.ENV_VARS }}
           DEPLOY_CONFIG_FROM_GITHUB: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB }}
-          VARS_JSON: ${{ toJSON(vars) }}       # only to DETECT legacy individual Variables
+          VARS_JSON: ${{ toJSON(vars) }}
           SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
+          set -euo pipefail
+
           python scripts/validate_github_configuration.py --env-name auto \
             | tee /tmp/config-summary.txt
-      - name: configuration summary (sanitised — secrets shown as SET only)
+
+      - name: Configuration summary
         if: always()
         env:
           ROLLOUT_GATE: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB || 'false' }}
@@ -58,74 +73,105 @@ jobs:
             echo "Rollout gate DEPLOY_CONFIG_FROM_GITHUB=$ROLLOUT_GATE"
             echo ""
             echo '```'
-            cat /tmp/config-summary.txt 2>/dev/null || echo "(no summary produced)"
+            cat /tmp/config-summary.txt 2>/dev/null || \
+              echo "(no summary produced)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
     needs: configuration-preflight
     runs-on: ubuntu-latest
-    # Bind to the TEST GitHub Environment so ENV_VARS + Secrets (which live there) resolve.
     environment: TEST
+
     env:
-      # Rollout gate exposed once, via env (never interpolated into a run: script body).
       ROLLOUT_GATE: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB }}
-      # DROPLET_HOST + DROPLET_USER are NON-secret config in the ENV_VARS bundle (resolved below).
-      # Only DEPLOY_SSH_KEY + DROPLET_SSH_KNOWN_HOSTS remain Secrets.
+
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
       - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - run: pip install pyyaml
+        with:
+          python-version: "3.12"
+
+      - name: Install deployment dependencies
+        run: pip install pyyaml
 
       - name: Resolve deploy host + user from ENV_VARS
         env:
           ENV_VARS: ${{ vars.ENV_VARS || secrets.ENV_VARS }}
         run: |
+          set -euo pipefail
+
           python3 - <<'PY' >> "$GITHUB_ENV"
-          import os, sys
+          import os
+          import sys
+
           sys.path.insert(0, "scripts")
           import env_vars as ev
-          vals, _ = ev.parse_bundle(os.environ.get("ENV_VARS", "") or "")
-          host, user = vals.get("DROPLET_HOST", ""), vals.get("DROPLET_USER", "")
-          if not host or not user:
-              sys.stderr.write("::error::DROPLET_HOST and DROPLET_USER must be in ENV_VARS\n")
+
+          vals, errors = ev.parse_bundle(
+              os.environ.get("ENV_VARS", "") or ""
+          )
+
+          if errors:
+              for error in errors:
+                  sys.stderr.write(f"::error::{error}\n")
               sys.exit(1)
+
+          host = vals.get("DROPLET_HOST", "").strip()
+          user = vals.get("DROPLET_USER", "").strip()
+
+          if not host or not user:
+              sys.stderr.write(
+                  "::error::DROPLET_HOST and DROPLET_USER "
+                  "must be present in ENV_VARS\n"
+              )
+              sys.exit(1)
+
           print(f"DROPLET_HOST={host}")
           print(f"DROPLET_USER={user}")
           PY
 
-      # Single SSH-key setup (deduplicated): write the deploy key once; later steps reuse
-      # ~/.ssh/deploy_key. The final cleanup step removes it. The secret is never printed.
-      # ALSO pin the deploy host's key into ~/.ssh/known_hosts so every scp/ssh below runs
-      # with StrictHostKeyChecking=yes — an impersonated/MITM host is refused BEFORE we ever
-      # transfer .env.platform.generated (which is rendered from GitHub Secrets). We fail
-      # CLOSED if the pin is missing: never fall back to trust-on-first-use for a host we
-      # send production credentials to.
       - name: Set up SSH key + pinned host key
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DROPLET_SSH_KNOWN_HOSTS: ${{ secrets.DROPLET_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          if [ -z "${DROPLET_SSH_KNOWN_HOSTS//[[:space:]]/}" ]; then
-            echo "::error::DROPLET_SSH_KNOWN_HOSTS secret is empty — refusing to deploy without a" \
-                 "pinned host key. Generate it with: ssh-keyscan -t ed25519,rsa <host>  and store" \
-                 "the output as the DROPLET_SSH_KNOWN_HOSTS Secret." >&2
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          if [ -z "${DEPLOY_SSH_KEY//[[:space:]]/}" ]; then
+            echo "::error::DEPLOY_SSH_KEY secret is empty." >&2
             exit 1
           fi
-          printf '%s\n' "$DROPLET_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          if [ -z "${DROPLET_SSH_KNOWN_HOSTS//[[:space:]]/}" ]; then
+            echo "::error::DROPLET_SSH_KNOWN_HOSTS secret is empty." >&2
+            echo "::error::Refusing to deploy without a pinned SSH host key." >&2
+            exit 1
+          fi
+
+          printf '%s\n' "$DROPLET_SSH_KNOWN_HOSTS" \
+            > ~/.ssh/known_hosts
+
           chmod 644 ~/.ssh/known_hosts
 
-      # Generate the server env from ENV_VARS + Secrets, then ship it atomically — ONLY when
-      # the gate is on. The generated file is 0600, git-ignored, never printed, deleted from
-      # the runner. The current server env is backed up first for automatic rollback.
-      - name: generate + push server env (atomic; backup for rollback)
+          if ! ssh-keygen -F "$DROPLET_HOST" \
+            -f ~/.ssh/known_hosts >/dev/null; then
+            echo "::error::known_hosts does not contain $DROPLET_HOST" >&2
+            exit 1
+          fi
+
+          echo "Pinned SSH host key found for $DROPLET_HOST"
+
+      - name: Generate + push server env
         if: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB == 'true' }}
         env:
           ENV_VARS: ${{ vars.ENV_VARS || secrets.ENV_VARS }}
@@ -135,62 +181,158 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          python scripts/validate_github_configuration.py --env-name auto >/dev/null
-          python scripts/generate_deploy_env.py --target platform --out .env.platform.generated
-          scp -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/deploy_key \
-            .env.platform.generated "$DROPLET_USER@$DROPLET_HOST:/tmp/lumaris.env.incoming"
-          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/deploy_key "$DROPLET_USER@$DROPLET_HOST" '
-            set -e
-            if sudo test -f /etc/lumaris/lumaris.env; then
-              sudo cp -a /etc/lumaris/lumaris.env /etc/lumaris/lumaris.env.deploybak
-            fi
-            sudo install -m 600 -o lumaris -g lumaris /tmp/lumaris.env.incoming /etc/lumaris/lumaris.env
-            sudo rm -f /tmp/lumaris.env.incoming'
+
+          python scripts/validate_github_configuration.py \
+            --env-name auto >/dev/null
+
+          python scripts/generate_deploy_env.py \
+            --target platform \
+            --out .env.platform.generated
+
+          scp \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=6 \
+            -o TCPKeepAlive=yes \
+            -i ~/.ssh/deploy_key \
+            .env.platform.generated \
+            "$DROPLET_USER@$DROPLET_HOST:/tmp/lumaris.env.incoming"
+
+          ssh \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=6 \
+            -o TCPKeepAlive=yes \
+            -i ~/.ssh/deploy_key \
+            "$DROPLET_USER@$DROPLET_HOST" '
+              set -e
+
+              if sudo test -f /etc/lumaris/lumaris.env; then
+                sudo cp -a \
+                  /etc/lumaris/lumaris.env \
+                  /etc/lumaris/lumaris.env.deploybak
+              fi
+
+              sudo install \
+                -m 600 \
+                -o lumaris \
+                -g lumaris \
+                /tmp/lumaris.env.incoming \
+                /etc/lumaris/lumaris.env
+
+              sudo rm -f /tmp/lumaris.env.incoming
+            '
 
       - name: Deploy code + restart over SSH
         run: |
           set -euo pipefail
-          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/deploy_key \
-            "$DROPLET_USER@$DROPLET_HOST" 'sudo /opt/lumaris/deploy/update.sh'
 
-      # Verify health after restart; if unhealthy, roll the env back to the backup and
-      # restart, then fail the deploy. Only runs when the gate is on (env was pushed).
-      - name: verify health + auto-rollback env on failure
+          ssh \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=6 \
+            -o TCPKeepAlive=yes \
+            -i ~/.ssh/deploy_key \
+            "$DROPLET_USER@$DROPLET_HOST" \
+            'sudo /opt/lumaris/deploy/update.sh'
+
+      - name: Verify health + auto-rollback env on failure
         if: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB == 'true' }}
         run: |
           set -euo pipefail
-          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/deploy_key "$DROPLET_USER@$DROPLET_HOST" '
-            set +e
-            ok=0
-            for i in $(seq 1 12); do
-              if curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1; then ok=1; break; fi
-              sleep 5
-            done
-            if [ "$ok" != 1 ]; then
-              echo "::error::health check FAILED after deploy — rolling back the env file"
-              if sudo test -f /etc/lumaris/lumaris.env.deploybak; then
-                sudo install -m 600 -o lumaris -g lumaris /etc/lumaris/lumaris.env.deploybak /etc/lumaris/lumaris.env
-                sudo systemctl restart lumaris-api lumaris-reaper
-              fi
-              exit 1
-            fi
-            echo "health OK after deploy"'
 
-      # Fetch the env report over a plain SSH command and drop it in the job summary.
-      # This never fails the run: if the report can't be read, we say so and move on.
+          ssh \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=6 \
+            -o TCPKeepAlive=yes \
+            -i ~/.ssh/deploy_key \
+            "$DROPLET_USER@$DROPLET_HOST" '
+              set +e
+
+              ok=0
+
+              for i in $(seq 1 12); do
+                if curl -fsS \
+                  http://127.0.0.1:8000/healthz \
+                  >/dev/null 2>&1; then
+                  ok=1
+                  break
+                fi
+
+                sleep 5
+              done
+
+              if [ "$ok" != 1 ]; then
+                echo "::error::Health check failed after deploy."
+
+                if sudo test \
+                  -f /etc/lumaris/lumaris.env.deploybak; then
+
+                  echo "Rolling back previous environment..."
+
+                  sudo install \
+                    -m 600 \
+                    -o lumaris \
+                    -g lumaris \
+                    /etc/lumaris/lumaris.env.deploybak \
+                    /etc/lumaris/lumaris.env
+
+                  sudo systemctl restart \
+                    lumaris-api \
+                    lumaris-reaper
+                else
+                  echo "::error::No environment backup exists."
+                fi
+
+                exit 1
+              fi
+
+              echo "health OK after deploy"
+            '
+
       - name: Env report to job summary
         if: always()
         run: |
-          REPORT="$(ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/deploy_key \
-            "$DROPLET_USER@$DROPLET_HOST" \
-            'sudo bash /opt/lumaris/deploy/env-report.sh 2>/dev/null' || true)"
+          set +e
+
+          REPORT="$(
+            ssh \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              -o ServerAliveInterval=15 \
+              -o ServerAliveCountMax=6 \
+              -o TCPKeepAlive=yes \
+              -i ~/.ssh/deploy_key \
+              "$DROPLET_USER@$DROPLET_HOST" \
+              'sudo bash /opt/lumaris/deploy/env-report.sh 2>/dev/null' \
+              2>/dev/null
+          )"
+
           {
             echo "## Deploy environment report"
+            echo ""
             echo '```'
-            if [ -n "$REPORT" ]; then echo "$REPORT"; else echo "(report unavailable — deploy log has details)"; fi
+
+            if [ -n "$REPORT" ]; then
+              echo "$REPORT"
+            else
+              echo "(report unavailable — deploy log has details)"
+            fi
+
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: cleanup generated secrets from the runner
+          exit 0
+
+      - name: Cleanup generated secrets from runner
         if: always()
-        run: rm -f .env.platform.generated ~/.ssh/deploy_key
+        run: |
+          rm -f \
+            .env.platform.generated \
+            ~/.ssh/deploy_key
+````
