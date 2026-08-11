@@ -474,7 +474,16 @@ sk5=Ed25519PrivateKey.generate(); pb5=base64.b64encode(sk5.public_key().public_b
 at5={"cpu":16,"nonce":"q","ts":int(time.time())}
 c.post("/prove", headers=s5h, json={"spec_id":sid5,"attestation":at5,"signature":sign_proof(sk5,at5),"pubkey":pb5})
 key5=c.post("/create_api_key", headers=s5h).json()["api_key"]
-c.post("/heartbeat", headers={"X-API-KEY":key5}, json={"spec_id":sid5})
+_hb=c.post("/heartbeat", headers={"X-API-KEY":key5}, json={"spec_id":sid5})
+
+# --- SELLER EARNINGS FORECAST: the agent + web can show expected profit ---
+ok("heartbeat returns a live earnings forecast for the agent to display",
+   (_hb.json().get("earnings") or {}).get("net_per_hour")==round(2.0*(1-0.10),4))
+_ef=c.get(f"/nodes/{sid5}/earnings_forecast", headers=s5h)
+ok("earnings forecast endpoint: definitive net/hr + utilization estimates",
+   _ef.status_code==200 and _ef.json()["net_per_hour"]>0 and len(_ef.json()["estimates"])>=3)
+ok("earnings forecast is owner-scoped (a non-owner gets 404)",
+   c.get(f"/nodes/{sid5}/earnings_forecast", headers=b5h).status_code==404)
 
 # --- TRUST LADDER: levels awarded only on evidence actually held ---
 _t5=[s for s in c.get("/specs", headers=b5h).json()["specs"] if s["spec_id"]==sid5][0]

@@ -228,6 +228,9 @@ jobs:
       - name: authenticity training dataset (feature rows + labels export)
         working-directory: lumaris_api
         run: python training_data_test.py
+      - name: seller earnings forecast (net/hr exact + honest estimates)
+        working-directory: lumaris_api
+        run: python earnings_test.py
       - name: agent telemetry (span exception-safety / redaction / trace-join / degrade)
         working-directory: lumaris_agent
         run: python agent_telemetry_test.py

@@ -24,7 +24,15 @@ from notebook import run_notebook_code
 from vm import launch_vm_task
 import agent_telemetry as _tel
 
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
+try:
+    import console as _con                            # pretty seller-facing console feed
+except Exception:                                     # noqa: BLE001 — never block the agent
+    _con = None
+
+# Console output IS the user feed now, so keep the root logger quiet (WARNING+); the pretty
+# lines carry the routine story, logging carries problems.
+logging.basicConfig(level=logging.WARNING, format="[%(asctime)s] %(levelname)s: %(message)s")
+_earn = {"shown": False}                              # latest earnings forecast from heartbeat
 
 API_URL = os.getenv("PETABYTE_API_URL")        # e.g. https://petabyte.market
 API_KEY = os.getenv("PETABYTE_API_KEY")        # encrypted key from POST /create_api_key
@@ -59,8 +67,24 @@ def heartbeat_loop():
             r = httpx.post(f"{API_URL}/heartbeat", json={"spec_id": int(SPEC_ID)},
                            headers=HEADERS, timeout=10)
             if r.status_code == 200:
-                _platform_idle["enabled"] = bool(r.json().get("idle_fallback"))
-                logging.debug("heartbeat ok")
+                _body = r.json()
+                _platform_idle["enabled"] = bool(_body.get("idle_fallback"))
+                # Live earnings forecast: show it once under the banner, and expose it to the
+                # desktop dashboard via the shared ui.agent_status dict.
+                _e = _body.get("earnings")
+                if _e:
+                    try:
+                        import ui as _ui
+                        _ui.agent_status["earnings"] = _e
+                    except Exception:
+                        pass
+                    if _con and not _earn["shown"]:
+                        _earn["shown"] = True
+                        _con.earnings(_e.get("net_per_hour", 0.0),
+                                      _e.get("estimated_daily_usd_low", 0.0),
+                                      _e.get("estimated_daily_usd_high", 0.0),
+                                      _e.get("idle_mining_daily_usd", 0.0))
+                        _con.ready(POLL_S)
                 _tel.event(_tel.EVENTS.HEARTBEAT, message="heartbeat ok", status_code=200)
             else:
                 logging.warning(f"heartbeat {r.status_code}: {r.text[:200]}")
@@ -637,7 +661,8 @@ def start_idle_miner():
              "-e", f"NICEHASH_ADDRESS={creds['address']}",
              "-e", f"RIG_NAME={creds['rig']}", creds["image"]])
         _idle_running["on"] = True
-        logging.info("idle miner started (unrented)")
+        if _con:
+            _con.line("mine", "idle-mining while unrented (earning a trickle)")
     except Exception as e:                              # noqa: BLE001
         logging.error(f"idle miner start failed: {e}")
 
@@ -651,7 +676,8 @@ def stop_idle_miner():
         subprocess.run(["docker", "rm", "-f", _IDLE_NAME], capture_output=True)
     finally:
         _idle_running["on"] = False
-        logging.info("idle miner stopped (paid work / disabled)")
+        if _con:
+            _con.line("idle", "idle-mining stopped (paid work takes the GPU)")
 
 
 def job_loop():
@@ -662,7 +688,8 @@ def job_loop():
                 start_idle_miner()   # unrented -> earn a trickle if opted in
             elif r.status_code == 200:
                 task = r.json()
-                logging.info(f"claimed task {task.get('task_id')} ({task.get('task_type')})")
+                if _con:
+                    _con.line("claim", f"claimed {task.get('task_type')} #{task.get('task_id')}")
                 stop_idle_miner()   # PAID WORK PREEMPTS: free the GPU first
                 tt = task.get("task_type")
                 # Join the SAME trace that started on the platform: the job envelope carries
@@ -696,10 +723,14 @@ def job_loop():
                             _run_vm(task)
                         _tel.event(_tel.EVENTS.JOB_EXECUTION_COMPLETED,
                                    message="execution completed", task_type=tt)
+                        if _con:
+                            _con.line("done", f"finished {tt} #{task.get('task_id')}")
                     except Exception as _je:             # noqa: BLE001
                         _tel.event(_tel.EVENTS.JOB_EXECUTION_FAILED,
                                    message="execution failed", task_type=tt,
                                    reason=str(_je)[:200])
+                        if _con:
+                            _con.line("fail", f"{tt} #{task.get('task_id')} failed: {str(_je)[:80]}")
                         raise
                 continue  # immediately poll again after finishing
             else:
@@ -713,7 +744,10 @@ def run_agent():
     # Telemetry first — degrade-safe: if the collector is unreachable the agent still runs.
     _tel.init(agent_id=SPEC_ID, seller_id=os.getenv("PROVIDER"))
     _tel.event(_tel.EVENTS.STARTUP, message="agent started", api_url=API_URL, spec_id=SPEC_ID)
-    logging.info(f"agent -> {API_URL} (spec {SPEC_ID})")
+    if _con:
+        _con.banner(API_URL, SPEC_ID, os.getenv("PROVIDER"))
+    else:
+        logging.warning(f"agent -> {API_URL} (spec {SPEC_ID})")
     threading.Thread(target=heartbeat_loop, daemon=True).start()
     job_loop()
 

@@ -2163,9 +2163,37 @@ def heartbeat(data: HeartbeatModel, request: Request, owner=Depends(api_key_user
                           declared=spec.country, detected=detected)
     except Exception:  # noqa: BLE001
         pass
+    # Compact earnings forecast so the agent can show the seller what they're making, live.
+    try:
+        from earnings import forecast as _forecast
+        _e = _forecast(spec.price_per_hour, PLATFORM_TAKE_RATE,
+                       idle_daily_usd=spec.idle_est_daily_usd, idle_enabled=spec.idle_fallback)
+        _earn = {"net_per_hour": _e["net_per_hour"],
+                 "estimated_daily_usd_low": _e["headline"]["low_daily_usd"],
+                 "estimated_daily_usd_high": _e["headline"]["high_daily_usd"],
+                 "idle_mining_daily_usd": _e["idle_mining_daily_usd"]}
+    except Exception:  # noqa: BLE001
+        _earn = None
     return {"status": "ok", "spec_id": spec.id, "state": "online",
             "detected_country": detected, "region_verified": spec.region_verified,
-            "idle_fallback": bool(spec.idle_fallback)}
+            "idle_fallback": bool(spec.idle_fallback), "earnings": _earn}
+
+
+@app.get("/nodes/{spec_id}/earnings_forecast", tags=["seller"])
+def node_earnings_forecast(spec_id: int, user: dict = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
+    """The seller's honest earnings forecast for one of their nodes: definitive net take-home
+    per hour + estimated daily/monthly at several utilization levels (+ idle-mining trickle)."""
+    me = get_user_by_username(db, _username(user))
+    spec = get_spec_by_id(db, spec_id)
+    if not spec or me is None or spec.user_id != me.id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    from earnings import forecast
+    out = forecast(spec.price_per_hour, PLATFORM_TAKE_RATE,
+                   idle_daily_usd=spec.idle_est_daily_usd, idle_enabled=spec.idle_fallback)
+    out["spec_id"] = spec.id
+    out["gpu_model"] = spec.gpu_model
+    return out
 
 
 # ------------------- BUYER -------------------

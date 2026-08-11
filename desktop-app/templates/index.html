@@ -214,10 +214,29 @@
     <div class="container">
         <div class="header">
             <h1>⚡ Petabyte Agent</h1>
-            <p>Decentralized Resource Sharing Platform</p>
+            <p>Earn from your GPU — securely and verifiably.</p>
         </div>
 
         <div class="dashboard">
+            <div class="card" style="background: rgba(255,255,255,0.16); grid-column: 1 / -1;">
+                <h3>💰 Estimated earnings</h3>
+                <div style="display:flex; flex-wrap:wrap; gap:28px; align-items:baseline; margin:6px 0 4px;">
+                    <div>
+                        <div style="font-size:2.2em; font-weight:800; color:#8CFFC0; line-height:1;"><span id="earn-rate">—</span></div>
+                        <div class="stat-label" style="margin-top:4px;">net take-home / hour (after 10% fee)</div>
+                    </div>
+                    <div>
+                        <div style="font-size:1.5em; font-weight:700;"><span id="earn-daily">—</span></div>
+                        <div class="stat-label" style="margin-top:4px;">estimated per day at typical use</div>
+                    </div>
+                    <div>
+                        <div style="font-size:1.2em; font-weight:600;" id="earn-idle">—</div>
+                        <div class="stat-label" style="margin-top:4px;">idle-mining while unrented</div>
+                    </div>
+                </div>
+                <p style="opacity:.62; font-size:.82em; margin-top:10px;">The net rate is exact; the daily figure is an estimate — actual earnings depend on demand. Runs the moment your GPU is online &amp; verified.</p>
+            </div>
+
             <div class="card">
                 <h3>📊 Agent Status</h3>
                 <div class="stat">
@@ -302,8 +321,8 @@
         </div>
 
         <div class="footer">
-            <p>Petabyte Market - Decentralized Cloud Computing</p>
-            <p>© 2024 Petabyte. All rights reserved.</p>
+            <p>Petabyte — verified GPU compute marketplace</p>
+            <p>© <span id="year">2026</span> Petabyte. Your workloads run in isolated containers; results are cryptographically signed.</p>
         </div>
     </div>
 
@@ -345,6 +364,16 @@
                     document.getElementById('tasks-failed').textContent = data.tasks_failed || 0;
                     document.getElementById('current-task').textContent = data.current_task || 'None';
                     document.getElementById('last-heartbeat').textContent = data.last_heartbeat || '-';
+
+                    // Live earnings forecast (written by the agent from the heartbeat response)
+                    var e = data.earnings;
+                    if (e) {
+                        document.getElementById('earn-rate').textContent = '$' + Number(e.net_per_hour || 0).toFixed(2) + '/hr';
+                        var lo = Number(e.estimated_daily_usd_low || 0), hi = Number(e.estimated_daily_usd_high || 0);
+                        document.getElementById('earn-daily').textContent = hi ? ('$' + lo.toFixed(0) + '–$' + hi.toFixed(0) + '/day') : '—';
+                        var idle = Number(e.idle_mining_daily_usd || 0);
+                        document.getElementById('earn-idle').textContent = idle > 0 ? ('+ $' + idle.toFixed(2) + '/day') : 'off';
+                    }
                 })
                 .catch(error => {
                     console.error('Error fetching status:', error);
@@ -411,6 +440,7 @@
         }
 
         // Initialize
+        try { document.getElementById('year').textContent = new Date().getFullYear(); } catch (e) {}
         updateStatus();
         loadConfig();
         statusInterval = setInterval(updateStatus, 5000);

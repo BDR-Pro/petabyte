@@ -1,5 +1,8 @@
 # Data moat — the GPU-authenticity training dataset
 
+> **Where to get the data:** [`docs/ai/`](ai/) — API, an export script, and the row schema.
+
+
 Every benchmark and idle-mining report Petabyte processes is also a **labelled data point**. As
 the marketplace runs, it accumulates a proprietary corpus that pairs GPU performance signals with
 outcomes — exactly the shape a fraud / authenticity model trains on. The dataset compounds: more

@@ -2420,6 +2420,12 @@ SELLER_EARNINGS_HTML = _page("Petabyte — seller earnings",
     </div>
 
     <div class="card" style="margin-top:16px">
+      <div class="lbl">Estimated earnings</div>
+      <p class="mini" style="margin:6px 0 10px">What you take home after Petabyte's 10% fee. The <b>net rate</b> is exact; daily/monthly are an <b>estimate</b> — actual earnings depend on demand.</p>
+      <div id="earn_forecast"><div class="mut mono" style="padding:8px 0">loading…</div></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
       <div class="lbl">Stripe payout account</div>
       <div id="stripe_state" class="mut mono" style="padding:10px 0">Checking…</div>
       <div id="stripe_why" class="mini" style="color:var(--warn);margin-bottom:10px"></div>
@@ -2481,6 +2487,17 @@ async function scRefresh(){await api('/payments/connect/refresh',{method:'POST',
 async function scNodes(){
   var r=await api('/seller/dashboard');if(!r.ok)return;var b=r.body;var box=document.getElementById('nodes_box');
   var ns=b.nodes||[];
+  // Estimated earnings — net of Petabyte's 10% fee. The net rate is exact; daily/monthly are
+  // an estimate at a few utilization levels (same honest math as the agent + /nodes/*/forecast).
+  (function(){
+    var fc=document.getElementById('earn_forecast');if(!fc)return;
+    function money(x){return '$'+Number(x).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+    if(!ns.length){fc.innerHTML='<p class="mut" style="font-size:13px">List a GPU to see your estimated earnings.</p>';return;}
+    var netHr=ns.reduce(function(a,n){return a+Number(n.price_per_hour||0)*0.9;},0);
+    var rows=[0.25,0.50,0.75].map(function(u){var d=netHr*24*u;return '<tr><td>'+Math.round(u*100)+'% utilized</td><td class="mono teal">'+money(d)+'/day</td><td class="mono">'+money(d*30)+'/mo</td></tr>';}).join('');
+    fc.innerHTML='<div class="mini" style="margin-bottom:8px">Net rate across your '+ns.length+' GPU'+(ns.length>1?'s':'')+': <b class="teal">'+money(netHr)+'/hr</b></div>'+
+      '<div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>If your GPUs are…</th><th>Estimated</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  })();
   if(!ns.length){box.innerHTML='<p class="mut" style="font-size:13px">No GPUs listed yet. <a class="teal" href="/install">List your hardware →</a></p>';}
   else{
     box.innerHTML=ns.map(function(n){
