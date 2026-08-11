@@ -147,5 +147,29 @@ r = c.post("/register_user", json={"username": "<script>1</script>", "password":
 ok("/register_user returns 422 for an XSS username", r.status_code == 422)
 
 
+# ---------------------------------------------------------------- DoS / input bounds
+_rejects(lambda: main.TranscodeModel(input_ref="s3://b/inputs/1/v.mp4", nodes=100000),
+         "TranscodeModel rejects an absurd node fan-out")
+_rejects(lambda: main.TranscodeModel(input_ref="s3://b/inputs/1/v.mp4", hours=1_000_000),
+         "TranscodeModel rejects an absurd hours value")
+_rejects(lambda: main.TranscodeModel(input_ref="s3://b/inputs/1/v.mp4", crf=999),
+         "TranscodeModel rejects an out-of-range CRF")
+_rejects(lambda: main.RenderModel(blend_ref="s3://b/inputs/1/s.blend",
+                                  frame_start=100, frame_end=1),
+         "RenderModel rejects frame_end < frame_start")
+_rejects(lambda: main.RenderModel(blend_ref="s3://b/inputs/1/s.blend",
+                                  frame_start=0, frame_end=9_000_000),
+         "RenderModel rejects an oversized frame range")
+_rejects(lambda: main.RenderModel(blend_ref="s3://b/inputs/1/s.blend",
+                                  frame_start=1, frame_end=10, samples=10_000_000),
+         "RenderModel rejects an absurd sample count")
+ok("TranscodeModel accepts a normal request",
+   main.TranscodeModel(input_ref="s3://b/inputs/1/v.mp4", nodes=4, hours=2,
+                       duration_seconds=120, crf=23).nodes == 4)
+ok("RenderModel accepts a normal frame range",
+   main.RenderModel(blend_ref="s3://b/inputs/1/s.blend", frame_start=1, frame_end=240,
+                    nodes=8, samples=256).frame_end == 240)
+
+
 print(f"\n=== security: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
 raise SystemExit(1 if _fail else 0)

@@ -6,7 +6,7 @@ from fastapi.responses import PlainTextResponse, JSONResponse, Response, HTMLRes
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, case, or_, distinct
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from contextlib import asynccontextmanager
 from typing import Optional
 from datetime import datetime, timezone, timedelta
@@ -730,7 +730,7 @@ class SpecModel(BaseModel):
 
 class RequestVMModel(BaseModel):
     spec_id: int
-    hours: int = Field(gt=0)
+    hours: int = Field(gt=0, le=8760)          # <=1 year; also gated by wallet funds
     vpn: bool = False
     require_confidential: bool = False
     require_region: Optional[str] = None
@@ -942,7 +942,7 @@ class SolveModel(BaseModel):
 
 class QuickLaunchModel(BaseModel):
     template: str                               # e.g. blender, comfyui, minecraft
-    hours: int = Field(default=1, gt=0)
+    hours: int = Field(default=1, gt=0, le=8760)
     max_price_per_hour: Optional[float] = None
     region: Optional[str] = None
     template_params: Optional[dict] = None
@@ -953,29 +953,40 @@ class UploadUrlModel(BaseModel):
 
 
 class TranscodeModel(BaseModel):
+    # Bounds keep a single request from fanning out or over-allocating without limit.
+    # nodes is also capped by live inventory, but an explicit ceiling fails fast and
+    # keeps absurd values out of the router/DB.
     input_ref: str                       # object-storage ref to the source video
     codec: str = "h264"                  # h264|h265|av1
     resolution: Optional[str] = None     # e.g. 1920x1080
     bitrate: Optional[str] = None        # e.g. 5M  (or use crf)
-    crf: Optional[int] = None
+    crf: Optional[int] = Field(default=None, ge=0, le=51)   # valid ffmpeg CRF range
     container: str = "mp4"
     use_gpu: bool = True                 # NVENC
-    duration_seconds: int = 0            # total length (for segment splitting)
-    nodes: int = 1
-    hours: int = 1
+    duration_seconds: int = Field(default=0, ge=0, le=2_592_000)   # <=30 days
+    nodes: int = Field(default=1, ge=1, le=256)
+    hours: int = Field(default=1, ge=1, le=8760)                   # <=1 year
     gpu_class: Optional[str] = None
     region: Optional[str] = None
 
 
 class RenderModel(BaseModel):
     blend_ref: str                       # object-storage ref to the .blend file
-    frame_start: int
-    frame_end: int
-    samples: int = 128
-    hours: int = 1
-    nodes: int = 1
+    frame_start: int = Field(ge=0, le=10_000_000)
+    frame_end: int = Field(ge=0, le=10_000_000)
+    samples: int = Field(default=128, ge=1, le=100_000)
+    hours: int = Field(default=1, ge=1, le=8760)
+    nodes: int = Field(default=1, ge=1, le=256)
     gpu_class: Optional[str] = None
     region: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _frames_sane(self):
+        if self.frame_end < self.frame_start:
+            raise ValueError("frame_end must be >= frame_start")
+        if self.frame_end - self.frame_start + 1 > 1_000_000:
+            raise ValueError("frame range too large (max 1,000,000 frames per job)")
+        return self
 
 
 class InputUrlModel(BaseModel):
