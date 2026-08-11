@@ -2527,7 +2527,14 @@ def _auto_fail_compute_tx(db, task, reason: str = "job reported failed"):
         return _sc.fail_job(db, tx, reason=reason).status
     except Exception:
         logger.exception("auto-fail error for tx %s (job failed)", tx.public_id)
-        return tx.status
+        # The session may be in a broken state (e.g. a failed flush left a PendingRollbackError);
+        # reading tx.status then triggers a refresh query that raises. Roll back FIRST, and fall
+        # back to a literal — a result POST must NEVER become a 500.
+        try:
+            db.rollback()
+            return tx.status
+        except Exception:  # noqa: BLE001
+            return None
 
 
 @app.post("/jobs/result")
@@ -5725,11 +5732,23 @@ def restore_task(task_id: int, data: RestoreModel, user: dict = Depends(get_curr
 def retry_task_endpoint(task_id: int, user: dict = Depends(get_current_user),
                         db: Session = Depends(get_db)):
     """Buyer re-queues a failed task (bounded retries)."""
-    from db import Task
+    from db import Task, ComputeTransaction
     buyer = get_user_by_username(db, _username(user))
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task or not buyer or task.buyer_id != buyer.id:
         raise HTTPException(status_code=404, detail="Task not found")
+    # A Stripe-native task whose card authorization was VOIDED when the job failed cannot be
+    # retried in place: re-queueing would let a completed retry return success while the PI is
+    # canceled (buyer never charged, seller never paid via Stripe). The one-time authorization is
+    # gone — the buyer must place a NEW order. (Legacy wallet-escrow tasks have no tx and retry
+    # normally, since their escrow is retained.)
+    ntx = db.query(ComputeTransaction).filter(ComputeTransaction.task_id == task.id).first()
+    if ntx is not None:
+        import marketplace_insight as _mi
+        if ntx.status in _mi.TX_FAILED:
+            raise HTTPException(status_code=409, detail=(
+                "This order's card authorization was voided when the job failed — a retry cannot "
+                "re-charge it. Place a new order to run this workload again."))
     if not retry_task(db, task):
         raise HTTPException(status_code=409, detail="Task not retryable (not failed or retry limit)")
     return {"status": "ok", "task_id": task.id, "task_status": "pending", "retries": task.retries}

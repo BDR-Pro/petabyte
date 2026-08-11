@@ -500,7 +500,10 @@ class LedgerEntry(Base):
     # databases (create_all); existing DBs pick them up on a schema rebuild/migration.
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_ledger_amount_pos"),
-        CheckConstraint("direction in ('debit','credit')", name="ck_ledger_direction"),
+        # `x IN (...)` is NULL (not FALSE) when x is NULL, so a NULL direction would slip past a
+        # bare IN check. Require it explicitly — a ledger leg with no debit/credit is invalid.
+        CheckConstraint("direction is not null and direction in ('debit','credit')",
+                        name="ck_ledger_direction"),
     )
 
 

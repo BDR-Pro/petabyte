@@ -65,12 +65,15 @@ def _sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
-def verify_update(exe_path: str, manifest: dict, pubkey_b64: str):
+def verify_update(exe_path: str, manifest: dict, pubkey_b64: str,
+                  expected_asset: str = None, expected_version: str = None):
     """Return (ok: bool, reason: str). FAIL CLOSED — any missing/invalid piece is a refusal.
 
     Checks: a pinned key is configured; the manifest carries asset/version/sha256 + a signature;
-    the downloaded file's SHA-256 equals the manifest's; and the manifest is Ed25519-signed by
-    the pinned key over the canonical core fields."""
+    the downloaded file's SHA-256 equals the manifest's; the manifest is Ed25519-signed by the
+    pinned key over the canonical core fields; and (when expected_asset/expected_version are
+    given) the SIGNED manifest actually targets THIS release — so a signer-less publisher cannot
+    replay an older valid exe+manifest under a newer GitHub tag."""
     if not pubkey_b64:
         return False, "no pinned release public key (refusing to apply an unsigned update)"
     try:
@@ -83,6 +86,15 @@ def verify_update(exe_path: str, manifest: dict, pubkey_b64: str):
         actual = _sha256_file(exe_path)
         if actual.lower() != str(core["sha256"]).lower():
             return False, "sha256 mismatch — downloaded file is not the signed release"
+        # Bind the signed manifest to the selected release (anti-replay). Checked BEFORE the
+        # signature so a mismatch is reported clearly, but note the signature covers these same
+        # fields, so an attacker cannot forge asset/version to match either.
+        if expected_asset is not None and str(core["asset"]) != str(expected_asset):
+            return False, (f"manifest asset '{core['asset']}' != expected '{expected_asset}' "
+                           "(replayed manifest for a different asset)")
+        if expected_version is not None and _ver(str(core["version"])) != _ver(str(expected_version)):
+            return False, (f"manifest version '{core['version']}' != release '{expected_version}' "
+                           "(replayed older signed release under a newer tag)")
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         from cryptography.exceptions import InvalidSignature
         pub = Ed25519PublicKey.from_public_bytes(base64.b64decode(pubkey_b64))
@@ -123,9 +135,15 @@ def _latest():
     return tag, exe_url, manifest_url
 
 
-def _fetch_bytes(url: str, timeout: int = 60) -> bytes:
+def _fetch_bytes(url: str, timeout: int = 60, max_bytes: int = 64 * 1024) -> bytes:
+    # Bound the read: a signed manifest is a few hundred bytes. Reading an attacker-published
+    # oversized "manifest" fully would cause memory pressure BEFORE signature verification can
+    # reject it. Read at most max_bytes+1 and refuse anything larger.
     with urllib.request.urlopen(url, timeout=timeout) as r:
-        return r.read()
+        data = r.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError(f"manifest exceeds {max_bytes} bytes — refusing")
+    return data
 
 
 def _swap_and_restart(current: str, newfile: str):
@@ -179,7 +197,8 @@ def _check_once():
             os.remove(newfile)
             logging.error("could not fetch/parse the signed manifest — refusing update: %s", e)
             return
-        ok, reason = verify_update(newfile, manifest, _pinned_pubkey())
+        ok, reason = verify_update(newfile, manifest, _pinned_pubkey(),
+                                   expected_asset=ASSET_NAME, expected_version=tag)
         if not ok:
             os.remove(newfile)
             logging.error("REFUSING update %s: %s", tag, reason)

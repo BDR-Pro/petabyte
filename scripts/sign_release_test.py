@@ -46,6 +46,17 @@ ok("signed manifest is ACCEPTED by desktop updater.verify_update",
 ok("same manifest is REJECTED against a different pinned key",
    updater.verify_update(EXE, manifest,
                          sr.pub_b64(Ed25519PrivateKey.generate()))[0] is False)
+# anti-replay: an OLDER validly-signed manifest must be REJECTED under a NEWER release tag.
+# (A publisher without the signing key could otherwise re-upload an old signed exe+manifest.)
+ok("a validly-signed OLD manifest is REJECTED when replayed under a newer tag",
+   updater.verify_update(EXE, manifest, PUB_B64,
+                         expected_asset=sr.ASSET_NAME, expected_version="9.9.9")[0] is False)
+ok("the manifest is ACCEPTED when the release tag matches its signed version",
+   updater.verify_update(EXE, manifest, PUB_B64,
+                         expected_asset=sr.ASSET_NAME, expected_version="1.4.0")[0] is True)
+ok("a manifest for a DIFFERENT asset is REJECTED",
+   updater.verify_update(EXE, manifest, PUB_B64,
+                         expected_asset="Evil.exe", expected_version="1.4.0")[0] is False)
 # tamper the binary -> hash no longer matches the signed manifest
 with open(EXE, "ab") as f:
     f.write(b"malware")

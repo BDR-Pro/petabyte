@@ -18,7 +18,7 @@ from datetime import timedelta
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-os.environ.setdefault("DATABASE_URL", "sqlite:///./tee_test.db")
+os.environ["DATABASE_URL"] = "sqlite:///./tee_test.db"   # force isolated SQLite; never inherit
 os.environ["SECRET_KEY"] = "test-jwt-secret"
 os.environ["SERVER_PRIVATE_KEY"] = Fernet.generate_key().decode()
 os.environ.pop("TEE_REQUIRE_HARDWARE", None)

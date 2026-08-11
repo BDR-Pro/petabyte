@@ -78,9 +78,12 @@ rejects("DB rejects a NEGATIVE ledger amount (money cannot be destroyed)",
 rejects("DB rejects a ZERO ledger amount",
         lambda: dbmod.LedgerEntry(account="x:1", direction="credit",
                                   amount=Decimal(0), entry_type="t"))
-# ---- ledger direction is a closed set ----
+# ---- ledger direction is a closed set (and NEVER null) ----
 rejects("DB rejects an invalid ledger direction (typo/garbage)",
         lambda: dbmod.LedgerEntry(account="x:1", direction="sideways",
+                                  amount=Decimal(10), entry_type="t"))
+rejects("DB rejects a NULL ledger direction (a leg must be debit or credit)",
+        lambda: dbmod.LedgerEntry(account="x:1", direction=None,
                                   amount=Decimal(10), entry_type="t"))
 accepts("DB accepts a valid positive debit leg",
         lambda: dbmod.LedgerEntry(account="x:1", direction="debit",

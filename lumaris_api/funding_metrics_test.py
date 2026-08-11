@@ -113,6 +113,9 @@ ok("refund rate computed from gmv", r["refund_rate"] == round(100 / 1615, 4))
 
 # ---- liquidity ----
 ok("utilization = busy/total units (3/4)", lq["utilization"] == 0.75)
+# duration is HOURS (not seconds): 1 available unit * 3600 rentable hours = 3600 GPU-hours.
+ok("gpu_hours_available treats duration as hours (1 unit x 3600h = 3600, not /3600)",
+   lq["gpu_hours_available"] == 3600)
 ok("unfulfilled demand counted from routing decisions", lq["unfulfilled_demand"] == 1)
 ok("fill rate = fulfilled / total routing decisions (3/4)", lq["fill_rate"] == 0.75)
 

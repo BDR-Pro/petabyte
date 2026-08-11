@@ -373,6 +373,13 @@ ok("fail_job is idempotent (stays JOB_FAILED, no double release)",
    _tx9b.status == "JOB_FAILED" and _avail_cx() == base9)
 _s.close()
 
+# A Stripe-native task whose card authorization was VOIDED on failure must NOT be retryable in
+# place — a completed retry would return success while the PI is canceled (buyer uncharged,
+# seller unpaid). The buyer must place a new order. (Regression for the retry-loses-auth finding.)
+_s = dbmod.SessionLocal(); _t9id = sc.get_tx_by_public_id(_s, tid9).task_id; _s.close()
+ok("retry of a Stripe-native task with a voided authorization is REFUSED (409, not silent re-run)",
+   c.post(f"/tasks/{_t9id}/retry", headers=login("buyer1")).status_code == 409)
+
 
 # ============================ TRANSFER ============================
 # transfer before capture is impossible: use a fresh tx still pre-capture
@@ -422,6 +429,25 @@ tid_pr = run_to_metered(3600)
 c.post(f"/admin/payments/{tid_pr}/capture", headers=admin)
 pr = c.post(f"/admin/payments/{tid_pr}/refund", headers=admin, json={"amount": 100, "reason": "partial"}).json()
 ok("partial refund refunds only the requested amount", pr["refunded_amount"] == 100 and pr["status"] != "REFUNDED")
+
+# TWO partial refunds that CUMULATIVELY equal the capture must REVERSE the unpaid obligation
+# and reconcile. Regression: the reversal used to gate on a single refund's `amount`, so two
+# partials each < captured never reversed, leaving the seller payable to be paid out anyway.
+tid_2p = run_to_metered(3600)     # captures 250
+c.post(f"/admin/payments/{tid_2p}/capture", headers=admin)
+c.post(f"/admin/payments/{tid_2p}/refund", headers=admin, json={"amount": 100, "reason": "partial 1"})
+r2 = c.post(f"/admin/payments/{tid_2p}/refund", headers=admin, json={"amount": 150, "reason": "partial 2"}).json()
+ok("two partial refunds summing to the capture -> fully REFUNDED",
+   r2["refunded_amount"] == 250 and r2["status"] == "REFUNDED")
+_s2 = dbmod.SessionLocal()
+_tx2 = sc.get_tx_by_public_id(_s2, tid_2p)
+_obl2 = _s2.query(dbmod.PayoutObligation).filter(
+    dbmod.PayoutObligation.compute_tx_id == _tx2.id).first()
+ok("cumulative full refund REVERSES the unpaid obligation (not left payable)",
+   _obl2 is not None and _obl2.state == "reversed")
+ok("cumulative full refund reconciles the tx (not needs_review)",
+   _tx2.reconciliation_status == "reconciled")
+_s2.close()
 
 # admin refund requires a reason
 ok("admin refund requires a reason",
