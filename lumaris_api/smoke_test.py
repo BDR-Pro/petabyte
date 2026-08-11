@@ -279,6 +279,12 @@ ok("trust summary publishes the honest ladder and never claims TEE from the stub
 _sec=c.get("/.well-known/security.txt")
 ok("RFC 9116 security.txt is served with a contact + policy (coordinated disclosure)",
    _sec.status_code==200 and "Contact:" in _sec.text and "Policy:" in _sec.text)
+_ref=c.get("/refunds")
+ok("refunds & disputes policy is published (escrow protection + dispute SLA)",
+   _ref.status_code==200 and "escrow" in _ref.text.lower() and "dispute" in _ref.text.lower())
+_prv=c.get("/privacy")
+ok("privacy page states the workload data lifecycle (encrypt / not read / not retained)",
+   _prv.status_code==200 and "Data lifecycle" in _prv.text)
 
 # REFUND ON REAP: new booking, node dies, settle refunds buyer
 c.post("/heartbeat", headers={"X-API-KEY":s3key}, json={"spec_id":sid3})

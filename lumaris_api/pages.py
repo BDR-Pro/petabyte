@@ -2217,9 +2217,9 @@ SECURITY_HTML = _page("Petabyte — security &amp; trust",
 </div>
 
 <div class="wrap" style="padding:22px 24px 8px"><div class="cols c3">
-  <a class="card" href="/privacy" style="display:block"><div class="lbl">Legal</div><h2 style="font-size:16px">Privacy policy</h2><p class="mut" style="font-size:13px">What we collect and why.</p></a>
+  <a class="card" href="/privacy" style="display:block"><div class="lbl">Legal</div><h2 style="font-size:16px">Privacy policy</h2><p class="mut" style="font-size:13px">What we collect, and your workload's data lifecycle.</p></a>
   <a class="card" href="/terms" style="display:block"><div class="lbl">Legal</div><h2 style="font-size:16px">Terms of service</h2><p class="mut" style="font-size:13px">The agreement for buyers and hosts.</p></a>
-  <a class="card" href="/acceptable-use" style="display:block"><div class="lbl">Legal</div><h2 style="font-size:16px">Acceptable use</h2><p class="mut" style="font-size:13px">What you may not run, and what hosts may not do.</p></a>
+  <a class="card" href="/refunds" style="display:block"><div class="lbl">Legal</div><h2 style="font-size:16px">Refunds &amp; disputes</h2><p class="mut" style="font-size:13px">Escrow protection, refunds, and the dispute SLA.</p></a>
 </div></div>""")
 
 
@@ -2249,6 +2249,8 @@ PRIVACY_HTML = _legal("Privacy policy", """
 <p class="mut">We do not read the contents of your workloads. We do not sell your data or share it with advertisers. We do not track you across other websites.</p>
 <h2 """ + _LEGAL_H + """>What hosts can see</h2>
 <p class="mut">A host runs your container on their machine. They can see that a job is running and its resource usage. Containers limit but do not eliminate what a determined host could observe — see our <a class="teal" href="/security">security page</a> for the honest boundary. Do not place data on shared infrastructure that you could not tolerate the host seeing.</p>
+<h2 """ + _LEGAL_H + """>Data lifecycle — your workload</h2>
+<p class="mut">Objects you upload for a job (scenes, inputs, outputs) are <b>client-side encrypted</b> before storage, and streamed to the node over TLS via one-time pre-signed URLs — the node holds no standing credentials to your storage. A job runs in a container on the host; when the rental ends the container and its working data are torn down. Backups a job takes are encrypted with a per-task key. We do <b>not</b> read the contents of your workloads, and we do not retain your input/output objects beyond what the job and your account need. The honest boundary is on the <a class="teal" href="/security">security page</a>: a container is not a hardware boundary, so for data you could not tolerate the host observing, use a <b>confidential</b> node or don't use shared infrastructure.</p>
 <h2 """ + _LEGAL_H + """>Retention and your rights</h2>
 <p class="mut">Financial records are kept as required for accounting. Other data is kept while your account is open. You can request a copy of your data or ask us to delete your account by emailing <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.</p>
 """)
@@ -2258,7 +2260,7 @@ TERMS_HTML = _legal("Terms of service", """
 <h2 """ + _LEGAL_H + """>What we are</h2>
 <p class="mut">We are an intermediary, not the owner of the hardware. Hosts are independent parties who set their own prices and availability. We verify what we can (see <a class="teal" href="/security">Security</a>) and show reputation earned from completed jobs, but we do not warrant any host's performance.</p>
 <h2 """ + _LEGAL_H + """>Money</h2>
-<p class="mut">Funds you deposit are held by Petabyte. When you book, the amount is moved into escrow for that rental. On completion we pay the host their share and take a 10% platform fee from the rental. If you stop early, you are billed for the hours you held the machine (minimum one hour) and the remainder is returned to your wallet. If a rental cannot be delivered, you are refunded.</p>
+<p class="mut">Funds you deposit are held by Petabyte. When you book, the amount is moved into escrow for that rental. On completion we pay the host their share and take a 10% platform fee from the rental. If you stop early, you are billed for the hours you held the machine (minimum one hour) and the remainder is returned to your wallet. If a rental cannot be delivered, you are refunded. Full details and the dispute process are in the <a class="teal" href="/refunds">Refunds &amp; disputes policy</a>.</p>
 <h2 """ + _LEGAL_H + """>Availability</h2>
 <p class="mut">We do not guarantee uptime. Hosts are consumer and datacenter machines that can go offline. When a host fails mid-rental we attempt to move your machine to another node at the same address, restoring from the most recent snapshot; recovery is from a checkpoint, not a live mirror. If we cannot, you are refunded.</p>
 <h2 """ + _LEGAL_H + """>Your responsibilities</h2>
@@ -2269,6 +2271,29 @@ TERMS_HTML = _legal("Terms of service", """
 <p class="mut">We may suspend accounts that breach these terms or the acceptable use policy. You can close your account at any time; hosts can uninstall the agent in one command.</p>
 <h2 """ + _LEGAL_H + """>Company</h2>
 <p class="mut">Petabyte is operated by <b>Petabyte, Inc.</b>, a C-corporation incorporated in the State of Delaware, United States, with operations in Riyadh, Saudi Arabia. For legal notices, contracts, or verification of the entity during due diligence, write to <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.</p>
+""")
+
+REFUNDS_HTML = _legal("Refunds &amp; disputes", """
+<p class="mut">You are renting a stranger's machine. Escrow and this policy exist so that if it doesn't deliver, you don't lose your money.</p>
+<h2 """ + _LEGAL_H + """>Your money is held in escrow</h2>
+<p class="mut">When you book, the amount moves from your wallet into escrow held by Petabyte for that rental — it is <b>not</b> paid to the host until the work is delivered. Every completed job carries a <a class="teal" href="/trust">verifiable receipt</a> (the node's signed result + the sha256 of the output), and payouts to hosts are held for a settlement window so fraud can be caught before money leaves.</p>
+<h2 """ + _LEGAL_H + """>When you are refunded automatically</h2>
+<ul class="mut" style="margin:8px 0 0 20px">
+  <li style="padding:3px 0"><b>The host can't deliver:</b> if a node goes offline mid-rental and we cannot fail your machine over to another eligible node, the rental is refunded.</li>
+  <li style="padding:3px 0"><b>The job never ran:</b> if we could not place your workload at all, you are refunded in full.</li>
+  <li style="padding:3px 0"><b>You stop early:</b> you are billed only for the hours you actually held the machine (minimum one hour). The unused prepay returns to your wallet.</li>
+</ul>
+<h2 """ + _LEGAL_H + """>Raising a dispute</h2>
+<p class="mut">If you believe you were charged for compute you did not receive — or a result is wrong — email <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a> with your <b>booking id</b> or <b>VM id</b> and what went wrong. We investigate using signals we already hold: the signed result receipt, the node's heartbeats, and — where the job is deterministic — cross-node re-verification of the output hash.</p>
+<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px">
+  <tr><td class="mut" style="padding:6px 0;border-bottom:1px solid var(--hair)">We acknowledge your dispute</td><td class="mono" style="text-align:right;border-bottom:1px solid var(--hair)">within 2 business days</td></tr>
+  <tr><td class="mut" style="padding:6px 0;border-bottom:1px solid var(--hair)">We resolve it (refund, partial, or explained)</td><td class="mono" style="text-align:right;border-bottom:1px solid var(--hair)">within 10 business days</td></tr>
+</table>
+<p class="mut">Outcomes are a full refund, a partial refund for the portion not delivered, or — if the evidence shows the compute <i>was</i> delivered — the charge upheld, with the receipt and signals we relied on shared with you so the decision is not a black box.</p>
+<h2 """ + _LEGAL_H + """>When a host is at fault</h2>
+<p class="mut">A host who takes a booking and fails to deliver, misrepresents hardware, or whose result diverges from independent re-verification has their <b>payouts frozen</b> pending review. Buyers are made whole from escrow <b>before</b> any payout to that host — your refund does not wait on us recovering from the host.</p>
+<h2 """ + _LEGAL_H + """>Card chargebacks</h2>
+<p class="mut">If you funded your wallet by card, please contact us before filing a card chargeback — we can almost always resolve a delivery dispute faster than your bank can, and a receipt makes it straightforward.</p>
 """)
 
 AUP_HTML = _legal("Acceptable use policy", """

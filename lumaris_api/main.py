@@ -111,7 +111,7 @@ from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
                    PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TRUST_HTML, TEMPLATES_HTML,
                    CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML,
-                   SELLER_EARNINGS_HTML, RESET_HTML, BUY_HTML, FUNDING_VIEW_HTML)
+                   SELLER_EARNINGS_HTML, RESET_HTML, BUY_HTML, FUNDING_VIEW_HTML, REFUNDS_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -1394,6 +1394,11 @@ def terms_page():
 @app.get("/acceptable-use", response_class=HTMLResponse)
 def aup_page():
     return AUP_HTML
+
+@app.get("/refunds", response_class=HTMLResponse)
+@app.get("/refund-policy", response_class=HTMLResponse)
+def refunds_page():
+    return REFUNDS_HTML
 
 @app.get("/gpu/{public_id}", response_class=HTMLResponse)
 def gpu_detail_page(public_id: str):
