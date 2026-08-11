@@ -160,6 +160,8 @@ Fixes are applied in priority order (P0 money-safety, P0 security, P0 reliabilit
 | Killer | Status | Commit / evidence |
 |---|---|---|
 | #1 admin privilege escalation | **FIXED** | `_is_admin` now honors only a **verified** email and never matches a look-alike username; `/account/email` resets verification on change; Google OAuth honors the provider's `email_verified` claim (stub never verifies). Regression tests in `account_test.py` (5 unit + 4 e2e). Verified: account/stripe(106)/e2e_safety/stripe_e2e_flow/marketplace/smoke all green. |
+| #14 cross-tenant IDOR (`/jobs/input_url`) | **FIXED** | A node may now presign a GET only for an input ref the buyer bound to *that* task (`_authorized_input_refs`, mirrors `restore_url`); an arbitrary key → 404. Regression test in `smoke_test.py`. |
+| #17 production safety gate opt-in | **FIXED** | The stub-safety gate now fires on any live-money signal (`PAYMENTS_LIVE_ENABLED=true` or a `sk_live_` key), not only `ENVIRONMENT=production` — a deploy that forgets the flag still fails closed. Regression tests in `smoke_test.py`. |
 | _(remaining P0 items sequenced below)_ | pending | — |
 
 **Sequenced P0 plan (multi-turn):** #1 admin escalation → #14 IDOR + #17 env-gate (cheap security) → #5/#20 fee accounting + net margin → #6 batch clawback + #7 ledger post-on-payout + conservation invariant → #4 wire result validation + #8 GPU proof → #9 failed-job transition → #13 DB invariants → #3 signed agent update → then P1 metrics layer + investor/founder view, then reliability (backups/migrations) which is founder-executed with Claude-provided scripts.

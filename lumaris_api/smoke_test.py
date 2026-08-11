@@ -711,6 +711,10 @@ ok("render node gets a frame subrange", rjob["task_type"]=="render" and "frame_s
 ok("render task carries a container image (no host install)", bool(rjob.get("image")) and rjob.get("gpu") is True)
 iu=c.post("/jobs/input_url", headers={"X-API-KEY":keyR1}, json={"task_id":rjob["task_id"],"ref":rjob["blend_ref"]}).json()
 ok("node pulls scene via pre-signed GET", "op=get" in iu["download_url"] and iu["key"]=="scene.blend")
+# IDOR: a node may NOT mint a GET for an arbitrary key — only refs the buyer bound to the task.
+ok("node CANNOT presign an arbitrary object key (cross-tenant IDOR blocked)",
+   c.post("/jobs/input_url", headers={"X-API-KEY":keyR1},
+          json={"task_id":rjob["task_id"],"ref":"inputs/999999/victim-secret.tar"}).status_code==404)
 
 
 # ==== PAYOUTS + SCHEDULED WITHDRAW ====
@@ -1097,6 +1101,27 @@ try:
 except RuntimeError as e:
     _refused_pay = "PAYMENTS_MODE" in str(e)
 ok("production REFUSES to boot with payments in sandbox", _refused_pay)
+# The gate must fire even if ENVIRONMENT=production is FORGOTTEN, whenever a live-money signal
+# is present — otherwise a mis-deployed prod box silently runs the login-as-anyone stub.
+os.environ.pop("ENVIRONMENT", None)
+os.environ["GOOGLE_OAUTH_STUB"] = "true"
+os.environ["PAYMENTS_LIVE_ENABLED"] = "true"
+_refused_forgot = False
+try:
+    _m._assert_production_is_safe()
+except RuntimeError:
+    _refused_forgot = True
+ok("gate fires without ENVIRONMENT when PAYMENTS_LIVE_ENABLED=true (forgotten-flag hole closed)",
+   _refused_forgot)
+os.environ.pop("PAYMENTS_LIVE_ENABLED", None)
+# ...and a plain dev process (no live signal, fake gateway) is NOT gated — stubs stay allowed.
+os.environ["GOOGLE_OAUTH_STUB"] = "true"
+_dev_ok = True
+try:
+    _m._assert_production_is_safe()
+except RuntimeError:
+    _dev_ok = False
+ok("dev process (no live signal) is NOT gated", _dev_ok)
 if _env_saved is None:
     os.environ.pop("ENVIRONMENT", None)
 else:

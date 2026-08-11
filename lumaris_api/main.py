@@ -278,8 +278,23 @@ async def _reaper_loop():
 #   LEGACY_KEYS_...   -> a scopeless API key is root
 # Fail loudly at boot rather than quietly at the first customer.
 # ---------------------------------------------------------------------------
+def _is_real_deployment() -> bool:
+    """True if this served process shows ANY unambiguous sign of being a real deployment —
+    not merely when someone remembered to set ENVIRONMENT=production. A deploy that FORGETS
+    that flag must still fail closed on dangerous stubs, so live-money signals also trigger
+    the gate. (TEST-mode E2E — real Stripe with sk_test_ keys — is intentionally NOT a signal,
+    so it can still run stubs like S3_STUB in a non-production context.)"""
+    if os.getenv("ENVIRONMENT", "development").strip().lower() == "production":
+        return True
+    if os.getenv("PAYMENTS_LIVE_ENABLED", "").strip().lower() == "true":
+        return True                                   # deliberate live-money opt-in
+    if os.getenv("STRIPE_SECRET_KEY", "").strip().startswith("sk_live_"):
+        return True                                   # a LIVE key is present — this is prod
+    return False
+
+
 def _assert_production_is_safe() -> None:
-    if os.getenv("ENVIRONMENT", "development").lower() != "production":
+    if not _is_real_deployment():
         return
     unsafe = {
         "GOOGLE_OAUTH_STUB": os.getenv("GOOGLE_OAUTH_STUB", "").lower() == "true",
@@ -298,9 +313,9 @@ def _assert_production_is_safe() -> None:
     enabled = [k for k, v in unsafe.items() if v]
     if enabled:
         raise RuntimeError(
-            "Refusing to start in production with unsafe settings: "
-            + ", ".join(enabled)
-            + ". Fix these or unset ENVIRONMENT=production.")
+            "Refusing to start: this looks like a real deployment (ENVIRONMENT=production, "
+            "PAYMENTS_LIVE_ENABLED=true, or a live Stripe key present) but unsafe settings are "
+            "enabled: " + ", ".join(enabled) + ". Fix these before serving real traffic.")
 
     # Live payments require the FULL real configuration; fail safe otherwise. This is the
     # "no half-configured live mode" gate: PAYMENTS_LIVE_ENABLED=true must come with real
@@ -5439,6 +5454,22 @@ def submit_checkpoint(data: CheckpointModel, agent=Depends(api_key_user),
     return {"status": "ok", "checkpoint_id": cp.id, "snapshot_ref": cp.snapshot_ref}
 
 
+def _authorized_input_refs(task) -> set:
+    """The object-storage refs a BUYER bound to THIS task (render `blend_ref`, transcode
+    `input_ref`, etc., stored in template_params). A node may mint a presigned GET only for
+    one of these — never an arbitrary key. Mirrors restore_url's checkpoint-scoped check."""
+    refs = set()
+    try:
+        params = json.loads(task.template_params or "{}")
+    except Exception:  # noqa: BLE001 — malformed params -> no authorized refs (fail closed)
+        params = {}
+    if isinstance(params, dict):
+        for k, v in params.items():
+            if isinstance(v, str) and v and (k == "ref" or k.endswith("_ref")):
+                refs.add(v)
+    return refs
+
+
 @app.post("/jobs/input_url")
 def input_url(data: InputUrlModel, agent=Depends(api_key_user),
               db: Session = Depends(get_db)):
@@ -5447,6 +5478,11 @@ def input_url(data: InputUrlModel, agent=Depends(api_key_user),
     task = get_task_for_agent(db, data.task_id, agent)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found or not yours")
+    # The ref MUST be one the buyer associated with this task. Without this, an assigned node
+    # could mint a GET for any object on the shared, tenant-prefixed bucket (another buyer's
+    # inputs/checkpoints) — a cross-tenant data-exfiltration IDOR.
+    if data.ref not in _authorized_input_refs(task):
+        raise HTTPException(status_code=404, detail="Input ref not associated with this task")
     key = data.ref.split("/", 3)[-1] if data.ref.startswith("s3://") else data.ref
     try:
         url = mint_presigned_get(key)
