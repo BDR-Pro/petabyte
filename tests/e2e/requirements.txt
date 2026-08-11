@@ -1,0 +1,4 @@
+# Browser E2E deps — kept separate from the app so the main requirements stay lean.
+# CI installs Chromium itself:  python -m playwright install --with-deps chromium
+pytest==8.3.4
+playwright==1.49.1

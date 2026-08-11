@@ -1,0 +1,72 @@
+name: Browser E2E
+
+# Drives the live TEST site through Chromium (Playwright) as real users — personas, wallet
+# boundaries, authorization isolation, and UX/UI quality on desktop + mobile — and uploads a
+# human-readable report you can paste back to Claude/ChatGPT. No other machine is needed.
+#
+# SAFETY: the suite reads the site's /payments/config and ABORTS if it looks LIVE. Login-gated
+# personas skip cleanly when their E2E_* GitHub Secrets are absent, so the anonymous + UX +
+# protected-route checks always run with zero setup.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 7 * * *"          # daily
+  push:
+    branches: [main]
+    paths:
+      - "tests/e2e/**"
+      - ".github/workflows/browser-e2e.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-e2e
+  cancel-in-progress: true
+
+jobs:
+  browser-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      E2E_BASE_URL: ${{ vars.E2E_BASE_URL || 'https://test.petabyte.market' }}
+      # Login-gated personas — all optional; absent ones skip. Never printed.
+      E2E_BUYER_USERNAME: ${{ secrets.E2E_BUYER_USERNAME }}
+      E2E_BUYER_PASSWORD: ${{ secrets.E2E_BUYER_PASSWORD }}
+      E2E_BUYER_ZERO_USERNAME: ${{ secrets.E2E_BUYER_ZERO_USERNAME }}
+      E2E_BUYER_ZERO_PASSWORD: ${{ secrets.E2E_BUYER_ZERO_PASSWORD }}
+      E2E_BUYER_B_USERNAME: ${{ secrets.E2E_BUYER_B_USERNAME }}
+      E2E_BUYER_B_PASSWORD: ${{ secrets.E2E_BUYER_B_PASSWORD }}
+      E2E_SELLER_USERNAME: ${{ secrets.E2E_SELLER_USERNAME }}
+      E2E_SELLER_PASSWORD: ${{ secrets.E2E_SELLER_PASSWORD }}
+      E2E_SELLER_B_USERNAME: ${{ secrets.E2E_SELLER_B_USERNAME }}
+      E2E_SELLER_B_PASSWORD: ${{ secrets.E2E_SELLER_B_PASSWORD }}
+      E2E_ADMIN_USERNAME: ${{ secrets.E2E_ADMIN_USERNAME }}
+      E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install browser-test deps
+        run: pip install -r tests/e2e/requirements.txt
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Run browser E2E (writes artifacts/e2e_browser_report.txt)
+        run: python -m pytest -q tests/e2e
+      - name: Print report (always, so it lands in the workflow log)
+        if: always()
+        run: cat artifacts/e2e_browser_report.txt || echo "no report produced"
+      - name: Upload report + failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-e2e-report
+          path: |
+            artifacts/e2e_browser_report.txt
+            artifacts/*.png
+            artifacts/*.trace.zip
+          retention-days: 14
+          if-no-files-found: warn

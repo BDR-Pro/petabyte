@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e browser-e2e test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e browser-e2e test-browser-e2e test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real
 
 help:
 	@echo "Petabyte make targets:"
@@ -73,6 +73,15 @@ local-e2e:
 # Needs Playwright's Chromium: python -m playwright install chromium
 browser-e2e:
 	python3 scripts/e2e/browser_e2e.py
+
+# Browser E2E against the live TEST site (default https://test.petabyte.market). Personas +
+# UX/UI + authorization, writing artifacts/e2e_browser_report.txt. This is what CI runs
+# (.github/workflows/browser-e2e.yml). Thin wrapper — one command; login-gated personas skip
+# without E2E_* credentials. Never runs against LIVE (the suite aborts if it detects live mode).
+test-browser-e2e:
+	pip install -q -r tests/e2e/requirements.txt
+	python -m playwright install --with-deps chromium
+	python -m pytest -q tests/e2e
 
 # Mailgun transactional email: offline unit suite, and an opt-in real send.
 email-test:
