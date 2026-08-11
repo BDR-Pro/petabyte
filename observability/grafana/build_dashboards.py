@@ -617,12 +617,66 @@ def d_security():
                      [ENV, SERVICEVAR], p)
 
 
-BUILDERS = [d_executive, d_marketplace, d_payments, d_gpu, d_api, d_infra, d_security]
+def d_trust():
+    """Trust & Integrity — the verification moat, made visible. Every panel reads the
+    scrape-time petabyte_* trust gauges emitted by main._marketplace_metrics (same honest
+    counts as the public /trust page)."""
+    c = Ctx()
+    p = []
+    E = 'environment="$environment"'
+    p.append(text(c, "", "**The verification moat, in numbers.** These are the same honest counts as "
+                         "the public [/trust](https://petabyte.market/trust) page — no fabrication, "
+                         "zeros mean zero. Attestation → benchmark-vs-public-reference → signed, "
+                         "content-bound results → redundant re-execution → payout freeze on fraud."))
+    p.append(rowp(c, "Verification coverage"))
+    p.append(stat(c, "Attested GPUs", [(f"max(petabyte_attested_gpus{{{E}}})", "attested")],
+                  color="background", steps=[(GREEN, None)], w=5,
+                  desc="Listings backed by an Ed25519-signed hardware report (verifiable)."))
+    p.append(stat(c, "Confidential nodes (fresh TEE)",
+                  [(f"max(petabyte_confidential_nodes_active{{{E}}})", "confidential")], w=5,
+                  desc="Nodes holding a fresh confidential attestation (fail-closed in prod)."))
+    p.append(stat(c, "Verifiable receipts issued",
+                  [(f"max(petabyte_verifiable_receipts{{{E}}})", "receipts")], w=7,
+                  desc="Completed jobs whose node signature is retained for the buyer to re-verify."))
+    p.append(stat(c, "Results bound to output bytes",
+                  [(f"max(petabyte_results_content_bound{{{E}}})", "content-bound")], w=7,
+                  desc="Results committing to sha256 of the real output bytes (quorum-comparable)."))
+    p.append(barchart(c, "GPUs by trust tier",
+                      f"max by (tier) (petabyte_trust_tier_gpus{{{E}}})", "{{tier}}", w=12,
+                      desc="self_reported → agent_verified → benchmark_consistent; 'flagged' = a "
+                           "benchmark that contradicted the claimed GPU model."))
+    p.append(ts(c, "Completed jobs (lifetime)",
+                [(f"max(petabyte_jobs_completed_total{{{E}}})", "completed")], unit="short", w=12,
+                desc="Durable count — survives a seller going offline."))
+
+    p.append(rowp(c, "Fraud caught & redundant verification"))
+    p.append(stat(c, "Sellers frozen for fraud",
+                  [(f"max(petabyte_sellers_fraud_flagged{{{E}}})", "frozen")],
+                  color="background", steps=[(GREEN, None), (AMBER, 1)], w=6,
+                  desc="Sellers with fraud on record (payouts frozen pending review) — the system "
+                       "working, not a failure."))
+    p.append(stat(c, "Suspicious seller telemetry (24h)",
+                  [(f"sum(increase(petabyte_seller_suspicious_total{{{E}}}[24h]))", "suspicious")],
+                  color="background", steps=[(GREEN, None), (AMBER, 1), (RED, 10)], w=6,
+                  desc="Nodes whose reported telemetry didn't add up."))
+    p.append(barchart(c, "Redundant re-execution (quorum) outcomes",
+                      f"max by (status) (petabyte_quorum_checks{{{E}}})", "{{status}}", w=12,
+                      desc="AGREED = honest majority; DIVERGENT/INCONCLUSIVE = a mismatch was "
+                           "caught and held/frozen."))
+    p.append(rowp(c, "Integrity event log"))
+    p.append(logs(c, "Trust & integrity events (fraud freezes / suspicious / invalid results)",
+                  '{service=~"$service"} | json | event_name=~"seller.suspicious'
+                  '|result.validation.failed|seller.reaped.batch|unhandled.exception"'))
+    return dashboard("petabyte-trust", "Petabyte — Trust & Integrity", ["petabyte", "trust"],
+                     [ENV, SERVICEVAR], p)
+
+
+BUILDERS = [d_executive, d_marketplace, d_payments, d_gpu, d_api, d_infra, d_security, d_trust]
 FILES = {
     "petabyte-executive": "executive.json", "petabyte-marketplace": "marketplace.json",
     "petabyte-settlement": "payments.json", "petabyte-seller-fleet": "gpu-fleet.json",
     "petabyte-api": "api.json", "petabyte-infra": "infrastructure.json",
-    "petabyte-security": "security.json",
+    "petabyte-security": "security.json", "petabyte-trust": "trust.json",
 }
 
 
