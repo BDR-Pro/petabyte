@@ -227,9 +227,13 @@ def _egress_flags(task):
     if policy == "none":
         return ["--network", "none"]
     if policy == "limited":
-        # Outbound works; inbound is unreachable because the port is published to
-        # 127.0.0.1 only and the ONLY way in is the reverse tunnel we control.
-        # (A full L3 allow-list belongs on the host firewall — see docs/egress.md.)
+        # Outbound works for the service; inbound is unreachable because the port is
+        # published to 127.0.0.1 only and the ONLY way in is the reverse tunnel we
+        # control. The dangerous outbound targets — the cloud metadata endpoint
+        # (169.254.169.254, IAM cred theft) and the seller's own LAN (RFC-1918) — are
+        # DROPPED by the host firewall installed by install.sh (DOCKER-USER chain).
+        # The job cannot undo those rules because _isolation_flags drops NET_ADMIN/RAW.
+        # See docs/egress.md.
         return []
     if policy == "open":
         return []
@@ -237,19 +241,41 @@ def _egress_flags(task):
 
 
 def _isolation_flags(task):
-    """Phase-1 workload isolation (see docs/isolation-roadmap.md). Uses gVisor
-    (runsc) when installed for a user-space kernel boundary, plus conservative
-    limits that don't break managed templates. Phase 2 = Kata/Firecracker."""
+    """Hardening flags applied to EVERY buyer container — this protects the SELLER's
+    host from the buyer's workload (see docs/isolation-roadmap.md).
+
+    Mirrors the notebook sandbox (notebook.py):
+      * --cap-drop ALL              — the job gets NO Linux capabilities, so it cannot
+                                       add routes / reconfigure the host firewall
+                                       (NET_ADMIN, NET_RAW), load kernel modules
+                                       (SYS_MODULE), or otherwise escalate. This is
+                                       also what makes the host egress firewall
+                                       (install.sh DOCKER-USER rules) un-bypassable
+                                       from inside a job.
+      * --security-opt no-new-privileges — no setuid escalation.
+      * --pids-limit                — fork-bomb cap.
+      * --memory/--memory-swap/--cpus — sized to the booking when the server sends them
+                                       (never guessed high, so a big legit rental isn't
+                                       throttled; absent -> only the pids cap applies).
+    gVisor (runsc) is used as a user-space kernel boundary when installed. GPU jobs keep
+    device access (the NVIDIA runtime injects the device via cgroups, not capabilities),
+    so dropping ALL caps does not break --gpus.
+    """
     import subprocess
-    flags = ["--security-opt", "no-new-privileges", "--pids-limit", "1024"]
+    flags = ["--cap-drop", "ALL",
+             "--security-opt", "no-new-privileges",
+             "--pids-limit", str(task.get("pids") or 1024)]
     mem = task.get("memory")
     if mem:
-        flags += ["--memory", str(mem)]
+        flags += ["--memory", str(mem), "--memory-swap", str(mem)]   # cap RAM; no swap escape
+    cpus = task.get("cpus")
+    if cpus:
+        flags += ["--cpus", str(cpus)]
     try:
         info = subprocess.check_output(["docker", "info", "--format", "{{.Runtimes}}"],
                                        text=True, timeout=5)
         if "runsc" in info:
-            flags = ["--runtime", "runsc"] + flags   # gVisor
+            flags = ["--runtime", "runsc"] + flags   # gVisor user-space kernel
     except Exception:
         pass
     return flags
@@ -335,13 +361,18 @@ def _run_render(task):
                        json={"task_id": tid, "ref": task.get("blend_ref", "")}).json()
         open(scene, "wb").write(httpx.get(g["download_url"], timeout=300).content)
         report_progress(tid, 15, f"scene fetched; rendering {fs}-{fe} in {image}")
-        # 2) render inside the container (GPU via NVIDIA Container Toolkit)
-        cmd = ["docker", "run", "--rm", "--network", "none",
-               "-v", f"{scene}:/scene.blend:ro", "-v", f"{out_dir}:/out"]
+        # 2) render inside the container (GPU via NVIDIA Container Toolkit).
+        # --network none: batch render needs no network -> no exfil / LAN access.
+        # _isolation_flags: cap-drop ALL etc. so a malicious .blend (Blender auto-runs
+        # embedded Python) cannot escalate or touch the host. --disable-autoexec stops
+        # the scene's embedded scripts from running at all.
+        cmd = ["docker", "run", "--rm", "--network", "none"]
+        cmd += _isolation_flags(task)
+        cmd += ["-v", f"{scene}:/scene.blend:ro", "-v", f"{out_dir}:/out"]
         if task.get("gpu"):
             cmd += ["--gpus", "all"]
-        cmd += [image, "blender", "-b", "/scene.blend", "-o", "/out/frame_",
-                "-s", str(fs), "-e", str(fe), "-a"]
+        cmd += [image, "blender", "-b", "/scene.blend", "--disable-autoexec",
+                "-o", "/out/frame_", "-s", str(fs), "-e", str(fe), "-a"]
         subprocess.check_call(cmd)
         report_progress(tid, 85, "uploading frames")
         # 3) tar the frames and upload via a one-object pre-signed PUT
@@ -384,8 +415,9 @@ def _run_transcode(task):
         report_progress(tid, 20, "transcoding")
         vcodec = {"h264": "h264_nvenc", "h265": "hevc_nvenc", "av1": "av1_nvenc"} \
             if task.get("gpu") else {"h264": "libx264", "h265": "libx265", "av1": "libaom-av1"}
-        args = ["docker", "run", "--rm", "--network", "none",
-                "-v", f"{src}:/in:ro", "-v", f"{work}:/work"]
+        args = ["docker", "run", "--rm", "--network", "none"]
+        args += _isolation_flags(task)
+        args += ["-v", f"{src}:/in:ro", "-v", f"{work}:/work"]
         if task.get("gpu"):
             args += ["--gpus", "all"]
         ff = [image, "-y"]
@@ -440,12 +472,15 @@ def _run_stitch(task):
                 lf.write(f"file '{p}'\n")
         out = _os.path.join(work, f"final.{task.get('container','mp4')}")
         if task.get("kind") == "transcode":
-            subprocess.check_call([image, "-y", "-f", "concat", "-safe", "0",
-                                   "-i", listfile, "-c", "copy", out]) \
-                if False else subprocess.check_call(
-                ["docker", "run", "--rm", "-v", f"{work}:/work", image, "-y",
-                 "-f", "concat", "-safe", "0", "-i", "/work/list.txt", "-c", "copy",
-                 f"/work/{_os.path.basename(out)}"])
+            # The agent already fetched every segment to /work, so the concat container
+            # needs NO network — close it (previously stitch ran with default egress,
+            # exposing ffmpeg-protocol SSRF/exfil on buyer-supplied inputs) and drop caps.
+            concat = ["docker", "run", "--rm", "--network", "none"]
+            concat += _isolation_flags(task)
+            concat += ["-v", f"{work}:/work", image, "-y",
+                       "-f", "concat", "-safe", "0", "-i", "/work/list.txt", "-c", "copy",
+                       f"/work/{_os.path.basename(out)}"]
+            subprocess.check_call(concat)
         else:   # render: tar the collected frames
             import tarfile
             with tarfile.open(out, "w") as tf:

@@ -204,6 +204,41 @@ def _start_backup_thread(task):
     return stop
 
 
+def _isolation_flags(task):
+    """Hardening flags for EVERY buyer container — protects the SELLER's machine.
+    Kept in parity with the Linux agent (lumaris_agent/task_fetcher.py): drop ALL Linux
+    capabilities (so a job can't reconfigure networking, load modules, or escalate),
+    no-new-privileges, a pids cap, and memory/CPU caps when the server sends them.
+    GPU device access is unaffected (the NVIDIA runtime injects it via cgroups)."""
+    import subprocess
+    flags = ["--cap-drop", "ALL",
+             "--security-opt", "no-new-privileges",
+             "--pids-limit", str(task.get("pids") or 1024)]
+    mem = task.get("memory")
+    if mem:
+        flags += ["--memory", str(mem), "--memory-swap", str(mem)]
+    cpus = task.get("cpus")
+    if cpus:
+        flags += ["--cpus", str(cpus)]
+    try:
+        info = subprocess.check_output(["docker", "info", "--format", "{{.Runtimes}}"],
+                                       text=True, timeout=5)
+        if "runsc" in info:
+            flags = ["--runtime", "runsc"] + flags
+    except Exception:
+        pass
+    return flags
+
+
+def _egress_flags(task):
+    """Template egress policy. Default closed; 'limited'/'open' rely on the host egress
+    firewall (install.sh) to block cloud-metadata + LAN. See docs/egress.md."""
+    policy = (task.get("egress") or "none").lower()
+    if policy in ("limited", "open"):
+        return []
+    return ["--network", "none"]
+
+
 def _run_template(task):
     """Launch a one-click stack (Ollama/vLLM/ComfyUI/game server/...) and report it."""
     tid = task["task_id"]
@@ -219,7 +254,11 @@ def _run_template(task):
                                    "status": "failed"})
         return
     name = f"pb-{task.get('template')}-{_uuid.uuid4().hex[:8]}"
-    cmd = ["docker", "run", "-d", "--name", name, "-p", f"{port}:{port}"]
+    # Publish to 127.0.0.1 ONLY (was 0.0.0.0 — exposed the buyer's service to the
+    # seller's whole LAN / the internet). Inbound reaches it only via the tunnel.
+    cmd = ["docker", "run", "-d", "--name", name, "-p", f"127.0.0.1:{port}:{port}"]
+    cmd += _isolation_flags(task)              # cap-drop ALL etc. (protect the host)
+    cmd += _egress_flags(task)                 # protect the host's home internet
     if task.get("gpu"):
         cmd += ["--gpus", "all"]
     if task.get("cache"):
@@ -283,12 +322,13 @@ def _run_render(task):
         open(scene, "wb").write(httpx.get(g["download_url"], timeout=300).content)
         report_progress(tid, 15, f"scene fetched; rendering {fs}-{fe} in {image}")
         # 2) render inside the container (GPU via NVIDIA Container Toolkit)
-        cmd = ["docker", "run", "--rm", "--network", "none",
-               "-v", f"{scene}:/scene.blend:ro", "-v", f"{out_dir}:/out"]
+        cmd = ["docker", "run", "--rm", "--network", "none"]
+        cmd += _isolation_flags(task)
+        cmd += ["-v", f"{scene}:/scene.blend:ro", "-v", f"{out_dir}:/out"]
         if task.get("gpu"):
             cmd += ["--gpus", "all"]
-        cmd += [image, "blender", "-b", "/scene.blend", "-o", "/out/frame_",
-                "-s", str(fs), "-e", str(fe), "-a"]
+        cmd += [image, "blender", "-b", "/scene.blend", "--disable-autoexec",
+                "-o", "/out/frame_", "-s", str(fs), "-e", str(fe), "-a"]
         subprocess.check_call(cmd)
         report_progress(tid, 85, "uploading frames")
         # 3) tar the frames and upload via a one-object pre-signed PUT
@@ -331,8 +371,9 @@ def _run_transcode(task):
         report_progress(tid, 20, "transcoding")
         vcodec = {"h264": "h264_nvenc", "h265": "hevc_nvenc", "av1": "av1_nvenc"} \
             if task.get("gpu") else {"h264": "libx264", "h265": "libx265", "av1": "libaom-av1"}
-        args = ["docker", "run", "--rm", "--network", "none",
-                "-v", f"{src}:/in:ro", "-v", f"{work}:/work"]
+        args = ["docker", "run", "--rm", "--network", "none"]
+        args += _isolation_flags(task)
+        args += ["-v", f"{src}:/in:ro", "-v", f"{work}:/work"]
         if task.get("gpu"):
             args += ["--gpus", "all"]
         ff = [image, "-y"]
@@ -387,12 +428,13 @@ def _run_stitch(task):
                 lf.write(f"file '{p}'\n")
         out = _os.path.join(work, f"final.{task.get('container','mp4')}")
         if task.get("kind") == "transcode":
-            subprocess.check_call([image, "-y", "-f", "concat", "-safe", "0",
-                                   "-i", listfile, "-c", "copy", out]) \
-                if False else subprocess.check_call(
-                ["docker", "run", "--rm", "-v", f"{work}:/work", image, "-y",
-                 "-f", "concat", "-safe", "0", "-i", "/work/list.txt", "-c", "copy",
-                 f"/work/{_os.path.basename(out)}"])
+            # segments already fetched to /work -> no network needed; drop caps too
+            concat = ["docker", "run", "--rm", "--network", "none"]
+            concat += _isolation_flags(task)
+            concat += ["-v", f"{work}:/work", image, "-y",
+                       "-f", "concat", "-safe", "0", "-i", "/work/list.txt", "-c", "copy",
+                       f"/work/{_os.path.basename(out)}"]
+            subprocess.check_call(concat)
         else:   # render: tar the collected frames
             import tarfile
             with tarfile.open(out, "w") as tf:

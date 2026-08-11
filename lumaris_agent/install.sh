@@ -32,6 +32,61 @@ if command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-ctk runtime configure --runtime=docker && systemctl restart docker || true
 fi
 
+# --- Container egress lockdown (protects the SELLER) -------------------------------
+# A buyer's job runs on the seller's machine and network. Left open, it can reach the
+# cloud metadata endpoint (169.254.169.254 -> steal the host's IAM/cloud credentials)
+# and the seller's own LAN (router admin, NAS, other hosts). We DROP both from
+# containers, on the DOCKER-USER chain so it governs all container-forwarded traffic.
+# The job cannot remove these rules: the agent runs every job with --cap-drop ALL, so
+# it has neither NET_ADMIN nor NET_RAW. Toggle with PETABYTE_LOCKDOWN_EGRESS=false.
+if [ "${PETABYTE_LOCKDOWN_EGRESS:-true}" = "true" ]; then
+  echo "==> installing container egress firewall (block cloud-metadata + LAN)"
+  apt-get install -y iptables >/dev/null 2>&1 || true
+  install -m 0755 /dev/stdin /etc/petabyte/egress-firewall.sh <<'FW'
+#!/usr/bin/env bash
+# Petabyte container egress lockdown. Idempotent: rebuilds a dedicated PB-EGRESS chain
+# jumped from DOCKER-USER. Re-applied on boot (docker flushes DOCKER-USER on restart).
+set -euo pipefail
+command -v iptables >/dev/null || exit 0
+iptables -N PB-EGRESS 2>/dev/null || iptables -F PB-EGRESS
+# let a container's OWN replies back in (only NEW outbound to the bad nets is dropped)
+iptables -A PB-EGRESS -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+# cloud instance metadata service (IMDS) — IAM/credential theft
+iptables -A PB-EGRESS -d 169.254.0.0/16 -j DROP
+# the seller's own private LAN — pivot / attack of router, NAS, other hosts
+iptables -A PB-EGRESS -d 10.0.0.0/8      -j DROP
+iptables -A PB-EGRESS -d 192.168.0.0/16  -j DROP
+# NOTE: 172.16.0.0/12 is intentionally NOT blocked wholesale — Docker's own bridge
+# networks live there and blocking them breaks container DNS/NAT. Operators whose LAN
+# is in 172.16/12 should add a scoped rule for their subnet.
+iptables -A PB-EGRESS -j RETURN
+iptables -C DOCKER-USER -j PB-EGRESS 2>/dev/null || iptables -I DOCKER-USER -j PB-EGRESS
+# IPv6 metadata (best-effort; AWS IMDS over v6)
+if command -v ip6tables >/dev/null; then
+  ip6tables -N PB-EGRESS 2>/dev/null || ip6tables -F PB-EGRESS
+  ip6tables -A PB-EGRESS -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+  ip6tables -A PB-EGRESS -d fd00:ec2::254/128 -j DROP
+  ip6tables -A PB-EGRESS -j RETURN
+  ip6tables -C DOCKER-USER -j PB-EGRESS 2>/dev/null || ip6tables -I DOCKER-USER -j PB-EGRESS
+fi
+echo "petabyte: container egress lockdown applied"
+FW
+  cat > /etc/systemd/system/petabyte-egress.service <<'UNIT'
+[Unit]
+Description=Petabyte container egress lockdown (block cloud-metadata + LAN)
+After=docker.service
+Requires=docker.service
+[Service]
+Type=oneshot
+ExecStart=/etc/petabyte/egress-firewall.sh
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now petabyte-egress.service || /etc/petabyte/egress-firewall.sh || true
+fi
+
 echo "==> fetching agent"
 mkdir -p "$APP" /etc/petabyte
 if [ -f "./task_fetcher.py" ]; then

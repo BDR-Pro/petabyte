@@ -63,6 +63,9 @@ jobs:
       - name: agent auto-update is signed (fleet-RCE guard)
         working-directory: desktop-app
         run: python updater_test.py
+      - name: agent sandbox (buyer job can't harm the seller host)
+        working-directory: lumaris_agent
+        run: python sandbox_test.py
       - name: release signer <-> updater round-trip
         run: python scripts/sign_release_test.py
       - name: account (reset + cal webhook + demo notify)

@@ -62,6 +62,8 @@ run_suite "grafana dashboards (metric-existence + generator determinism)" \
           bash -c "cd .. && python observability/grafana/validate_dashboards.py && \
                    python observability/grafana/build_dashboards.py && \
                    git diff --exit-code observability/grafana/dashboards"
+run_suite "agent sandbox (buyer job can't harm the seller host)" \
+          bash -c "cd ../lumaris_agent && python sandbox_test.py"
 run_suite "tunnel (nat + failover)" bash -c "cd ../lumaris_gateway && python tunnel_test.py"
 rm -f smoke.db* adv.db* stripe_test.db* payout_test.db* seller_payable_metric_test.db* \
       reservation_reclaim_test.db* security.db* ../lumaris_gateway/tunnel.db*
