@@ -106,5 +106,18 @@ ok("egress lockdown is re-applied on boot (survives docker restart)",
    "petabyte-egress.service" in inst and "After=docker.service" in inst)
 
 
+# ---------------------------------------------------------------- result binds to output bytes
+sr = tf._signed_result(7, status="completed", result="s3://b/out.tar", content_hash="a" * 64)
+ok("a completed result carries the content_hash INSIDE the signed proof",
+   sr["proof"].get("content_hash") == "a" * 64 and "signature" in sr)
+ok("content_hash is the sha256 of real output bytes (render/transcode/stitch pass it)",
+   src("_run_render").count("hashlib.sha256(raw)") >= 1
+   and "hashlib.sha256(raw)" in src("_run_transcode")
+   and "hashlib.sha256(raw)" in src("_run_stitch"))
+_desk = open(os.path.join(ROOT, "desktop-app", "task_fetcher.py")).read()
+ok("desktop agent also binds results to real output bytes",
+   "content_hash=hashlib.sha256(raw)" in _desk and _desk.count("hashlib.sha256(raw)") >= 3)
+
+
 print(f"\n=== sandbox: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
 raise SystemExit(1 if _fail else 0)

@@ -927,8 +927,14 @@ rkeymap={sidR1:(keyR1,skR1), sidR2:(keyR2,skR2)}
 for seg in rj["tasks"]:
     key,sk=rkeymap[seg["spec_id"]]
     c.get("/jobs/next", headers={"X-API-KEY":key})
-    ph={"task_id":seg["task_id"],"output_hash":"f","ts":int(time.time())}
+    ph={"task_id":seg["task_id"],"output_hash":"f","content_hash":"e"*64,"ts":int(time.time())}
     c.post("/jobs/result", headers={"X-API-KEY":key}, json={"task_id":seg["task_id"],"status":"completed","result":f"s3://pb/render/{rj['job_id']}/seg.tar","proof":ph,"signature":sign_proof(sk,ph)})
+# the seller-signed content_hash (sha256 of the real output bytes) is persisted for quorum re-exec
+from db import SessionLocal as _CHS, Task as _CHT
+_chs=_CHS(); _cht=_chs.query(_CHT).filter(_CHT.id==rj["tasks"][0]["task_id"]).first()
+ok("server persists the seller-signed output content_hash (result binds to real bytes, #65)",
+   _cht is not None and _cht.result_content_hash=="e"*64)
+_chs.close()
 rman=c.get(f"/jobs/manifest/{rj['job_id']}", headers=rndh).json()
 ok("render assembles via manifest (stitch created)", rman["status"]=="assembling" and rman["stitch_task_id"] is not None)
 

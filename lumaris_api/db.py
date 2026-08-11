@@ -227,20 +227,26 @@ def trust_level_for(spec: "SellerSpec") -> dict:
       agent_verified      the node's agent signed a hardware report with its
                           Ed25519 device key (/prove) — proves a keyholder on the
                           node claims this hardware, NOT that the silicon is real.
-      benchmark_verified  agent_verified + a signed benchmark result exists, so
-                          throughput was measured, not declared.
+      benchmark_verified  agent_verified + a benchmark number the node's agent REPORTED and
+                          SIGNED — so it is attributable (non-repudiable), but it is
+                          self-reported, NOT independently measured by the platform.
 
     'hardware_attested' (real vendor TEE chain: NVIDIA NRAS / AMD SEV-SNP / Intel
     TDX) is deliberately NOT awardable today: the current verifier is a structural
     stub (stub.md #3). spec.confidential therefore surfaces separately as
-    'cc_pilot' evidence and must never be marketed as hardware attestation."""
+    'cc_pilot' evidence and must never be marketed as hardware attestation.
+
+    Honesty rule: the benchmark tier's label/evidence must never claim the throughput was
+    'measured' or 'verified' by the platform — the agent's benchmark harness reports the number
+    (today from BENCH_TOKENS_SEC) and signs it; the platform only records that signed claim."""
     if not spec.attested:
         return {"level": "self_reported", "rank": 0, "label": "Self-reported",
                 "evidence": "Listing details supplied by the seller; no proof held."}
     if spec.benchmark_tokens_sec:
-        return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-verified",
-                "evidence": "Agent-signed hardware report + a signed benchmark "
-                            f"({round(spec.benchmark_tokens_sec)} tok/s) on record."}
+        return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-reported",
+                "evidence": "Agent-signed hardware report + a node-REPORTED, signed benchmark "
+                            f"({round(spec.benchmark_tokens_sec)} tok/s) — self-reported and "
+                            "attributable, not independently measured by the platform."}
     return {"level": "agent_verified", "rank": 1, "label": "Agent-verified",
             "evidence": "Hardware report signed by the node's Ed25519 device key."}
 
@@ -299,6 +305,7 @@ class Task(Base):
     interrupted_at = Column(DateTime, nullable=True)       # set when its node died
     enc_key = Column(Text, nullable=True)                  # sealed per-task backup data key
     result = Column(Text, nullable=True)
+    result_content_hash = Column(String, nullable=True)   # signed sha256 of the output bytes (#65)
     created_at = Column(DateTime, default=_utcnow)
     assigned_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -1523,6 +1530,7 @@ def _ensure_columns():
         "payout_obligations": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
         "payout_batches": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
         "connected_accounts": [("gateway_mode", "VARCHAR")],
+        "tasks": [("result_content_hash", "VARCHAR")],
     }
     try:
         insp = _inspect(engine)
@@ -2262,10 +2270,15 @@ def mark_task_running(db: Session, task: "Task") -> None:
 
 
 def submit_task_result(db: Session, task: "Task", result: str,
-                       status: str = "completed") -> None:
+                       status: str = "completed", content_hash: str = None) -> None:
     task.result = result
     task.status = status if status in ("completed", "failed", "running") else "completed"
     task.completed_at = _utcnow()
+    if content_hash:
+        # The seller-signed sha256 of the PLAINTEXT output bytes (from the signed proof). Stored
+        # so a fraction of real jobs can be independently re-executed and compared (quorum),
+        # instead of trusting a signed object-ref string. (#65)
+        task.result_content_hash = str(content_hash)[:128]
     db.add(task); db.commit()
 
 

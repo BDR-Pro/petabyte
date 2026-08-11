@@ -2585,13 +2585,19 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
         # seller, and a no-majority split holds everyone for review.
         if getattr(tw, "trigger", "manual") == "quorum":
             import quorum
-            quorum.record_submission(db, task.id, data.proof.get("output_hash"))
+            # Prefer the REAL signed content hash of the output bytes for quorum comparison —
+            # two honest nodes doing the same deterministic work produce the same content_hash.
+            quorum.record_submission(
+                db, task.id, data.proof.get("content_hash") or data.proof.get("output_hash"))
         return {"status": "ok", "task_id": task.id, "test_passed": passed,
                 "reputation": agent.reputation,
                 "can_accept_paid_jobs": agent.can_accept_paid_jobs}
 
-    # 3) Normal job: signature binds output to the node; store hash + result.
-    submit_task_result(db, task, data.result or data.proof.get("output_hash"), data.status)
+    # 3) Normal job: the signature binds the output to the node. Persist the seller-signed
+    #    content_hash (sha256 of the real output bytes) so a fraction of real jobs can be
+    #    re-executed on independent nodes and compared (quorum) — not just trusted.
+    submit_task_result(db, task, data.result or data.proof.get("output_hash"), data.status,
+                       content_hash=data.proof.get("content_hash"))
     if data.status == "completed":
         lat = None
         try:

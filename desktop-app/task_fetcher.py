@@ -9,6 +9,7 @@ Talks to the hardened API:
 Auth is the real encrypted API key (X-API-KEY). Heartbeat runs on its own thread
 so a long-running job never makes the node look offline (which would get it reaped).
 """
+import hashlib
 import logging
 import os
 import threading
@@ -338,10 +339,12 @@ def _run_render(task):
         grant = httpx.post(f"{API_URL}/jobs/backup_url", headers=HEADERS, timeout=15,
                            json={"task_id": tid, "filename": f"frames_{fs}_{fe}.tar"}).json()
         from cryptography.fernet import Fernet
-        enc = Fernet(grant["enc_key"].encode()).encrypt(open(bundle, "rb").read())
+        raw = open(bundle, "rb").read()
+        enc = Fernet(grant["enc_key"].encode()).encrypt(raw)
         httpx.put(grant["upload_url"], content=enc, timeout=600)
         _post("/jobs/result", _signed_result(tid, status="completed",
-                                             result=f"frames {fs}-{fe} -> {grant['snapshot_ref']}"))
+                                             result=f"frames {fs}-{fe} -> {grant['snapshot_ref']}",
+                                             content_hash=hashlib.sha256(raw).hexdigest()))
         _set_ui(status="idle", task=None, ok=True)
     except Exception as e:                              # noqa: BLE001
         report_log(tid, f"render failed: {e}")
@@ -393,9 +396,11 @@ def _run_transcode(task):
         grant = httpx.post(f"{API_URL}/jobs/backup_url", headers=HEADERS, timeout=15,
                            json={"task_id": tid, "filename": _os.path.basename(dst)}).json()
         from cryptography.fernet import Fernet
-        enc = Fernet(grant["enc_key"].encode()).encrypt(open(dst, "rb").read())
+        raw = open(dst, "rb").read()
+        enc = Fernet(grant["enc_key"].encode()).encrypt(raw)
         httpx.put(grant["upload_url"], content=enc, timeout=600)
-        _post("/jobs/result", _signed_result(tid, status="completed", result=grant["snapshot_ref"]))
+        _post("/jobs/result", _signed_result(tid, status="completed", result=grant["snapshot_ref"],
+                                             content_hash=hashlib.sha256(raw).hexdigest()))
         _set_ui(status="idle", task=None, ok=True)
     except Exception as e:                              # noqa: BLE001
         report_log(tid, f"transcode failed: {e}")
@@ -442,9 +447,11 @@ def _run_stitch(task):
         grant = httpx.post(f"{API_URL}/jobs/backup_url", headers=HEADERS, timeout=15,
                            json={"task_id": tid, "filename": _os.path.basename(out)}).json()
         from cryptography.fernet import Fernet
-        enc = Fernet(grant["enc_key"].encode()).encrypt(open(out, "rb").read())
+        raw = open(out, "rb").read()
+        enc = Fernet(grant["enc_key"].encode()).encrypt(raw)
         httpx.put(grant["upload_url"], content=enc, timeout=600)
-        _post("/jobs/result", _signed_result(tid, status="completed", result=grant["snapshot_ref"]))
+        _post("/jobs/result", _signed_result(tid, status="completed", result=grant["snapshot_ref"],
+                                             content_hash=hashlib.sha256(raw).hexdigest()))
         _set_ui(status="idle", task=None, ok=True)
     except Exception as e:                              # noqa: BLE001
         report_log(tid, f"assemble failed: {e}")
@@ -453,8 +460,12 @@ def _run_stitch(task):
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _signed_result(tid, status="completed", result=None):
+def _signed_result(tid, status="completed", result=None, content_hash=None):
+    # content_hash = sha256 of the PLAINTEXT output bytes, carried in the SIGNED proof so the
+    # seller commits to the actual output (quorum-comparable), not just the object ref string.
     proof = {"task_id": tid, "output_hash": (result or status)[:32], "ts": int(_t.time())}
+    if content_hash:
+        proof["content_hash"] = content_hash
     return {"task_id": tid, "status": status, "result": result,
             "proof": proof, "signature": crypto.sign_proof(proof)}
 

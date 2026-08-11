@@ -57,16 +57,25 @@ per-object handles + metadata minimization.
 - Payouts hold for `PAYOUT_HOLD_DAYS` (default 14) so a fraud freeze can catch a bad actor
   before money leaves.
 
+**Landed**
+- **Results now bind to the real output bytes (#65).** Every completed render/transcode/stitch
+  result carries a `content_hash` = sha256 of the *plaintext* output bytes, **inside the signed
+  proof** (both agents), and the server persists it (`Task.result_content_hash`). Quorum
+  comparison uses this content hash. So a seller commits to the actual output — two honest nodes
+  doing the same deterministic work produce the same hash — instead of signing a bare object-ref
+  string. *Remaining:* an independent verifier that re-executes a random fraction of real jobs
+  and compares the stored hashes (the storage is now in place); full server-side recompute of the
+  uploaded object needs real object storage.
+- **Benchmark tier is honestly labelled (#64).** The `benchmark_verified` tier's label is now
+  "Benchmark-reported" and its evidence states the throughput is **self-reported by the node's
+  agent and signed (attributable), not independently measured by the platform** — never "measured".
+
 **Honest gaps (closeable in software — roadmap, not yet enforced)**
 - The strongest validator (`matmul_validation.py`) is **not yet wired into the live result
-  path**, and results are bound to a seller-chosen `output_hash`, not to a server- or
-  quorum-recomputed hash of the actual output bytes. **Fix in flight (#65):** put a real
-  content hash in the result model and re-verify / quorum-compare it.
+  path**. With the signed `content_hash` now stored, wiring it + quorum re-execution of a random
+  fraction of *real* jobs is the next step.
 - Audits/quorum arrive as a distinct `test` task the agent can branch on, and run only when
   scheduled. **Fix:** subject a random fraction of *real* jobs to redundant re-execution.
-- `benchmark_verified` is derived from a **self-reported** `tokens_sec` (an agent env var),
-  so it is a *signed, attributable claim* — **not** an independent measurement. The trust
-  ladder must present it as self-reported, and marketing must never call it "measured." (#64)
 
 **Requires hardware attestation**
 - Proving the *specific silicon* (an "H100" really is an H100; VRAM is real) and that work ran
