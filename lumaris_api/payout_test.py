@@ -215,6 +215,26 @@ ok("exactly one Stripe transfer created for the batch",
    len([t for t in GW.transfers.values() if t.get("metadata", {}).get("seller_id") == str(sid2)]) == 1)
 ok("batch + its obligations are stamped TEST mode",
    batch.mode == "TEST" and all(o.mode == "TEST" for o in paid))
+
+# SPLIT-BRAIN FIX: a settled batch DEBITS the seller's seller_payable in the double-entry ledger
+# (mirroring the admin transfer path) so the ledger's seller-liability reconciles with the paid
+# obligations instead of growing forever.
+def _psettled(direction=None, account=None):
+    q = (s.query(dbmod.LedgerEntry).join(dbmod.LedgerTx, dbmod.LedgerEntry.tx_id == dbmod.LedgerTx.id)
+         .filter(dbmod.LedgerTx.reference_id == batch.public_id,
+                 dbmod.LedgerEntry.entry_type == "payout_settled"))
+    if direction:
+        q = q.filter(dbmod.LedgerEntry.direction == direction)
+    if account:
+        q = q.filter(dbmod.LedgerEntry.account == account)
+    return q.all()
+_dr = _psettled(dbmod.DEBIT, dbmod.acct_seller_payable(sid2))
+ok("settled batch posts a seller_payable DEBIT == batch total (split-brain fixed)",
+   len(_dr) == 1 and int(_dr[0].amount) == 1000)
+routing._post_batch_payout_ledger(s, batch)   # re-post
+ok("batch payout ledger leg is idempotent (no duplicate on re-post)", len(_psettled()) == 2)
+_bal_ok, _ = dbmod.ledger_is_balanced(s)
+ok("ledger balances after the batch-payout leg", _bal_ok)
 # a re-run does not create a second batch or double-pay (no available obligations left)
 again = routing.create_and_send_batch(s, dbmod.get_user_by_id(s, sid2), currency="usd")
 ok("re-running aggregation does not double-pay (nothing available)", again is None)

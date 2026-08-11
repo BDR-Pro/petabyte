@@ -66,6 +66,10 @@ def health(db) -> dict:
         return int(db.query(func.coalesce(func.sum(col), 0)).filter(CT.mode == mode).scalar() or 0)
     captured, fees = summ(CT.captured_amount), summ(CT.platform_fee_amount)
     seller_net, refunded = summ(CT.seller_net_amount), summ(CT.refunded_amount)
+    # Card-processing cost the platform bears (estimated, tracked per tx). Net contribution
+    # margin = gross commission - processing cost; it can be NEGATIVE on small jobs.
+    processing_fees = summ(CT.stripe_fee_amount)
+    net_platform_revenue = fees - processing_fees
 
     def txc(states):
         return db.query(func.count(CT.id)).filter(
@@ -92,7 +96,9 @@ def health(db) -> dict:
         "demand": {"queued_jobs": queued, "running_jobs": running,
                    "completed_jobs": completed_jobs, "failed_jobs": failed_jobs},
         "economics_minor": {"gmv_captured": captured, "platform_revenue": fees,
-                            "seller_earnings": seller_net, "refunded": refunded, "currency": "usd"},
+                            "seller_earnings": seller_net, "refunded": refunded,
+                            "processing_fees_est": processing_fees,
+                            "net_platform_revenue": net_platform_revenue, "currency": "usd"},
         "quality": {"tx_success_rate_pct": pct(tx_settled, tx_settled + tx_failed),
                     "job_success_rate_pct": pct(completed_jobs, job_denom),
                     "retry_rate_pct": pct(retried, tasks_total),

@@ -97,6 +97,21 @@ def audit(session) -> None:
                  f"but signed compute_transfer legs on {d.acct_stripe_payouts()} sum to {got} "
                  f"(a wrong-direction leg subtracts here)")
 
+    # ---- #37 ledger vs batch payouts: a PAID batch discharges its seller_payable liability ----
+    # A settled batch payout must post a payout_settled DEBIT on the seller's seller_payable equal
+    # to the batch total. Without it the batch marks obligations 'paid' but never debits the
+    # ledger — the split-brain that let the seller-liability account grow forever.
+    paid_batches = [b for b in session.query(d.PayoutBatch).all() if b.state == "paid"]
+    for b in paid_batches:
+        total = int(getattr(b, "total_amount_minor", 0) or 0)
+        if total <= 0:
+            continue
+        got = legs_sum(b.public_id, "payout_settled", d.acct_seller_payable(b.seller_id), d.DEBIT)
+        if got != Decimal(total):
+            fail(f"[vs-payouts] paid batch {b.public_id}: total_amount_minor={total} but "
+                 f"payout_settled seller_payable DEBIT legs sum to {got} (batch marked paid "
+                 f"without debiting the ledger — seller-liability split-brain)")
+
     valid_tx_ids = {t.id for t in session.query(d.ComputeTransaction).all()}
     for ob in session.query(d.PayoutObligation).all():
         if ob.compute_tx_id is not None and ob.compute_tx_id not in valid_tx_ids:

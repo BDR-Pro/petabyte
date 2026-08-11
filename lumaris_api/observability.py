@@ -623,6 +623,11 @@ def init_metrics() -> bool:
           ("payment_mode", "environment"))
         C("petabyte_seller_earnings_minor_total", "Seller net earned at capture (minor units)",
           ("payment_mode", "environment"))
+        # Estimated card-processing cost the PLATFORM bears (minor units). Net contribution
+        # margin = platform_fees - processing_fees; on small jobs this can be negative.
+        C("petabyte_processing_fees_minor_total",
+          "Estimated card-processing fee paid by the platform (minor units)",
+          ("payment_mode", "environment"))
         C("petabyte_webhooks_total", "Stripe webhooks",
           ("category", "outcome", "environment"))
         C("petabyte_webhook_invalid_signature_total", "Invalid webhook signatures",

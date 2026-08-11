@@ -54,11 +54,14 @@ def ok(label, cond):
         raise AssertionError(label)
 
 PW = "hunter2-correct-horse-xyz"
-def reg(u, email=None):
+def reg(u, email=None, verified=False):
     c.post("/register_user", json={"username": u, "password": PW})
     if email:
         s = dbmod.SessionLocal()
-        usr = dbmod.get_user_by_username(s, u); usr.email = email; s.add(usr); s.commit(); s.close()
+        usr = dbmod.get_user_by_username(s, u); usr.email = email
+        # Admin is conferred only by a VERIFIED email matching ADMIN_USERS (see _is_admin).
+        usr.email_verified = bool(verified)
+        s.add(usr); s.commit(); s.close()
 def login(u):
     return {"Authorization": "Bearer " + c.post("/login", data={"username": u, "password": PW}).json()["access_token"]}
 
@@ -89,7 +92,9 @@ def onboard_seller(seller_user, ok_=True, country="US"):
 # ============================ ONBOARDING ============================
 reg("seller_a", "sa@x.com"); c.post("/change_role", headers=login("seller_a"), json={"role": "seller"})
 reg("seller_b", "sb@x.com"); c.post("/change_role", headers=login("seller_b"), json={"role": "seller"})
-reg("buyer1"); reg("admin@petabyte.market")
+reg("buyer1")
+# The platform admin: ADMIN_USERS is an email, so admin requires a VERIFIED matching email.
+reg("admin@petabyte.market", email="admin@petabyte.market", verified=True)
 
 r = c.post("/payments/connect/account", headers=login("seller_a"), json={"country": "US"})
 ok("connected account created", r.status_code == 200 and r.json()["connected_account_id"].startswith("acct_"))
@@ -263,6 +268,34 @@ ok("duplicate capture is a no-op (amount unchanged, one capture per tx across su
    GW.payment_intents[pid]["amount_received"] == before)
 s.close()
 
+# ---- UNIT ECONOMICS: the platform's card-processing COST is recorded + visible ----
+# Captured 125 minor; commission 12; estimated Stripe fee = 2.9%*125 + 30c = 33. So the NET
+# contribution margin on this small job is 12 - 33 = -21 (a LOSS) — which is now visible in
+# the ledger and per-tx, instead of a dashboard showing a healthy 10% take while bleeding.
+import pricing as _pr  # noqa: E402
+_exp_fee = _pr.estimate_processing_fee_minor(125, "usd")
+s = dbmod.SessionLocal()
+_txf = sc.get_tx_by_public_id(s, tid)
+ok("processing fee recorded on the tx (estimated card cost = 33)",
+   _txf.stripe_fee_amount == _exp_fee and _exp_fee == 33)
+
+def _fee_legs(direction, account):
+    return (s.query(dbmod.LedgerEntry)
+            .join(dbmod.LedgerTx, dbmod.LedgerEntry.tx_id == dbmod.LedgerTx.id)
+            .filter(dbmod.LedgerTx.reference_id == tid,
+                    dbmod.LedgerEntry.entry_type == "stripe_fee",
+                    dbmod.LedgerEntry.account == account,
+                    dbmod.LedgerEntry.direction == direction).all())
+_dr = _fee_legs(dbmod.DEBIT, dbmod.acct_stripe_fees())
+_cr = _fee_legs(dbmod.CREDIT, dbmod.EXTERNAL_PAYMENTS)
+ok("processing fee posted as ONE balanced stripe:fees entry (idempotent across the dup capture)",
+   len(_dr) == 1 and len(_cr) == 1 and int(_dr[0].amount) == _exp_fee and int(_cr[0].amount) == _exp_fee)
+ok("net contribution margin is negative on a small job (commission 12 - fee 33)",
+   (cap["platform_fee_amount"] - _exp_fee) == -21)
+_bal_ok, _broken = dbmod.ledger_is_balanced(s)
+ok("ledger still balances globally after the processing-fee leg", _bal_ok)
+s.close()
+
 
 # ============================ CANCEL: prompt release of a FAILED dispatched job ===========
 # Once a job is dispatched, POST /payments/{tx}/cancel must still refuse an ACTIVELY running job
@@ -315,6 +348,30 @@ _s.close()
 c2 = c.post(f"/payments/{tid_run}/cancel", headers=login("buyer1"))
 ok("cancel of an already-released failed job is idempotent (200, no double release)",
    c2.status_code == 200 and _avail_cx() == base_avail)
+
+# ---- fail_job(): the /jobs/result FAILURE bridge unsticks a RUNNING tx (killer #9) ----
+# When a dispatched job reports FAILED, /jobs/result calls sc.fail_job — which must move the tx
+# out of RUNNING to JOB_FAILED and free the reservation + void the buyer hold immediately, rather
+# than leaving it stuck in RUNNING (buyer can't cancel; unit pinned until the 26h reaper).
+base9 = _avail_cx()
+tid9 = _run_to_running(spec_cx)
+ok("fail_job setup: dispatched job holds a unit", _avail_cx() == base9 - 1)
+_s = dbmod.SessionLocal()
+_tx9 = sc.get_tx_by_public_id(_s, tid9)
+ok("fail_job setup: tx is RUNNING before failure", _tx9.status == "RUNNING")
+_pid9 = _tx9.stripe_payment_intent_id
+sc.fail_job(_s, _tx9, reason="agent reported job failed")
+ok("fail_job moves a failed RUNNING tx to JOB_FAILED (no longer stuck)", _tx9.status == "JOB_FAILED")
+_s.close()
+ok("fail_job frees the reserved GPU unit immediately", _avail_cx() == base9)
+ok("fail_job voids the buyer's authorization hold (a failed job bills nothing)",
+   GW.payment_intents[_pid9]["status"] == "canceled")
+_s = dbmod.SessionLocal()
+_tx9b = sc.get_tx_by_public_id(_s, tid9)
+sc.fail_job(_s, _tx9b, reason="again")
+ok("fail_job is idempotent (stays JOB_FAILED, no double release)",
+   _tx9b.status == "JOB_FAILED" and _avail_cx() == base9)
+_s.close()
 
 
 # ============================ TRANSFER ============================
@@ -369,6 +426,45 @@ ok("partial refund refunds only the requested amount", pr["refunded_amount"] == 
 # admin refund requires a reason
 ok("admin refund requires a reason",
    c.post(f"/admin/payments/{tid_pr}/refund", headers=admin, json={"reason": ""}).status_code in (400, 422))
+
+# ---- REFUND after a BATCH payout: clawback is FLAGGED, never silently 'reconciled' (killer #6) ----
+# Simulate the seller already paid via the batch path: obligation 'paid', NO stripe_transfer_id.
+# A refund/chargeback then can't reverse a specific transfer, so the seller's share becomes a
+# recoverable debt (ledger DEBITs seller_payable) and MUST be flagged for recovery.
+tid_bc = run_to_metered(3600)
+c.post(f"/admin/payments/{tid_bc}/capture", headers=admin)
+_s = dbmod.SessionLocal()
+_txbc = sc.get_tx_by_public_id(_s, tid_bc)
+_obc = _s.query(dbmod.PayoutObligation).filter(dbmod.PayoutObligation.compute_tx_id == _txbc.id).first()
+_obc.state = "paid"; _s.add(_obc); _s.commit(); _s.close()
+rbc = c.post(f"/admin/payments/{tid_bc}/refund", headers=admin,
+             json={"reason": "chargeback after batch payout"}).json()
+ok("refund after batch payout still returns the buyer's money in full", rbc["refunded_amount"] == 250)
+_s = dbmod.SessionLocal()
+_txbc2 = sc.get_tx_by_public_id(_s, tid_bc)
+ok("batch-paid refund is flagged needs_review, NOT silently reconciled (killer #6)",
+   _txbc2.reconciliation_status == "needs_review")
+_rlegs = (_s.query(dbmod.LedgerEntry).join(dbmod.LedgerTx, dbmod.LedgerEntry.tx_id == dbmod.LedgerTx.id)
+          .filter(dbmod.LedgerTx.reference_id == tid_bc,
+                  dbmod.LedgerEntry.entry_type == "compute_refund",
+                  dbmod.LedgerEntry.account == dbmod.acct_seller_payable(_txbc2.seller_id),
+                  dbmod.LedgerEntry.direction == dbmod.DEBIT).all())
+ok("refund posted a seller_payable clawback DEBIT (ledger records the recoverable debt)",
+   len(_rlegs) == 1 and int(_rlegs[0].amount) > 0)
+_bal_ok, _ = dbmod.ledger_is_balanced(_s)
+ok("ledger balances after the batch-paid refund clawback", _bal_ok)
+_s.close()
+
+# ---- REFUND of an UNPAID obligation reverses it (money never left) -> reconciled (killer #6) ----
+tid_up = run_to_metered(3600)
+c.post(f"/admin/payments/{tid_up}/capture", headers=admin)
+c.post(f"/admin/payments/{tid_up}/refund", headers=admin, json={"reason": "buyer cancelled, unpaid"})
+_s = dbmod.SessionLocal()
+_txup = sc.get_tx_by_public_id(_s, tid_up)
+_oup = _s.query(dbmod.PayoutObligation).filter(dbmod.PayoutObligation.compute_tx_id == _txup.id).first()
+ok("full refund of an UNPAID obligation reverses it (never paid out) + reconciles",
+   _oup.state == "reversed" and _txup.reconciliation_status == "reconciled")
+_s.close()
 
 # REGRESSION (defect B): a DUPLICATE identical partial refund must NOT double-count.
 # Previously refunded_amount went 100 -> 200 for a single Stripe refund.
@@ -827,6 +923,19 @@ ok("financial_integrity: a deliberately-injected imbalance is DETECTED",
    (not _bad["balanced"]) and _bad["imbalanced_tx"] >= 1)
 _fs.close()
 
+
+# ---- canonical funding metrics endpoint (admin-only, read-only, honest) ----
+fnd = c.get("/admin/funding?scope=test", headers=admin)
+ok("admin funding endpoint returns 200 for an admin",
+   fnd.status_code == 200 and "money_minor" in fnd.json() and "rates" in fnd.json())
+ok("funding endpoint reports canonical GMV as an int (minor units)",
+   isinstance(fnd.json()["money_minor"]["gmv_captured"], int))
+ok("funding REAL scope shows no LIVE GMV in this TEST-mode suite",
+   c.get("/admin/funding?scope=real", headers=admin).json()["money_minor"]["gmv_captured"] == 0)
+ok("funding endpoint is admin-only (buyer -> 403)",
+   c.get("/admin/funding", headers=login("buyer1")).status_code == 403)
+ok("funding endpoint rejects an invalid scope (422)",
+   c.get("/admin/funding?scope=bogus", headers=admin).status_code == 422)
 
 print(f"\n=== stripe: {PASSES} passed, {FAILS} failed ===")
 for f in ("stripe_test.db", "stripe_test.db-wal", "stripe_test.db-shm"):

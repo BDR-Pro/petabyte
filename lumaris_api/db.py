@@ -156,6 +156,15 @@ class User(Base):
     # Seeded demo entity. NEVER shown as real traction: metrics separate demo from
     # real, and the UI badges anything demo as "Demo data".
     is_demo = Column(Boolean, default=False, nullable=False, index=True)
+    # Signup timestamp — powers funding cohorts (retention) + time-to-first-value. Nullable
+    # so pre-existing rows (created before this column) don't block; new users always get it.
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    # A user's spendable balance and accrued earnings can NEVER go negative — enforced at the
+    # DB layer, not only by the guarded-debit application logic (defence in depth).
+    __table_args__ = (
+        CheckConstraint("balance >= 0", name="ck_user_balance_nonneg"),
+        CheckConstraint("earnings >= 0", name="ck_user_earnings_nonneg"),
+    )
 
 
 class SellerSpec(Base):
@@ -484,6 +493,14 @@ class LedgerEntry(Base):
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
     entry_type = Column(String, nullable=False)
     created_at = Column(DateTime, default=_utcnow)
+    # DB-level invariants (defence in depth): a leg's amount is ALWAYS positive (the
+    # convention in the docstring), and direction is a closed set. These make money impossible
+    # to create/destroy via a stray write or raw SQL that bypasses post(). Apply on fresh
+    # databases (create_all); existing DBs pick them up on a schema rebuild/migration.
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_ledger_amount_pos"),
+        CheckConstraint("direction in ('debit','credit')", name="ck_ledger_direction"),
+    )
 
 
 # ---- account naming ----------------------------------------------------------
@@ -1488,7 +1505,8 @@ def _ensure_columns():
                   ("referral_rewarded", "BOOLEAN DEFAULT false"),
                   ("referral_signup_meta", "VARCHAR"),("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
                   ("email_token_exp", "TIMESTAMP"),
-                  ("is_demo", "BOOLEAN NOT NULL DEFAULT false")],
+                  ("is_demo", "BOOLEAN NOT NULL DEFAULT false"),
+                  ("created_at", "TIMESTAMP")],
         "platform": [("bookings_paused", "BOOLEAN DEFAULT false"),
                      ("pause_reason", "VARCHAR"), ("paused_at", "TIMESTAMP"),
                      ("landing_video_id", "VARCHAR"),
@@ -3197,14 +3215,24 @@ def list_issued_keys(db: Session, user_id: int):
 
 # ------------------ Google / passwordless users ------------------
 
-def get_or_create_oauth_user(db: Session, email: str, provider: str = "google") -> "User":
+def get_or_create_oauth_user(db: Session, email: str, provider: str = "google",
+                             email_verified: bool = False) -> "User":
+    # `email_verified` should reflect the PROVIDER's verification claim (e.g. Google's
+    # `email_verified`), NOT a dev stub. A provider-verified email is a trusted identity
+    # (it gates payouts and the admin allowlist), so honour it — but only ever UPGRADE a
+    # user's flag, never downgrade one that was verified another way.
     u = db.query(User).filter(User.username == email).first()
     if u:
+        changed = False
         if not u.email:
-            u.email = email; db.add(u); db.commit()
+            u.email = email; changed = True
+        if email_verified and not u.email_verified:
+            u.email_verified = True; changed = True
+        if changed:
+            db.add(u); db.commit()
         return u
     import secrets as _s
-    u = User(username=email, email=email,
+    u = User(username=email, email=email, email_verified=bool(email_verified),
              password=hash_password("oauth:" + provider + ":" + _s.token_hex(16)),
              role="buyer")
     db.add(u); db.commit(); db.refresh(u)

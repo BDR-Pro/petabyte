@@ -26,13 +26,13 @@ import os
 from datetime import datetime, timezone, timedelta
 
 from db import (post, DEBIT, CREDIT, EXTERNAL_PAYMENTS, PLATFORM_REVENUE,
-                acct_seller_payable, acct_stripe_payouts,
+                acct_seller_payable, acct_stripe_payouts, acct_stripe_fees,
                 ConnectedAccount, ComputeTransaction, ComputeTxEvent,
                 PaymentOperation, StripeWebhookEvent, Settlement,
                 SellerSpec, Booking, User, spec_is_live, try_reserve_unit,
                 release_unit, create_task, get_user_by_id, update)
 from pricing import (PricingConfig, PricingError, price_per_hour_to_minor, estimate,
-                     settle, refund_split)
+                     settle, refund_split, estimate_processing_fee_minor)
 from stripe_gateway import get_gateway, StripeError
 import observability as _obs
 
@@ -652,6 +652,37 @@ def capture(db, tx: ComputeTransaction) -> ComputeTransaction:
     ], reference_id=tx.public_id,
        description="captured actual compute usage", entry_type="compute_capture")
     transition(db, tx, "PAYMENT_CAPTURED", reason=f"captured {captured}")
+    # Record the platform's card-processing COST for this charge — the missing leg of unit
+    # economics. Without it the ledger shows a healthy commission while small jobs quietly lose
+    # money (the fixed ~30c dominates). Posted as its OWN balanced entry (stripe:fees expense
+    # funded from the external-payments clearing account) so the capture split stays exactly
+    # `captured == platform_fee + seller_net` and the ledger auditor's compute_capture check is
+    # untouched. This is an ESTIMATE (standard card formula); the exact balance_transaction fee
+    # is reconciled separately. Best-effort + idempotent: a hiccup never fails the capture, and
+    # the tx is already PAYMENT_CAPTURED (repairable).
+    try:
+        fee_est = estimate_processing_fee_minor(captured, tx.currency)
+        if fee_est > 0:
+            tx.stripe_fee_amount = fee_est
+            db.add(tx)
+            post(db, "compute_transaction", legs=[
+                (acct_stripe_fees(), DEBIT,  fee_est),
+                (EXTERNAL_PAYMENTS,  CREDIT, fee_est),
+            ], reference_id=tx.public_id,
+               idempotency_key=idem_key("stripe_fee", tx, version),
+               description="estimated card-processing fee (platform cost)",
+               entry_type="stripe_fee")
+            db.commit()
+            try:
+                _mode = _obs.bounded_label(getattr(tx, "mode", None), _obs.PAYMENT_MODE, "sandbox")
+                _obs.inc_metric("petabyte_processing_fees_minor_total", fee_est,
+                                payment_mode=_mode, environment=_obs.ENVIRONMENT)
+            except Exception:  # noqa: BLE001 — telemetry never blocks
+                pass
+    except Exception:  # noqa: BLE001 — fee accounting is supplementary; never break capture
+        db.rollback()
+        logger.warning("stripe fee accounting failed for tx %s (repairable)",
+                       tx.public_id, exc_info=True)
     # Settlement telemetry: the money split (gross / commission / seller) as structured
     # event fields for the executive + investor dashboards (they sum these from Loki,
     # split by payment_mode — real and test money are never mixed). Amounts are minor
@@ -941,6 +972,41 @@ def release_failed_reservation(db, tx: ComputeTransaction, *,
     return tx
 
 
+def fail_job(db, tx: ComputeTransaction, *,
+             reason: str = "job reported failed") -> ComputeTransaction:
+    """A dispatched job FAILED (the agent reported failure, or its result was rejected). Move an
+    in-flight (DISPATCHING/RUNNING) Stripe-native tx to JOB_FAILED and immediately free the GPU
+    reservation + void the buyer's authorization — a failed job bills nothing.
+
+    This is the /jobs/result FAILURE counterpart to the completed -> settle bridge. Without it a
+    Stripe-native job that fails on a still-alive node lingers in RUNNING forever: the buyer's
+    cancel 409s (job looks 'running'), the reserved unit stays pinned, and the FSM's failure
+    edges are never reached until the 26h abandoned-reservation reaper. The tx is left in the
+    truthful JOB_FAILED state (a recognized terminal-failure in marketplace_insight.TX_FAILED),
+    not rewritten to CANCELLED. Idempotent: an already-terminal-failed tx just gets its
+    reservation reclaimed; a pre-dispatch or already-captured tx is left to the cancel/capture
+    paths (nothing to fail here)."""
+    import marketplace_insight as mi
+    if tx.status in mi.TX_FAILED:
+        if tx.booking_id:
+            try:
+                release_failed_reservation(db, tx, reason=reason)
+            except TransactionError:
+                pass
+        return tx
+    if tx.status not in ("DISPATCHING", "RUNNING"):
+        return tx
+    transition(db, tx, "JOB_FAILED", reason=reason)
+    # tx is now terminal-failed, so release_failed_reservation accepts it: void the PI hold
+    # (buyer charged nothing) + free the GPU unit. Best-effort; the reaper repairs on failure.
+    try:
+        release_failed_reservation(db, tx, reason=reason)
+    except Exception:  # noqa: BLE001
+        logger.warning("fail_job: reservation release failed for tx %s (reaper will retry)",
+                       tx.public_id, exc_info=True)
+    return tx
+
+
 # Pre-capture states in which a reservation is legitimately held while the job is in flight.
 _PRE_CAPTURE_ACTIVE = ("GPU_RESERVED", "DISPATCHING", "RUNNING",
                        "METERING_FINALIZED", "PAYMENT_CAPTURE_PENDING")
@@ -1131,8 +1197,44 @@ def refund(db, tx: ComputeTransaction, *, amount: int = None, actor: str = "admi
             db.add(tx); db.commit()
             raise TransactionError(f"refund done but reversal failed; escalated: {e}")
 
+    # Recover the seller's refunded share when there was NO Stripe transfer to reverse (the seller
+    # was paid — or not yet — via the batch payout path). Previously this branch was silently
+    # marked 'reconciled', so a refund/chargeback AFTER a batch payout let the platform eat the
+    # seller's share with the books misstating it. Now:
+    if split["seller_reversal_amount"] == 0:
+        seller_share_settled = True                          # nothing owed back by the seller
+    elif tx.stripe_transfer_id:
+        seller_share_settled = tx.reversed_amount >= split["seller_reversal_amount"]
+    else:
+        seller_share_settled = False
+        import db as _dbm
+        obl = db.query(_dbm.PayoutObligation).filter(
+            _dbm.PayoutObligation.compute_tx_id == tx.id).first()
+        obl_state = getattr(obl, "state", None)
+        if obl is not None and obl_state in ("accrued", "available") and amount >= tx.captured_amount:
+            # Seller NOT yet paid: the money is still with the platform (the ledger already
+            # debited seller_payable). Reverse the whole obligation so the refunded share is
+            # never paid out. (A partial refund of an unpaid obligation is escalated below.)
+            obl.state = "reversed"; db.add(obl); db.commit()
+            seller_share_settled = True
+        else:
+            # Seller ALREADY paid via the batch path (paid/batched/transferring), a partial
+            # refund of an unpaid obligation, or no obligation on record: there is no reversible
+            # transfer. The ledger debit turns seller_payable into a recoverable NEGATIVE balance
+            # (it nets against the seller's FUTURE earnings), but it needs explicit recovery —
+            # flag it for review, NEVER silently reconcile.
+            logger.warning("refund clawback PENDING for tx %s: seller share %s minor was paid via "
+                           "the batch path (no reversible transfer). seller_payable now carries a "
+                           "recoverable debt; operator/auto-net recovery required.",
+                           tx.public_id, split["seller_reversal_amount"])
+            try:
+                _obs.inc_metric("petabyte_reconciliation_discrepancies_total",
+                                environment=_obs.ENVIRONMENT)
+            except Exception:  # noqa: BLE001 — telemetry never blocks the refund
+                pass
+
     fully = tx.refunded_amount >= tx.captured_amount
-    tx.reconciliation_status = "reconciled" if (not tx.stripe_transfer_id or tx.reversed_amount >= split["seller_reversal_amount"]) else "needs_review"
+    tx.reconciliation_status = "reconciled" if seller_share_settled else "needs_review"
     db.add(tx); db.commit()
     if fully:
         return transition(db, tx, "REFUNDED", reason=reason)

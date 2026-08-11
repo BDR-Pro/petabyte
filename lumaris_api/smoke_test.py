@@ -702,7 +702,13 @@ for u in ["rr1","rr2"]:
     c.post("/register_user", json={"username":u,"password":"hunter2-correct-horse"})
 hR1,sidR1,skR1,keyR1=seller("rr1",2.0,gpu="RENDERGPU")
 hR2,sidR2,skR2,keyR2=seller("rr2",2.0,gpu="RENDERGPU")
-job=c.post("/render", headers=rndh, json={"blend_ref":"s3://pb/scene.blend","frame_start":1,"frame_end":100,"nodes":2,"hours":1,"gpu_class":"RENDERGPU"}).json()
+# buyer uploads the scene to their OWN tenant prefix, then binds that ref (the only path)
+rup=c.post("/uploads/url", headers=rndh, json={"filename":"scene.blend"}).json()
+ok("render buyer input is under their own tenant prefix", rup["key"].startswith("inputs/") and rup["key"].endswith("scene.blend"))
+# a buyer may NOT bind ANOTHER tenant's object key (cross-tenant bind rejected at request time)
+ok("render REJECTS binding a foreign tenant's input ref",
+   c.post("/render", headers=rndh, json={"blend_ref":"s3://pb-backups-test/inputs/999999/victim.blend","frame_start":1,"frame_end":100,"nodes":2,"hours":1,"gpu_class":"RENDERGPU"}).status_code==422)
+job=c.post("/render", headers=rndh, json={"blend_ref":rup["ref"],"frame_start":1,"frame_end":100,"nodes":2,"hours":1,"gpu_class":"RENDERGPU"}).json()
 ok("render splits across 2 nodes", job["nodes"]==2)
 ok("render frame chunks contiguous & complete", sorted(tuple(t["frames"]) for t in job["tasks"])==[(1,50),(51,100)])
 # the assigned node receives its frame range
@@ -710,7 +716,11 @@ rjob=c.get("/jobs/next", headers={"X-API-KEY":keyR1}).json()
 ok("render node gets a frame subrange", rjob["task_type"]=="render" and "frame_start" in rjob and "frame_end" in rjob and rjob["blend_ref"].endswith("scene.blend"))
 ok("render task carries a container image (no host install)", bool(rjob.get("image")) and rjob.get("gpu") is True)
 iu=c.post("/jobs/input_url", headers={"X-API-KEY":keyR1}, json={"task_id":rjob["task_id"],"ref":rjob["blend_ref"]}).json()
-ok("node pulls scene via pre-signed GET", "op=get" in iu["download_url"] and iu["key"]=="scene.blend")
+ok("node pulls scene via pre-signed GET", "op=get" in iu["download_url"] and iu["key"]==rup["key"])
+# IDOR: a node may NOT mint a GET for an arbitrary key — only refs the buyer bound to the task.
+ok("node CANNOT presign an arbitrary object key (cross-tenant IDOR blocked)",
+   c.post("/jobs/input_url", headers={"X-API-KEY":keyR1},
+          json={"task_id":rjob["task_id"],"ref":"inputs/999999/victim-secret.tar"}).status_code==404)
 
 
 # ==== PAYOUTS + SCHEDULED WITHDRAW ====
@@ -893,6 +903,9 @@ for seg in r["segments"]:
 man=c.get(f"/jobs/manifest/{job_id}", headers=tcb).json()
 ok("all segments done -> job assembling", man["status"]=="assembling" and all(s["status"]=="done" for s in man["segments"]))
 ok("stitch task auto-created", man["stitch_task_id"] is not None)
+# IDOR: another authenticated buyer cannot read this job's manifest (segment output refs).
+ok("job manifest is owner-only (cross-tenant enumeration blocked)",
+   c.get(f"/jobs/manifest/{job_id}", headers=rndh).status_code==404)
 
 # complete the stitch (runs on segment-0's node) -> final output
 stitch_key,stitch_sk=keymap[r["segments"][0]["spec_id"]]
@@ -907,7 +920,8 @@ r1=c.post("/transcode", headers=tcb, json={"input_ref":up["ref"],"nodes":1,"gpu_
 ok("single-node transcode = 1 segment", r1["nodes"]==1 and len(r1["segments"])==1)
 
 # ---- RENDER now uses the same manifest (stitching backfilled) ----
-rj=c.post("/render", headers=rndh, json={"blend_ref":"s3://pb/scene.blend","frame_start":1,"frame_end":100,"nodes":2,"hours":1,"gpu_class":"RENDERGPU"}).json()
+rup2=c.post("/uploads/url", headers=rndh, json={"filename":"scene.blend"}).json()
+rj=c.post("/render", headers=rndh, json={"blend_ref":rup2["ref"],"frame_start":1,"frame_end":100,"nodes":2,"hours":1,"gpu_class":"RENDERGPU"}).json()
 ok("render now returns a manifest job", "job_id" in rj and rj["nodes"]==2)
 rkeymap={sidR1:(keyR1,skR1), sidR2:(keyR2,skR2)}
 for seg in rj["tasks"]:
@@ -1097,6 +1111,27 @@ try:
 except RuntimeError as e:
     _refused_pay = "PAYMENTS_MODE" in str(e)
 ok("production REFUSES to boot with payments in sandbox", _refused_pay)
+# The gate must fire even if ENVIRONMENT=production is FORGOTTEN, whenever a live-money signal
+# is present — otherwise a mis-deployed prod box silently runs the login-as-anyone stub.
+os.environ.pop("ENVIRONMENT", None)
+os.environ["GOOGLE_OAUTH_STUB"] = "true"
+os.environ["PAYMENTS_LIVE_ENABLED"] = "true"
+_refused_forgot = False
+try:
+    _m._assert_production_is_safe()
+except RuntimeError:
+    _refused_forgot = True
+ok("gate fires without ENVIRONMENT when PAYMENTS_LIVE_ENABLED=true (forgotten-flag hole closed)",
+   _refused_forgot)
+os.environ.pop("PAYMENTS_LIVE_ENABLED", None)
+# ...and a plain dev process (no live signal, fake gateway) is NOT gated — stubs stay allowed.
+os.environ["GOOGLE_OAUTH_STUB"] = "true"
+_dev_ok = True
+try:
+    _m._assert_production_is_safe()
+except RuntimeError:
+    _dev_ok = False
+ok("dev process (no live signal) is NOT gated", _dev_ok)
 if _env_saved is None:
     os.environ.pop("ENVIRONMENT", None)
 else:
@@ -1663,6 +1698,10 @@ ok("google user is created/persistent", c.get("/auth/google/callback?code=x&emai
 
 # ==== ADMIN CONSOLE (env-allowlisted, gated) ====
 os.environ["ADMIN_USERS"]="gtest@example.com"   # make the google user an admin (read dynamically)
+# Admin is conferred only by a VERIFIED matching email (see _is_admin). The stub OAuth path
+# deliberately does NOT verify emails, so grant verification here as a real Google login would.
+_sga=dbmod.SessionLocal(); _gu=main.get_user_by_username(_sga,"gtest@example.com")
+_gu.email_verified=True; _sga.add(_gu); _sga.commit(); _sga.close()
 GAH={"Authorization":f"Bearer {gjwt}"}
 NAH={"Authorization":f"Bearer {login('buyer1')}"}   # a normal, non-admin user
 ok("admin page serves to anyone (data still gated)", c.get("/admin").status_code==200 and "console" in c.get("/admin").text)

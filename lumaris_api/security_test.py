@@ -1,0 +1,175 @@
+"""security_test.py — regression tests for the offensive-hardening batch.
+
+Covers, offline (no network, no GPU, SQLite):
+  * _client_ip is spoof-resistant: forwarding headers are trusted ONLY from a declared
+    proxy, X-Real-IP (which nginx sets to the true peer) wins, and X-Forwarded-For is read
+    from the RIGHT — so a client cannot forge its IP by PREPENDing an entry.
+  * the token-less Prometheus endpoint no longer authorizes a SPOOFED loopback IP.
+  * cross-tenant object refs: a buyer may bind only their OWN inputs/<id>/ prefix, and a
+    node can never presign another tenant's key (input_url tenant backstop).
+  * stored-XSS at the source: gpu_model / region / provider / username / org name reject
+    HTML metacharacters at write time (SpecModel / UserRegisterModel / OrgCreateModel).
+
+Run: python security_test.py
+"""
+import os
+
+from cryptography.fernet import Fernet
+
+os.environ["TRUSTED_PROXIES"] = "testclient,127.0.0.1,::1"
+os.environ.setdefault("DATABASE_URL", "sqlite:///./security.db")
+os.environ["SECRET_KEY"] = "test-jwt-secret"
+os.environ["SERVER_PRIVATE_KEY"] = Fernet.generate_key().decode()
+os.environ["WG_PUBLIC_KEY"] = "SERVERPUBLICKEYbase64example=="
+os.environ["WG_ENDPOINT"] = "vpn.lumaris.example"
+os.environ["PAYMENT_WEBHOOK_SECRET"] = "whsec_test"
+os.environ["NOTIFY_STUB"] = "true"
+os.environ.pop("PROMETHEUS_METRICS_TOKEN", None)   # exercise the loopback gate, not the token path
+
+for f in ("security.db", "security.db-wal", "security.db-shm"):
+    if os.path.exists(f):
+        os.remove(f)
+
+from fastapi.testclient import TestClient   # noqa: E402
+from pydantic import ValidationError        # noqa: E402
+import db as dbmod                           # noqa: E402
+if dbmod.engine.dialect.name.startswith("postgres"):
+    with dbmod.engine.begin() as _c:
+        _c.exec_driver_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    dbmod.init_db()
+import main   # noqa: E402
+
+c = TestClient(main.app)
+_fail = 0
+
+
+def ok(label, cond):
+    global _fail
+    print(("ok  " if cond else "FAIL") + "  " + label)
+    if not cond:
+        _fail += 1
+
+
+class _Hdrs(dict):
+    def get(self, k, default=None):
+        return dict.get(self, k, default)
+
+
+class _Req:
+    """Minimal stand-in for starlette Request (only what _client_ip touches)."""
+    def __init__(self, peer, headers=None):
+        self.client = type("C", (), {"host": peer})() if peer else None
+        self.headers = _Hdrs(headers or {})
+
+
+# ---------------------------------------------------------------- _client_ip spoofing
+# A direct, UNTRUSTED peer is used verbatim — its forwarding headers are ignored.
+ok("untrusted peer: X-Forwarded-For is ignored",
+   main._client_ip(_Req("9.9.9.9", {"X-Forwarded-For": "1.1.1.1"})) == "9.9.9.9")
+
+# Trusted proxy + X-Real-IP (what nginx sets to $remote_addr) wins over a spoofed XFF.
+ok("trusted proxy: X-Real-IP wins over spoofed left-most XFF",
+   main._client_ip(_Req("127.0.0.1",
+                        {"X-Real-IP": "8.8.8.8",
+                         "X-Forwarded-For": "1.1.1.1, 8.8.8.8"})) == "8.8.8.8")
+
+# Trusted proxy, no X-Real-IP: the real client is the RIGHT-most non-proxy hop, NOT the
+# attacker-prepended left-most entry.
+ok("trusted proxy: XFF is read from the right (prepended spoof ignored)",
+   main._client_ip(_Req("127.0.0.1",
+                        {"X-Forwarded-For": "1.1.1.1, 8.8.8.8"})) == "8.8.8.8")
+
+# A forged loopback in XFF must NOT resolve to loopback (this is the metrics-gate bypass).
+ok("trusted proxy: forged loopback in XFF does NOT become the client IP",
+   main._client_ip(_Req("127.0.0.1",
+                        {"X-Real-IP": "8.8.8.8",
+                         "X-Forwarded-For": "127.0.0.1, 8.8.8.8"})) == "8.8.8.8")
+
+# Backwards-compatible single-hop XFF (GeoIP tests rely on this).
+ok("trusted proxy: single-hop XFF still returns that client",
+   main._client_ip(_Req("testclient", {"X-Forwarded-For": "10.1.1.1"})) == "10.1.1.1")
+
+
+# ---------------------------------------------------------------- metrics loopback gate
+# No token configured -> only genuine loopback/trusted callers may scrape. A caller that
+# nginx tags with a real external X-Real-IP is rejected even though it forged XFF loopback.
+r = c.get(main._PROM_PATH, headers={"X-Real-IP": "8.8.8.8", "X-Forwarded-For": "127.0.0.1"})
+ok("token-less metrics: spoofed loopback (real X-Real-IP) is REJECTED", r.status_code == 403)
+r = c.get(main._PROM_PATH, headers={"X-Forwarded-For": "127.0.0.1, 8.8.8.8"})
+ok("token-less metrics: appended real client behind forged loopback is REJECTED",
+   r.status_code == 403)
+r = c.get(main._PROM_PATH, headers={"X-Real-IP": "127.0.0.1"})
+ok("token-less metrics: genuine loopback is allowed", r.status_code == 200)
+
+
+# ---------------------------------------------------------------- cross-tenant object refs
+ok("_storage_key_from_ref strips s3://bucket/",
+   main._storage_key_from_ref("s3://b/inputs/5/f.mp4") == "inputs/5/f.mp4")
+ok("buyer's OWN input ref is accepted",
+   main._ref_is_own_input("s3://b/inputs/5/f.mp4", 5) is True)
+ok("another tenant's input ref is REJECTED",
+   main._ref_is_own_input("s3://b/inputs/999/secret.mp4", 5) is False)
+ok("a non-inputs key (e.g. another tenant's backups) is REJECTED",
+   main._ref_is_own_input("s3://b/backups/999/1/x.tar", 5) is False)
+ok("empty / None ref is REJECTED (fail closed)",
+   main._ref_is_own_input("", 5) is False and main._ref_is_own_input(None, 5) is False)
+
+
+# ---------------------------------------------------------------- stored-XSS at write time
+def _rejects(factory, label):
+    try:
+        factory()
+        ok(label, False)
+    except ValidationError:
+        ok(label, True)
+
+
+_rejects(lambda: main.SpecModel(cpu=1, ram=1, duration=1, price_per_hour=1.0,
+                                provider="ok", gpu_model="<img src=x onerror=alert(1)>"),
+         "SpecModel rejects HTML in gpu_model")
+_rejects(lambda: main.SpecModel(cpu=1, ram=1, duration=1, price_per_hour=1.0,
+                                provider="ok", region="\"><script>alert(1)</script>"),
+         "SpecModel rejects HTML in region")
+_rejects(lambda: main.UserRegisterModel(username="<b>xss</b>", password="corrhorsebatt42"),
+         "UserRegisterModel rejects HTML in username")
+_rejects(lambda: main.OrgCreateModel(name="<svg onload=alert(1)>"),
+         "OrgCreateModel rejects HTML in name")
+
+# Real-world labels must still be accepted (no false positives).
+ok("SpecModel accepts a real GPU label",
+   main.SpecModel(cpu=8, ram=32, duration=24, price_per_hour=1.5, provider="self-hosted",
+                  gpu_model="RTX 4090", region="us-east-1", country="US").gpu_model == "RTX 4090")
+ok("UserRegisterModel accepts a normal username",
+   main.UserRegisterModel(username="alice_2", password="corrhorsebatt42").username == "alice_2")
+
+# End-to-end: the API returns 422 (not a 500) for an XSS username at /register_user.
+r = c.post("/register_user", json={"username": "<script>1</script>", "password": "corrhorsebatt42"})
+ok("/register_user returns 422 for an XSS username", r.status_code == 422)
+
+
+# ---------------------------------------------------------------- DoS / input bounds
+_rejects(lambda: main.TranscodeModel(input_ref="s3://b/inputs/1/v.mp4", nodes=100000),
+         "TranscodeModel rejects an absurd node fan-out")
+_rejects(lambda: main.TranscodeModel(input_ref="s3://b/inputs/1/v.mp4", hours=1_000_000),
+         "TranscodeModel rejects an absurd hours value")
+_rejects(lambda: main.TranscodeModel(input_ref="s3://b/inputs/1/v.mp4", crf=999),
+         "TranscodeModel rejects an out-of-range CRF")
+_rejects(lambda: main.RenderModel(blend_ref="s3://b/inputs/1/s.blend",
+                                  frame_start=100, frame_end=1),
+         "RenderModel rejects frame_end < frame_start")
+_rejects(lambda: main.RenderModel(blend_ref="s3://b/inputs/1/s.blend",
+                                  frame_start=0, frame_end=9_000_000),
+         "RenderModel rejects an oversized frame range")
+_rejects(lambda: main.RenderModel(blend_ref="s3://b/inputs/1/s.blend",
+                                  frame_start=1, frame_end=10, samples=10_000_000),
+         "RenderModel rejects an absurd sample count")
+ok("TranscodeModel accepts a normal request",
+   main.TranscodeModel(input_ref="s3://b/inputs/1/v.mp4", nodes=4, hours=2,
+                       duration_seconds=120, crf=23).nodes == 4)
+ok("RenderModel accepts a normal frame range",
+   main.RenderModel(blend_ref="s3://b/inputs/1/s.blend", frame_start=1, frame_end=240,
+                    nodes=8, samples=256).frame_end == 240)
+
+
+print(f"\n=== security: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
+raise SystemExit(1 if _fail else 0)

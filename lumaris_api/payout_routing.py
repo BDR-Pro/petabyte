@@ -313,7 +313,36 @@ def execute_batch(db, batch: PayoutBatch) -> PayoutBatch:
                .where(PayoutObligation.batch_id == batch.id)
                .values(state="paid" if settled else "batched"))
     db.add(batch); db.commit()
+    # If the rail settled synchronously, the seller_payable liability is discharged now: post
+    # the DEBIT so the ledger matches the obligation state (split-brain fix). A batch that only
+    # 'sent' posts its leg later in confirm_batch when settlement is confirmed.
+    if settled:
+        _post_batch_payout_ledger(db, batch)
     return batch
+
+
+def _post_batch_payout_ledger(db, batch) -> None:
+    """Post the DOUBLE-ENTRY leg for a SETTLED batch payout: DEBIT the seller's seller_payable
+    (the liability recorded at capture) and CREDIT the payout clearing account. Mirrors the admin
+    transfer_to_seller post so BOTH payout paths keep the ledger's seller-liability truthful.
+    Without it the batch path marked obligations 'paid' but never debited seller_payable — a
+    permanent ledger/obligation split-brain (the liability grew forever). Idempotent via a
+    per-batch key; best-effort so it can never undo the already-committed paid state."""
+    total = int(getattr(batch, "total_amount_minor", 0) or 0)
+    if total <= 0:
+        return
+    try:
+        dbmod.post(db, "payout_batch", legs=[
+            (dbmod.acct_seller_payable(batch.seller_id), dbmod.DEBIT, total, batch.seller_id),
+            (dbmod.acct_stripe_payouts(),               dbmod.CREDIT, total),
+        ], reference_id=batch.public_id,
+           idempotency_key=f"payout_settled:{batch.public_id}",
+           description="batch payout settled to seller", entry_type="payout_settled")
+        db.commit()
+    except Exception:  # noqa: BLE001 — a duplicate idempotency key (already posted) or a transient
+        db.rollback()  # error must NEVER roll back the paid-state commit; the leg is idempotent.
+        logger.warning("payout ledger post skipped/failed for batch %s (idempotent; repairable)",
+                       getattr(batch, "public_id", "?"))
 
 
 def confirm_batch(db, batch: PayoutBatch) -> PayoutBatch:
@@ -328,6 +357,8 @@ def confirm_batch(db, batch: PayoutBatch) -> PayoutBatch:
                .where(PayoutObligation.batch_id == batch.id)
                .values(state="paid"))
     db.add(batch); db.commit()
+    # Money actually left to the seller -> post the seller_payable DEBIT now (split-brain fix).
+    _post_batch_payout_ledger(db, batch)
     return batch
 
 
