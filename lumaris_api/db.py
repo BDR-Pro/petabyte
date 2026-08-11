@@ -2167,6 +2167,7 @@ def reprice_specs(db: Session, reference_price: float = None) -> int:
             cloud_ref = float(reference_price)   # caller-supplied fallback anchor
         rec = pricing_engine.recommend(
             cloud_ref,
+            perf_reference=pricing_engine.performance_reference_price(s.gpu_model),
             utilization=util,
             trust_level=trust_level_for(s).get("level"),
             benchmark_verdict=getattr(s, "benchmark_verdict", None),

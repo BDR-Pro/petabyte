@@ -77,6 +77,36 @@ ok("never below the seller's min price", floor["recommended_price"] >= 5.0)
 ok("seller floor recorded as a factor", any(f["factor"] == "seller_floor" for f in floor["factors"]))
 ok("price is never negative", pe.recommend(0.0, current_price=0.0)["recommended_price"] >= 0.0)
 
+# ---- performance-anchored reference price: MONOTONIC in the FP16 benchmark ----
+# The core fairness rule: a slower GPU is never priced above a faster one.
+ok("RTX 2060 has a benchmark reference price", pe.performance_reference_price("RTX 2060") is not None)
+ok("a slower GPU (2060) is cheaper than a faster one (4080)",
+   pe.performance_reference_price("RTX 2060") < pe.performance_reference_price("RTX 4080"))
+ok("4080 is cheaper than 4090", pe.performance_reference_price("RTX 4080") < pe.performance_reference_price("RTX 4090"))
+ok("an unknown GPU has no benchmark reference price", pe.performance_reference_price("Foocard 9000") is None)
+
+_cat = pe.catalog()
+ok("catalog lists many GPU models", len(_cat) >= 20)
+ok("catalog is sorted by benchmark ascending",
+   all(_cat[i]["benchmark_tflops_fp16"] <= _cat[i + 1]["benchmark_tflops_fp16"] for i in range(len(_cat) - 1)))
+ok("catalog reference price is NON-DECREASING along the benchmark order (slower never dearer)",
+   all(_cat[i]["reference_price_per_hour"] <= _cat[i + 1]["reference_price_per_hour"] for i in range(len(_cat) - 1)))
+ok("every catalog row carries a benchmark + a reference price",
+   all(r["benchmark_tflops_fp16"] and r["reference_price_per_hour"] for r in _cat))
+
+# recommend() anchors on the performance reference when given, and reports it
+_pr = pe.recommend(0.80, perf_reference=pe.performance_reference_price("RTX 4090"),
+                   utilization=0.5, trust_level="agent_verified")
+ok("recommend anchors on the performance reference when provided", _pr["anchor_source"] == "performance")
+ok("recommend echoes the perf reference + still reports cloud savings",
+   _pr["perf_reference"] == pe.performance_reference_price("RTX 4090") and _pr["savings_vs_cloud_pct"] is not None)
+ok("performance-anchored explanation names the benchmark", "benchmark" in _pr["explanation"].lower())
+# two GPUs, same everything except benchmark -> the faster one is recommended higher
+_slow = pe.recommend(None, perf_reference=pe.performance_reference_price("RTX 2060"), utilization=0.5, trust_level="agent_verified")
+_fast = pe.recommend(None, perf_reference=pe.performance_reference_price("RTX 4090"), utilization=0.5, trust_level="agent_verified")
+ok("all else equal, the faster GPU is recommended at a higher price",
+   _fast["recommended_price"] > _slow["recommended_price"])
+
 # ---- the smoke invariant: A100 auto-price node, band [0.5, 2.0], stays inside the band ----
 a100 = pe.recommend(pe.cloud_reference_for("A100"), utilization=0.0,
                     trust_level="self_reported", reputation=100,

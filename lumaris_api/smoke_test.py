@@ -1996,13 +1996,23 @@ _asid=c.post("/register_specs", headers=_auth, json={"cpu":8,"ram":32,"gpu_model
 _aat={"cpu":8,"ram":32,"gpu_model":"A100","nonce":"autoseller","ts":int(time.time())}
 c.post("/prove", headers=_auth, json={"spec_id":_asid,"attestation":_aat,"signature":sign_proof(_VENDOR_SK,_aat),"pubkey":base64.b64encode(_VENDOR_SK.public_key().public_bytes_raw()).decode()})
 _ak=c.post("/create_api_key", headers=_auth).json()["api_key"]; c.post("/heartbeat", headers={"X-API-KEY":_ak}, json={"spec_id":_asid})
-# explainable price recommendation: cloud-anchored, inside the seller's band, shows its factors
+# explainable price recommendation: benchmark-anchored, inside the seller's band, shows its factors
 _prec=c.get(f"/nodes/{_asid}/price/recommendation", headers=_auth).json()
-ok("price recommendation is cloud-anchored for A100", _prec["anchor_source"]=="cloud" and _prec["cloud_reference"]==4.10)
+ok("price recommendation is benchmark-anchored for A100", _prec["anchor_source"]=="performance" and _prec["perf_reference"]>0)
+ok("price recommendation still reports the cloud reference for A100", _prec["cloud_reference"]==4.10)
 ok("price recommendation stays inside the seller's band", 0.5<=_prec["recommended_price"]<=2.0)
 ok("price recommendation shows its factors + a plain explanation",
    isinstance(_prec.get("factors"),list) and len(_prec["factors"])>=1 and bool(_prec.get("explanation")))
 ok("price recommendation is owner-only", c.get(f"/nodes/{_asid}/price/recommendation", headers=_mh).status_code==404)
+# GPU price catalog: benchmark-ordered, a slower GPU is never priced above a faster one
+_cat=c.get("/pricing/catalog").json()
+ok("pricing catalog lists GPU models sorted by benchmark", _cat["count"]>=20 and _cat["sorted_by"].startswith("benchmark"))
+_cprices=[r["reference_price_per_hour"] for r in _cat["catalog"]]
+ok("catalog reference price never decreases as benchmark rises (2060 < 4080 < 4090)",
+   all(_cprices[i]<=_cprices[i+1] for i in range(len(_cprices)-1)))
+_p2060=c.get("/pricing/suggest?gpu_model=RTX%202060").json()["suggested_price"]
+_p4080=c.get("/pricing/suggest?gpu_model=RTX%204080").json()["suggested_price"]
+ok("suggested price honours benchmark order (2060 cheaper than 4080)", _p2060 < _p4080)
 dbmod.reprice_specs(dbmod.SessionLocal())
 _asp=dbmod.get_spec_by_id(dbmod.SessionLocal(),_asid)
 ok("auto-price clamps within [min,max], below cloud", 0.5<=_asp.price_per_hour<=2.0)

@@ -869,6 +869,18 @@ variables:
     scope:
     - platform
     description: ''
+  PRICING_PERF_BASE:
+    required: false
+    default: '0.02'
+    scope:
+    - platform
+    description: ''
+  PRICING_PERF_PER_TFLOP:
+    required: false
+    default: '0.00205'
+    scope:
+    - platform
+    description: ''
   PRODUCT_ANALYTICS_ENABLED:
     required: false
     default: 'true'

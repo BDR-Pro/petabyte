@@ -13,19 +13,50 @@ three places so they never disagree:
 
 | Surface | Endpoint / call | Who sees it |
 |---|---|---|
+| **Catalog** | `GET /pricing/catalog` — every GPU sorted by benchmark, reference $/hr + live avg | public (`/pricing` page) |
+| **Suggest** | `GET /pricing/suggest?gpu_model=…` — benchmark-anchored suggestion for a listing | any prospective seller |
 | **Preview** | `GET /nodes/{spec_id}/price/recommendation` | the seller (JWT), on demand |
 | **Dashboard** | inline `suggested_price` on each node in `GET /seller/dashboard` | the seller, in the web UI |
 | **Auto-price** | `db.reprice_specs()` (opt-in `auto_price` nodes) | applied automatically each cycle |
+
+### The catalog (`GET /pricing/catalog`)
+
+Lists every recognised GPU model **sorted by FP16 benchmark ascending**, each with its
+benchmark-anchored `reference_price_per_hour` (monotonic — slower is never dearer), the live
+marketplace `avg_price_per_hour` for that model, and the cloud reference + savings. The reference
+prices per model (a representative slice):
+
+| GPU | FP16 TFLOPS | Reference $/hr | Cloud ref | Save |
+|---|--:|--:|--:|--:|
+| RTX 2060 | 52 | $0.13 | — | — |
+| RTX 3060 | 51 | $0.12 | — | — |
+| RTX 4060 | 61 | $0.15 | — | — |
+| T4 | 65 | $0.15 | $0.53 | 72% |
+| RTX 4070 | 117 | $0.26 | — | — |
+| RTX 3090 | 142 | $0.31 | $0.55 | 44% |
+| RTX 4080 | 195 | $0.42 | $0.60 | 30% |
+| A100 | 312 | $0.66 | $4.10 | 84% |
+| RTX 4090 | 330 | $0.70 | $0.80 | 13% |
+| H100 | 989 | $2.05 | $12.29 | 83% |
 
 ## How a price is built
 
 Starting from an **anchor**, each factor is a multiplier with a plain-language reason:
 
-1. **Anchor — the per-GPU cloud on-demand rate.** Petabyte's value prop is "cheaper than cloud,
-   verified", so the anchor is `cloud_rate × PRICING_CLOUD_DISCOUNT` (default `0.60` → target ~40%
-   under cloud). The cloud rate comes from the shared, **like-for-like** table
-   (`CLOUD_REFERENCE`); if we don't recognise the GPU we fall back to the seller's band midpoint
-   and **say so** — no invented discount.
+1. **Anchor — the GPU's performance reference (benchmark-ordered).** The anchor is derived from the
+   one hardware-invariant benchmark we freeze on — **FP16 matmul TFLOPS** — as a *monotonic*
+   function: `reference_price = PRICING_PERF_BASE + PRICING_PERF_PER_TFLOP × fp16_tflops`. Because
+   it is monotonic, **a slower GPU is never priced above a faster one** — an RTX 2060 is always
+   cheaper per hour than an RTX 4080, by construction. Cloud on-demand rates can't guarantee this
+   (an A100 costs ~5× an RTX 4090 despite similar TFLOPS — scarcity/VRAM, not raw compute), so
+   performance, not cloud, sets the ordering. The cloud rate is still reported for the
+   savings figure and enforced as a ceiling. If we don't recognise the GPU we fall back to the
+   cloud rate × discount, then the seller's band midpoint, and **say so** — no invented number.
+
+   > The fairness rule — **benchmark order ⇒ price order** — is enforced at the reference/anchor
+   > level, which is what the catalog advertises and what auto-price anchors to. It is asserted by
+   > `pricing_engine_test.py` (the whole catalog is non-decreasing along the benchmark) and by the
+   > smoke suite (an RTX 2060 is suggested below an RTX 4080).
 2. **Demand** — `1 + PRICING_DEMAND_SENSITIVITY × (utilization − 0.5)`. Busy GPU class → higher;
    idle → lower. Default sensitivity `0.50` gives an idle 0.75× … full 1.25× swing.
 3. **Verified performance / trust** — a benchmark that **matches** the claimed GPU's public
@@ -71,8 +102,14 @@ Two operator knobs (see [`template.env`](../lumaris_api/template.env)), both wit
 
 | Var | Default | Meaning |
 |---|---|---|
-| `PRICING_CLOUD_DISCOUNT` | `0.60` | fraction of the cloud rate to target (0.60 ≈ 40% cheaper) |
+| `PRICING_PERF_BASE` | `0.02` | $/hr floor offset of the benchmark price curve |
+| `PRICING_PERF_PER_TFLOP` | `0.00205` | $/hr added per FP16 TFLOPS (the monotonic slope) |
+| `PRICING_CLOUD_DISCOUNT` | `0.60` | cloud-anchor fallback: fraction of cloud rate to target |
 | `PRICING_DEMAND_SENSITIVITY` | `0.50` | how hard busy-ness moves price (idle 0.75× … full 1.25×) |
+
+The performance curve is deliberately calibrated to sit **below** cloud rates for the cards where
+we have a cloud reference, so the below-cloud clamp rarely bites and never inverts the benchmark
+ordering.
 
 ## Honest limitations
 

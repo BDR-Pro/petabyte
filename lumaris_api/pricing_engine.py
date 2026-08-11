@@ -50,18 +50,85 @@ def _f(env, default):
         return float(default)
 
 
-def recommend(cloud_ref, *, utilization=0.5, trust_level=None, benchmark_verdict=None,
-              confidential=False, region_verified=False, reputation=None,
+# ── performance-anchored reference price ────────────────────────────────────────────────
+# The core fairness rule the marketplace must never violate: a slower GPU must never be
+# priced ABOVE a faster one. Cloud rates don't guarantee this (an A100 costs ~5x an RTX 4090
+# on-demand despite similar FP16 TFLOPS — scarcity/VRAM, not raw compute). So the *reference*
+# price is derived from the one hardware-invariant benchmark we freeze on — FP16 matmul TFLOPS
+# (gpu_benchmark.reference_value) — as a MONOTONIC function of that score. Ordering by price is
+# then guaranteed by ordering of the benchmark, by construction:
+#
+#     reference_price = PERF_BASE + PERF_PER_TFLOP * fp16_tflops        (rounded to the cent)
+#
+# Calibrated so common cards land at sane hourly rates (RTX 2060 ~ $0.13, RTX 4080 ~ $0.42,
+# RTX 4090 ~ $0.70, A100 ~ $0.66, H100 ~ $2.05) — well under cloud, so the "cheaper than cloud"
+# clamp rarely bites and never inverts the benchmark order.
+
+def performance_reference_price(gpu_model, *, base=None, per_tflop=None):
+    """A per-hour reference price derived MONOTONICALLY from the GPU's FP16 TFLOPS reference.
+
+    Returns None if the model has no FP16 reference (then callers fall back to cloud/band). The
+    result is non-decreasing in FP16 TFLOPS, so a lower-benchmark GPU is never priced above a
+    higher-benchmark one."""
+    try:
+        import gpu_benchmark
+    except Exception:
+        return None
+    _key, tflops = gpu_benchmark.reference_value(gpu_model, "tflops_fp16")
+    if not tflops or float(tflops) <= 0:
+        return None
+    b = _f("PRICING_PERF_BASE", 0.02) if base is None else float(base)
+    s = _f("PRICING_PERF_PER_TFLOP", 0.00205) if per_tflop is None else float(per_tflop)
+    return round(b + s * float(tflops), 2)
+
+
+def catalog():
+    """The GPU price catalog: every model with an FP16 reference, sorted by benchmark ASC, each
+    with its monotonic performance reference price + cloud reference + honest savings. Pure (no
+    DB) — the /pricing/catalog endpoint enriches these rows with live marketplace averages.
+
+    Guarantees (asserted by the tests): rows are sorted by benchmark ascending AND
+    reference_price_per_hour is non-decreasing along that order (slower GPU never priced higher)."""
+    try:
+        import gpu_benchmark
+    except Exception:
+        return []
+    ref = gpu_benchmark._METRICS["tflops_fp16"]["ref"]
+    rows = []
+    for model, tflops in sorted(ref.items(), key=lambda kv: (kv[1], kv[0])):
+        price = performance_reference_price(model)
+        cloud = cloud_reference_for(model)
+        rows.append({
+            "gpu_model": model,
+            "benchmark_tflops_fp16": round(float(tflops), 1),
+            "reference_price_per_hour": price,
+            "cloud_reference": (round(float(cloud), 2) if cloud else None),
+            "savings_vs_cloud_pct": (round(max(0.0, 1.0 - price / float(cloud)) * 100.0, 1)
+                                     if (cloud and price) else None),
+        })
+    return rows
+
+
+def recommend(cloud_ref, *, perf_reference=None, utilization=0.5, trust_level=None,
+              benchmark_verdict=None, confidential=False, region_verified=False, reputation=None,
               min_price=None, max_price=None, current_price=None,
               cloud_discount=None, demand_sensitivity=None) -> dict:
     """Recommend a price for one node. Returns the recommended price + the labelled factors that
-    produced it (anchor, demand, verification, confidential, region, reputation) + the clamps."""
+    produced it (anchor, demand, verification, confidential, region, reputation) + the clamps.
+
+    Anchor priority: the GPU's PERFORMANCE reference (monotonic in FP16 TFLOPS — guarantees a
+    slower card is never anchored above a faster one) > the cloud on-demand rate x discount >
+    the seller's own band midpoint > the current price. Cloud is still used for the savings
+    figure and the below-cloud cap regardless of which anchor won."""
     disc = _f("PRICING_CLOUD_DISCOUNT", 0.60) if cloud_discount is None else float(cloud_discount)
     dsens = _f("PRICING_DEMAND_SENSITIVITY", 0.50) if demand_sensitivity is None else float(demand_sensitivity)
     factors = []
 
-    # 1) anchor
-    if cloud_ref and float(cloud_ref) > 0:
+    # 1) anchor — performance first (benchmark-ordered), then cloud, then the seller's band.
+    if perf_reference and float(perf_reference) > 0:
+        anchor = float(perf_reference)
+        anchor_source = "performance"
+    elif cloud_ref and float(cloud_ref) > 0:
         anchor = float(cloud_ref) * disc
         anchor_source = "cloud"
     elif min_price is not None and max_price is not None:
@@ -126,6 +193,7 @@ def recommend(cloud_ref, *, utilization=0.5, trust_level=None, benchmark_verdict
         "recommended_price": price,
         "anchor": round(anchor, 2),
         "anchor_source": anchor_source,
+        "perf_reference": (round(float(perf_reference), 2) if perf_reference else None),
         "cloud_reference": (round(float(cloud_ref), 2) if cloud_ref else None),
         "savings_vs_cloud_pct": savings,
         "current_price": (round(float(current_price), 2) if current_price is not None else None),
@@ -134,15 +202,21 @@ def recommend(cloud_ref, *, utilization=0.5, trust_level=None, benchmark_verdict
                     else (round(float(max_price), 2) if max_price is not None else None)),
         "factors": factors,
         "explanation": _explain(price, savings, anchor_source, factors),
-        "note": "A recommendation — you set the final price. Higher verified trust and demand "
-                "support a higher price; we always keep you below cloud.",
+        "note": "A recommendation — you set the final price. Priced on this GPU's measured "
+                "benchmark, so a faster card always sits above a slower one; adjusted for demand "
+                "and verified trust, and always kept below cloud.",
     }
 
 
 def _explain(price, savings, anchor_source, factors) -> str:
-    lead = (f"Recommended ${price:.2f}/hr" +
-            (f" — about {savings:.0f}% below the equivalent cloud rate." if savings
-             else " (no cloud reference for this GPU; anchored on your price band)."))
+    if anchor_source == "performance":
+        base = f"Recommended ${price:.2f}/hr, priced on this GPU's FP16 benchmark"
+        lead = base + (f" — about {savings:.0f}% below the equivalent cloud rate." if savings
+                       else " (no cloud reference for this GPU).")
+    else:
+        lead = (f"Recommended ${price:.2f}/hr" +
+                (f" — about {savings:.0f}% below the equivalent cloud rate." if savings
+                 else " (no cloud reference for this GPU; anchored on your price band)."))
     ups = [f["factor"] for f in factors if f.get("multiplier") and f["multiplier"] > 1]
     downs = [f["factor"] for f in factors if f.get("multiplier") and f["multiplier"] < 1]
     tail = ""

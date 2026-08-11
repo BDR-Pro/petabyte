@@ -2209,6 +2209,7 @@ def node_price_recommendation(spec_id: int, user: dict = Depends(get_current_use
     tl = trust_level_for(spec)
     rec = pricing_engine.recommend(
         cloud_reference_for(spec.gpu_model),
+        perf_reference=pricing_engine.performance_reference_price(spec.gpu_model),
         utilization=util,
         trust_level=tl.get("level"),
         benchmark_verdict=getattr(spec, "benchmark_verdict", None),
@@ -2931,6 +2932,7 @@ def seller_dashboard(user: dict = Depends(get_current_user), db: Session = Depen
         class_util = (class_busy.get(ck, 0) / ct) if ct else (util / 100.0)
         rec = pricing_engine.recommend(
             cloud_reference_for(sp.gpu_model),
+            perf_reference=pricing_engine.performance_reference_price(sp.gpu_model),
             utilization=class_util,
             trust_level=trust_level_for(sp).get("level"),
             benchmark_verdict=getattr(sp, "benchmark_verdict", None),
@@ -5381,13 +5383,20 @@ def suggest_price(gpu_model: Optional[str] = None, db: Session = Depends(get_db)
         prices.append(spec.price_per_hour)
     # Per-GPU cloud reference (shared table) so a T4 isn't anchored off an H100-class rate.
     # Only fall back to the generic AWS reference when we don't recognise the GPU class.
+    import pricing_engine
     cloud_ref = cloud_reference_for(gpu_model)
+    perf_ref = pricing_engine.performance_reference_price(gpu_model)
     ref = float(cloud_ref) if cloud_ref is not None else float(AWS_REFERENCE_PRICE)
     if prices:
         prices.sort()
         median = prices[len(prices) // 2]
         suggested, low, high = qc(median), qc(prices[0]), qc(prices[-1])
         basis = f"median of {len(prices)} similar live node(s)"
+    elif perf_ref is not None:
+        # Benchmark-anchored: guarantees a slower GPU is never suggested above a faster one.
+        suggested = qc(D(str(perf_ref)))
+        low, high = qc(D(str(perf_ref)) * D("0.80")), qc(D(str(perf_ref)) * D("1.20"))
+        basis = "priced on this GPU's FP16 benchmark (a faster card always sits above a slower one)"
     elif cloud_ref is not None:
         suggested = qc(D(ref) * D("0.45"))    # ~55% under THIS GPU's cloud rate when no market yet
         low, high = qc(D(ref) * D("0.30")), qc(D(ref) * D("0.70"))
@@ -5398,9 +5407,45 @@ def suggest_price(gpu_model: Optional[str] = None, db: Session = Depends(get_db)
         basis = "unrecognised GPU + no similar nodes online — anchored to a generic cloud reference"
     return {"gpu_model": gpu_model or "any", "suggested_price": suggested,
             "range_low": low, "range_high": high, "market_samples": len(prices),
+            "benchmark_reference_price": perf_ref,
             "cloud_reference": round(ref, 2), "cloud_reference_known": cloud_ref is not None,
             "basis": basis,
             "note": "Suggestion only — you set your price. Stay below the cloud reference to win bookings."}
+
+
+@app.get("/pricing/catalog", tags=["marketplace"])
+def pricing_catalog(db: Session = Depends(get_db)):
+    """The GPU price catalog: every recognised GPU model, sorted by FP16 benchmark ascending, with
+    its benchmark-anchored reference price per hour and the live marketplace average.
+
+    The reference price is a MONOTONIC function of the FP16 TFLOPS benchmark, so a slower GPU is
+    never priced above a faster one — the fairness rule the marketplace guarantees. `avg_price_per_hour`
+    is the mean over currently-live listings of that model (null when none are online)."""
+    import pricing_engine
+    import gpu_benchmark
+    from db import SellerSpec
+    # Live listing prices grouped by canonical GPU model (same normaliser the benchmark uses).
+    live_by_model = {}
+    for s in db.query(SellerSpec).all():
+        if not spec_is_live(s):
+            continue
+        key = gpu_benchmark.normalize_model(s.gpu_model)
+        if key is None:
+            continue
+        live_by_model.setdefault(key, []).append(float(s.price_per_hour or 0))
+    rows = []
+    for r in pricing_engine.catalog():
+        live = live_by_model.get(r["gpu_model"], [])
+        r = dict(r)
+        r["live_listings"] = len(live)
+        r["avg_price_per_hour"] = round(sum(live) / len(live), 2) if live else None
+        r["min_price_per_hour"] = round(min(live), 2) if live else None
+        r["max_price_per_hour"] = round(max(live), 2) if live else None
+        rows.append(r)
+    return {"catalog": rows, "count": len(rows), "sorted_by": "benchmark_tflops_fp16 ascending",
+            "note": "Reference price is derived monotonically from the FP16 TFLOPS benchmark: a "
+                    "slower GPU is never priced above a faster one. Sellers set their own price; "
+                    "this is the fair baseline."}
 
 
 @app.post("/launch", tags=["compute"])

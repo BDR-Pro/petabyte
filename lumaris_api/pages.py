@@ -2140,6 +2140,17 @@ PRICING_HTML = _page("Petabyte — pricing",
   <p class="mut" style="font-size:12.5px;margin-top:10px" data-ar="يحدّد كل مضيف أسعاره، وتتغيّر مع الطلب والتوفّر. «مرجع السحابة» هو سعر عند الطلب من مزوّد سحابي كبير لفئة كرت مماثلة، يُستخدم كمعيار للمقارنة — وليس عرض سعر من أي مزوّد بعينه.">Prices are set by individual hosts and change with demand and availability. "Cloud reference" is an on-demand hyperscaler rate for a comparable GPU class, used as a benchmark — not a quote from any specific provider.</p>
 </div>
 
+<div class="wrap" style="padding:26px 24px 8px">
+  <div class="lbl" data-ar="السعر المرجعي حسب الأداء">Reference price by GPU (benchmark-ordered)</div>
+  <p class="mut" style="font-size:13px;max-width:70ch;margin:6px 0 12px" data-ar="السعر المرجعي مشتقّ من معيار FP16 TFLOPS لكل كرت، لذا لا يكون الكرت الأبطأ أغلى من الأسرع أبداً. «متوسط مباشر» هو متوسط أسعار المضيفين المتصلين الآن لهذا الطراز.">Every GPU's <b>reference $/hr</b> is derived from its FP16 TFLOPS benchmark, so a slower card is <b>never priced above a faster one</b>. "Live avg" is the mean of hosts currently online for that model.</p>
+  <div class="panel" style="overflow:auto">
+    <table class="tbl">
+      <thead><tr><th data-ar="الكرت">GPU</th><th>FP16 TFLOPS</th><th data-ar="السعر المرجعي">Reference $/hr</th><th data-ar="متوسط مباشر">Live avg $/hr</th><th data-ar="مرجع السحابة">Cloud ref</th><th data-ar="توفيرك">Save</th></tr></thead>
+      <tbody id="crows"><tr><td colspan=6 class="mut mono" style="padding:22px;text-align:center">Loading catalog…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
 <div class="wrap" style="padding:34px 24px 8px"><div class="cols c3">
   <div class="card"><div class="lbl" data-ar="كيف تعمل الفوترة">How billing works</div>
     <h2 style="font-size:17px;margin-bottom:8px" data-ar="بالساعة، مع استرداد">Hourly, with refunds</h2>
@@ -2167,6 +2178,21 @@ async function prices(){
    '<td><a class="btn btn-teal" style="padding:6px 14px;font-size:12px" href="/gpu/'+s.id+'">View</a></td></tr>';}).join('');
 }
 prices();setInterval(prices,10000);
+// Benchmark-ordered reference catalog: reference $/hr is monotonic in the FP16 benchmark, so a
+// slower GPU is never priced above a faster one. Enriched with the live marketplace average.
+async function catalog(){
+ var r=await fetch('/pricing/catalog');if(!r.ok)return;var b=await r.json();var tb=document.getElementById('crows');
+ if(!b.count){tb.innerHTML='<tr><td colspan=6 class="mut mono" style="padding:18px;text-align:center">Catalog unavailable.</td></tr>';return;}
+ tb.innerHTML=b.catalog.map(function(g){
+  return '<tr>'+
+   '<td style="font-family:var(--disp);font-weight:600">'+esc(g.gpu_model)+'</td>'+
+   '<td data-l="FP16 TFLOPS" class="mono mut">'+Number(g.benchmark_tflops_fp16).toFixed(0)+'</td>'+
+   '<td data-l="Reference" class="mono amber" style="font-weight:600">$'+Number(g.reference_price_per_hour).toFixed(2)+'</td>'+
+   '<td data-l="Live avg" class="mono">'+(g.avg_price_per_hour!=null?('$'+Number(g.avg_price_per_hour).toFixed(2)+' <span class="mini mut">('+g.live_listings+')</span>'):'<span class="mini mut">none online</span>')+'</td>'+
+   '<td data-l="Cloud ref" class="mono mut">'+(g.cloud_reference!=null?'$'+Number(g.cloud_reference).toFixed(2):'—')+'</td>'+
+   '<td data-l="Save" class="mono" style="color:var(--pos)">'+(g.savings_vs_cloud_pct!=null?Math.round(g.savings_vs_cloud_pct)+'%':'—')+'</td></tr>';}).join('');
+}
+catalog();
 </script>""")
 
 
