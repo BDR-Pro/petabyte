@@ -237,6 +237,9 @@ jobs:
       - name: database backup to S3 (disaster recovery: dump/gzip/sha256/retention/verify)
         working-directory: lumaris_api
         run: python backup_test.py
+      - name: sanctions screen (free public OFAC: country embargo + SDN crypto address, fail-closed)
+        working-directory: lumaris_api
+        run: python sanctions_test.py
       - name: agent telemetry (span exception-safety / redaction / trace-join / degrade)
         working-directory: lumaris_agent
         run: python agent_telemetry_test.py

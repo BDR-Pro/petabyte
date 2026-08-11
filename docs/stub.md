@@ -24,11 +24,18 @@ you flip each to **off** as you wire that integration. See `template.env` /
 ## 2. Payouts to sellers (`PAYOUT_STUB`)
 - **Flag:** `PAYOUT_STUB=true` (default). File: `payout_providers.py`.
 - **Stubbed behaviour:** `StubProvider` returns `{"status":"confirmed", ...}` —
-  no real money leaves. Also the **sanctions/AML screen** (`screen_destination`)
-  is a stub that always passes.
+  no real money leaves.
+- **Sanctions/AML screen — now has a FREE, public baseline (implemented).**
+  `payout_providers.screen()` + `sanctions.py`. Set `SANCTIONS_SCREEN_PROVIDER=ofac`
+  (no vendor account) and it BLOCKS payouts to comprehensively-embargoed countries
+  (CU/IR/KP/SY, extend via `SANCTIONS_EXTRA_COUNTRIES`) and to OFAC SDN **crypto (USDC)
+  wallets** — the address list is refreshed from OFAC's public SDN by
+  `scripts/refresh_ofac_addresses.py` into `OFAC_SDN_ADDRESSES_FILE`. It **fails closed**
+  when it can't screen (no list, or a bank/gift-card destination that needs name matching).
+  Name/PEP/adverse-media screening still needs a vendor (`chainalysis`/`trm`), which fails
+  closed until wired. Tested in `sanctions_test.py`.
 - **Go live:** set `PAYOUT_STUB=false` + provider creds (Tremendous / Circle /
-  Stripe bank), and wire a real AML screen (Chainalysis/TRM) in
-  `screen_destination`.
+  Stripe bank), `SANCTIONS_SCREEN_PROVIDER=ofac` (baseline) or a vendor for full KYC/AML.
 
 ## 3. KYC / AML (payout onboarding)
 - **File:** `main.py` (`/wallet/methods` verify flow, ~line 1374).
@@ -63,10 +70,16 @@ you flip each to **off** as you wire that integration. See `template.env` /
   Needed for the VM failover model (see vm-rental).
 
 ## 7. GeoIP data-residency (`GEOIP_STUB`)
-- **Flag:** `GEOIP_STUB` set. File: `utils.py` (~255).
-- **Stubbed behaviour:** region/country detection returns a fixed value, so
-  `region_verified` and residency gating can be exercised without a GeoIP DB.
-- **Go live:** unset the stub, provide a `GEOIP_DB` (MaxMind) path.
+- **Flag:** `GEOIP_STUB` set. File: `utils.py` (`geolocate_country`).
+- **Stubbed behaviour:** region/country detection returns a fixed value from a JSON
+  ip->country map, so `region_verified` and residency gating can be exercised without a DB.
+- **Real path (implemented):** with `GEOIP_DB` set, `geolocate_country` does real MaxMind
+  GeoLite2 lookups via the `geoip2` package — **now in `requirements.txt`** (previously the
+  import would fail and the real path silently returned `None`, so residency verification
+  never actually worked). The reader is opened **once and cached**, and an install/DB-open
+  failure is now **logged** instead of silently swallowed.
+- **Go live:** unset `GEOIP_STUB`, provide a `GEOIP_DB` (MaxMind GeoLite2-Country.mmdb; free
+  account). VPN/proxy IPs can still spoof this — hard residency needs provider/TEE attestation.
 
 ## 8. NiceHash idle-fallback pricing (`NICEHASH_STUB`)
 - **Flag:** `NICEHASH_STUB=true` (default). File: `nicehash.py`.

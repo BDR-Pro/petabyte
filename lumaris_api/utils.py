@@ -8,12 +8,15 @@ import hashlib
 import hmac
 import shutil
 import subprocess
+import logging
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives import serialization
 
 load_dotenv()
+
+_log = logging.getLogger("petabyte.utils")
 
 
 def _fernet() -> Fernet:
@@ -272,21 +275,52 @@ def _verify_stub(report: dict, signature_b64: str) -> None:
 
 # ------------------ IP geolocation (region verification) ------------------
 
+_GEOIP_READER = None            # cached MaxMind reader (opened once per db_path)
+_GEOIP_READER_PATH = None
+_GEOIP_IMPORT_WARNED = False
+
+
+def _geoip_reader(db_path: str):
+    """Open the MaxMind reader once and reuse it (opening the ~mmdb per lookup is wasteful).
+    Reopens only if GEOIP_DB changes. Returns None (logged, once) if geoip2 isn't installed
+    or the DB can't be opened — so a real misconfig is visible, not silently swallowed."""
+    global _GEOIP_READER, _GEOIP_READER_PATH, _GEOIP_IMPORT_WARNED
+    if _GEOIP_READER is not None and _GEOIP_READER_PATH == db_path:
+        return _GEOIP_READER
+    try:
+        import geoip2.database
+    except ImportError:
+        if not _GEOIP_IMPORT_WARNED:
+            _log.warning("GEOIP_DB is set but the 'geoip2' package is not installed — "
+                         "residency verification is disabled. Add geoip2 to requirements.")
+            _GEOIP_IMPORT_WARNED = True
+        return None
+    try:
+        if _GEOIP_READER is not None:
+            _GEOIP_READER.close()
+        _GEOIP_READER = geoip2.database.Reader(db_path)
+        _GEOIP_READER_PATH = db_path
+        return _GEOIP_READER
+    except Exception:
+        _log.warning("could not open GEOIP_DB at %s — residency verification disabled", db_path)
+        _GEOIP_READER = None
+        _GEOIP_READER_PATH = None
+        return None
+
+
 def geolocate_country(ip: str):
     """Return the ISO country for an IP, or None if unknown.
 
     Resolution order:
       1. GEOIP_STUB env (JSON ip->country) — for tests / manual mapping.
-      2. GEOIP_DB env -> MaxMind GeoLite2-Country.mmdb via the geoip2 package.
+      2. GEOIP_DB env -> MaxMind GeoLite2-Country.mmdb via the geoip2 package (reader cached).
       3. None (unknown) — caller treats region as unverified.
 
-    For production, point GEOIP_DB at a MaxMind DB (or swap in an ipinfo/IPregistry
-    API call). VPN/proxy IPs can still spoof this; hard residency needs
-    provider/TEE-attested datacenter location (roadmap).
+    Point GEOIP_DB at a MaxMind GeoLite2-Country.mmdb (free account) for real lookups. VPN/proxy
+    IPs can still spoof this; hard residency needs provider/TEE-attested datacenter location.
     """
     if not ip:
         return None
-    # TODO(stub): GeoIP from env map — provide a MaxMind GEOIP_DB for real lookups (stub.md #7)
     stub = os.getenv("GEOIP_STUB")
     if stub:
         try:
@@ -295,12 +329,13 @@ def geolocate_country(ip: str):
             return None
     db_path = os.getenv("GEOIP_DB")
     if db_path:
-        try:
-            import geoip2.database
-            with geoip2.database.Reader(db_path) as reader:
-                return reader.country(ip).country.iso_code
-        except Exception:
+        reader = _geoip_reader(db_path)
+        if reader is None:
             return None
+        try:
+            return reader.country(ip).country.iso_code
+        except Exception:
+            return None            # address not in the DB / not a public IP
     return None
 
 

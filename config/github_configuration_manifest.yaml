@@ -636,6 +636,12 @@ variables:
     scope:
     - observability
     description: Observability server host (private IP/DNS).
+  OFAC_SDN_ADDRESSES_FILE:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   OTEL_ENABLED:
     required: false
     default: 'true'
@@ -1048,6 +1054,12 @@ variables:
     - 'true'
     - 'false'
     format: bool
+  SANCTIONS_EXTRA_COUNTRIES:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   SANCTIONS_SCREEN_PROVIDER:
     required: false
     default: null
