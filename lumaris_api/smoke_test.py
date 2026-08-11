@@ -465,10 +465,10 @@ ok("template job carries image/port/model", tjob["task_type"]=="template" and "v
 c.post("/benchmark", headers=s5h, json={"spec_id":sid5})
 bjob=c.get("/jobs/next", headers={"X-API-KEY":key5}).json()
 ok("benchmark job dispatched", bjob["task_type"]=="benchmark")
-bph={"task_id":bjob["task_id"],"output_hash":"bench","ts":int(time.time())}
-# The agent reports a measured FP16 matmul TFLOPS the server checks against the CLAIMED
-# GPU model's public band. 720 TFLOPS is squarely in the H100 band -> verdict "consistent".
-_br=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key5}, json={"spec_id":sid5,"tokens_sec":2350.5,"meta":{"model":"llama3-8b","sd_images_sec":4.2,"tflops_fp16":720,"metric":"fp16_matmul_tflops"},"proof":bph,"signature":sign_proof(sk5,bph)})
+# The agent measures FP16 matmul TFLOPS and puts it INSIDE the SIGNED proof; the server
+# checks it against the CLAIMED model's public band. 720 TFLOPS is in the H100 band.
+bph={"task_id":bjob["task_id"],"output_hash":"bench","ts":int(time.time()),"tflops_fp16":720}
+_br=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key5}, json={"spec_id":sid5,"tokens_sec":2350.5,"meta":{"model":"llama3-8b","sd_images_sec":4.2},"proof":bph,"signature":sign_proof(sk5,bph)})
 ok("signed benchmark result accepted", _br.status_code==200)
 ok("benchmark consistent with the claimed H100 -> verdict 'consistent'", _br.json().get("benchmark_verdict")=="consistent")
 ok("/specs surfaces tokens/sec", any(s["spec_id"]==sid5 and s["benchmark_tokens_sec"]==2350.5 for s in c.get("/specs", headers=b5h).json()["specs"]))
@@ -477,7 +477,7 @@ _t5b=[s for s in c.get("/specs", headers=b5h).json()["specs"] if s["spec_id"]==s
 ok("signed benchmark upgrades trust to benchmark_verified",
    _t5b["trust"]["level"]=="benchmark_verified" and _t5b["trust"]["rank"]==2)
 ok("consistent benchmark surfaces as 'Benchmark-consistent' with public-reference evidence",
-   _t5b["trust"]["label"]=="Benchmark-consistent" and "CONSISTENT" in _t5b["trust"]["evidence"])
+   _t5b["trust"]["label"]=="Benchmark-consistent" and "MATCHES public reference" in _t5b["trust"]["evidence"])
 _pub5=[s for s in c.get("/marketplace/specs").json()["specs"] if s["gpu_model"]=="H100" and s.get("trust",{}).get("level")=="benchmark_verified"]
 ok("marketplace surfaces the trust level publicly", len(_pub5)>=1)
 _det5=c.get(f"/marketplace/specs/{_pub5[0]['id']}").json() if _pub5 else {}
@@ -500,13 +500,45 @@ key6=c.post("/create_api_key", headers=s6h).json()["api_key"]
 c.post("/heartbeat", headers={"X-API-KEY":key6}, json={"spec_id":sid6})
 c.post("/benchmark", headers=s6h, json={"spec_id":sid6})
 bjob6=c.get("/jobs/next", headers={"X-API-KEY":key6}).json()
-bph6={"task_id":bjob6["task_id"],"output_hash":"bench","ts":int(time.time())}
-_ov=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key6}, json={"spec_id":sid6,"tokens_sec":90.0,"meta":{"tflops_fp16":45,"metric":"fp16_matmul_tflops"},"proof":bph6,"signature":sign_proof(sk6,bph6)})
+bph6={"task_id":bjob6["task_id"],"output_hash":"bench","ts":int(time.time()),"tflops_fp16":45}
+_ov=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key6}, json={"spec_id":sid6,"tokens_sec":90.0,"meta":{},"proof":bph6,"signature":sign_proof(sk6,bph6)})
 ok("H100 listing measuring T4-class TFLOPS -> verdict 'implausibly_low'",
    _ov.status_code==200 and _ov.json().get("benchmark_verdict")=="implausibly_low")
 _t6=[s for s in c.get("/specs", headers=s6h).json()["specs"] if s["spec_id"]==sid6][0]
 ok("an over-claiming benchmark does NOT upgrade trust (flagged, not benchmark_verified)",
    _t6["trust"]["level"]=="agent_verified" and "flagged" in _t6["trust"]["label"].lower())
+
+# --- BENCHMARK AUTHENTICITY: a 3D render benchmark (Blender Open Data) works too ---
+# A dedicated RTX 4090 node reports a Blender Open Data score. A score matching the public
+# 4090 median earns 'Benchmark-consistent' — proving the check spans more than FP16. A
+# render benchmark is ADVISORY: a too-low score FLAGS the listing but never freezes payouts.
+c.post("/register_user", json={"username":"seller7","password":"hunter2-correct-horse"})
+s7h={"Authorization":f"Bearer {login('seller7')}"}
+c.post("/change_role", headers=s7h, json={"role":"seller"})
+sid7=c.post("/register_specs", headers=s7h, json={"cpu":16,"ram":64,"duration":48,"price_per_hour":1.0,"provider":"seller7","gpu_model":"RTX 4090","units":1}).json()["spec_id"]
+sk7=Ed25519PrivateKey.generate(); pb7=base64.b64encode(sk7.public_key().public_bytes_raw()).decode()
+at7={"cpu":16,"nonce":"y","ts":int(time.time())}
+c.post("/prove", headers=s7h, json={"spec_id":sid7,"attestation":at7,"signature":sign_proof(sk7,at7),"pubkey":pb7})
+key7=c.post("/create_api_key", headers=s7h).json()["api_key"]
+c.post("/heartbeat", headers={"X-API-KEY":key7}, json={"spec_id":sid7})
+c.post("/benchmark", headers=s7h, json={"spec_id":sid7})
+bjob7=c.get("/jobs/next", headers={"X-API-KEY":key7}).json()
+bph7={"task_id":bjob7["task_id"],"output_hash":"bench","ts":int(time.time()),"blender_optix":12000}
+_bl=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key7}, json={"spec_id":sid7,"tokens_sec":0.0,"meta":{},"proof":bph7,"signature":sign_proof(sk7,bph7)})
+ok("a Blender Open Data score consistent with the claimed RTX 4090 -> verdict 'consistent'",
+   _bl.status_code==200 and _bl.json().get("benchmark_verdict")=="consistent")
+_t7=[s for s in c.get("/specs", headers=s7h).json()["specs"] if s["spec_id"]==sid7][0]
+ok("a 3D render benchmark ALSO earns 'Benchmark-consistent' trust (no tok/s needed)",
+   _t7["trust"]["label"]=="Benchmark-consistent")
+c.post("/benchmark", headers=s7h, json={"spec_id":sid7})
+bjob7b=c.get("/jobs/next", headers={"X-API-KEY":key7}).json()
+bph7b={"task_id":bjob7b["task_id"],"output_hash":"bench","ts":int(time.time()),"blender_optix":1500}
+_bl2=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key7}, json={"spec_id":sid7,"tokens_sec":0.0,"meta":{},"proof":bph7b,"signature":sign_proof(sk7,bph7b)})
+ok("a 4090 rendering like a weak card is FLAGGED via the advisory Blender metric (no freeze)",
+   _bl2.json().get("benchmark_verdict")=="implausibly_low")
+_t7b=[s for s in c.get("/specs", headers=s7h).json()["specs"] if s["spec_id"]==sid7][0]
+ok("the advisory flag downgrades trust to agent_verified (flagged), not benchmark_verified",
+   _t7b["trust"]["level"]=="agent_verified" and "flagged" in _t7b["trust"]["label"].lower())
 
 # --- #5 QUEUE PRIORITY ---
 lowb=book5(); highb=book5()

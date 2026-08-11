@@ -247,27 +247,30 @@ def trust_level_for(spec: "SellerSpec") -> dict:
         return {"level": "self_reported", "rank": 0, "label": "Self-reported",
                 "evidence": "Listing details supplied by the seller; no proof held."}
     verdict = getattr(spec, "benchmark_verdict", None)
-    if spec.benchmark_tokens_sec:
-        # A benchmark that did NOT match the claimed model's public performance band is
-        # NOT corroborating evidence — it is a red flag. Don't let it upgrade the tier.
+    # A benchmark is present if the node reported a throughput OR any benchmark score was
+    # graded against public reference data (a pure render/video benchmark carries no tok/s).
+    tok = f"{round(spec.benchmark_tokens_sec)} tok/s" if spec.benchmark_tokens_sec else "a signed benchmark"
+    if spec.benchmark_tokens_sec or verdict is not None:
+        # A benchmark that did NOT match the claimed model's public reference data is NOT
+        # corroborating evidence — it is a red flag. Don't let it upgrade the tier.
         if verdict in ("implausibly_low", "suspiciously_high"):
             return {"level": "agent_verified", "rank": 1,
                     "label": "Agent-verified (benchmark flagged)",
                     "evidence": "Hardware report signed by the node's Ed25519 device key. "
                                 "A submitted benchmark did NOT match the claimed GPU model's "
-                                f"public performance band ({verdict}) and was rejected as "
+                                f"public reference data ({verdict}) and was rejected as "
                                 "corroborating evidence — the listing may be mislabeled."}
         if verdict == "consistent":
             return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-consistent",
-                    "evidence": "Agent-signed hardware report + a node-reported, signed benchmark "
-                                f"({round(spec.benchmark_tokens_sec)} tok/s) whose measured FP16 "
-                                "throughput is CONSISTENT with the published spec of the claimed "
-                                "GPU model. Node-reported (not run in a platform enclave), but it "
-                                "matches public reference data for the advertised card."}
-        return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-reported",
-                "evidence": "Agent-signed hardware report + a node-REPORTED, signed benchmark "
-                            f"({round(spec.benchmark_tokens_sec)} tok/s) — self-reported and "
-                            "attributable, not independently measured by the platform."}
+                    "evidence": f"Agent-signed hardware report + {tok} that MATCHES public "
+                                "reference data for the claimed GPU model (FP16 TFLOPS / Blender "
+                                "Open Data / Cinebench / PugetBench). Node-reported (not run in a "
+                                "platform enclave), but consistent with the advertised card."}
+        if spec.benchmark_tokens_sec:
+            return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-reported",
+                    "evidence": "Agent-signed hardware report + a node-REPORTED, signed benchmark "
+                                f"({round(spec.benchmark_tokens_sec)} tok/s) — self-reported and "
+                                "attributable, not independently measured by the platform."}
     return {"level": "agent_verified", "rank": 1, "label": "Agent-verified",
             "evidence": "Hardware report signed by the node's Ed25519 device key."}
 

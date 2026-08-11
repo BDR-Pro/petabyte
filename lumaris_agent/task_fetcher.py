@@ -356,26 +356,60 @@ def _measure_fp16_tflops():
         return None
 
 
+def _measure_blender_score():
+    """Blender Open Data score (OptiX, sum of standard-scene samples/min) via the OFFICIAL
+    benchmark-launcher-cli when it's installed on the node.
+
+    This is the workload-relevant authenticity number: Petabyte renders Blender, and
+    opendata.blender.org publishes a per-GPU public median the server compares against
+    (gpu_benchmark 'blender_optix'). Returns None if the CLI isn't present (the server then
+    just skips the Blender check) — never crashes the agent."""
+    import shutil, subprocess, json as _json
+    cli = os.getenv("BLENDER_BENCH_CLI") or shutil.which("benchmark-launcher-cli")
+    if not cli:
+        return None
+    try:
+        scenes = [s for s in os.getenv("BLENDER_BENCH_SCENES", "classroom").split(",") if s]
+        out = subprocess.run([cli, "benchmark", *scenes, "--device-type", "OPTIX",
+                              "--json"], capture_output=True, text=True, timeout=1800)
+        rows = _json.loads(out.stdout or "[]")
+        total = 0.0
+        for row in rows:                             # sum the scene medians -> Open Data score
+            spm = (row.get("stats") or {}).get("samples_per_minute")
+            if spm:
+                total += float(spm)
+        return round(total, 1) if total > 0 else None
+    except Exception:                                # noqa: BLE001 — never crash the agent
+        return None
+
+
 def _run_benchmark(task):
-    """Measure LLM tokens/sec + FP16 matmul TFLOPS and submit a SIGNED result."""
+    """Measure LLM tokens/sec + FP16 matmul TFLOPS + Blender Open Data, submit a SIGNED result.
+    Every measured score goes INSIDE the signed proof so the server checks the attributable
+    (non-repudiable) number, not a bare unsigned meta field."""
     tid = task["task_id"]
     _set_ui(status="running", task=f"Benchmark #{tid}")
     spec_id = int(os.getenv("PETABYTE_SPEC_ID"))
-    report_progress(tid, 50, "benchmarking")
+    report_progress(tid, 40, "benchmarking")
     # tokens/sec: a real node runs a fixed prompt through a local model and counts
     # generated tokens / wall-time. Hook your LLM harness here (env stub for now).
     tokens_sec = float(os.getenv("BENCH_TOKENS_SEC", "0"))
-    # FP16 matmul TFLOPS: an actual on-device measurement the server checks against the
-    # claimed GPU model's public reference band. This is what makes the benchmark an
-    # authenticity signal instead of a self-reported guess.
+    # FP16 matmul TFLOPS: a hardware-invariant the server checks against the claimed model's
+    # datasheet peak (the one metric allowed to freeze payouts on a gross over-claim).
     tflops = _measure_fp16_tflops()
-    meta = {"harness": "matmul-fp16" if tflops is not None else "stub"}
+    report_progress(tid, 70, f"fp16 matmul: {tflops} TFLOPS" if tflops else "benchmarking")
+    # Blender Open Data: workload-relevant, public per-GPU medians (advisory signal).
+    blender = _measure_blender_score()
+    report_progress(tid, 90, f"blender: {blender}" if blender else "benchmarking")
+
+    metrics = {}
     if tflops is not None:
-        meta["tflops_fp16"] = tflops
-        meta["metric"] = "fp16_matmul_tflops"
-    report_progress(tid, 90, f"fp16 matmul: {tflops} TFLOPS" if tflops else "benchmarking")
-    proof = {"task_id": tid, "output_hash": "benchmark",
-             "tflops_fp16": tflops, "ts": int(_t.time())}
+        metrics["tflops_fp16"] = tflops
+    if blender is not None:
+        metrics["blender_optix"] = blender
+    meta = {"harness": ",".join(metrics) or "stub", "metrics": list(metrics)}
+    # scores live in the SIGNED proof (attributable); meta is freeform display.
+    proof = {"task_id": tid, "output_hash": "benchmark", "ts": int(_t.time()), **metrics}
     httpx.post(f"{API_URL}/jobs/benchmark_result", headers=HEADERS, timeout=20, json={
         "spec_id": spec_id, "tokens_sec": tokens_sec,
         "meta": meta, "proof": proof, "signature": crypto.sign_proof(proof)})

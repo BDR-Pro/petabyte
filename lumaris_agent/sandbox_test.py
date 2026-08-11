@@ -122,8 +122,14 @@ ok("desktop agent also binds results to real output bytes",
 # ---------------------------------------------------------------- benchmark authenticity
 ok("agent measures FP16 matmul TFLOPS on-device (not an env stub)",
    hasattr(tf, "_measure_fp16_tflops") and "tflops_fp16" in src("_run_benchmark"))
+ok("agent runs the real Blender Open Data benchmark (workload-relevant)",
+   hasattr(tf, "_measure_blender_score") and "benchmark-launcher-cli" in src("_measure_blender_score")
+   and "blender_optix" in src("_run_benchmark"))
+ok("benchmark scores go INSIDE the signed proof (attributable, not bare meta)",
+   "**metrics" in src("_run_benchmark") and "crypto.sign_proof(proof)" in src("_run_benchmark"))
 ok("benchmark measurement never crashes the agent (guarded)",
-   "return None" in src("_measure_fp16_tflops") and "except Exception" in src("_measure_fp16_tflops"))
+   all("except Exception" in src(fn) and "return None" in src(fn)
+       for fn in ("_measure_fp16_tflops", "_measure_blender_score")))
 
 
 print(f"\n=== sandbox: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")

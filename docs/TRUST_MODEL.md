@@ -58,26 +58,46 @@ per-object handles + metadata minimization.
   before money leaves.
 
 **Landed**
-- **Gamer-style GPU authenticity check (benchmark vs. public reference).** The way a gamer
-  proves a card is real — run a benchmark, compare the score to the numbers everyone knows for
-  that exact card — applied to a **compute** benchmark. The agent measures achieved **FP16 dense
-  matmul TFLOPS** on-device (`task_fetcher._measure_fp16_tflops`); the server compares it to the
-  published dense-FP16 tensor peak for the **claimed** `gpu_model` (`gpu_benchmark.classify`,
-  seeded from vendor datasheets with deliberately wide bands). A score far below what the claimed
-  card can physically do means the listing **over-claims its silicon** → the verdict is
-  `implausibly_low` and a gross shortfall (below `GPU_BENCH_FRAUD_FLOOR_FRAC`, default 20 % of
-  peak) **freezes the seller's payouts** (`freeze_for_fraud`) and blocks the benchmark tier. A
-  matching score reads as `consistent` and the listing shows **"Benchmark-consistent"** with
-  *"matches public reference data for the advertised card"* evidence. Tests: `gpu_benchmark_test.py`
-  (classification) + `smoke_test.py` (endpoint freeze on over-claim). *Why compute, not 3DMark:*
-  headless datacenter GPUs (H100/A100/L4) have no display pipeline and can't run a graphics
-  benchmark — FP16 TFLOPS is the one metric the whole mixed fleet shares. A graphics score plugs
-  into the same band table (add a `graphics_score` band and `classify(..., metric=...)`).
+- **Gamer-style GPU authenticity check (benchmark vs. public reference), multi-benchmark.** The
+  way a gamer proves a card is real — run a benchmark, compare the score to the numbers everyone
+  publicly knows for that exact card — across several benchmarks, each with its own per-GPU public
+  reference table (`gpu_benchmark.py`). Every measured score travels **inside the node's signed
+  proof** (attributable), and the server grades each against the **claimed** `gpu_model`
+  (`classify_all`):
+
+  | metric | what it is | public reference | freezes payouts? |
+  |---|---|---|---|
+  | `tflops_fp16` | measured FP16 dense matmul TFLOPS | vendor datasheet tensor peak | **yes** |
+  | `blender_optix` | Blender Open Data score (OptiX, samples/min) | opendata.blender.org | no (advisory) |
+  | `cinebench_2024_gpu` | Cinebench 2024 GPU (Redshift) | Maxon Cinebench | no (advisory) |
+  | `pugetbench_resolve` | PugetBench — DaVinci Resolve Studio | pugetsystems.com | no (advisory) |
+  | `pugetbench_premiere` | PugetBench — Premiere Pro | pugetsystems.com | no (advisory) |
+
+  **Blender is the flagship 3D benchmark** because Petabyte *renders Blender* — the agent already
+  shells out to a Blender container, so the benchmark measures the real workload, and Blender Open
+  Data publishes a per-GPU median to compare against (`task_fetcher._measure_blender_score` runs
+  the official `benchmark-launcher-cli` where installed). Cinebench covers Cinema 4D / Redshift;
+  PugetBench covers the video-editing fleet.
+
+  A score far below what the claimed card can do → verdict `implausibly_low`; above what it can do
+  → `suspiciously_high`; within the (wide) band → `consistent`, shown to buyers as
+  **"Benchmark-consistent — matches public reference data for the advertised card."** Only the
+  hardware-invariant **FP16 TFLOPS** metric may **freeze payouts** (`freeze_for_fraud`, on a gross
+  over-claim below `GPU_BENCH_FRAUD_FLOOR_FRAC`, default 20 % of peak). The **render/video metrics
+  are advisory**: a mismatch flags the listing and suppresses the trust boost but never auto-freezes,
+  because their public medians depend on Blender/driver version, scene, and (for Puget) the whole
+  system — corroboration, not proof. A card absent from a metric's table resolves to `unknown_model`
+  (recorded, shown, never flagged). Tests: `gpu_benchmark_test.py` (per-metric + aggregate) +
+  `smoke_test.py` (FP16 freeze on over-claim, Blender consistent + advisory-flag-no-freeze).
+
   *Honest limits:* it verifies a performance **class**, not the exact die (adjacent tiers overlap,
-  so it catches gross over-claims — H100-listed-but-T4 — not an A100-for-H100 swap); and it stops
-  **over**-claiming, not bait-and-switch (benchmark a real H100, run the job elsewhere) — that
-  needs the benchmark to become a platform-dispatched, seed-bound, server-timed re-run against a
-  random fraction of *real* jobs. This is the reference-comparison half of that.
+  so it catches gross over-claims — H100-listed-but-T4 — not an A100-for-H100 swap); render
+  benchmarks rank GPUs **differently** than TFLOPS (RT-core presence dominates OptiX), which is why
+  each metric has its own table; and it stops **over**-claiming, not bait-and-switch (benchmark a
+  real card, run the job elsewhere) — that needs the benchmark to become a platform-dispatched,
+  seed-bound, server-timed re-run against a random fraction of *real* jobs. This is the
+  reference-comparison half of that. Reference numbers are approximate public medians (wide
+  tolerance) — recalibrate against each source's live dataset.
 - **Results now bind to the real output bytes (#65).** Every completed render/transcode/stitch
   result carries a `content_hash` = sha256 of the *plaintext* output bytes, **inside the signed
   proof** (both agents), and the server persists it (`Task.result_content_hash`). Quorum

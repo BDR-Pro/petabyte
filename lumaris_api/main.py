@@ -5562,25 +5562,29 @@ def benchmark_result(data: BenchmarkResultModel, agent=Depends(api_key_user),
     except ValueError as e:
         raise HTTPException(status_code=401, detail=f"Invalid proof: {e}")
 
-    # Gamer-style authenticity check: compare the measured FP16 matmul throughput the
-    # agent reports (meta.tflops_fp16) against the PUBLIC reference band for the model
-    # the seller CLAIMS to be listing (spec.gpu_model). A number far below what that
-    # card can physically do means the listing over-claims its hardware -> fraud freeze.
+    # Gamer-style authenticity check: compare every benchmark score inside the SIGNED proof
+    # (FP16 matmul TFLOPS, Blender Open Data, Cinebench, PugetBench) against PUBLIC reference
+    # data for the model the seller CLAIMS to list (spec.gpu_model). The hardware-invariant
+    # FP16 metric may FREEZE payouts on a gross over-claim; render/video metrics are advisory
+    # (they flag a mismatch and suppress the trust boost, but never auto-freeze).
     meta = data.meta or {}
     verdict = None
     try:
-        from gpu_benchmark import classify
-        tflops = meta.get("tflops_fp16")
-        if tflops is not None and spec.gpu_model:
-            v = classify(spec.gpu_model, tflops, metric="tflops_fp16")
-            verdict = v["verdict"]
-            meta = {**meta, "verdict": verdict, "verdict_detail": v["detail"]}
-            if v["fraud"]:
+        from gpu_benchmark import classify_all
+        if spec.gpu_model:
+            agg = classify_all(spec.gpu_model, data.proof)
+            verdict = agg["verdict"]
+            if agg["results"]:
+                meta = {**meta, "benchmark_checks": [
+                    {"metric": r["metric"], "label": r["label"], "verdict": r["verdict"],
+                     "source": r["source"], "detail": r["detail"]} for r in agg["results"]]}
+            if agg["fraud"]:
+                bad = next((r for r in agg["results"] if r.get("fraud")), None)
                 import seller_audit
                 seller_audit.freeze_for_fraud(
                     db, spec,
-                    f"benchmark over-claim: {spec.gpu_model} measured {tflops} TFLOPS "
-                    f"(< floor for the claimed model)")
+                    f"benchmark over-claim on {bad['metric'] if bad else '?'}: "
+                    f"{spec.gpu_model} — {bad['detail'] if bad else ''}"[:200])
     except HTTPException:
         raise
     except Exception:

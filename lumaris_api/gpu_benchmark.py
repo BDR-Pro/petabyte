@@ -1,85 +1,115 @@
-"""gpu_benchmark.py — is the reported benchmark consistent with the CLAIMED GPU model?
+"""gpu_benchmark.py — is a reported benchmark consistent with the CLAIMED GPU model?
 
-The idea (a seller's request): the way a gamer proves their card is real — run a
-benchmark, get a score, compare it to the public numbers everyone knows for that
-exact card. We do the same with a COMPUTE benchmark instead of a graphics one:
+The idea (a seller's request): the way a gamer proves a card is real — run a benchmark,
+compare the score to the numbers everyone publicly knows for that exact card. We do the
+same, across SEVERAL public benchmarks, and pick ones that are also **workload-relevant**
+for Petabyte's fleet:
 
-    (claimed GPU model, measured score)  ->  compare to published spec  ->  verdict
+    (claimed GPU model, {metric: score, ...})  ->  compare each to public data  ->  verdict
 
-Why a compute benchmark and not 3DMark/Unigine: Petabyte's fleet mixes gaming rigs
-with *headless* datacenter GPUs (H100/A100/L4) that have no display pipeline and
-can't run a graphics benchmark at all. FP16 dense matrix-multiply throughput
-(TFLOPS), on the other hand, every GPU can run, and it maps directly to the tensor
-peak on the vendor datasheet — so one metric covers the whole fleet. (A gaming
-score plugs into the exact same band framework; add a `graphics_score` band to a
-model's entry and `classify(..., metric="graphics_score")` works unchanged.)
+Metrics wired today, each with a per-GPU public reference table:
 
-Honest boundaries — what this does and does NOT prove:
-  * It checks a performance *class*, not the exact die. Adjacent tiers overlap, so
-    it reliably catches GROSS over-claims (list an H100, actually run a T4 / a
-    consumer mid-range card) — not an A100-for-H100 swap.
-  * It catches OVER-claiming (claiming a *stronger* card than the silicon can do).
-    It does not, on its own, stop bait-and-switch (benchmark a real H100, then run
-    the paid job on something weaker) — that needs the benchmark to be a
-    platform-dispatched, seed-bound, server-timed measurement re-run against real
-    jobs. This module is the reference-comparison half of that.
-  * The score is only as trustworthy as the harness that produced it. A real
-    server-timed measurement makes this strong; a self-reported number makes it a
-    consistency hint. The agent measures FP16 matmul TFLOPS on-device
-    (`task_fetcher._measure_fp16_tflops`); the platform records the signed claim and
-    checks it here.
+  metric               what it is                              public reference        freezes?
+  ─────────────────────────────────────────────────────────────────────────────────────────────
+  tflops_fp16          FP16 dense matmul TFLOPS (measured)     vendor datasheet peak   YES
+  blender_optix        Blender Open Data score (OptiX, sum of  opendata.blender.org    no (advisory)
+                       standard-scene samples/min)             (median per GPU)
+  cinebench_2024_gpu   Cinebench 2024 GPU (Redshift) score     Maxon Cinebench          no (advisory)
+  pugetbench_resolve   PugetBench for DaVinci Resolve Studio   pugetsystems.com         no (advisory)
+  pugetbench_premiere  PugetBench for Premiere Pro             pugetsystems.com         no (advisory)
 
-Reference numbers below are published **dense FP16 tensor-core peak TFLOPS** from
-vendor datasheets (FP16 accumulate; the sparsity-doubled figure is NOT used). A
-genuine device running a decent matmul reaches a large fraction of peak; a much
-weaker card physically cannot. Bands are deliberately wide so an honestly throttled
-or small-matmul run is never flagged — we only fire fraud on a gross shortfall.
+Why these: **Blender is what Petabyte actually renders** (the agent shells out to a Blender
+container), so a Blender benchmark measures the real workload and has abundant public data;
+Cinebench covers Cinema 4D / Redshift users; PugetBench covers the video-editing fleet
+(Resolve/Premiere). FP16 TFLOPS stays the one hardware-invariant, so it is the only metric
+allowed to FREEZE payouts on a gross over-claim. The render/video metrics are **advisory**:
+they surface a buyer-facing consistency signal and suppress a trust boost on a mismatch, but
+never auto-freeze — their public medians depend on Blender/driver version, scene, and (for
+Puget) the whole system, so they are corroboration, not proof.
+
+Reference numbers are approximate public **medians** with deliberately wide tolerance, so an
+honestly-throttled or slightly-different-version run is never flagged; a card absent from a
+metric's table resolves to `unknown_model` (recorded, shown to buyers, never flagged).
+Recalibrate against each source's live dataset — the tables are seeds, not gospel.
+
+Honest boundaries (unchanged): this checks a performance *class*, not the exact die (adjacent
+tiers overlap → catches gross over-claims, not an A100-for-H100 swap); it catches OVER-claiming,
+not bait-and-switch; and a self-run score is only as trustworthy as the harness — the number is
+node-signed (attributable) but becomes strong evidence only when platform-dispatched and
+server-timed. NOTE render benchmarks rank GPUs DIFFERENTLY than TFLOPS (RT-core presence
+dominates OptiX), which is exactly why each metric has its own table.
 
 No network, no GPU, pure functions — fully testable offline.
 """
 import os
 import re
 
-# canonical model -> published dense FP16 tensor-core peak TFLOPS (vendor datasheets).
-# Wide by design; see module docstring. Extend freely — unknown models never freeze.
-_PEAK_TFLOPS_FP16 = {
-    # ---- NVIDIA datacenter (Hopper / Ampere / Ada / Volta / Turing) ----
-    "H200": 989.0,
-    "H100": 989.0,          # SXM peak; board variant (PCIe ~756) folds in — bands are wide
-    "A100": 312.0,          # 40GB & 80GB, SXM/PCIe share the tensor peak
-    "L40S": 366.0,
-    "L40": 181.0,
-    "L4": 121.0,
-    "A40": 150.0,
-    "A30": 165.0,
-    "A10G": 125.0,
-    "A10": 125.0,
-    "V100": 125.0,
-    "T4": 65.0,
-    "P100": 21.0,           # no tensor cores; raw FP16
-    # ---- NVIDIA RTX / GeForce (consumer & workstation) ----
-    "RTX 5090": 450.0,
-    "RTX 4090": 330.0,
-    "RTX 4080": 195.0,
-    "RTX 4070 TI": 160.0,
-    "RTX 4070": 117.0,
-    "RTX 3090 TI": 160.0,
-    "RTX 3090": 142.0,
-    "RTX 3080": 119.0,
-    "RTX 3070": 81.0,
-    "RTX A6000": 155.0,
-    "RTX A5000": 111.0,
-    "RTX A4000": 76.0,
-    # ---- AMD Instinct (CDNA) ----
-    "MI300X": 1300.0,
-    "MI250X": 383.0,
-    "MI250": 362.0,
-    "MI210": 181.0,
+# ── per-metric reference tables ────────────────────────────────────────────────────────
+# Each metric: higher-is-better reference value per canonical GPU model, band fractions
+# (consistent floor / ceiling as a fraction of the reference; fraud floor used only when
+# freezes=True), a public source citation, and whether it may freeze payouts.
+_METRICS = {
+    "tflops_fp16": {
+        "label": "FP16 matmul TFLOPS", "unit": "TFLOPS", "freezes": True,
+        "source": "vendor datasheet — dense FP16 tensor-core peak",
+        "low": 0.30, "high": 1.15, "fraud": 0.20,
+        "ref": {
+            # NVIDIA datacenter
+            "H200": 989.0, "H100": 989.0, "A100": 312.0, "L40S": 366.0, "L40": 181.0,
+            "L4": 121.0, "A40": 150.0, "A30": 165.0, "A10G": 125.0, "A10": 125.0,
+            "V100": 125.0, "T4": 65.0, "P100": 21.0,
+            # NVIDIA RTX / GeForce
+            "RTX 5090": 450.0, "RTX 4090": 330.0, "RTX 4080": 195.0, "RTX 4070 TI": 160.0,
+            "RTX 4070": 117.0, "RTX 3090 TI": 160.0, "RTX 3090": 142.0, "RTX 3080": 119.0,
+            "RTX 3070": 81.0, "RTX A6000": 155.0, "RTX A5000": 111.0, "RTX A4000": 76.0,
+            # AMD Instinct
+            "MI300X": 1300.0, "MI250X": 383.0, "MI250": 362.0, "MI210": 181.0,
+        },
+    },
+    "blender_optix": {
+        "label": "Blender Open Data score (OptiX)", "unit": "score", "freezes": False,
+        "source": "opendata.blender.org — median samples/min, Blender 4.x OptiX (sum of scenes)",
+        "low": 0.35, "high": 1.35, "fraud": 0.25,
+        # RT-core cards where the public Blender data is solid. Datacenter cards without
+        # consumer RT throughput (A100/T4/P100) are intentionally omitted → unknown_model.
+        "ref": {
+            "RTX 4090": 12500.0, "RTX 4080": 8800.0, "RTX 4070 TI": 7000.0, "RTX 4070": 5400.0,
+            "RTX 3090 TI": 7200.0, "RTX 3090": 6300.0, "RTX 3080": 5400.0, "RTX 3070": 4300.0,
+            "RTX A6000": 6200.0, "RTX A5000": 4800.0, "L40S": 10500.0, "L40": 8000.0,
+            "A10": 3200.0, "L4": 3000.0,
+        },
+    },
+    "cinebench_2024_gpu": {
+        "label": "Cinebench 2024 GPU (Redshift)", "unit": "score", "freezes": False,
+        "source": "Maxon Cinebench 2024 — GPU (Redshift) test",
+        "low": 0.35, "high": 1.40, "fraud": 0.25,
+        "ref": {  # approximate anchors for common cards
+            "RTX 4090": 33000.0, "RTX 4080": 25000.0, "RTX 4070": 15000.0,
+            "RTX 3090": 18000.0, "RTX 3080": 14000.0,
+        },
+    },
+    "pugetbench_resolve": {
+        "label": "PugetBench — DaVinci Resolve Studio", "unit": "score", "freezes": False,
+        "source": "pugetsystems.com — PugetBench for DaVinci Resolve (overall)",
+        "low": 0.30, "high": 1.50, "fraud": 0.25,  # widest: whole-system dependent
+        "ref": {"RTX 4090": 12000.0, "RTX 4080": 10500.0, "RTX 3090": 8800.0},
+    },
+    "pugetbench_premiere": {
+        "label": "PugetBench — Premiere Pro", "unit": "score", "freezes": False,
+        "source": "pugetsystems.com — PugetBench for Premiere Pro (GPU score)",
+        "low": 0.30, "high": 1.50, "fraud": 0.25,
+        "ref": {"RTX 4090": 9500.0, "RTX 4080": 9000.0, "RTX 3090": 8000.0},
+    },
 }
 
+KNOWN_METRICS = tuple(_METRICS)
+
 # space-stripped canonical keys, longest first, so "H100 PCIE" beats "H100" and
-# "A100" beats "A10" on a substring match.
-_KEYS_BY_LEN = sorted(_PEAK_TFLOPS_FP16, key=lambda k: len(k.replace(" ", "")), reverse=True)
+# "A100" beats "A10" on a substring match. Union of every metric's models.
+_ALL_MODELS = set()
+for _m in _METRICS.values():
+    _ALL_MODELS |= set(_m["ref"])
+_KEYS_BY_LEN = sorted(_ALL_MODELS, key=lambda k: len(k.replace(" ", "")), reverse=True)
 
 # vendor/marketing noise words dropped before matching.
 _NOISE = re.compile(
@@ -99,11 +129,8 @@ def _canon_text(raw: str) -> str:
 def normalize_model(raw: str):
     """Map a free-text GPU name to a canonical reference key, or None if unknown.
 
-    Handles vendor prefixes, memory/board suffixes, and spacing:
-      'NVIDIA H100 80GB HBM3'      -> 'H100'
-      'NVIDIA A100-SXM4-80GB'      -> 'A100'
-      'GeForce RTX 4090'           -> 'RTX 4090'
-      'rtx4090'                    -> 'RTX 4090'
+      'NVIDIA H100 80GB HBM3'  -> 'H100'   ·  'NVIDIA A100-SXM4-80GB' -> 'A100'
+      'GeForce RTX 4090'       -> 'RTX 4090'  ·  'rtx4090' -> 'RTX 4090'
     """
     if not raw:
         return None
@@ -116,49 +143,65 @@ def normalize_model(raw: str):
     return None
 
 
-def reference_peak(gpu_model: str):
-    """Published dense FP16 tensor peak TFLOPS for a claimed model, or None."""
+def reference_value(gpu_model: str, metric: str = "tflops_fp16"):
+    """Public reference value for a claimed model under a metric: (canonical_key, value)
+    or (key_or_None, None) when the model isn't in that metric's table."""
+    m = _METRICS.get(metric)
+    if not m:
+        return (None, None)
     key = normalize_model(gpu_model)
-    return (key, _PEAK_TFLOPS_FP16[key]) if key else (None, None)
+    if not key:
+        return (None, None)
+    return (key, m["ref"].get(key))
 
 
-# --- band fractions (env-tunable). Wide, to protect honest sellers. ---
-def _f(env, default):
-    try:
-        return float(os.getenv(env, default))
-    except (TypeError, ValueError):
-        return float(default)
+def reference_peak(gpu_model: str):
+    """Back-compat: FP16 TFLOPS reference for a model, or (None, None)."""
+    return reference_value(gpu_model, "tflops_fp16")
 
 
-def _low_frac():   return _f("GPU_BENCH_LOW_FRAC", 0.30)     # consistent floor: 30% of peak
-def _high_frac():  return _f("GPU_BENCH_HIGH_FRAC", 1.15)    # can't exceed peak by much
-def _fraud_frac(): return _f("GPU_BENCH_FRAUD_FLOOR_FRAC", 0.20)  # below this = fraud
+def metric_meta(metric: str) -> dict:
+    """Public-facing description of a metric (label/source/freezes) for docs/UI."""
+    m = _METRICS.get(metric)
+    if not m:
+        return {}
+    return {"label": m["label"], "source": m["source"], "freezes": m["freezes"], "unit": m["unit"]}
+
+
+# ── band fractions (env-tunable) ────────────────────────────────────────────────────────
+_ENV = {"low": "GPU_BENCH_LOW_FRAC", "high": "GPU_BENCH_HIGH_FRAC", "fraud": "GPU_BENCH_FRAUD_FLOOR_FRAC"}
+
+
+def _frac(metric: str, kind: str) -> float:
+    """A global GPU_BENCH_* override (kept for back-compat) wins; else the per-metric default."""
+    v = os.getenv(_ENV[kind])
+    if v is not None:
+        try:
+            return float(v)
+        except ValueError:
+            pass
+    return float(_METRICS[metric][kind])
 
 
 def classify(gpu_model: str, score, metric: str = "tflops_fp16") -> dict:
-    """Compare a measured score to the claimed GPU model's public reference band.
+    """Compare one measured score to the claimed GPU model's public reference band.
 
-    Returns a dict:
-      verdict            one of consistent | implausibly_low | suspiciously_high |
-                         unknown_model | unknown_metric | no_score
-      fraud              True only on a GROSS over-claim (score below the fraud floor
-                         of the claimed model) — the caller should freeze payouts.
-      model / peak       resolved canonical model + its published peak TFLOPS
-      score / ratio      the measured score and score/peak
-      band               (low, high) plausible range for a genuine device
-      detail             one-line human explanation
+    Returns a dict: verdict (consistent | implausibly_low | suspiciously_high |
+    unknown_model | unknown_metric | no_score), fraud (True only when a FREEZING metric
+    falls below its fraud floor), plus model/peak/score/ratio/band/detail and the metric's
+    label/source/freezes for display.
     """
-    out = {"verdict": "unknown_model", "fraud": False, "metric": metric,
-           "model": None, "peak": None, "score": None, "ratio": None,
-           "band": None, "detail": ""}
-
-    if metric != "tflops_fp16":
-        # Only FP16 matmul TFLOPS has a reference table today. A gaming/graphics
-        # score would resolve here once a band is added for it.
-        out["verdict"] = "unknown_metric"
-        out["detail"] = f"No public reference band for metric '{metric}'."
+    m = _METRICS.get(metric)
+    out = {"verdict": "unknown_metric", "fraud": False, "metric": metric,
+           "label": m["label"] if m else metric, "source": m["source"] if m else None,
+           "freezes": bool(m["freezes"]) if m else False,
+           "model": None, "peak": None, "reference": None, "score": None,
+           "ratio": None, "band": None, "detail": ""}
+    if not m:
+        out["detail"] = f"No public reference table for metric '{metric}'."
         return out
 
+    unit = m["unit"]
     try:
         score = float(score)
     except (TypeError, ValueError):
@@ -169,32 +212,62 @@ def classify(gpu_model: str, score, metric: str = "tflops_fp16") -> dict:
         return out
     out["score"] = score
 
-    key, peak = reference_peak(gpu_model)
-    if not key:
-        out["detail"] = f"'{gpu_model}' is not in the public reference table; cannot judge."
+    key, ref = reference_value(gpu_model, metric)
+    if not key or ref is None:
+        out["verdict"] = "unknown_model"
+        out["model"] = key
+        out["detail"] = (f"'{gpu_model}' has no public {m['label']} reference; cannot judge "
+                         f"(recorded, not flagged).")
         return out
 
-    low, high = round(peak * _low_frac(), 1), round(peak * _high_frac(), 1)
-    fraud_floor = peak * _fraud_frac()
-    ratio = round(score / peak, 3)
-    out.update(model=key, peak=peak, ratio=ratio, band=(low, high))
+    low, high = round(ref * _frac(metric, "low"), 1), round(ref * _frac(metric, "high"), 1)
+    ratio = round(score / ref, 3)
+    out.update(model=key, peak=ref, reference=ref, ratio=ratio, band=(low, high))
 
     if score > high:
         out["verdict"] = "suspiciously_high"
-        out["detail"] = (f"{score:.0f} TFLOPS exceeds the {key} published peak "
-                         f"({peak:.0f}); the claimed model is weaker than the silicon "
-                         f"measured, or the number is inflated.")
+        out["detail"] = (f"{score:.0f} {unit} exceeds the {key} public {m['label']} "
+                         f"({ref:.0f}); the claimed model is weaker than the silicon measured, "
+                         f"or the number is inflated.")
         return out
     if score < low:
-        out["fraud"] = score < fraud_floor
+        out["fraud"] = bool(m["freezes"]) and score < ref * _frac(metric, "fraud")
         out["verdict"] = "implausibly_low"
-        floor_txt = f" below the {int(_fraud_frac()*100)}%-of-peak fraud floor" if out["fraud"] else ""
-        out["detail"] = (f"{score:.0f} TFLOPS is far below the {key} plausible floor "
-                         f"({low:.0f}){floor_txt}; the claimed model is stronger than the "
-                         f"silicon can deliver (over-claim).")
+        tail = " (below the fraud floor)" if out["fraud"] else ""
+        out["detail"] = (f"{score:.0f} {unit} is far below the {key} plausible floor "
+                         f"({low:.0f}) for {m['label']}{tail}; the claimed model is stronger "
+                         f"than the silicon can deliver (over-claim).")
         return out
 
     out["verdict"] = "consistent"
-    out["detail"] = (f"{score:.0f} TFLOPS is within the {key} plausible band "
-                     f"({low:.0f}–{high:.0f}); consistent with the claimed model.")
+    out["detail"] = (f"{score:.0f} {unit} is within the {key} plausible band "
+                     f"({low:.0f}–{high:.0f}) for {m['label']}; consistent with the claimed model.")
     return out
+
+
+def classify_all(gpu_model: str, source: dict) -> dict:
+    """Classify every recognized benchmark metric present in `source` (a signed proof or
+    meta dict) against the claimed model.
+
+    Returns {verdict, fraud, results}: `results` is the per-metric list; `verdict` is the
+    trust-relevant summary (over-claim beats high beats consistent); `fraud` is True only if
+    a FREEZING metric is a gross over-claim (the caller should freeze payouts).
+    """
+    results = []
+    if isinstance(source, dict):
+        for metric in _METRICS:                      # stable order: tflops first
+            if source.get(metric) is not None:
+                results.append(classify(gpu_model, source.get(metric), metric=metric))
+
+    graded = [r["verdict"] for r in results
+              if r["verdict"] in ("consistent", "implausibly_low", "suspiciously_high")]
+    fraud = any(r.get("fraud") for r in results)
+    if fraud or "implausibly_low" in graded:
+        verdict = "implausibly_low"
+    elif "suspiciously_high" in graded:
+        verdict = "suspiciously_high"
+    elif "consistent" in graded:
+        verdict = "consistent"
+    else:
+        verdict = None
+    return {"verdict": verdict, "fraud": fraud, "results": results}
