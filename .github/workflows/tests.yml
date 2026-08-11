@@ -234,6 +234,10 @@ jobs:
               except Exception as e: print(f"::error::{f}: {e}"); bad += 1
           sys.exit(1 if bad else 0)
           PY
+      - name: grafana provisioning (provider<->mount alignment + verify guards)
+        run: |
+          python observability/grafana/verify_provisioning.py
+          python observability/grafana/verify_provisioning_test.py
       - name: configuration drift (manifest / code / workflows / template.env in sync)
         run: python scripts/check_configuration_drift.py
       - name: manifest is up to date (re-generate → no diff)

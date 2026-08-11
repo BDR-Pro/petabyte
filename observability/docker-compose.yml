@@ -45,7 +45,14 @@ services:
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Dashboards are mounted OUTSIDE /var/lib/grafana on purpose. Mounting them at
+      # /var/lib/grafana/dashboards nested the bind mount INSIDE the grafana-data named
+      # volume; with a persistent volume + `docker compose restart` (which does not apply
+      # mount changes) the dashboard files could be invisible to the provider, leaving the
+      # Petabyte folder created-but-empty. A sibling path under /etc/grafana can never be
+      # masked by the named volume. The provider path (provisioning/dashboards/petabyte.yaml)
+      # MUST match this destination — grafana/verify_provisioning.py asserts they agree.
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
       - "127.0.0.1:3000:3000"   # loopback only — front with the TLS reverse proxy
