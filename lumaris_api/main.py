@@ -85,7 +85,7 @@ from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
                    PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TEMPLATES_HTML,
                    CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML,
-                   SELLER_EARNINGS_HTML, RESET_HTML, BUY_HTML)
+                   SELLER_EARNINGS_HTML, RESET_HTML, BUY_HTML, FUNDING_VIEW_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -1230,6 +1230,12 @@ def marketplace_page():
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page():
     return ADMIN_HTML
+
+@app.get("/admin/funding-view", response_class=HTMLResponse)
+def admin_funding_view():
+    # Static shell only; it reveals nothing until an admin token loads data from the
+    # admin-gated /admin/funding endpoint (safe to serve publicly, like /admin).
+    return FUNDING_VIEW_HTML
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page():

@@ -1208,6 +1208,99 @@ boot();
 </script>""")
 
 
+FUNDING_VIEW_HTML = _page("Petabyte — funding metrics", """
+<div class="wrap" style="padding:48px 22px 8px">
+  <div class="eyebrow"><span class="dot"></span> investor / founder</div>
+  <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 6px">Funding <span class="grad-teal">metrics</span></h1>
+  <p class="mut">Computed live from authoritative database rows — never fabricated. Read-only, operators only.</p>
+</div>
+<div class="wrap" style="padding:8px 22px 8px">
+  <div id="fsignin" class="card" style="display:none"><div class="lbl">Restricted</div>
+    <p class="mut">Sign in with an operator account.</p>
+    <div style="margin-top:14px"><a class="btn btn-amber" href="/auth/google/login">Sign in</a></div></div>
+  <div id="fdenied" class="card" style="display:none;border-color:rgba(229,120,139,.4)">
+    <div class="lbl" style="color:var(--bad)">Not authorized</div>
+    <p class="mut">This account isn't a platform admin.</p></div>
+</div>
+<div id="fconsole" style="display:none">
+  <div class="wrap" style="padding:4px 22px 4px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn-ghost" id="sc_real" onclick="fload('real')">Real (LIVE money)</button>
+      <button class="btn-ghost" id="sc_test" onclick="fload('test')">Test mode</button>
+      <button class="btn-ghost" id="sc_demo" onclick="fload('demo')">Demo</button>
+      <span class="mini mono" id="f_asof" style="margin-inline-start:auto"></span>
+    </div>
+    <div id="f_banner" class="card" style="display:none;margin-top:12px"></div>
+    <div class="stats" style="margin-top:12px">
+      <div class="stat"><div class="l">GMV (captured)</div><div class="n amber" id="f_gmv">—</div><div class="mini" id="f_netgmv"></div></div>
+      <div class="stat"><div class="l">Net platform revenue</div><div class="n teal" id="f_net">—</div><div class="mini" id="f_take"></div></div>
+      <div class="stat"><div class="l">Active buyers</div><div class="n" id="f_buyers">—</div><div class="mini" id="f_arpu"></div></div>
+      <div class="stat"><div class="l">Active sellers / GPUs</div><div class="n" id="f_sellers">—</div><div class="mini" id="f_gpus"></div></div>
+    </div>
+    <div class="panel" style="margin-top:12px;padding:16px 18px;display:flex;flex-wrap:wrap;gap:26px">
+      <div><span class="mini">Gross take rate</span><div class="mono teal" id="f_takeg" style="font-size:18px">—</div></div>
+      <div><span class="mini">Job success</span><div class="mono" id="f_success" style="font-size:18px">—</div></div>
+      <div><span class="mini">Refund rate</span><div class="mono" id="f_refund" style="font-size:18px">—</div></div>
+      <div><span class="mini">Utilization</span><div class="mono" id="f_util" style="font-size:18px">—</div></div>
+      <div><span class="mini">Fill rate</span><div class="mono" id="f_fill" style="font-size:18px">—</div></div>
+      <div><span class="mini">Unfulfilled demand</span><div class="mono amber" id="f_unmet" style="font-size:18px">—</div></div>
+    </div>
+    <div class="panel" style="margin-top:12px;padding:16px 18px;display:flex;flex-wrap:wrap;gap:26px">
+      <div><span class="mini">Seller liability (owed)</span><div class="mono amber" id="f_liab" style="font-size:18px">—</div></div>
+      <div><span class="mini">Payouts paid</span><div class="mono" id="f_paid" style="font-size:18px">—</div></div>
+      <div><span class="mini">Repeat-buyer rate</span><div class="mono teal" id="f_repeat" style="font-size:18px">—</div></div>
+      <div><span class="mini">Retention 30d</span><div class="mono" id="f_ret30" style="font-size:18px">—</div></div>
+      <div><span class="mini">Retention 90d</span><div class="mono" id="f_ret90" style="font-size:18px">—</div></div>
+    </div>
+    <p class="mini mut" id="f_note" style="margin:12px 2px 30px"></p>
+  </div>
+</div>
+<script>
+function fd(minor){if(minor===null||minor===undefined)return '—';return '$'+(minor/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function fp(rate){if(rate===null||rate===undefined)return '—';return (rate*100).toFixed(1)+'%';}
+function fnum(n){return (n===null||n===undefined)?'—':String(n);}
+async function fboot(){
+  if(!tok()){document.getElementById('fsignin').style.display='block';return;}
+  var w=await api('/admin/whoami');
+  if(!w.ok){document.getElementById(w.status===403?'fdenied':'fsignin').style.display='block';return;}
+  document.getElementById('fconsole').style.display='block';fload('real');
+}
+async function fload(scope){
+  ['real','test','demo'].forEach(function(s){var b=document.getElementById('sc_'+s);if(b)b.style.opacity=(s===scope?'1':'.55');});
+  var r=await api('/admin/funding?scope='+scope);
+  if(!r.ok)return;var b=r.body,m=b.money_minor,mk=b.marketplace,rt=b.rates,lq=b.liquidity,re=b.retention;
+  document.getElementById('f_asof').textContent='scope: '+b.scope+'  ·  '+(b.as_of||'').slice(0,19).replace('T',' ')+'Z';
+  var ban=document.getElementById('f_banner');
+  if(scope==='real'&&!m.gmv_captured){ban.style.display='block';ban.style.borderColor='rgba(240,180,80,.5)';
+    ban.innerHTML='<div class="lbl" style="color:var(--warn)">No real (LIVE) traction yet</div><p class="mut">The platform is in Stripe TEST mode, so REAL GMV is $0 by design — this is honest, not a bug. Use <b>Test mode</b> to see test-mode activity. TEST/demo figures are never shown as real traction.</p>';}
+  else if(scope!=='real'){ban.style.display='block';ban.style.borderColor='rgba(240,180,80,.5)';
+    ban.innerHTML='<div class="lbl" style="color:var(--warn)">'+(scope==='demo'?'DEMO data':'TEST-mode data')+' — not real traction</div><p class="mut">These figures are '+(scope==='demo'?'seeded demo':'Stripe TEST-mode')+' activity, shown for verification only.</p>';}
+  else{ban.style.display='none';}
+  document.getElementById('f_gmv').textContent=fd(m.gmv_captured);
+  document.getElementById('f_netgmv').textContent='net of refunds '+fd(m.net_gmv);
+  document.getElementById('f_net').textContent=fd(m.net_platform_revenue);
+  document.getElementById('f_take').textContent='net take '+fp(rt.take_rate_net);
+  document.getElementById('f_buyers').textContent=fnum(mk.active_buyers);
+  document.getElementById('f_arpu').textContent='ARPU '+fd(mk.arpu_minor);
+  document.getElementById('f_sellers').textContent=fnum(mk.active_sellers);
+  document.getElementById('f_gpus').textContent=fnum(mk.active_gpus_online)+' GPUs online';
+  document.getElementById('f_takeg').textContent=fp(rt.take_rate_gross);
+  document.getElementById('f_success').textContent=fp(rt.job_success_rate);
+  document.getElementById('f_refund').textContent=fp(rt.refund_rate);
+  document.getElementById('f_util').textContent=fp(lq.utilization);
+  document.getElementById('f_fill').textContent=fp(lq.fill_rate);
+  document.getElementById('f_unmet').textContent=fnum(lq.unfulfilled_demand);
+  document.getElementById('f_liab').textContent=fd(m.seller_liability_outstanding);
+  document.getElementById('f_paid').textContent=fd(m.payouts_paid);
+  document.getElementById('f_repeat').textContent=fp(re.repeat_buyer_rate);
+  document.getElementById('f_ret30').textContent=fp(re.buyer_retention_30d);
+  document.getElementById('f_ret90').textContent=fp(re.buyer_retention_90d);
+  document.getElementById('f_note').textContent=b.note;
+}
+fboot();
+</script>""")
+
+
 LOGIN_HTML = _page("Petabyte — sign in", """
 <div class="wrap" style="max-width:440px;padding:60px 22px 40px">
   <div class="eyebrow"><span class="dot"></span> <span id="eyebrow">account</span></div>
