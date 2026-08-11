@@ -1322,6 +1322,19 @@ def account_page():
 def trust_page():
     return HTMLResponse(TRUST_HTML)
 
+@app.get("/.well-known/security.txt", response_class=PlainTextResponse)
+@app.get("/security.txt", response_class=PlainTextResponse)
+def security_txt():
+    """RFC 9116 security contact — the file security researchers look for first."""
+    return (
+        "# Petabyte vulnerability disclosure — see /security and the repo SECURITY.md\n"
+        "Contact: mailto:security@petabyte.market\n"
+        "Contact: https://github.com/BDR-Pro/petabyte/security/advisories/new\n"
+        "Policy: https://petabyte.market/security\n"
+        "Expires: 2027-08-01T00:00:00Z\n"
+        "Preferred-Languages: en\n"
+    )
+
 @app.get("/status", response_class=HTMLResponse)
 def status_page():
     """Plain service status — honest, generated from live heartbeats."""

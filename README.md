@@ -10,6 +10,12 @@ We state plainly what is built and what is not. Real payment rails, vendor TEE
 attestation, and KYC/AML are on the roadmap, not live; see
 [`docs/PRODUCTION_GAPS.md`](docs/PRODUCTION_GAPS.md).
 
+**Trust & security:** what is enforced in code vs. what needs hardware is documented in
+[`docs/TRUST_MODEL.md`](docs/TRUST_MODEL.md); live, honest transparency counts and a
+verifiable per-job receipt are at [petabyte.market/trust](https://petabyte.market/trust).
+To report a vulnerability, see [`SECURITY.md`](SECURITY.md) — we offer coordinated
+disclosure with safe harbor.
+
 ## Try the demo in one command
 
 ```bash

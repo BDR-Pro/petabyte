@@ -276,6 +276,9 @@ ok("trust summary reports honest live counts (>=1 job completed, >=1 receipt)",
 ok("trust summary reports the double-entry ledger is not broken", _ts["ledger_balanced"] is not False)
 ok("trust summary publishes the honest ladder and never claims TEE from the stub",
    any(t["level"]=="benchmark_verified" for t in _ts["trust_ladder"]) and "not_claimed" in _ts)
+_sec=c.get("/.well-known/security.txt")
+ok("RFC 9116 security.txt is served with a contact + policy (coordinated disclosure)",
+   _sec.status_code==200 and "Contact:" in _sec.text and "Policy:" in _sec.text)
 
 # REFUND ON REAP: new booking, node dies, settle refunds buyer
 c.post("/heartbeat", headers={"X-API-KEY":s3key}, json={"spec_id":sid3})
