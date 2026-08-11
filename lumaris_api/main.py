@@ -1806,6 +1806,40 @@ def _marketplace_metrics():
                          "value": _minor})
     except Exception:  # noqa: BLE001
         logger.debug("financial-integrity metrics query failed", exc_info=True)
+    # Trust & integrity — the verification MOAT, made measurable. Reuses the same honest
+    # counts as the public /trust page (single source of truth). All labels are bounded
+    # (tier/status enumerations), never an id. Own try: never drops the gauges above.
+    try:
+        import trust as _trust
+        ts = _trust.trust_summary(dbs)
+        rows += [
+            {"name": "petabyte_attested_gpus", "doc": "Attested GPUs (verifiable listings)",
+             "labels": {"environment": env}, "value": ts["attested_gpus"]},
+            {"name": "petabyte_confidential_nodes_active",
+             "doc": "Nodes holding a FRESH confidential (TEE) attestation",
+             "labels": {"environment": env}, "value": ts["confidential_nodes_active"]},
+            {"name": "petabyte_jobs_completed_total", "doc": "Completed jobs (lifetime)",
+             "labels": {"environment": env}, "value": ts["jobs_completed"]},
+            {"name": "petabyte_results_content_bound",
+             "doc": "Results bound to the sha256 of the real output bytes",
+             "labels": {"environment": env}, "value": ts["results_content_bound"]},
+            {"name": "petabyte_verifiable_receipts",
+             "doc": "Jobs with a retained node signature (buyer-verifiable receipt)",
+             "labels": {"environment": env}, "value": ts["verifiable_receipts"]},
+            {"name": "petabyte_sellers_fraud_flagged",
+             "doc": "Sellers with fraud on record (payouts frozen pending review)",
+             "labels": {"environment": env}, "value": ts["sellers_fraud_flagged"]},
+        ]
+        for _tier, _n in (ts.get("trust_tiers") or {}).items():
+            rows.append({"name": "petabyte_trust_tier_gpus",
+                         "doc": "Attested GPUs by trust tier",
+                         "labels": {"tier": _tier, "environment": env}, "value": _n})
+        for _status, _n in (ts.get("quorum_checks_by_status") or {}).items():
+            rows.append({"name": "petabyte_quorum_checks",
+                         "doc": "Redundant re-execution (quorum) checks by outcome",
+                         "labels": {"status": str(_status), "environment": env}, "value": _n})
+    except Exception:  # noqa: BLE001
+        logger.debug("trust-integrity metrics query failed", exc_info=True)
     finally:
         dbs.close()
     return rows
