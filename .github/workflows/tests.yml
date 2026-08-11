@@ -466,6 +466,37 @@ jobs:
       - name: ruff (format check)
         run: ruff format --check lumaris_api || true
 
+  docker-build:
+    # Container build verification: the production image must build, and the app must
+    # actually come up healthy inside it (gunicorn + the canonical lumaris_api.main:app
+    # entrypoint), talking to a real Postgres. Proves `docker compose up` works for anyone.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - name: build the API image
+        run: docker build -t petabyte-api:ci .
+      - name: boot the image against Postgres and hit /healthz
+        run: |
+          docker network create pb
+          docker run -d --name db --network pb \
+            -e POSTGRES_USER=petabyte -e POSTGRES_PASSWORD=petabyte -e POSTGRES_DB=petabyte \
+            postgres:16
+          for i in $(seq 1 30); do
+            docker exec db pg_isready -U petabyte -d petabyte && break; sleep 2; done
+          docker run -d --name api --network pb -p 8000:8000 \
+            -e DATABASE_URL=postgresql+psycopg2://petabyte:petabyte@db:5432/petabyte \
+            -e SECRET_KEY=ci-insecure -e SERVER_PRIVATE_KEY=HjosLuZJfl-Qo_pSU5b61P_E5202al_7t9va97hjYBE= \
+            -e PAYMENT_WEBHOOK_SECRET=ci -e WG_PUBLIC_KEY=x -e WG_ENDPOINT=y \
+            -e GOOGLE_OAUTH_STUB=true -e ENVIRONMENT=development -e PAYMENTS_MODE=sandbox \
+            petabyte-api:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1; then echo "healthy"; ok=1; break; fi
+            sleep 2
+          done
+          if [ "${ok:-0}" != "1" ]; then echo "::error::container never became healthy"; docker logs api; exit 1; fi
+          curl -fsS http://127.0.0.1:8000/trust/summary | head -c 400; echo
+
   security-scan:
     runs-on: ubuntu-latest
     steps:
