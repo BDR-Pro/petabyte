@@ -321,7 +321,9 @@ def _run_template(task):
                                    "status": "failed"})
         return
     name = f"pb-{task.get('template')}-{_uuid.uuid4().hex[:8]}"
-    cmd = ["docker", "run", "-d", "--name", name, "-p", f"127.0.0.1:{port}:{port}"]
+    cmd = ["docker", "run", "-d", "--name", name]
+    if port:                                    # only publish a port for SERVING templates
+        cmd += ["-p", f"127.0.0.1:{port}:{port}"]   # (never -p …:0:0 for a batch template)
     cmd += _isolation_flags(task)              # Phase-1 sandbox (gVisor if present)
     cmd += _egress_flags(task)                 # protect the HOST's home internet
     if task.get("gpu"):

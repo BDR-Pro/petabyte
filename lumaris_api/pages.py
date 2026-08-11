@@ -1,7 +1,7 @@
 """Static site pages served by the API (same-origin, no build step).
 
 Brand: Petabyte — deep-navy background with teal/cyan bioluminescent
-accents and an amber energy accent, Space Grotesk (display) + Inter (body) +
+accents and an amber energy accent, Sora (display) + Figtree (body) +
 JetBrains Mono (data). The hexagon node mark (/static/petabyte-logo.png) is the
 signature. Token persists in localStorage as 'pb_token' across pages.
 """
@@ -344,14 +344,17 @@ function toggleLang(){
   try{localStorage.setItem('pb_lang',next);}catch(e){}
   location.reload();
 }
-// Translate in place. Every translatable node carries data-ar; we swap textContent
-// and flip direction. No separate Arabic build to drift out of sync.
+// Translate in place. Every translatable node carries data-ar; we swap innerHTML (NOT
+// textContent — that would flatten child markup like gradient spans, links, <code> and <b>
+// even for English readers) and flip direction. No separate Arabic build to drift out of sync.
 function applyLang(){
   var ar = document.documentElement.getAttribute('dir')==='rtl';
   var b=document.getElementById('langbtn'); if(b) b.textContent = ar ? 'EN' : 'AR';
   document.querySelectorAll('[data-ar]').forEach(function(el){
-    if(!el.hasAttribute('data-en')) el.setAttribute('data-en', el.textContent);
-    el.textContent = ar ? el.getAttribute('data-ar') : el.getAttribute('data-en');
+    // Snapshot the ORIGINAL English markup once; data-ar is authored as plain text, so setting
+    // innerHTML from it is safe (only ever our own server-rendered markup, never user input).
+    if(!el.hasAttribute('data-en-html')) el.setAttribute('data-en-html', el.innerHTML);
+    el.innerHTML = ar ? el.getAttribute('data-ar') : el.getAttribute('data-en-html');
   });
   document.querySelectorAll('[data-ar-ph]').forEach(function(el){
     if(!el.hasAttribute('data-en-ph')) el.setAttribute('data-en-ph', el.placeholder||'');
@@ -3065,9 +3068,12 @@ DEMO_HTML = _page("Petabyte — book a demo",
 (function(){var d=document.getElementById('d_date');if(d){var t=new Date();t.setMinutes(t.getMinutes()-t.getTimezoneOffset());d.min=t.toISOString().slice(0,10);}})();
 async function submitDemo(){
   var m=document.getElementById('d_msg');
+  var btn=document.querySelector('[data-act="submitDemo"]');
+  if(btn&&btn.disabled) return;                       // guard: no duplicate lead on double-click
   var name=(document.getElementById('d_name').value||'').trim();
   var email=(document.getElementById('d_email').value||'').trim();
   if(!name||!email){m.style.color='var(--warn)';m.textContent='Please add your name and email.';return;}
+  if(btn) btn.disabled=true;
   m.style.color='';m.textContent='Sending…';
   var payload={name:name,email:email,
     organization:(document.getElementById('d_org').value||'').trim(),
@@ -3078,13 +3084,14 @@ async function submitDemo(){
   try{
     var r=await fetch('/demo/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     var b=await r.json();
-    if(!r.ok){m.style.color='var(--warn)';m.textContent=(b.error&&b.error.message)||(b.detail)||'Could not send. Try emailing info@petabyte.market.';return;}
+    if(!r.ok){if(btn) btn.disabled=false;m.style.color='var(--warn)';
+      m.textContent=(b.error&&b.error.message)||(typeof b.detail==='string'?b.detail:'Please check your name and email, then try again.');return;}
     document.getElementById('demoform').innerHTML='<div style="text-align:center;padding:20px 10px">'+
       '<div class="mono" style="font-size:32px;color:var(--teal)">&#10003;</div>'+
       '<div style="font-family:var(--disp);font-weight:600;margin:8px 0 4px" data-ar="تم استلام الطلب">Request received</div>'+
       '<div class="mut" style="font-size:13.5px">'+b.message+'</div>'+
       (b.booking_url?('<a class="btn btn-amber" style="margin-top:14px" href="'+b.booking_url+'" target="_blank" rel="noopener" data-ar="اختر وقتاً يناسبك ←">Pick your time →</a>'):'')+
       '<div class="mini" style="margin-top:10px" data-ar="المرجع">Reference '+b.reference+'</div></div>';
-  }catch(e){m.style.color='var(--warn)';m.textContent='Network error. Try emailing info@petabyte.market.';}
+  }catch(e){if(btn) btn.disabled=false;m.style.color='var(--warn)';m.textContent='Network error. Try emailing info@petabyte.market.';}
 }
 </script>""")

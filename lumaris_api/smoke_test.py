@@ -1015,8 +1015,9 @@ keymap={sidTC1:(keyTC1,skTC1), sidTC2:(keyTC2,skTC2)}
 up=c.post("/uploads/url", headers=tcb, json={"filename":"movie.mp4"}).json()
 ok("buyer gets a pre-signed upload URL", "op=put" in up["upload_url"] and up["ref"].startswith("s3://") and up["key"].startswith("inputs/") and up["key"].endswith("movie.mp4"))
 
-# ffmpeg in the catalog
-ok("ffmpeg template listed", any(t["name"]=="ffmpeg" for t in c.get("/templates").json()["templates"]))
+# ffmpeg transcoding is a DEDICATED job path (/transcode), not a do-nothing one-click template.
+ok("transcode capability is exposed via /transcode (not a placeholder template)",
+   not any(t["name"]=="ffmpeg" for t in c.get("/templates").json()["templates"]))
 
 # fan-out transcode across 2 nodes, 100s split into [0,49]/[50,99]
 r=c.post("/transcode", headers=tcb, json={"input_ref":up["ref"],"codec":"h265","container":"mp4","nodes":2,"duration_seconds":100,"gpu_class":"TCGPU","hours":1}).json()
@@ -1358,8 +1359,8 @@ ok("kill switch: bookings work again after resume",
 from templates_registry import TEMPLATES as _TPL
 ok("every template declares an egress policy",
    all("egress" in v for v in _TPL.values()))
-ok("batch templates get NO network at all (blender/ffmpeg)",
-   _TPL["blender"]["egress"]=="none" and _TPL["ffmpeg"]["egress"]=="none")
+ok("batch templates get NO network at all (blender render node)",
+   _TPL["blender"]["egress"]=="none")
 ok("no template is 'open' (nothing gets unrestricted use of a host's connection)",
    not any(v["egress"]=="open" for v in _TPL.values()))
 _cat={t["name"]: t for t in c.get("/templates").json()["templates"]}
@@ -1440,7 +1441,8 @@ ok("a seller with no hardware is told to install the agent",
 # --- new templates for the highest-intent GPU renter: the researcher ---
 _tpl = {t["name"]: t for t in c.get("/templates").json()["templates"]}
 ok("jupyter notebook template exists (the researcher's front door)", "jupyter" in _tpl)
-ok("pytorch base template exists", "pytorch" in _tpl)
+ok("no do-nothing placeholder templates are advertised (pytorch base / tensorrt-llm removed)",
+   "pytorch" not in _tpl and "tensorrt-llm" not in _tpl)
 ok("jupyter is stateful (people leave notebooks running -> snapshot them)",
    _tpl["jupyter"]["stateful"] is True)
 
@@ -1688,6 +1690,10 @@ ok("newsletter response no longer shows the 'wired up yet' placeholder",
    "wired up" not in _nl.text.lower())
 ok("bad email to newsletter is rejected",
    c.post("/newsletter/subscribe", json={"email":"nope"}).status_code == 422)
+# a signup recorded while the provider is unconfigured is NOT stranded — it stays pending for
+# reconciliation (self-heals once Mailgun is configured).
+ok("unsynced signup is tracked for reconciliation (never silently stranded)",
+   dbmod.count_unsynced_newsletter(dbmod.SessionLocal()) >= 1)
 _lv=c.get("/landing/video").json()
 ok("landing video endpoint returns a default id", bool(_lv.get("video_id")))
 
@@ -1806,6 +1812,14 @@ ok("deploy builds the agent bundle the API serves",
 ok("install.sh served by API", c.get("/install.sh").status_code==200 and "petabyte-agent" in c.get("/install.sh").text)
 ok("install.ps1 served by API", c.get("/install.ps1").status_code==200)
 ok("installers are key-based (no creds)", "PETABYTE_API_KEY" in c.get("/install.sh").text and "PETABYTE_PASS" not in c.get("/install.sh").text)
+# REGRESSION GUARD: the SERVED installer must be the current, secure one — it installs the
+# container egress firewall (protects the seller's home network) and can fetch the agent bundle
+# without cloning (private-repo safe). A stale committed copy served ahead of it was a real bug.
+_ish=c.get("/install.sh").text
+ok("served install.sh installs the container egress firewall (seller-network protection)",
+   "DOCKER-USER" in _ish and "169.254" in _ish)
+ok("served install.sh can fetch the agent bundle (no GitHub clone required / private-repo safe)",
+   "/agent.tar.gz" in _ish)
 _lg=c.get("/static/petabyte-logo.png"); ok("brand logo served", _lg.status_code==200 and _lg.headers.get("content-type")=="image/png")
 _bm=c.get("/static/petabyte-bimi.svg"); ok("BIMI mark served (svg tiny-ps)", _bm.status_code==200 and _bm.headers.get("content-type")=="image/svg+xml" and b"baseProfile=\"tiny-ps\"" in _bm.content)
 ok("favicon served", c.get("/favicon.ico").status_code==200)
@@ -1861,6 +1875,11 @@ ok("dataset exports as JSONL for training pipelines",
    c.get("/admin/dataset/authenticity?format=jsonl", headers=GAH).headers.get("content-type","").startswith("application/x-ndjson"))
 ok("admin users list flags admin", any(u["username"]=="gtest@example.com" and u["is_admin"] for u in c.get("/admin/users", headers=GAH).json()["users"]))
 ok("admin specs list", c.get("/admin/specs", headers=GAH).status_code==200)
+# newsletter reconciliation (deferred-signup delivery) is admin-gated + reports pending count
+ok("newsletter reconcile is admin-gated", c.post("/admin/newsletter/reconcile", headers=NAH).status_code==403)
+_nrec=c.post("/admin/newsletter/reconcile", headers=GAH).json()
+ok("newsletter reconcile reports pending count (no-op when Mailgun unconfigured)",
+   "pending" in _nrec and _nrec.get("skipped") is True)
 # --- DISASTER RECOVERY: platform database backup to S3 (S3_STUB in tests) ---
 ok("backups admin list is admin-gated (403 for non-admin)", c.get("/admin/backups", headers=NAH).status_code==403)
 ok("backups run is admin-gated (403 for non-admin)", c.post("/admin/backups/run", headers=NAH).status_code==403)

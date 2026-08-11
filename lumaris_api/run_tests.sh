@@ -65,6 +65,7 @@ run_suite "pricing engine (cloud-anchored, demand+trust, explainable, clamped)" 
 run_suite "reservation reclaim (abandoned GPU capacity)" python reservation_reclaim_test.py
 run_suite "database backup to S3 (disaster recovery: dump/gzip/sha256/retention/verify)" python backup_test.py
 run_suite "sanctions screen (free public OFAC: country embargo + SDN crypto address, fail-closed)" python sanctions_test.py
+run_suite "launch templates (every template is a real, pullable, runnable container)" python templates_test.py
 run_suite "observability smoke (local tier; remote skipped offline)" \
           bash -c "cd .. && python scripts/observability_smoke_test.py"
 run_suite "grafana dashboards (metric-existence + generator determinism)" \

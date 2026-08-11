@@ -775,6 +775,24 @@ def record_newsletter_signup(db: Session, email: str, source: str = "homepage") 
         return "active"
 
 
+def unsynced_newsletter_subscribers(db: Session, limit: int = 200) -> list:
+    """Subscribed addresses NOT yet reflected into the mailing list (Mailgun down/unconfigured
+    at signup, or a transient failure). A reconciliation job drains these so a signup that
+    returned 'you're subscribed' actually receives the newsletter. Oldest first (FIFO)."""
+    return (db.query(NewsletterSubscriber)
+            .filter(NewsletterSubscriber.status == "subscribed",
+                    NewsletterSubscriber.mailgun_synced == False)   # noqa: E712
+            .order_by(NewsletterSubscriber.created_at.asc())
+            .limit(max(1, int(limit))).all())
+
+
+def count_unsynced_newsletter(db: Session) -> int:
+    from sqlalchemy import func as _func
+    return int(db.query(_func.count(NewsletterSubscriber.id))
+               .filter(NewsletterSubscriber.status == "subscribed",
+                       NewsletterSubscriber.mailgun_synced == False).scalar() or 0)  # noqa: E712
+
+
 def mark_newsletter_synced(db: Session, email: str, synced: bool = True) -> None:
     """Record whether the address has been reflected into the Mailgun mailing list, so a
     reconciliation job can later re-sync rows that Mailgun rejected/timed out on."""

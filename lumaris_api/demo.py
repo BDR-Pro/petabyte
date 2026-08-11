@@ -77,7 +77,7 @@ DEMO_JOBS = [
      "outcome": "completed"},
     {"buyer": "delta_research", "template": "jupyter", "hours": 1, "region": "eu-west",
      "outcome": "running"},
-    {"buyer": "quant_forge", "template": "pytorch", "hours": 2, "region": "me-central",
+    {"buyer": "quant_forge", "template": "jupyter", "hours": 2, "region": "me-central",
      "outcome": "completed"},
     {"buyer": "quant_forge", "template": "vllm", "hours": 1, "region": "us-west",
      "outcome": "failed"},

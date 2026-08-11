@@ -119,7 +119,9 @@ from router import select_plan
 from payout_providers import screen, get_provider
 import notifications
 RENDER_IMAGE = TEMPLATES['blender']['image']
-FFMPEG_IMAGE = TEMPLATES['ffmpeg']['image']
+# Image for the DEDICATED /transcode + /stitch job paths (NVENC/NVDEC). This is a job type, not a
+# one-click launch template — running the bare image does nothing, so it's not in the catalog.
+FFMPEG_IMAGE = "jrottenberg/ffmpeg:6.1-nvidia"
 from utils import (
     verify_webhook_signature, verify_tee_report, geolocate_country,
     mint_presigned_put, mint_presigned_get, s3_key_for, s3_uri,
@@ -260,6 +262,10 @@ def _maintenance_cycle() -> None:
         except Exception:  # noqa: BLE001 — never let cleanup break the maintenance cycle
             logger.exception("reclaim_abandoned_reservations cycle failed")
         reprice_specs(db)                # demand-based auto-pricing for opted-in nodes
+        try:
+            reconcile_newsletter(db, limit=50)   # deliver any deferred newsletter signups
+        except Exception:  # noqa: BLE001 — a mailing-list hiccup must not break maintenance
+            logger.exception("newsletter reconcile cycle failed")
         _maintenance["last_success"] = time.time()
     finally:
         db.close()
@@ -1282,11 +1288,17 @@ def account_page():
 app.include_router(web_router)
 
 def _find_installer(name: str):
-    """Locate a bundled installer script across dev + deployed layouts."""
+    """Locate a bundled installer script across dev + deployed layouts.
+
+    The CANONICAL source (lumaris_agent/) wins over the deploy-copied installers/ snapshot:
+    a stale committed installers/ copy (e.g. missing the container egress firewall) must never
+    be served ahead of the current, secure agent script — that was a real seller-security
+    regression on Docker/compose deploys. Generated artifacts with no canonical source (the
+    agent.tar.gz bundle) still fall back to installers/."""
     here = os.path.dirname(__file__)
     for cand in (
-        os.path.join(here, "installers", name),        # copied here by deploy.sh/update.sh
-        os.path.join(here, "..", "lumaris_agent", name),  # dev / monorepo checkout
+        os.path.join(here, "..", "lumaris_agent", name),  # canonical source of truth
+        os.path.join(here, "installers", name),           # deploy snapshot / built artifacts
     ):
         if os.path.exists(cand):
             return cand
@@ -2491,13 +2503,19 @@ def _build_job_payload(task) -> dict:
                 **rp, **_backup}
     if task.task_type == "template":
         tpl = TEMPLATES.get(task.template, {})
+        params = json.loads(task.template_params or "{}")
+        # A serving LLM template must have a model to boot. Fall back to the template's
+        # documented default so a one-click launch actually starts a usable service instead
+        # of a crash-looping container; the buyer can still override via params.model.
+        if not params.get("model") and tpl.get("default_model"):
+            params["model"] = tpl["default_model"]
         return {"task_id": task.id, "task_type": "template", "template": task.template,
                 "image": tpl.get("image"), "port": tpl.get("port"),
                 "cache": tpl.get("cache"), "gpu": tpl.get("gpu", True),
                 # The agent enforces this. Default CLOSED: if a template forgets to
                 # declare a policy, the workload gets no network rather than the host's.
                 "egress": tpl.get("egress", "none"),
-                "params": json.loads(task.template_params or "{}"), **_backup}
+                "params": params, **_backup}
     return {"task_id": task.id, "task_type": "vm", "vm_type": task.vm_type,
             "cpu": task.cpu, "ram": task.ram, "cuda": task.cuda}
 
@@ -3972,6 +3990,34 @@ def newsletter_subscribe(body: NewsletterModel, request: Request,
     obs.event("marketing.newsletter.subscribed", message="newsletter signup",
               new=created, mailgun_synced=synced, source="homepage", email_sha=tag)
     return {"ok": True, "message": "Thanks — you're subscribed."}
+
+
+def reconcile_newsletter(db, limit: int = 100) -> dict:
+    """Deliver signups that were recorded but not yet reflected in the mailing list (Mailgun was
+    down/unconfigured at signup, or hit a transient error). Without this, every 'you're
+    subscribed' with a blank/failed Mailgun would strand forever. Runs in the maintenance loop
+    (self-healing) and via POST /admin/newsletter/reconcile. No-op unless Mailgun is configured,
+    so an unconfigured deploy costs nothing."""
+    provider = (NEWSLETTER_PROVIDER or "none").lower()
+    if provider != "mailgun" or not (os.getenv("MAILGUN_API_KEY", "").strip() and NEWSLETTER_LIST_ADDRESS):
+        return {"reconciled": 0, "failed": 0, "skipped": True,
+                "pending": dbmod.count_unsynced_newsletter(db)}
+    done = failed = 0
+    for sub in dbmod.unsynced_newsletter_subscribers(db, limit=limit):
+        if _newsletter_add_to_mailgun(sub.email) in ("synced", "already"):
+            dbmod.mark_newsletter_synced(db, sub.email, True)
+            done += 1
+        else:
+            failed += 1     # leave unsynced; the next cycle retries
+    return {"reconciled": done, "failed": failed, "skipped": False,
+            "pending": dbmod.count_unsynced_newsletter(db)}
+
+
+@app.post("/admin/newsletter/reconcile", tags=["admin"])
+def admin_reconcile_newsletter(limit: int = Query(1000, ge=1, le=10000),
+                               me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Push any newsletter signups not yet reflected in the mailing list to the provider now."""
+    return reconcile_newsletter(db, limit=limit)
 
 
 @app.get("/landing/video", tags=["marketing"])

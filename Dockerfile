@@ -34,6 +34,11 @@ RUN pip install --no-cache-dir -r lumaris_api/requirements.txt
 # Application code.
 COPY . /app
 
+# Bundle the agent code so GET /agent.tar.gz works in the image (the node installer fetches this
+# instead of cloning GitHub, so onboarding keeps working even when the repo is private). Deploy
+# scripts build the same artifact on a host; this makes the Docker image self-sufficient too.
+RUN tar -czf /app/lumaris_api/installers/agent.tar.gz -C /app lumaris_agent
+
 # Run as an unprivileged user — never root inside the container.
 RUN useradd --create-home --uid 10001 petabyte && chown -R petabyte:petabyte /app
 USER petabyte

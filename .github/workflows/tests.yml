@@ -240,6 +240,9 @@ jobs:
       - name: sanctions screen (free public OFAC: country embargo + SDN crypto address, fail-closed)
         working-directory: lumaris_api
         run: python sanctions_test.py
+      - name: launch templates (every template is a real, pullable, runnable container)
+        working-directory: lumaris_api
+        run: python templates_test.py
       - name: agent telemetry (span exception-safety / redaction / trace-join / degrade)
         working-directory: lumaris_agent
         run: python agent_telemetry_test.py
