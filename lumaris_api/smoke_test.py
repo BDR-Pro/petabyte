@@ -1479,6 +1479,13 @@ ok("tables collapse to cards under 720px (a host checks their phone)",
    "@media(max-width:720px)" in _css and ".tbl td::before" in _css)
 ok("table cells carry their header label for the mobile card view",
    all('data-l=' in c.get(p).text for p in ["/marketplace", "/pricing", "/account"]))
+# TEST-MODE honesty: sandbox reports test_mode, and every money screen carries the banner slot
+# + the shared banner renderer, so no one mistakes a demo charge for a real one.
+ok("payments/config reports test_mode in sandbox", c.get("/payments/config").json().get("test_mode") is True)
+ok("every money screen carries the test-mode banner slot",
+   all('id="pbtestmode"' in c.get(p).text for p in ["/account", "/seller/payouts", "/buy/demo-spec"]))
+ok("the shared shell renders the test-mode banner (pbTestBanner + .pb-testmode)",
+   "pbTestBanner" in c.get("/account").text and ".pb-testmode" in c.get("/account").text)
 
 # --- COMMAND PALETTE (item 18) ---
 ok("Cmd/Ctrl+K opens a command palette", "pbPalette" in _css and "metaKey" in _css)

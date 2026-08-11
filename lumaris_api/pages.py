@@ -167,6 +167,12 @@ html[data-theme=light] .codeline{background:#0E1A2E}
 .badge{font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:999px;border:1px solid var(--line2);color:var(--mut)}
 .badge.ok{color:var(--teal);border-color:rgba(53,224,208,.4);background:rgba(53,224,208,.09)}
 .badge.cc{color:var(--amber);border-color:rgba(255,178,36,.4);background:rgba(255,178,36,.09)}
+/* ---------- test-mode banner (shown on money screens whenever payments are in sandbox/TEST) ---------- */
+.pb-testmode{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;
+  margin:0 0 18px;padding:10px 14px;border-radius:var(--r);font-size:13px;line-height:1.4;
+  color:var(--amber);border:1px solid rgba(255,178,36,.4);background:rgba(255,178,36,.09)}
+.pb-testmode b{font-family:var(--mono);font-size:10px;letter-spacing:.06em;padding:3px 8px;border-radius:999px;
+  color:#241802;background:linear-gradient(180deg,var(--amber-br),var(--amber))}
 /* ---------- stats ---------- */
 .stats{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
 .stat{flex:1 1 22%;min-width:150px;background:linear-gradient(180deg,var(--depth2),var(--panel2));padding:20px 22px}
@@ -339,6 +345,14 @@ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'
 function authed(){return !!tok();}
 async function api(p,o){o=o||{};o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
  if(tok())o.headers['Authorization']='Bearer '+tok();var r=await fetch(p,o);var b={};try{b=await r.json()}catch(e){}return {ok:r.ok,status:r.status,body:b};}
+// Money-screen honesty: any page with a #pbtestmode slot shows a clear TEST-MODE banner while the
+// platform is in sandbox / Stripe test mode — so no one ever mistakes a demo for a real charge.
+async function pbTestBanner(){var el=document.getElementById('pbtestmode');if(!el)return;
+ try{var r=await fetch('/payments/config');var c=await r.json();
+  if(c&&c.test_mode){el.innerHTML='<div class="pb-testmode" role="status" data-ar="وضع تجريبي — لا تُخصم أي بطاقة حقيقية ولا تتحرك أي أموال حقيقية. للعروض فقط."><b>TEST MODE</b><span>No real card is charged and no real money moves — this is a sandbox for demos.</span></div>';}
+  else{el.textContent='';}
+ }catch(e){}}
+document.addEventListener('DOMContentLoaded',pbTestBanner);
 function toggleLang(){
   var h=document.documentElement, next=(h.getAttribute('dir')==='rtl')?'en':'ar';
   try{localStorage.setItem('pb_lang',next);}catch(e){}
@@ -1461,6 +1475,7 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
 </div>
 
 <div id="hub" style="display:none">
+  <div class="wrap" style="padding:18px 22px 0"><div id="pbtestmode"></div></div>
   <!-- onboarding: what do I do next? -->
   <div class="wrap" id="onbsection" style="padding:22px 22px 0;display:none">
     <div class="card">
@@ -2436,6 +2451,7 @@ SELLER_EARNINGS_HTML = _page("Petabyte — seller earnings",
     desc="Connect your Stripe account to receive payouts, and track compute earnings, commission, transfers and bank payouts.",
     path="/seller/payouts", body="""
 <div class="wrap" style="padding:52px 24px 8px;max-width:900px">
+  <div id="pbtestmode"></div>
   <div class="eyebrow"><span class="dot"></span> seller earnings</div>
   <h1 style="font-size:clamp(28px,4.4vw,42px);margin:14px 0 8px">Get paid for your compute</h1>
   <p class="mut" id="signedout" style="display:none">Please <a class="teal" href="/login">sign in</a> to set up payouts.</p>
@@ -2576,6 +2592,7 @@ BUY_HTML = _page("Petabyte — rent & run on a GPU",
     path="/buy", body="""
 <div class="wrap" style="padding:34px 24px 44px;max-width:960px">
   <a class="mini" href="/marketplace" style="color:var(--mut)">← Back to marketplace</a>
+  <div id="pbtestmode" style="margin-top:14px"></div>
   <p class="mut" id="buy_signedout" style="display:none;margin-top:18px">Please <a class="teal" href="/login">sign in</a> to rent a GPU.</p>
   <div id="buywrap" style="margin-top:14px"><div class="mut mono" style="padding:40px 0">Loading GPU…</div></div>
 </div>
