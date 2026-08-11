@@ -635,7 +635,8 @@ jobs:
       - name: Cleanup generated secrets from runner
         if: always()
         run: |
-          rm -f \
-            .env.platform.generated \
-            ~/.ssh/deploy_key \
-            ~/.ssh/known_hosts
+          set +e
+          rm -f .env.platform.generated
+          rm -f .env.gpu.generated
+          rm -f ~/.ssh/deploy_key
+          rm -f ~/.ssh/known_hosts
