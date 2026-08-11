@@ -312,37 +312,55 @@ def execute_batch(db, batch: PayoutBatch) -> PayoutBatch:
     db.execute(dbmod.update(PayoutObligation)
                .where(PayoutObligation.batch_id == batch.id)
                .values(state="paid" if settled else "batched"))
-    db.add(batch); db.commit()
-    # If the rail settled synchronously, the seller_payable liability is discharged now: post
-    # the DEBIT so the ledger matches the obligation state (split-brain fix). A batch that only
-    # 'sent' posts its leg later in confirm_batch when settlement is confirmed.
+    db.add(batch)
+    # If the rail settled synchronously, the seller_payable liability is discharged now: add the
+    # DEBIT leg to THIS transaction and commit both together, so the ledger can never lag the
+    # obligation state after a crash (split-brain fix, now atomic). A batch that only 'sent' posts
+    # its leg later in confirm_batch when settlement is confirmed.
     if settled:
-        _post_batch_payout_ledger(db, batch)
+        _add_batch_payout_ledger(db, batch)
+    _commit_payout_atomic(db, batch, "paid" if settled else "sent",
+                          "paid" if settled else "batched")
     return batch
 
 
-def _post_batch_payout_ledger(db, batch) -> None:
-    """Post the DOUBLE-ENTRY leg for a SETTLED batch payout: DEBIT the seller's seller_payable
-    (the liability recorded at capture) and CREDIT the payout clearing account. Mirrors the admin
-    transfer_to_seller post so BOTH payout paths keep the ledger's seller-liability truthful.
-    Without it the batch path marked obligations 'paid' but never debited seller_payable — a
-    permanent ledger/obligation split-brain (the liability grew forever). Idempotent via a
-    per-batch key; best-effort so it can never undo the already-committed paid state."""
+def _add_batch_payout_ledger(db, batch) -> bool:
+    """ADD (flush, do NOT commit) the DOUBLE-ENTRY leg for a SETTLED batch payout to the CURRENT
+    transaction: DEBIT the seller's seller_payable (the liability recorded at capture) and CREDIT
+    the payout clearing account. Mirrors the admin transfer_to_seller post so BOTH payout paths
+    keep the ledger's seller-liability truthful. The CALLER commits it in the SAME transaction as
+    the paid-state write, so a crash can never leave a 'paid' batch without its ledger entry
+    (atomic — this used to be a second, separate commit). Idempotent: returns False (adds nothing)
+    if the per-batch leg was already posted. Returns True if it added the leg."""
     total = int(getattr(batch, "total_amount_minor", 0) or 0)
     if total <= 0:
-        return
+        return False
+    key = f"payout_settled:{batch.public_id}"
+    if db.query(dbmod.LedgerTx).filter(dbmod.LedgerTx.idempotency_key == key).first():
+        return False                      # already posted -> nothing to add (idempotent)
+    dbmod.post(db, "payout_batch", legs=[
+        (dbmod.acct_seller_payable(batch.seller_id), dbmod.DEBIT, total, batch.seller_id),
+        (dbmod.acct_stripe_payouts(),               dbmod.CREDIT, total),
+    ], reference_id=batch.public_id, idempotency_key=key,
+       description="batch payout settled to seller", entry_type="payout_settled")
+    return True                           # flushed, NOT committed — caller commits atomically
+
+
+def _commit_payout_atomic(db, batch, batch_state: str, obl_state: str) -> None:
+    """Commit the paid-state write AND the settled ledger leg TOGETHER (atomic). On the rare
+    duplicate-key race — a concurrent settle already posted the idempotent leg — roll back and
+    re-apply just the state so the batch still reaches its paid state. Never 500, never a
+    ledger/obligation split-brain."""
     try:
-        dbmod.post(db, "payout_batch", legs=[
-            (dbmod.acct_seller_payable(batch.seller_id), dbmod.DEBIT, total, batch.seller_id),
-            (dbmod.acct_stripe_payouts(),               dbmod.CREDIT, total),
-        ], reference_id=batch.public_id,
-           idempotency_key=f"payout_settled:{batch.public_id}",
-           description="batch payout settled to seller", entry_type="payout_settled")
         db.commit()
-    except Exception:  # noqa: BLE001 — a duplicate idempotency key (already posted) or a transient
-        db.rollback()  # error must NEVER roll back the paid-state commit; the leg is idempotent.
-        logger.warning("payout ledger post skipped/failed for batch %s (idempotent; repairable)",
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.warning("atomic payout commit retried for batch %s (concurrent settle race)",
                        getattr(batch, "public_id", "?"))
+        db.query(PayoutBatch).filter(PayoutBatch.id == batch.id).update({"state": batch_state})
+        db.execute(dbmod.update(PayoutObligation)
+                   .where(PayoutObligation.batch_id == batch.id).values(state=obl_state))
+        db.commit()
 
 
 def confirm_batch(db, batch: PayoutBatch) -> PayoutBatch:
@@ -356,9 +374,11 @@ def confirm_batch(db, batch: PayoutBatch) -> PayoutBatch:
     db.execute(dbmod.update(PayoutObligation)
                .where(PayoutObligation.batch_id == batch.id)
                .values(state="paid"))
-    db.add(batch); db.commit()
-    # Money actually left to the seller -> post the seller_payable DEBIT now (split-brain fix).
-    _post_batch_payout_ledger(db, batch)
+    db.add(batch)
+    # Money actually left to the seller -> add the seller_payable DEBIT to THIS transaction and
+    # commit both together (atomic split-brain fix; was a separate best-effort commit).
+    _add_batch_payout_ledger(db, batch)
+    _commit_payout_atomic(db, batch, "paid", "paid")
     return batch
 
 

@@ -1541,9 +1541,49 @@ def _ensure_columns():
             pass  # never block startup on a best-effort migration
 
 
+def _ensure_check_constraints():
+    """Best-effort: add the money-safety CHECK constraints to an EXISTING (pre-constraint) DB.
+    create_all() only adds constraints to NEW tables, so a database whose `users`/`ledger` tables
+    predate these constraints would keep allowing negative balances and invalid ledger legs.
+
+    Postgres only (SQLite cannot ALTER TABLE ADD CONSTRAINT — fresh SQLite DBs get them via
+    create_all). Guarded so it NEVER blocks startup or a deploy: each constraint is skipped if it
+    already exists OR if any legacy row would violate it (which would make the ALTER fail) — in
+    that case we log the count so an operator can remediate, then the constraint is added on a
+    later boot. Idempotent."""
+    import logging as _logging
+    from sqlalchemy import text as _text
+    if not engine.dialect.name.startswith("postgres"):
+        return
+    wanted = [
+        ("users",  "ck_user_balance_nonneg",  "balance >= 0"),
+        ("users",  "ck_user_earnings_nonneg", "earnings >= 0"),
+        ("ledger", "ck_ledger_amount_pos",    "amount > 0"),
+        ("ledger", "ck_ledger_direction",
+         "direction is not null and direction in ('debit','credit')"),
+    ]
+    for table, name, check in wanted:
+        try:
+            with engine.begin() as conn:
+                if conn.execute(_text("SELECT 1 FROM pg_constraint WHERE conname = :n"),
+                                {"n": name}).first():
+                    continue                                   # already present
+                bad = conn.execute(
+                    _text(f"SELECT count(*) FROM {table} WHERE NOT ({check})")).scalar() or 0
+                if bad:
+                    _logging.getLogger("petabyte").warning(
+                        "skip constraint %s on %s: %d legacy row(s) violate it — remediate, "
+                        "then it will be added on the next boot", name, table, bad)
+                    continue                                   # adding would fail; don't block
+                conn.execute(_text(f"ALTER TABLE {table} ADD CONSTRAINT {name} CHECK ({check})"))
+        except Exception:  # noqa: BLE001 — never block startup on a best-effort constraint add
+            pass
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
+    _ensure_check_constraints()
     _ensure_indexes()
     _backfill_public_ids()
 

@@ -231,8 +231,10 @@ def _psettled(direction=None, account=None):
 _dr = _psettled(dbmod.DEBIT, dbmod.acct_seller_payable(sid2))
 ok("settled batch posts a seller_payable DEBIT == batch total (split-brain fixed)",
    len(_dr) == 1 and int(_dr[0].amount) == 1000)
-routing._post_batch_payout_ledger(s, batch)   # re-post
-ok("batch payout ledger leg is idempotent (no duplicate on re-post)", len(_psettled()) == 2)
+_readded = routing._add_batch_payout_ledger(s, batch)   # attempt a re-post (same batch key)
+s.commit()
+ok("batch payout ledger leg is idempotent (re-post adds nothing)",
+   _readded is False and len(_psettled()) == 2)
 _bal_ok, _ = dbmod.ledger_is_balanced(s)
 ok("ledger balances after the batch-payout leg", _bal_ok)
 # a re-run does not create a second batch or double-pay (no available obligations left)
