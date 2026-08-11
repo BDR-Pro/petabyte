@@ -190,6 +190,10 @@ class SellerSpec(Base):
     benchmark_tokens_sec = Column(Float, nullable=True)  # last LLM tokens/sec benchmark
     benchmark_meta = Column(Text, nullable=True)         # JSON: other metrics
     benchmark_at = Column(DateTime, nullable=True)
+    # verdict of comparing a reported benchmark against the CLAIMED gpu_model's public
+    # reference band (gpu_benchmark.classify): consistent | implausibly_low |
+    # suspiciously_high | unknown_model | None. Feeds the honest trust ladder.
+    benchmark_verdict = Column(String, nullable=True)
     jobs_completed = Column(Integer, default=0)
     jobs_failed = Column(Integer, default=0)
     fraud_count = Column(Integer, default=0)
@@ -242,7 +246,24 @@ def trust_level_for(spec: "SellerSpec") -> dict:
     if not spec.attested:
         return {"level": "self_reported", "rank": 0, "label": "Self-reported",
                 "evidence": "Listing details supplied by the seller; no proof held."}
+    verdict = getattr(spec, "benchmark_verdict", None)
     if spec.benchmark_tokens_sec:
+        # A benchmark that did NOT match the claimed model's public performance band is
+        # NOT corroborating evidence — it is a red flag. Don't let it upgrade the tier.
+        if verdict in ("implausibly_low", "suspiciously_high"):
+            return {"level": "agent_verified", "rank": 1,
+                    "label": "Agent-verified (benchmark flagged)",
+                    "evidence": "Hardware report signed by the node's Ed25519 device key. "
+                                "A submitted benchmark did NOT match the claimed GPU model's "
+                                f"public performance band ({verdict}) and was rejected as "
+                                "corroborating evidence — the listing may be mislabeled."}
+        if verdict == "consistent":
+            return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-consistent",
+                    "evidence": "Agent-signed hardware report + a node-reported, signed benchmark "
+                                f"({round(spec.benchmark_tokens_sec)} tok/s) whose measured FP16 "
+                                "throughput is CONSISTENT with the published spec of the claimed "
+                                "GPU model. Node-reported (not run in a platform enclave), but it "
+                                "matches public reference data for the advertised card."}
         return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-reported",
                 "evidence": "Agent-signed hardware report + a node-REPORTED, signed benchmark "
                             f"({round(spec.benchmark_tokens_sec)} tok/s) — self-reported and "
@@ -1512,7 +1533,8 @@ def _ensure_columns():
         "specs": [("min_price", "FLOAT"), ("max_price", "FLOAT"),
                   ("auto_price", "BOOLEAN DEFAULT false"), ("public_id", "VARCHAR"),
                   ("is_demo", "BOOLEAN NOT NULL DEFAULT false"),
-                  ("tee_attested_at", "TIMESTAMP")],
+                  ("tee_attested_at", "TIMESTAMP"),
+                  ("benchmark_verdict", "VARCHAR")],
         "users": [("referral_code", "VARCHAR"), ("referred_by", "INTEGER"),
                   ("referral_rewarded", "BOOLEAN DEFAULT false"),
                   ("referral_signup_meta", "VARCHAR"),("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
@@ -2858,11 +2880,15 @@ def get_task_logs(db: Session, task_id: int, after_id: int = 0):
 
 # ------------------ Benchmarks ------------------
 
-def set_benchmark(db: Session, spec: "SellerSpec", tokens_sec: float, meta: dict) -> None:
+def set_benchmark(db: Session, spec: "SellerSpec", tokens_sec: float, meta: dict,
+                  verdict: str = None) -> None:
     import json as _json
     spec.benchmark_tokens_sec = tokens_sec
     spec.benchmark_meta = _json.dumps(meta or {})
     spec.benchmark_at = _utcnow()
+    if verdict is not None:
+        # consistency of the reported number with the CLAIMED gpu_model's public band.
+        spec.benchmark_verdict = str(verdict)[:32]
     db.add(spec); db.commit()
 
 

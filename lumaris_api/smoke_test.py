@@ -466,18 +466,47 @@ c.post("/benchmark", headers=s5h, json={"spec_id":sid5})
 bjob=c.get("/jobs/next", headers={"X-API-KEY":key5}).json()
 ok("benchmark job dispatched", bjob["task_type"]=="benchmark")
 bph={"task_id":bjob["task_id"],"output_hash":"bench","ts":int(time.time())}
-ok("signed benchmark result accepted", c.post("/jobs/benchmark_result", headers={"X-API-KEY":key5}, json={"spec_id":sid5,"tokens_sec":2350.5,"meta":{"model":"llama3-8b","sd_images_sec":4.2},"proof":bph,"signature":sign_proof(sk5,bph)}).status_code==200)
+# The agent reports a measured FP16 matmul TFLOPS the server checks against the CLAIMED
+# GPU model's public band. 720 TFLOPS is squarely in the H100 band -> verdict "consistent".
+_br=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key5}, json={"spec_id":sid5,"tokens_sec":2350.5,"meta":{"model":"llama3-8b","sd_images_sec":4.2,"tflops_fp16":720,"metric":"fp16_matmul_tflops"},"proof":bph,"signature":sign_proof(sk5,bph)})
+ok("signed benchmark result accepted", _br.status_code==200)
+ok("benchmark consistent with the claimed H100 -> verdict 'consistent'", _br.json().get("benchmark_verdict")=="consistent")
 ok("/specs surfaces tokens/sec", any(s["spec_id"]==sid5 and s["benchmark_tokens_sec"]==2350.5 for s in c.get("/specs", headers=b5h).json()["specs"]))
 # --- TRUST LADDER: a signed benchmark upgrades the level; TEE is never claimed ---
 _t5b=[s for s in c.get("/specs", headers=b5h).json()["specs"] if s["spec_id"]==sid5][0]
 ok("signed benchmark upgrades trust to benchmark_verified",
    _t5b["trust"]["level"]=="benchmark_verified" and _t5b["trust"]["rank"]==2)
+ok("consistent benchmark surfaces as 'Benchmark-consistent' with public-reference evidence",
+   _t5b["trust"]["label"]=="Benchmark-consistent" and "CONSISTENT" in _t5b["trust"]["evidence"])
 _pub5=[s for s in c.get("/marketplace/specs").json()["specs"] if s["gpu_model"]=="H100" and s.get("trust",{}).get("level")=="benchmark_verified"]
 ok("marketplace surfaces the trust level publicly", len(_pub5)>=1)
 _det5=c.get(f"/marketplace/specs/{_pub5[0]['id']}").json() if _pub5 else {}
 ok("detail page never claims vendor hardware attestation (stub is not TEE)",
    _det5.get("verification",{}).get("hardware_attested")==False and
    _det5.get("verification",{}).get("agent_attested")==True)
+
+# --- BENCHMARK AUTHENTICITY: an over-claiming listing is caught + frozen ---
+# A dedicated node (never reused elsewhere) LISTS an H100 but its measured FP16 matmul
+# is T4-class -> the silicon can't be an H100 -> fraud freeze. Proves the gamer-style
+# "compare the score to the card's public numbers" check is wired to the freeze path.
+c.post("/register_user", json={"username":"seller6","password":"hunter2-correct-horse"})
+s6h={"Authorization":f"Bearer {login('seller6')}"}
+c.post("/change_role", headers=s6h, json={"role":"seller"})
+sid6=c.post("/register_specs", headers=s6h, json={"cpu":16,"ram":64,"duration":48,"price_per_hour":2.0,"provider":"seller6","gpu_model":"H100","units":1}).json()["spec_id"]
+sk6=Ed25519PrivateKey.generate(); pb6=base64.b64encode(sk6.public_key().public_bytes_raw()).decode()
+at6={"cpu":16,"nonce":"z","ts":int(time.time())}
+c.post("/prove", headers=s6h, json={"spec_id":sid6,"attestation":at6,"signature":sign_proof(sk6,at6),"pubkey":pb6})
+key6=c.post("/create_api_key", headers=s6h).json()["api_key"]
+c.post("/heartbeat", headers={"X-API-KEY":key6}, json={"spec_id":sid6})
+c.post("/benchmark", headers=s6h, json={"spec_id":sid6})
+bjob6=c.get("/jobs/next", headers={"X-API-KEY":key6}).json()
+bph6={"task_id":bjob6["task_id"],"output_hash":"bench","ts":int(time.time())}
+_ov=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key6}, json={"spec_id":sid6,"tokens_sec":90.0,"meta":{"tflops_fp16":45,"metric":"fp16_matmul_tflops"},"proof":bph6,"signature":sign_proof(sk6,bph6)})
+ok("H100 listing measuring T4-class TFLOPS -> verdict 'implausibly_low'",
+   _ov.status_code==200 and _ov.json().get("benchmark_verdict")=="implausibly_low")
+_t6=[s for s in c.get("/specs", headers=s6h).json()["specs"] if s["spec_id"]==sid6][0]
+ok("an over-claiming benchmark does NOT upgrade trust (flagged, not benchmark_verified)",
+   _t6["trust"]["level"]=="agent_verified" and "flagged" in _t6["trust"]["label"].lower())
 
 # --- #5 QUEUE PRIORITY ---
 lowb=book5(); highb=book5()

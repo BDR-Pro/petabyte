@@ -324,19 +324,61 @@ def _run_template(task):
         _set_ui(status="idle", task=None, fail=True)
 
 
+def _measure_fp16_tflops():
+    """Achieved FP16 dense matmul throughput (TFLOPS) on THIS GPU, server-comparable.
+
+    This is the gamer-style authenticity number: a hardware-invariant a genuine card
+    can reach and a weaker card physically cannot. The server compares it to the
+    published spec of the CLAIMED gpu_model (gpu_benchmark.classify) to catch a listing
+    that over-claims its silicon. Returns None if torch/CUDA is unavailable (older
+    agents just omit it — the server then records the number without a verdict)."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return None
+        n = int(os.getenv("BENCH_MATMUL_N", "8192"))
+        a = torch.randn(n, n, device="cuda", dtype=torch.float16)
+        b = torch.randn(n, n, device="cuda", dtype=torch.float16)
+        for _ in range(3):                      # warm up clocks + cuBLAS autotune
+            _c = a @ b
+        torch.cuda.synchronize()
+        iters = int(os.getenv("BENCH_MATMUL_ITERS", "30"))
+        t0 = _t.time()
+        for _ in range(iters):
+            _c = a @ b
+        torch.cuda.synchronize()
+        dt = _t.time() - t0
+        if dt <= 0:
+            return None
+        flops = 2.0 * (n ** 3) * iters          # 2*N^3 per matmul
+        return round(flops / dt / 1e12, 1)      # TFLOPS
+    except Exception:                            # noqa: BLE001 — never crash the agent
+        return None
+
+
 def _run_benchmark(task):
-    """Measure LLM tokens/sec (+ optional extras) and submit a SIGNED result."""
+    """Measure LLM tokens/sec + FP16 matmul TFLOPS and submit a SIGNED result."""
     tid = task["task_id"]
     _set_ui(status="running", task=f"Benchmark #{tid}")
     spec_id = int(os.getenv("PETABYTE_SPEC_ID"))
     report_progress(tid, 50, "benchmarking")
-    # Placeholder measurement: a real node runs a fixed prompt through a local
-    # model and counts generated tokens / wall-time. Hook your harness here.
+    # tokens/sec: a real node runs a fixed prompt through a local model and counts
+    # generated tokens / wall-time. Hook your LLM harness here (env stub for now).
     tokens_sec = float(os.getenv("BENCH_TOKENS_SEC", "0"))
-    proof = {"task_id": tid, "output_hash": "benchmark", "ts": int(_t.time())}
+    # FP16 matmul TFLOPS: an actual on-device measurement the server checks against the
+    # claimed GPU model's public reference band. This is what makes the benchmark an
+    # authenticity signal instead of a self-reported guess.
+    tflops = _measure_fp16_tflops()
+    meta = {"harness": "matmul-fp16" if tflops is not None else "stub"}
+    if tflops is not None:
+        meta["tflops_fp16"] = tflops
+        meta["metric"] = "fp16_matmul_tflops"
+    report_progress(tid, 90, f"fp16 matmul: {tflops} TFLOPS" if tflops else "benchmarking")
+    proof = {"task_id": tid, "output_hash": "benchmark",
+             "tflops_fp16": tflops, "ts": int(_t.time())}
     httpx.post(f"{API_URL}/jobs/benchmark_result", headers=HEADERS, timeout=20, json={
         "spec_id": spec_id, "tokens_sec": tokens_sec,
-        "meta": {"harness": "stub"}, "proof": proof, "signature": crypto.sign_proof(proof)})
+        "meta": meta, "proof": proof, "signature": crypto.sign_proof(proof)})
     _set_ui(status="idle", task=None, ok=True)
 
 

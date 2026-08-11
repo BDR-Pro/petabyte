@@ -119,5 +119,12 @@ ok("desktop agent also binds results to real output bytes",
    "content_hash=hashlib.sha256(raw)" in _desk and _desk.count("hashlib.sha256(raw)") >= 3)
 
 
+# ---------------------------------------------------------------- benchmark authenticity
+ok("agent measures FP16 matmul TFLOPS on-device (not an env stub)",
+   hasattr(tf, "_measure_fp16_tflops") and "tflops_fp16" in src("_run_benchmark"))
+ok("benchmark measurement never crashes the agent (guarded)",
+   "return None" in src("_measure_fp16_tflops") and "except Exception" in src("_measure_fp16_tflops"))
+
+
 print(f"\n=== sandbox: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
 raise SystemExit(1 if _fail else 0)

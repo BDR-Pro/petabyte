@@ -58,6 +58,26 @@ per-object handles + metadata minimization.
   before money leaves.
 
 **Landed**
+- **Gamer-style GPU authenticity check (benchmark vs. public reference).** The way a gamer
+  proves a card is real — run a benchmark, compare the score to the numbers everyone knows for
+  that exact card — applied to a **compute** benchmark. The agent measures achieved **FP16 dense
+  matmul TFLOPS** on-device (`task_fetcher._measure_fp16_tflops`); the server compares it to the
+  published dense-FP16 tensor peak for the **claimed** `gpu_model` (`gpu_benchmark.classify`,
+  seeded from vendor datasheets with deliberately wide bands). A score far below what the claimed
+  card can physically do means the listing **over-claims its silicon** → the verdict is
+  `implausibly_low` and a gross shortfall (below `GPU_BENCH_FRAUD_FLOOR_FRAC`, default 20 % of
+  peak) **freezes the seller's payouts** (`freeze_for_fraud`) and blocks the benchmark tier. A
+  matching score reads as `consistent` and the listing shows **"Benchmark-consistent"** with
+  *"matches public reference data for the advertised card"* evidence. Tests: `gpu_benchmark_test.py`
+  (classification) + `smoke_test.py` (endpoint freeze on over-claim). *Why compute, not 3DMark:*
+  headless datacenter GPUs (H100/A100/L4) have no display pipeline and can't run a graphics
+  benchmark — FP16 TFLOPS is the one metric the whole mixed fleet shares. A graphics score plugs
+  into the same band table (add a `graphics_score` band and `classify(..., metric=...)`).
+  *Honest limits:* it verifies a performance **class**, not the exact die (adjacent tiers overlap,
+  so it catches gross over-claims — H100-listed-but-T4 — not an A100-for-H100 swap); and it stops
+  **over**-claiming, not bait-and-switch (benchmark a real H100, run the job elsewhere) — that
+  needs the benchmark to become a platform-dispatched, seed-bound, server-timed re-run against a
+  random fraction of *real* jobs. This is the reference-comparison half of that.
 - **Results now bind to the real output bytes (#65).** Every completed render/transcode/stitch
   result carries a `content_hash` = sha256 of the *plaintext* output bytes, **inside the signed
   proof** (both agents), and the server persists it (`Task.result_content_hash`). Quorum
@@ -110,5 +130,8 @@ default runtime; ephemeral per-booking cache volumes; scoped `--gpus device=…`
 | `TEE_VERIFIER` | `stub` | Which TEE verifier to use (real: `nvidia-nras`/`sev-snp`/`tdx`). |
 | `TEE_REQUIRE_HARDWARE` | (prod: on) | Refuse the software stub — no fake confidential badges. |
 | `TEE_ATTESTATION_TTL_S` | `86400` | How long a confidential attestation stays valid. |
+| `GPU_BENCH_LOW_FRAC` | `0.30` | Benchmark ≥ this × the claimed model's peak reads as consistent. |
+| `GPU_BENCH_HIGH_FRAC` | `1.15` | Above this × peak is `suspiciously_high` (never a freeze). |
+| `GPU_BENCH_FRAUD_FLOOR_FRAC` | `0.20` | Below this × peak = gross over-claim → payout freeze. |
 | `PETABYTE_LOCKDOWN_EGRESS` | `true` | Install the container egress firewall. |
 | `PAYOUT_HOLD_DAYS` | `14` | Fraud-catch window before payouts settle. |

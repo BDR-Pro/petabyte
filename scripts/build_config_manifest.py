@@ -56,6 +56,9 @@ def is_secret(name: str) -> bool:
 TEST_ONLY = {
     "BUYER_USER", "BUYER_PASS", "STRIPE_TEST_SECRET_KEY", "PAYOUT_TEST_ALLOW_DROP",
     "MAILGUN_TEST_RECIPIENT", "NO_COLOR", "INTERVAL", "BENCH_TOKENS_SEC",
+    # agent benchmark-harness tuning knobs (matmul size / iteration count) — same class
+    # as BENCH_TOKENS_SEC: local measurement tuning, never deployment config.
+    "BENCH_MATMUL_N", "BENCH_MATMUL_ITERS",
     "DEMO_API_URL", "FASTAPI_SERVER_URL", "API_BASE", "API_KEY", "SPEC_ID", "AGENT_ENV",
 }
 

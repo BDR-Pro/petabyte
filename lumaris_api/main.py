@@ -5561,10 +5561,36 @@ def benchmark_result(data: BenchmarkResultModel, agent=Depends(api_key_user),
         verify_signed_proof(spec.attest_pubkey, data.proof, data.signature)
     except ValueError as e:
         raise HTTPException(status_code=401, detail=f"Invalid proof: {e}")
-    set_benchmark(db, spec, data.tokens_sec, data.meta or {})
+
+    # Gamer-style authenticity check: compare the measured FP16 matmul throughput the
+    # agent reports (meta.tflops_fp16) against the PUBLIC reference band for the model
+    # the seller CLAIMS to be listing (spec.gpu_model). A number far below what that
+    # card can physically do means the listing over-claims its hardware -> fraud freeze.
+    meta = data.meta or {}
+    verdict = None
+    try:
+        from gpu_benchmark import classify
+        tflops = meta.get("tflops_fp16")
+        if tflops is not None and spec.gpu_model:
+            v = classify(spec.gpu_model, tflops, metric="tflops_fp16")
+            verdict = v["verdict"]
+            meta = {**meta, "verdict": verdict, "verdict_detail": v["detail"]}
+            if v["fraud"]:
+                import seller_audit
+                seller_audit.freeze_for_fraud(
+                    db, spec,
+                    f"benchmark over-claim: {spec.gpu_model} measured {tflops} TFLOPS "
+                    f"(< floor for the claimed model)")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("benchmark authenticity check failed (non-fatal)")
+
+    set_benchmark(db, spec, data.tokens_sec, meta, verdict=verdict)
     from db import record_rep_event
     record_rep_event(db, spec, "benchmark", data.tokens_sec)
-    return {"status": "ok", "spec_id": spec.id, "tokens_sec": data.tokens_sec}
+    return {"status": "ok", "spec_id": spec.id, "tokens_sec": data.tokens_sec,
+            "benchmark_verdict": verdict}
 
 
 
