@@ -159,6 +159,12 @@ class User(Base):
     # Signup timestamp — powers funding cohorts (retention) + time-to-first-value. Nullable
     # so pre-existing rows (created before this column) don't block; new users always get it.
     created_at = Column(DateTime, default=_utcnow, index=True)
+    # A user's spendable balance and accrued earnings can NEVER go negative — enforced at the
+    # DB layer, not only by the guarded-debit application logic (defence in depth).
+    __table_args__ = (
+        CheckConstraint("balance >= 0", name="ck_user_balance_nonneg"),
+        CheckConstraint("earnings >= 0", name="ck_user_earnings_nonneg"),
+    )
 
 
 class SellerSpec(Base):
@@ -487,6 +493,14 @@ class LedgerEntry(Base):
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
     entry_type = Column(String, nullable=False)
     created_at = Column(DateTime, default=_utcnow)
+    # DB-level invariants (defence in depth): a leg's amount is ALWAYS positive (the
+    # convention in the docstring), and direction is a closed set. These make money impossible
+    # to create/destroy via a stray write or raw SQL that bypasses post(). Apply on fresh
+    # databases (create_all); existing DBs pick them up on a schema rebuild/migration.
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_ledger_amount_pos"),
+        CheckConstraint("direction in ('debit','credit')", name="ck_ledger_direction"),
+    )
 
 
 # ---- account naming ----------------------------------------------------------

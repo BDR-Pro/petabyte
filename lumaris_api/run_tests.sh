@@ -53,6 +53,7 @@ run_suite "observability (correlation/redaction/cardinality/degrade)" python obs
 run_suite "sentry (degrade-safe init + before_send redaction)" python sentry_test.py
 run_suite "seller payable metric (mode-separated payout gauge)" python seller_payable_metric_test.py
 run_suite "funding metrics (canonical, scope-separated, honest)" python funding_metrics_test.py
+run_suite "db invariants (money-impossible states rejected at DB layer)" python db_invariants_test.py
 run_suite "reservation reclaim (abandoned GPU capacity)" python reservation_reclaim_test.py
 run_suite "observability smoke (local tier; remote skipped offline)" \
           bash -c "cd .. && python scripts/observability_smoke_test.py"
