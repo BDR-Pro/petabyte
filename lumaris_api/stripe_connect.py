@@ -1197,8 +1197,44 @@ def refund(db, tx: ComputeTransaction, *, amount: int = None, actor: str = "admi
             db.add(tx); db.commit()
             raise TransactionError(f"refund done but reversal failed; escalated: {e}")
 
+    # Recover the seller's refunded share when there was NO Stripe transfer to reverse (the seller
+    # was paid — or not yet — via the batch payout path). Previously this branch was silently
+    # marked 'reconciled', so a refund/chargeback AFTER a batch payout let the platform eat the
+    # seller's share with the books misstating it. Now:
+    if split["seller_reversal_amount"] == 0:
+        seller_share_settled = True                          # nothing owed back by the seller
+    elif tx.stripe_transfer_id:
+        seller_share_settled = tx.reversed_amount >= split["seller_reversal_amount"]
+    else:
+        seller_share_settled = False
+        import db as _dbm
+        obl = db.query(_dbm.PayoutObligation).filter(
+            _dbm.PayoutObligation.compute_tx_id == tx.id).first()
+        obl_state = getattr(obl, "state", None)
+        if obl is not None and obl_state in ("accrued", "available") and amount >= tx.captured_amount:
+            # Seller NOT yet paid: the money is still with the platform (the ledger already
+            # debited seller_payable). Reverse the whole obligation so the refunded share is
+            # never paid out. (A partial refund of an unpaid obligation is escalated below.)
+            obl.state = "reversed"; db.add(obl); db.commit()
+            seller_share_settled = True
+        else:
+            # Seller ALREADY paid via the batch path (paid/batched/transferring), a partial
+            # refund of an unpaid obligation, or no obligation on record: there is no reversible
+            # transfer. The ledger debit turns seller_payable into a recoverable NEGATIVE balance
+            # (it nets against the seller's FUTURE earnings), but it needs explicit recovery —
+            # flag it for review, NEVER silently reconcile.
+            logger.warning("refund clawback PENDING for tx %s: seller share %s minor was paid via "
+                           "the batch path (no reversible transfer). seller_payable now carries a "
+                           "recoverable debt; operator/auto-net recovery required.",
+                           tx.public_id, split["seller_reversal_amount"])
+            try:
+                _obs.inc_metric("petabyte_reconciliation_discrepancies_total",
+                                environment=_obs.ENVIRONMENT)
+            except Exception:  # noqa: BLE001 — telemetry never blocks the refund
+                pass
+
     fully = tx.refunded_amount >= tx.captured_amount
-    tx.reconciliation_status = "reconciled" if (not tx.stripe_transfer_id or tx.reversed_amount >= split["seller_reversal_amount"]) else "needs_review"
+    tx.reconciliation_status = "reconciled" if seller_share_settled else "needs_review"
     db.add(tx); db.commit()
     if fully:
         return transition(db, tx, "REFUNDED", reason=reason)

@@ -427,6 +427,45 @@ ok("partial refund refunds only the requested amount", pr["refunded_amount"] == 
 ok("admin refund requires a reason",
    c.post(f"/admin/payments/{tid_pr}/refund", headers=admin, json={"reason": ""}).status_code in (400, 422))
 
+# ---- REFUND after a BATCH payout: clawback is FLAGGED, never silently 'reconciled' (killer #6) ----
+# Simulate the seller already paid via the batch path: obligation 'paid', NO stripe_transfer_id.
+# A refund/chargeback then can't reverse a specific transfer, so the seller's share becomes a
+# recoverable debt (ledger DEBITs seller_payable) and MUST be flagged for recovery.
+tid_bc = run_to_metered(3600)
+c.post(f"/admin/payments/{tid_bc}/capture", headers=admin)
+_s = dbmod.SessionLocal()
+_txbc = sc.get_tx_by_public_id(_s, tid_bc)
+_obc = _s.query(dbmod.PayoutObligation).filter(dbmod.PayoutObligation.compute_tx_id == _txbc.id).first()
+_obc.state = "paid"; _s.add(_obc); _s.commit(); _s.close()
+rbc = c.post(f"/admin/payments/{tid_bc}/refund", headers=admin,
+             json={"reason": "chargeback after batch payout"}).json()
+ok("refund after batch payout still returns the buyer's money in full", rbc["refunded_amount"] == 250)
+_s = dbmod.SessionLocal()
+_txbc2 = sc.get_tx_by_public_id(_s, tid_bc)
+ok("batch-paid refund is flagged needs_review, NOT silently reconciled (killer #6)",
+   _txbc2.reconciliation_status == "needs_review")
+_rlegs = (_s.query(dbmod.LedgerEntry).join(dbmod.LedgerTx, dbmod.LedgerEntry.tx_id == dbmod.LedgerTx.id)
+          .filter(dbmod.LedgerTx.reference_id == tid_bc,
+                  dbmod.LedgerEntry.entry_type == "compute_refund",
+                  dbmod.LedgerEntry.account == dbmod.acct_seller_payable(_txbc2.seller_id),
+                  dbmod.LedgerEntry.direction == dbmod.DEBIT).all())
+ok("refund posted a seller_payable clawback DEBIT (ledger records the recoverable debt)",
+   len(_rlegs) == 1 and int(_rlegs[0].amount) > 0)
+_bal_ok, _ = dbmod.ledger_is_balanced(_s)
+ok("ledger balances after the batch-paid refund clawback", _bal_ok)
+_s.close()
+
+# ---- REFUND of an UNPAID obligation reverses it (money never left) -> reconciled (killer #6) ----
+tid_up = run_to_metered(3600)
+c.post(f"/admin/payments/{tid_up}/capture", headers=admin)
+c.post(f"/admin/payments/{tid_up}/refund", headers=admin, json={"reason": "buyer cancelled, unpaid"})
+_s = dbmod.SessionLocal()
+_txup = sc.get_tx_by_public_id(_s, tid_up)
+_oup = _s.query(dbmod.PayoutObligation).filter(dbmod.PayoutObligation.compute_tx_id == _txup.id).first()
+ok("full refund of an UNPAID obligation reverses it (never paid out) + reconciles",
+   _oup.state == "reversed" and _txup.reconciliation_status == "reconciled")
+_s.close()
+
 # REGRESSION (defect B): a DUPLICATE identical partial refund must NOT double-count.
 # Previously refunded_amount went 100 -> 200 for a single Stripe refund.
 tid_dup = run_to_metered(3600)
