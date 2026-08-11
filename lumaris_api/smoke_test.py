@@ -1827,6 +1827,16 @@ ok("served install.sh installs the container egress firewall (seller-network pro
    "DOCKER-USER" in _ish and "169.254" in _ish)
 ok("served install.sh can fetch the agent bundle (no GitHub clone required / private-repo safe)",
    "/agent.tar.gz" in _ish)
+# WSL/Linux SIGNED auto-update: the API serves the bundle signature and pins the release pubkey
+# into the installer so update.sh applies ONLY signed bundles (fail-closed when unset).
+ok("agent.tar.gz.sig route exists (404 until a signed bundle is deployed)",
+   c.get("/agent.tar.gz.sig").status_code==404)
+os.environ["PETABYTE_RELEASE_PUBKEY"]=base64.b64encode(_VENDOR_SK.public_key().public_bytes_raw()).decode()
+ok("installer pins the release pubkey when configured (enables signed auto-update)",
+   "-----BEGIN PUBLIC KEY-----" in c.get("/install.sh").text and "__PETABYTE_RELEASE_PUBKEY_PEM__" not in c.get("/install.sh").text)
+del os.environ["PETABYTE_RELEASE_PUBKEY"]
+ok("installer embeds NO key when unset (auto-update fail-closed, never TLS-only for root code)",
+   "-----BEGIN PUBLIC KEY-----" not in c.get("/install.sh").text)
 _lg=c.get("/static/petabyte-logo.png"); ok("brand logo served", _lg.status_code==200 and _lg.headers.get("content-type")=="image/png")
 _bm=c.get("/static/petabyte-bimi.svg"); ok("BIMI mark served (svg tiny-ps)", _bm.status_code==200 and _bm.headers.get("content-type")=="image/svg+xml" and b"baseProfile=\"tiny-ps\"" in _bm.content)
 ok("favicon served", c.get("/favicon.ico").status_code==200)

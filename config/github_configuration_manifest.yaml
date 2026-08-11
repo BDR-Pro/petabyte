@@ -808,9 +808,11 @@ variables:
     required: false
     default: null
     scope:
+    - platform
     - deployment
-    description: "Base64 Ed25519 PUBLIC release key \u2014 a repo VARIABLE (not a secret). Pinned into\
-      \ the exe at build time so the updater verifies signed auto-updates; pairs with RELEASE_SIGNING_KEY."
+    description: Base64 Ed25519 PUBLIC release key (not a secret). The release workflow pins it into the
+      exe at build time; the API reads it to pin the key into the served install.sh for Linux/WSL signed
+      auto-update. Pairs with RELEASE_SIGNING_KEY.
   PETABYTE_SPEC_ID:
     required: true
     default: null

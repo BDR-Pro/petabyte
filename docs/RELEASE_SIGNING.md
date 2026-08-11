@@ -67,7 +67,30 @@ the release pipeline. Exposing it through an admin web page — generated, displ
 there — would put that key on a running, internet-facing server and in a browser session, which is
 exactly what we don't want. The GitHub-secret model keeps it out of the app entirely.
 
-> **Linux/WSL agent:** the same `sign_release.py` also produces `agent.tar.gz.sig` for the Linux
-> updater (`lumaris_agent/update.sh`), verified with the pinned public key. Serving that `.sig`
-> from the API + shipping the pubkey in `install.sh` is the remaining step to enable WSL
-> auto-update; the desktop `.exe` path above is complete.
+## Linux / WSL agent auto-update
+
+The same key also signs the Linux agent bundle. The app side is fully wired:
+
+- The API **serves `/agent.tar.gz.sig`** (the detached signature) and **pins the public key into
+  the served `install.sh`** — it substitutes `PETABYTE_RELEASE_PUBKEY` (as PEM) at download time,
+  and the installer writes it to `/etc/petabyte/release_ed25519.pub`. Unset ⇒ no key is pinned and
+  `update.sh` refuses to auto-update (fail-closed; it never trusts TLS alone for root-run code).
+- `lumaris_agent/update.sh` downloads the bundle + its `.sig` and verifies with
+  `openssl pkeyutl -verify -rawin` against the pinned key before applying.
+
+The **one remaining operational step** is producing the signature at deploy time. Because
+`agent.tar.gz` is built when you deploy, sign it in the deploy pipeline **where the private key is
+available** (never place the key on the app server):
+
+```bash
+# in the deploy runner, with RELEASE_SIGNING_KEY available as an env/secret:
+printf '%s\n' "$RELEASE_SIGNING_KEY" > /tmp/rk.pem
+python scripts/sign_release.py --key /tmp/rk.pem \
+    --tarball lumaris_api/installers/agent.tar.gz --out-dir lumaris_api/installers
+shred -u /tmp/rk.pem
+```
+
+That writes `agent.tar.gz.sig` next to the bundle; the API then serves it and signed WSL
+auto-update works. Set the `PETABYTE_RELEASE_PUBKEY` variable so new installs pin the key.
+The producer↔verifier loop (both exe manifest and raw tarball `.sig`) is tested offline in
+`scripts/sign_release_test.py`.

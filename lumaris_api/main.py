@@ -1304,14 +1304,42 @@ def _find_installer(name: str):
             return cand
     return None
 
+def _release_pubkey_pem() -> str:
+    """The release verification PUBLIC key (from the PETABYTE_RELEASE_PUBKEY variable, a base64
+    raw Ed25519 key) as a PEM — the form the node's update.sh pins and openssl verifies against.
+    Empty when unset/invalid, which keeps signed auto-update OFF (fail-closed) rather than
+    pinning a bad key."""
+    b64 = os.getenv("PETABYTE_RELEASE_PUBKEY", "").strip()
+    if not b64:
+        return ""
+    try:
+        import base64 as _b64
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from cryptography.hazmat.primitives import serialization as _ser
+        raw = _b64.b64decode(b64, validate=True)
+        if len(raw) != 32:
+            return ""
+        return Ed25519PublicKey.from_public_bytes(raw).public_bytes(
+            _ser.Encoding.PEM, _ser.PublicFormat.SubjectPublicKeyInfo).decode()
+    except Exception:
+        return ""
+
+
 @app.get("/install.sh")
 def install_script():
-    """Serve the Linux node installer so the one-liner needs no extra hosting."""
+    """Serve the Linux node installer so the one-liner needs no extra hosting.
+
+    The pinned release PUBLIC key is substituted into the script at download time (the seller
+    already trusts this API over TLS for the installer). update.sh then verifies every future
+    agent bundle against it; unset -> the placeholder resolves empty and auto-update stays
+    fail-closed (refused)."""
     path = _find_installer("install.sh")
     if not path:
         raise HTTPException(status_code=404, detail="installer not bundled")
     with open(path) as f:
-        return Response(content=f.read(), media_type="text/x-shellscript")
+        script = f.read()
+    script = script.replace("__PETABYTE_RELEASE_PUBKEY_PEM__", _release_pubkey_pem())
+    return Response(content=script, media_type="text/x-shellscript")
 
 @app.get("/install.ps1")
 def install_script_ps1():
@@ -1347,6 +1375,21 @@ def agent_tarball():
             with open(cand, "rb") as f:
                 return Response(content=f.read(), media_type="application/gzip")
     raise HTTPException(status_code=404, detail="agent bundle not built on this host")
+
+
+@app.get("/agent.tar.gz.sig")
+def agent_tarball_sig():
+    """Serve the detached Ed25519 signature of agent.tar.gz (produced at deploy time by
+    scripts/sign_release.py with the offline release key). The node's update.sh verifies the
+    downloaded bundle against this before applying it — SIGNED updates only, fail-closed. 404
+    when unsigned (then update.sh refuses to auto-update rather than trusting TLS alone)."""
+    here = os.path.dirname(__file__)
+    for cand in (os.path.join(here, "installers", "agent.tar.gz.sig"),
+                 os.path.join(here, "..", "lumaris_agent.tar.gz.sig")):
+        if os.path.exists(cand):
+            with open(cand, "rb") as f:
+                return Response(content=f.read(), media_type="application/octet-stream")
+    raise HTTPException(status_code=404, detail="agent bundle signature not present on this host")
 
 
 @app.get("/uninstall.sh")

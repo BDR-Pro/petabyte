@@ -89,6 +89,18 @@ fi
 
 echo "==> fetching agent"
 mkdir -p "$APP" /etc/petabyte
+
+# Pin the release verification PUBLIC key. The API substitutes it into this script at download
+# time; update.sh then requires every future agent bundle to be signed by the matching offline
+# key before applying it. If it's empty (unset on the server) we remove the file so auto-update
+# stays OFF (fail-closed) rather than trusting TLS alone for code that runs as root.
+cat > /etc/petabyte/release_ed25519.pub <<'PBPUBKEY_EOF'
+__PETABYTE_RELEASE_PUBKEY_PEM__
+PBPUBKEY_EOF
+if ! grep -q "BEGIN PUBLIC KEY" /etc/petabyte/release_ed25519.pub 2>/dev/null; then
+  rm -f /etc/petabyte/release_ed25519.pub
+fi
+
 if [ -f "./task_fetcher.py" ]; then
   cp -r ./* "$APP"/                          # running from inside lumaris_agent/ locally
 else
