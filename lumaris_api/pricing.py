@@ -209,6 +209,31 @@ def settle(snapshot: dict, actual_seconds: int, authorization_amount: int) -> di
     }
 
 
+def estimate_processing_fee_minor(amount_minor: int, currency: str = "usd") -> int:
+    """ESTIMATE of the card-processing fee the PLATFORM pays to accept a charge (minor units).
+
+    This is the platform's cost of taking the card. It is borne by the platform and is NEVER
+    subtracted from the seller's net — it is tracked separately so net contribution margin
+    (`platform_fee - processing_fee`) is visible. It is an ESTIMATE using the standard card
+    formula (percentage + fixed); the EXACT per-charge fee is available from Stripe's
+    balance_transaction and can replace this during reconciliation. Configurable:
+
+        STRIPE_FEE_BPS          basis points of the amount   (default 290 = 2.9%)
+        STRIPE_FEE_FIXED_MINOR  fixed component, minor units (default 30 = $0.30)
+
+    Because a fixed per-charge cost (the 30c) dominates small transactions, a job whose gross
+    is small can cost more to process than the platform's commission — which is exactly why
+    this must be visible and why PLATFORM_FIXED_FEE_MINOR exists to offset it. Returns 0 for a
+    non-positive amount; never negative.
+    """
+    amt = int(amount_minor)
+    if amt <= 0:
+        return 0
+    bps = max(0, _env_int("STRIPE_FEE_BPS", 290))
+    fixed = max(0, _env_int("STRIPE_FEE_FIXED_MINOR", 30))
+    return (amt * bps) // 10000 + fixed
+
+
 def refund_split(settlement: dict, refund_amount: int) -> dict:
     """Given a captured settlement and a refund (minor units), compute how much of the
     seller's net must be clawed back (proportional) vs. platform fee returned. Used to

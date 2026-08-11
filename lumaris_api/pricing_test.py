@@ -9,7 +9,8 @@ Run: python pricing_test.py
 """
 import os
 
-from pricing import PricingConfig, PricingError, estimate, settle
+from pricing import (PricingConfig, PricingError, estimate, settle,
+                     estimate_processing_fee_minor)
 
 _fail = 0
 
@@ -76,6 +77,25 @@ ok("settle never captures more than the authorization",
 ok("all settle amounts are integer minor units (no float)",
    all(isinstance(s[k], int) for k in
        ("capture_amount", "platform_fee_amount", "seller_net_amount", "actual_compute_amount")))
+
+# ---- processing-fee estimate (unit economics visibility) ----
+ok("processing fee = 2.9% + 30c on $2.50 (250 minor) -> 37", estimate_processing_fee_minor(250) == 37)
+ok("processing fee on the 50c minimum charge -> 31 (fixed 30c dominates)",
+   estimate_processing_fee_minor(50) == 31)
+ok("processing fee is 0 for a non-positive amount", estimate_processing_fee_minor(0) == 0
+   and estimate_processing_fee_minor(-5) == 0)
+ok("processing fee is a non-negative int (minor units)",
+   isinstance(estimate_processing_fee_minor(1000), int) and estimate_processing_fee_minor(1000) >= 0)
+# The break-even truth: below ~$4.23 gross a 10% commission (< fee) loses money.
+ok("small job loses money: 10% commission < processing fee",
+   (100 // 10) < estimate_processing_fee_minor(100))
+ok("large job is profitable: 10% commission > processing fee",
+   (100000 // 10) > estimate_processing_fee_minor(100000))
+# Configurable via env (parsed at call time).
+os.environ["STRIPE_FEE_BPS"] = "0"; os.environ["STRIPE_FEE_FIXED_MINOR"] = "0"
+ok("processing fee honors env overrides (0 bps + 0 fixed -> 0)",
+   estimate_processing_fee_minor(1000) == 0)
+os.environ.pop("STRIPE_FEE_BPS", None); os.environ.pop("STRIPE_FEE_FIXED_MINOR", None)
 
 print(f"\n=== pricing: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
 raise SystemExit(1 if _fail else 0)

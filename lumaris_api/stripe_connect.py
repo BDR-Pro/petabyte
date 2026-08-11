@@ -26,13 +26,13 @@ import os
 from datetime import datetime, timezone, timedelta
 
 from db import (post, DEBIT, CREDIT, EXTERNAL_PAYMENTS, PLATFORM_REVENUE,
-                acct_seller_payable, acct_stripe_payouts,
+                acct_seller_payable, acct_stripe_payouts, acct_stripe_fees,
                 ConnectedAccount, ComputeTransaction, ComputeTxEvent,
                 PaymentOperation, StripeWebhookEvent, Settlement,
                 SellerSpec, Booking, User, spec_is_live, try_reserve_unit,
                 release_unit, create_task, get_user_by_id, update)
 from pricing import (PricingConfig, PricingError, price_per_hour_to_minor, estimate,
-                     settle, refund_split)
+                     settle, refund_split, estimate_processing_fee_minor)
 from stripe_gateway import get_gateway, StripeError
 import observability as _obs
 
@@ -652,6 +652,37 @@ def capture(db, tx: ComputeTransaction) -> ComputeTransaction:
     ], reference_id=tx.public_id,
        description="captured actual compute usage", entry_type="compute_capture")
     transition(db, tx, "PAYMENT_CAPTURED", reason=f"captured {captured}")
+    # Record the platform's card-processing COST for this charge — the missing leg of unit
+    # economics. Without it the ledger shows a healthy commission while small jobs quietly lose
+    # money (the fixed ~30c dominates). Posted as its OWN balanced entry (stripe:fees expense
+    # funded from the external-payments clearing account) so the capture split stays exactly
+    # `captured == platform_fee + seller_net` and the ledger auditor's compute_capture check is
+    # untouched. This is an ESTIMATE (standard card formula); the exact balance_transaction fee
+    # is reconciled separately. Best-effort + idempotent: a hiccup never fails the capture, and
+    # the tx is already PAYMENT_CAPTURED (repairable).
+    try:
+        fee_est = estimate_processing_fee_minor(captured, tx.currency)
+        if fee_est > 0:
+            tx.stripe_fee_amount = fee_est
+            db.add(tx)
+            post(db, "compute_transaction", legs=[
+                (acct_stripe_fees(), DEBIT,  fee_est),
+                (EXTERNAL_PAYMENTS,  CREDIT, fee_est),
+            ], reference_id=tx.public_id,
+               idempotency_key=idem_key("stripe_fee", tx, version),
+               description="estimated card-processing fee (platform cost)",
+               entry_type="stripe_fee")
+            db.commit()
+            try:
+                _mode = _obs.bounded_label(getattr(tx, "mode", None), _obs.PAYMENT_MODE, "sandbox")
+                _obs.inc_metric("petabyte_processing_fees_minor_total", fee_est,
+                                payment_mode=_mode, environment=_obs.ENVIRONMENT)
+            except Exception:  # noqa: BLE001 — telemetry never blocks
+                pass
+    except Exception:  # noqa: BLE001 — fee accounting is supplementary; never break capture
+        db.rollback()
+        logger.warning("stripe fee accounting failed for tx %s (repairable)",
+                       tx.public_id, exc_info=True)
     # Settlement telemetry: the money split (gross / commission / seller) as structured
     # event fields for the executive + investor dashboards (they sum these from Loki,
     # split by payment_mode — real and test money are never mixed). Amounts are minor

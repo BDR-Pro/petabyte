@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (149)
+## Variables (non-sensitive) (151)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -144,6 +144,8 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `SENTRY_TRACES_SAMPLE_RATE` | no | platform | `0.1` | `0.1` | — | format: float | — |
 | `STRIPE_ALLOW_LIVE` | no | platform | `false` | `false` | api/stripe_gateway.py | format: bool; one of: true / false | Second live gate; live keys refused unless true. |
 | `STRIPE_API_VERSION` | no | platform | *(empty)* | `…` | api/stripe_gateway.py | — | — |
+| `STRIPE_FEE_BPS` | no | platform | `290            # 2.9%` | `290            # 2.9%` | — | — | — |
+| `STRIPE_FEE_FIXED_MINOR` | no | platform | `30     # $0.30 — the fixed part that makes tiny jobs unprofitable` | `30     # $0.30 — the fixed part that makes tiny jobs unprofitable` | — | — | — |
 | `STRIPE_GATEWAY` | no | platform | `fake` | `fake` | api/main.py, api/stripe_demo.py, api/stripe_gateway.py | one of: fake / real | 'real' uses the Stripe SDK; anything else = in-process fake (tests only). |
 | `STRIPE_MODE` | no | platform | `test` | `test` | api/stripe_gateway.py | one of: test / live | Declared Stripe mode; must match key prefixes. |
 | `TEE_MEASUREMENT_ALLOWLIST` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
@@ -202,7 +204,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `SERVER_PRIVATE_KEY` | **yes** | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/audit_js.py, api/stripe_demo.py, api/utils.py | — | — |
 | `STRIPE_API_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/payout_providers.py | — | — |
 | `STRIPE_PUBLISHABLE_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, api/stripe_gateway.py, api/wallet_funding.py | — | — |
-| `STRIPE_SECRET_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/stripe_gateway.py | — | — |
+| `STRIPE_SECRET_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, api/stripe_gateway.py | — | — |
 | `STRIPE_WEBHOOK_SECRET` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
 | `TEE_TRUSTED_ROOT` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/utils.py | — | — |
 | `TEMPO_PASSWORD` | no | observability | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | Tempo push auth password. |

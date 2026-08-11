@@ -1025,6 +1025,18 @@ variables:
     scope:
     - platform
     description: ''
+  STRIPE_FEE_BPS:
+    required: false
+    default: '290            # 2.9%'
+    scope:
+    - platform
+    description: ''
+  STRIPE_FEE_FIXED_MINOR:
+    required: false
+    default: "30     # $0.30 \u2014 the fixed part that makes tiny jobs unprofitable"
+    scope:
+    - platform
+    description: ''
   STRIPE_GATEWAY:
     required: false
     default: fake

@@ -268,6 +268,34 @@ ok("duplicate capture is a no-op (amount unchanged, one capture per tx across su
    GW.payment_intents[pid]["amount_received"] == before)
 s.close()
 
+# ---- UNIT ECONOMICS: the platform's card-processing COST is recorded + visible ----
+# Captured 125 minor; commission 12; estimated Stripe fee = 2.9%*125 + 30c = 33. So the NET
+# contribution margin on this small job is 12 - 33 = -21 (a LOSS) — which is now visible in
+# the ledger and per-tx, instead of a dashboard showing a healthy 10% take while bleeding.
+import pricing as _pr  # noqa: E402
+_exp_fee = _pr.estimate_processing_fee_minor(125, "usd")
+s = dbmod.SessionLocal()
+_txf = sc.get_tx_by_public_id(s, tid)
+ok("processing fee recorded on the tx (estimated card cost = 33)",
+   _txf.stripe_fee_amount == _exp_fee and _exp_fee == 33)
+
+def _fee_legs(direction, account):
+    return (s.query(dbmod.LedgerEntry)
+            .join(dbmod.LedgerTx, dbmod.LedgerEntry.tx_id == dbmod.LedgerTx.id)
+            .filter(dbmod.LedgerTx.reference_id == tid,
+                    dbmod.LedgerEntry.entry_type == "stripe_fee",
+                    dbmod.LedgerEntry.account == account,
+                    dbmod.LedgerEntry.direction == direction).all())
+_dr = _fee_legs(dbmod.DEBIT, dbmod.acct_stripe_fees())
+_cr = _fee_legs(dbmod.CREDIT, dbmod.EXTERNAL_PAYMENTS)
+ok("processing fee posted as ONE balanced stripe:fees entry (idempotent across the dup capture)",
+   len(_dr) == 1 and len(_cr) == 1 and int(_dr[0].amount) == _exp_fee and int(_cr[0].amount) == _exp_fee)
+ok("net contribution margin is negative on a small job (commission 12 - fee 33)",
+   (cap["platform_fee_amount"] - _exp_fee) == -21)
+_bal_ok, _broken = dbmod.ledger_is_balanced(s)
+ok("ledger still balances globally after the processing-fee leg", _bal_ok)
+s.close()
+
 
 # ============================ CANCEL: prompt release of a FAILED dispatched job ===========
 # Once a job is dispatched, POST /payments/{tx}/cancel must still refuse an ACTIVELY running job
