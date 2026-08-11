@@ -54,6 +54,7 @@ run_suite "sentry (degrade-safe init + before_send redaction)" python sentry_tes
 run_suite "seller payable metric (mode-separated payout gauge)" python seller_payable_metric_test.py
 run_suite "funding metrics (canonical, scope-separated, honest)" python funding_metrics_test.py
 run_suite "db invariants (money-impossible states rejected at DB layer)" python db_invariants_test.py
+run_suite "security (ip-spoof / cross-tenant refs / stored-xss at write time)" python security_test.py
 run_suite "reservation reclaim (abandoned GPU capacity)" python reservation_reclaim_test.py
 run_suite "observability smoke (local tier; remote skipped offline)" \
           bash -c "cd .. && python scripts/observability_smoke_test.py"
@@ -63,7 +64,7 @@ run_suite "grafana dashboards (metric-existence + generator determinism)" \
                    git diff --exit-code observability/grafana/dashboards"
 run_suite "tunnel (nat + failover)" bash -c "cd ../lumaris_gateway && python tunnel_test.py"
 rm -f smoke.db* adv.db* stripe_test.db* payout_test.db* seller_payable_metric_test.db* \
-      reservation_reclaim_test.db* ../lumaris_gateway/tunnel.db*
+      reservation_reclaim_test.db* security.db* ../lumaris_gateway/tunnel.db*
 
 # Informational: honest seller-payout country coverage. This deliberately reports a
 # SHORTFALL (0/100) today and is NOT a gate — coverage grows only through real provider

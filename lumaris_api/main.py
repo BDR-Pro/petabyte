@@ -16,10 +16,36 @@ import json
 import logging
 from decimal import Decimal
 import os
+import re
 import secrets
 import time
 
 logger = logging.getLogger("petabyte")
+
+# User-supplied display labels (GPU model, region, provider, country, username, org name)
+# are rendered into other users' pages (marketplace, admin console, payout tables). They
+# MUST NOT be able to carry HTML/JS: reject the metacharacters that make stored XSS
+# (< > & " ' ` and control chars). We validate at WRITE time so a payload can never be
+# stored — the single strongest lever, independent of how many render sinks exist. The
+# allowed set covers every real GPU/region/provider label ("RTX 4090", "us-east-1",
+# "H100 80GB", "self-hosted").
+_SAFE_LABEL_RE = re.compile(r"^[\w .,\-/+:()#@]*$", re.UNICODE)
+
+
+def _clean_label(v, *, field: str, maxlen: int = 64, required: bool = False):
+    """Trim + charset-validate a user display label. Returns the cleaned value (or None)."""
+    if v is None:
+        if required:
+            raise ValueError(f"{field} is required")
+        return None
+    v = str(v).strip()
+    if required and not v:
+        raise ValueError(f"{field} is required")
+    if len(v) > maxlen:
+        raise ValueError(f"{field} is too long (max {maxlen} characters)")
+    if not _SAFE_LABEL_RE.match(v):
+        raise ValueError(f"{field} contains invalid characters")
+    return v
 
 # Observability: structured JSON logging + redaction, optional OTel tracing, and
 # bounded-cardinality Prometheus metrics. Import-safe and degrade-safe — if the telemetry
@@ -694,6 +720,13 @@ class SpecModel(BaseModel):
     max_price: Optional[float] = Field(default=None, gt=0, description="Auto-price ceiling")
     auto_price: bool = Field(default=False, description="Opt in to demand pricing")
 
+    @field_validator("provider", "gpu_model", "region", "country")
+    @classmethod
+    def _safe_labels(cls, v, info):
+        # These are rendered into other users' pages (marketplace, admin) — reject any
+        # HTML/JS metacharacters at write time so a listing can never carry stored XSS.
+        return _clean_label(v, field=info.field_name, maxlen=64)
+
 
 class RequestVMModel(BaseModel):
     spec_id: int
@@ -754,6 +787,13 @@ class UserRegisterModel(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=12, max_length=128)   # length beats complexity rules
     ref: Optional[str] = Field(default=None, max_length=16)   # referral code (optional)
+
+    @field_validator("username")
+    @classmethod
+    def _safe_username(cls, v: str) -> str:
+        # Usernames are rendered into the admin console + payout tables. Constrain the
+        # charset at registration so a username can never carry stored XSS (< > & " ' `).
+        return _clean_label(v, field="username", maxlen=64, required=True)
 
     @field_validator("password")
     @classmethod
@@ -973,6 +1013,12 @@ class DepositModel(BaseModel):
 class OrgCreateModel(BaseModel):
     name: str = Field(min_length=2, max_length=80)
 
+    @field_validator("name")
+    @classmethod
+    def _safe_name(cls, v: str) -> str:
+        # Org names appear in member-facing UI — same anti-XSS charset rule as usernames.
+        return _clean_label(v, field="org name", maxlen=80, required=True)
+
 
 class OrgMemberModel(BaseModel):
     username: str
@@ -1028,12 +1074,28 @@ TRUSTED_PROXIES = {p.strip() for p in os.getenv(
 
 
 def _client_ip(request: Request):
+    """The real client IP, resilient to header spoofing.
+
+    Forwarding headers are consulted ONLY when the direct peer is a declared trusted proxy
+    (nginx). Our nginx sets `X-Real-IP $remote_addr` (the true peer it saw — a client cannot
+    forge it, proxy_set_header overwrites any client value) and
+    `X-Forwarded-For $proxy_add_x_forwarded_for` (== "<client-sent XFF>, $remote_addr", so a
+    client can PREPEND spoofed entries and the real address is the RIGHT-most one nginx
+    appended). Taking the LEFT-most XFF entry would trust attacker input, letting anyone forge
+    their IP to defeat per-IP rate-limits, fake their country, or reach loopback-gated
+    endpoints (e.g. token-less /internal/metrics). So: trust X-Real-IP, else walk
+    X-Forwarded-For from the RIGHT past any trusted hops."""
     peer = request.client.host if request.client else None
-    if peer in TRUSTED_PROXIES:
-        xff = request.headers.get("X-Forwarded-For")
-        if xff:
-            # left-most entry is the original client, as appended by our own proxy
-            return xff.split(",")[0].strip()
+    if peer not in TRUSTED_PROXIES:
+        return peer                       # direct, untrusted peer -> use it verbatim
+    real = (request.headers.get("X-Real-IP") or "").strip()
+    if real:
+        return real
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        for hop in reversed([h.strip() for h in xff.split(",") if h.strip()]):
+            if hop not in TRUSTED_PROXIES:
+                return hop                # first non-proxy hop from the right = real client
     return peer
 
 
@@ -5063,6 +5125,9 @@ def transcode_job(data: TranscodeModel, user: dict = Depends(get_current_user),
     """Split a video into N time segments, transcode each on a router-selected node
     (NVENC), and assemble via a stitch step. Single node if nodes=1."""
     buyer = get_user_by_username(db, _username(user))
+    if not _ref_is_own_input(data.input_ref, buyer.id):
+        raise HTTPException(status_code=422,
+                            detail="input_ref must be an object you uploaded (inputs/<your id>/…)")
     intent = {"workload": "transcode", "redundancy": data.nodes, "hours": data.hours,
               "gpu_class": data.gpu_class, "region": data.region}
     picks = select_plan(db, intent)["selected"][:data.nodes]
@@ -5101,7 +5166,11 @@ def transcode_job(data: TranscodeModel, user: dict = Depends(get_current_user),
 def job_manifest(job_id: int, user: dict = Depends(get_current_user),
                  db: Session = Depends(get_db)):
     job = get_multinode_job(db, job_id)
-    if not job:
+    me = get_user_by_username(db, _username(user))
+    # Owner-only: the manifest exposes every segment's output_ref + task ids. Without this,
+    # any authenticated buyer could enumerate another tenant's jobs by id (IDOR). 404 (not
+    # 403) so a foreign id is indistinguishable from a non-existent one.
+    if not job or not me or (job.buyer_id != me.id and not _is_admin(me)):
         raise HTTPException(status_code=404, detail="Job not found")
     segs = job_segments(db, job_id)
     return {"job_id": job.id, "kind": job.kind, "status": job.status,
@@ -5118,6 +5187,9 @@ def render_job(data: RenderModel, user: dict = Depends(get_current_user),
     router) and dispatch a render task per node. Embarrassingly parallel; a dropped
     frame just re-renders via retry."""
     buyer = get_user_by_username(db, _username(user))
+    if not _ref_is_own_input(data.blend_ref, buyer.id):
+        raise HTTPException(status_code=422,
+                            detail="blend_ref must be an object you uploaded (inputs/<your id>/…)")
     intent = {"workload": "render", "redundancy": data.nodes, "hours": data.hours,
               "gpu_class": data.gpu_class, "region": data.region}
     plan = select_plan(db, intent)
@@ -5493,6 +5565,26 @@ def submit_checkpoint(data: CheckpointModel, agent=Depends(api_key_user),
     return {"status": "ok", "checkpoint_id": cp.id, "snapshot_ref": cp.snapshot_ref}
 
 
+def _storage_key_from_ref(ref: str) -> str:
+    """The object key inside the bucket for a stored ref (strips a leading s3://bucket/)."""
+    return ref.split("/", 3)[-1] if isinstance(ref, str) and ref.startswith("s3://") else (ref or "")
+
+
+def _input_prefix(buyer_id: int) -> str:
+    """The ONLY object-key prefix a buyer's inputs live under (see /uploads/url)."""
+    return f"inputs/{int(buyer_id)}/"
+
+
+def _ref_is_own_input(ref: str, buyer_id: int) -> bool:
+    """A buyer may bind an input ref ONLY if it resolves to a key under their OWN tenant
+    prefix inputs/<buyer_id>/ (the prefix /uploads/url mints). This blocks a buyer from
+    binding ANOTHER tenant's object key to their task — which an assigned node would then
+    be able to presign and read (cross-tenant data-exfiltration IDOR)."""
+    if not isinstance(ref, str) or not ref:
+        return False
+    return _storage_key_from_ref(ref).startswith(_input_prefix(buyer_id))
+
+
 def _authorized_input_refs(task) -> set:
     """The object-storage refs a BUYER bound to THIS task (render `blend_ref`, transcode
     `input_ref`, etc., stored in template_params). A node may mint a presigned GET only for
@@ -5522,7 +5614,13 @@ def input_url(data: InputUrlModel, agent=Depends(api_key_user),
     # inputs/checkpoints) — a cross-tenant data-exfiltration IDOR.
     if data.ref not in _authorized_input_refs(task):
         raise HTTPException(status_code=404, detail="Input ref not associated with this task")
-    key = data.ref.split("/", 3)[-1] if data.ref.startswith("s3://") else data.ref
+    key = _storage_key_from_ref(data.ref)
+    # Authoritative backstop: even a bound ref must resolve to THIS task-buyer's own input
+    # prefix. Bind-time validation (/transcode, /render) already rejects foreign refs, but a
+    # node must never be able to presign another tenant's object regardless of how the ref
+    # got into template_params.
+    if not key.startswith(_input_prefix(task.buyer_id)):
+        raise HTTPException(status_code=404, detail="Input ref not associated with this task")
     try:
         url = mint_presigned_get(key)
     except ValueError as e:

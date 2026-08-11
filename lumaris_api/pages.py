@@ -331,6 +331,10 @@ _AUTHJS = """<script>
 (function(){var h=location.hash.match(/t=([^&]+)/);if(h){localStorage.setItem('pb_token',decodeURIComponent(h[1]));document.documentElement.setAttribute('data-auth','in');history.replaceState(null,'',location.pathname);}})();
 (function(){try{var m=location.search.match(/[?&]ref=([A-Za-z0-9]{4,16})/);if(m){localStorage.setItem('pb_ref',m[1].toUpperCase());}}catch(e){}})();
 function tok(){return localStorage.getItem('pb_token');}
+// HTML-escape any user-controlled value before it goes into innerHTML. Server-side
+// validation (main.py _clean_label) already rejects HTML metachars at write time; this is
+// defence-in-depth at the DOM sink and also neutralises any legacy row stored before that.
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 (function(){try{var p=location.pathname.replace(new RegExp('[/]$'),'')||'/';document.querySelectorAll('.navlinks a').forEach(function(a){if(a.getAttribute('href')===p)a.classList.add('active');});}catch(e){}})();
 function authed(){return !!tok();}
 async function api(p,o){o=o||{};o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
@@ -710,8 +714,8 @@ async function heroPreview(){
       var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
       return '<a href="/gpu/'+s.id+'" style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--hair)">'+
        '<div style="flex:1;min-width:0">'+
-        '<div style="font-family:var(--disp);font-weight:600;font-size:14px">'+(s.gpu_model||'CPU')+(s.vram_gb?' <span class="mut" style="font-weight:400">· '+s.vram_gb+'GB</span>':'')+'</div>'+
-        '<div class="mini" style="margin-top:2px">'+(s.region||'unknown region')+' · '+(s.available_units>0?'<span class="teal">available now</span>':'busy')+'</div>'+
+        '<div style="font-family:var(--disp);font-weight:600;font-size:14px">'+esc(s.gpu_model||'CPU')+(s.vram_gb?' <span class="mut" style="font-weight:400">· '+s.vram_gb+'GB</span>':'')+'</div>'+
+        '<div class="mini" style="margin-top:2px">'+esc(s.region||'unknown region')+' · '+(s.available_units>0?'<span class="teal">available now</span>':'busy')+'</div>'+
        '</div>'+
        '<div style="text-align:end;flex:none">'+
         '<div class="mono amber" style="font-size:15px;font-weight:600">$'+Number(s.price_per_hour).toFixed(2)+'</div>'+
@@ -782,12 +786,12 @@ async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await 
   var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
   var rep=(s.reputation_score!=null?s.reputation_score:'—')+(s.success_rate!=null?' <span class="mut" style="font-size:10px">('+s.success_rate+'%)</span>':'');
   var vram=s.vram_gb?((s.gpu_count>1?s.gpu_count+'× ':'')+s.vram_gb+'GB'):'—';
-  return '<tr><td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
+  return '<tr><td style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
    '<td class="mono mut" style="font-size:12px">'+vram+'</td>'+
    '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+(s.auto_price?' <span class="badge cc" title="demand-priced within seller bounds">auto</span>':'')+'</td>'+
    '<td data-l="vs cloud" class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
    '<td>'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
-   '<td data-l="Region" class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td>'+
+   '<td data-l="Region" class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
    '<td class="mono" style="color:'+rc+'">'+rep+'</td>'+
    '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
 load();setInterval(load,8000);
@@ -928,7 +932,7 @@ KEYS_HTML = _page("Petabyte — API keys", """
 if(authed())list();else document.getElementById('hint').style.display='';
 async function list(){var r=await api('/account/keys');var tb=document.getElementById('krows');
  if(!r.ok||!r.body.keys||!r.body.keys.length){tb.innerHTML='<tr><td colspan=6 class="mut mono" style="padding:22px;text-align:center">No keys yet.</td></tr>';return;}
- tb.innerHTML=r.body.keys.map(function(k){return '<tr><td>'+(k.label||'—')+'</td><td class="mono mut">'+(k.scopes||'—')+'</td>'+
+ tb.innerHTML=r.body.keys.map(function(k){return '<tr><td>'+esc(k.label||'—')+'</td><td class="mono mut">'+esc(k.scopes||'—')+'</td>'+
   '<td class="mono mut" style="font-size:11px">'+k.created_at.slice(0,10)+'</td><td class="mono mut" style="font-size:11px">'+k.expires_at.slice(0,10)+'</td>'+
   '<td>'+(k.revoked?'<span class="badge">revoked</span>':'<span class="badge ok">active</span>')+'</td>'+
   '<td>'+(k.revoked?'':'<button class="btn-ghost" data-act="rv" data-a1="'+k.jti+'">revoke</button>')+'</td></tr>';}).join('');}
@@ -1182,18 +1186,18 @@ async function loadUsers(){var q=document.getElementById('uq').value;
   var r=await api('/admin/users'+(q?('?q='+encodeURIComponent(q)):''));var tb=document.getElementById('urows');
   if(!r.ok||!r.body.users.length){tb.innerHTML='<tr><td colspan=7 class="mut mono" style="padding:20px;text-align:center">No users.</td></tr>';return;}
   tb.innerHTML=r.body.users.map(function(u){var other=u.role==='seller'?'buyer':'seller';
-    return '<tr><td style="font-family:var(--disp);font-weight:600">'+u.username+(u.is_admin?' <span class="badge cc">admin</span>':'')+'</td>'+
-     '<td class="mut mono" style="font-size:12px">'+(u.email||'—')+'</td>'+
+    return '<tr><td style="font-family:var(--disp);font-weight:600">'+esc(u.username)+(u.is_admin?' <span class="badge cc">admin</span>':'')+'</td>'+
+     '<td class="mut mono" style="font-size:12px">'+esc(u.email||'—')+'</td>'+
      '<td>'+(u.role==='seller'?'<span class="badge ok">seller</span>':'<span class="badge">buyer</span>')+'</td>'+
      '<td class="mono">'+u.reputation+'</td><td class="mono">'+money(u.balance)+'</td><td class="mono amber">'+money(u.earnings)+'</td>'+
-     '<td><button class="btn-ghost" data-act="setRole" data-a1="'+u.username+'" data-a2="'+other+'">make '+other+'</button></td></tr>';}).join('');}
+     '<td><button class="btn-ghost" data-act="setRole" data-a1="'+esc(u.username)+'" data-a2="'+other+'">make '+other+'</button></td></tr>';}).join('');}
 async function setRole(u,role){await api('/admin/users/'+encodeURIComponent(u)+'/role',{method:'POST',body:JSON.stringify({role:role})});loadUsers();}
 async function loadSpecs(){var r=await api('/admin/specs');var tb=document.getElementById('srows');
   if(!r.ok||!r.body.specs.length){tb.innerHTML='<tr><td colspan=8 class="mut mono" style="padding:20px;text-align:center">No nodes.</td></tr>';return;}
   tb.innerHTML=r.body.specs.map(function(s){var t=[];if(s.confidential)t.push('<span class="badge cc">conf</span>');if(s.region_verified)t.push('<span class="badge ok">region ✓</span>');
     var st=s.status==='online'?'<span class="badge ok">online</span>':'<span class="badge">'+s.status+'</span>';
-    return '<tr><td class="mono mut">'+s.id+'</td><td>'+s.owner+'</td>'+
-     '<td data-l="GPU" style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
+    return '<tr><td class="mono mut">'+s.id+'</td><td>'+esc(s.owner)+'</td>'+
+     '<td data-l="GPU" style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
      '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+'</td><td>'+st+'</td>'+
      '<td>'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
      '<td class="mono">'+s.jobs_completed+'/'+s.jobs_failed+'</td>'+
@@ -1201,7 +1205,7 @@ async function loadSpecs(){var r=await api('/admin/specs');var tb=document.getEl
 async function delist(id){await api('/admin/specs/'+id+'/delist',{method:'POST'});loadSpecs();}
 async function loadPayouts(){var r=await api('/admin/payouts');var tb=document.getElementById('prows');
   if(!r.ok||!r.body.payouts.length){tb.innerHTML='<tr><td colspan=5 class="mut mono" style="padding:20px;text-align:center">No pending payouts.</td></tr>';return;}
-  tb.innerHTML=r.body.payouts.map(function(p){return '<tr><td class="mono mut">'+p.id+'</td><td>'+p.user+'</td>'+
+  tb.innerHTML=r.body.payouts.map(function(p){return '<tr><td class="mono mut">'+p.id+'</td><td>'+esc(p.user)+'</td>'+
     '<td class="mono amber">'+money(p.amount_usd)+'</td><td class="mono mut">'+p.kind+'</td>'+
     '<td class="mono mut" style="font-size:12px">'+(p.created_at?p.created_at.slice(0,10):'—')+'</td></tr>';}).join('');}
 boot();
@@ -1731,23 +1735,23 @@ async function loadEarnings(){var r=await api('/seller/earnings');if(!r.ok)retur
   document.getElementById('se_active').textContent=e.active_rentals;
   document.getElementById('se_rows').innerHTML=(e.specs||[]).map(function(s){
     var pr=s.auto_price?('<span class="badge cc">auto $'+Number(s.min_price||0).toFixed(2)+'–'+Number(s.max_price||0).toFixed(2)+'</span>'):'fixed';
-    return '<tr><td style="font-family:var(--disp);font-weight:600">'+s.gpu_model+'</td>'+
+    return '<tr><td style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model)+'</td>'+
       '<td class="mono">'+s.busy+'/'+s.units+'</td><td class="mono amber">$'+Number(s.price_per_hour||0).toFixed(2)+'</td>'+
       '<td>'+pr+'</td><td class="mono">'+s.reputation+'</td><td class="mono mut">'+s.jobs_completed+'✓ '+s.jobs_failed+'✗</td></tr>';}).join('');}
 async function loadNodes(){var r=await api('/account/specs');var tb=document.getElementById('noderows');
   if(!r.ok||!r.body.specs.length){tb.innerHTML='<tr><td colspan=7 class="mut mono" style="padding:20px;text-align:center">No nodes yet — <a class="teal" href="/install">list one</a>.</td></tr>';return;}
   tb.innerHTML=r.body.specs.map(function(s){var t=[];if(s.attested)t.push('<span class="badge ok">attested</span>');if(s.confidential)t.push('<span class="badge cc">conf</span>');
-   return '<tr><td class="mono mut">'+s.id+'</td><td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
-   '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+'</td><td>'+(s.status==='online'?'<span class="badge ok">online</span>':'<span class="badge">'+s.status+'</span>')+'</td>'+
-   '<td>'+(t.join(' ')||'—')+'</td><td class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td><td class="mono">'+s.jobs_completed+'/'+s.jobs_failed+'</td></tr>';}).join('');}
+   return '<tr><td class="mono mut">'+s.id+'</td><td style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
+   '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+'</td><td>'+(s.status==='online'?'<span class="badge ok">online</span>':'<span class="badge">'+esc(s.status)+'</span>')+'</td>'+
+   '<td>'+(t.join(' ')||'—')+'</td><td class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td><td class="mono">'+s.jobs_completed+'/'+s.jobs_failed+'</td></tr>';}).join('');}
 async function loadJobs(){var r=await api('/account/bookings');var tb=document.getElementById('jobrows');
   if(!r.ok||!r.body.bookings.length){tb.innerHTML='<tr><td colspan=7 class="mut mono" style="padding:20px;text-align:center">No jobs yet — <a class="teal" href="/marketplace">rent a GPU</a>.</td></tr>';return;}
   tb.innerHTML=r.body.bookings.map(function(b){return '<tr><td class="mono mut">'+b.id+'</td><td>'+(b.role==='buyer'?'<span class="badge">bought</span>':'<span class="badge ok">sold</span>')+'</td>'+
-   '<td style="font-family:var(--disp);font-weight:600">'+b.gpu_model+'</td><td class="mono">'+b.hours+'h</td><td class="mono amber">'+money(b.gross_amount)+'</td>'+
-   '<td><span class="badge">'+b.status+'</span></td><td class="mut mono" style="font-size:12px">'+(b.created_at?b.created_at.slice(0,10):'—')+'</td></tr>';}).join('');}
+   '<td style="font-family:var(--disp);font-weight:600">'+esc(b.gpu_model)+'</td><td class="mono">'+b.hours+'h</td><td class="mono amber">'+money(b.gross_amount)+'</td>'+
+   '<td><span class="badge">'+esc(b.status)+'</span></td><td class="mut mono" style="font-size:12px">'+(b.created_at?b.created_at.slice(0,10):'—')+'</td></tr>';}).join('');}
 async function loadKeys(){var r=await api('/account/keys');var tb=document.getElementById('keyrows');
   if(!r.ok||!r.body.keys||!r.body.keys.length){tb.innerHTML='<tr><td colspan=5 class="mut mono" style="padding:18px;text-align:center">No keys yet.</td></tr>';return;}
-  tb.innerHTML=r.body.keys.map(function(k){return '<tr><td>'+(k.label||'—')+'</td><td class="mono mut">'+(k.scopes||'—')+'</td>'+
+  tb.innerHTML=r.body.keys.map(function(k){return '<tr><td>'+esc(k.label||'—')+'</td><td class="mono mut">'+esc(k.scopes||'—')+'</td>'+
    '<td class="mono mut" style="font-size:11px">'+k.expires_at.slice(0,10)+'</td>'+
    '<td>'+(k.revoked?'<span class="badge">revoked</span>':'<span class="badge ok">active</span>')+'</td>'+
    '<td>'+(k.revoked?'':'<button class="btn-ghost" data-act="rvkey" data-a1="'+k.jti+'">revoke</button>')+'</td></tr>';}).join('');}
@@ -1958,7 +1962,7 @@ async function hosts(){var r=await fetch('/marketplace/specs?sort=price');var b=
    var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
    var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
    return '<tr style="cursor:pointer" data-act="pbGoGpu" data-a1="'+s.id+'">'+
-    '<td data-l="GPU"><div style="font-family:var(--disp);font-weight:600">'+(s.gpu_count>1?s.gpu_count+'× ':'')+(s.gpu_model||'CPU')+'</div>'+
+    '<td data-l="GPU"><div style="font-family:var(--disp);font-weight:600">'+(s.gpu_count>1?s.gpu_count+'× ':'')+esc(s.gpu_model||'CPU')+'</div>'+
       '<div class="mini" style="margin-top:2px">'+(s.cpu?s.cpu+' vCPU':'')+(s.ram_gb?' · '+s.ram_gb+'GB RAM':'')+'</div></td>'+
     '<td data-l="VRAM" class="mono mut">'+(s.vram_gb?s.vram_gb+' GB':'—')+'</td>'+
     '<td data-l="$/hr"><div class="mono amber" style="font-weight:600">$'+s.price_per_hour.toFixed(2)+'</div>'+
@@ -1966,7 +1970,7 @@ async function hosts(){var r=await fetch('/marketplace/specs?sort=price');var b=
     '<td class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
     '<td data-l="Trust">'+(s.trust?'<span class="badge '+(s.trust.rank>=2?'ok':'')+'" title="'+s.trust.evidence+'">'+s.trust.label+'</span>':(s.attested?'<span class="badge ok">verified</span>':'<span class="badge">unverified</span>'))+
       (s.confidential?' <span class="badge cc" title="Confidential-computing pilot — vendor TEE verification not yet connected">CC pilot</span>':'')+'</td>'+
-    '<td data-l="Region" class="mut mono" style="font-size:12px">'+(s.region||'—')+(s.region_verified?' <span class="teal">✓</span>':'')+'</td>'+
+    '<td data-l="Region" class="mut mono" style="font-size:12px">'+esc(s.region||'—')+(s.region_verified?' <span class="teal">✓</span>':'')+'</td>'+
     '<td data-l="Reputation" class="mono" style="color:'+rc+'">'+(s.reputation_score!=null?s.reputation_score:'—')+
       '<div class="mini">'+(s.success_rate!=null?s.success_rate+'% ok':'no history')+'</div></td>'+
     '<td data-l="Available"><span class="badge '+(s.available_units>0?'ok':'')+'">'+(s.available_units>0?s.available_units+' free':'busy')+'</span></td>'+
@@ -2037,9 +2041,9 @@ renderLaunch('launchgrid',['render','art'],2);
 async function rhosts(){var r=await fetch('/marketplace/specs?sort=price');var b=await r.json();var tb=document.getElementById('rhostrows');
   if(!b.count){tb.innerHTML=pbEmpty(6,'No GPUs online yet','Rent out your workstation between projects.','/install','List your rig');return;}
   tb.innerHTML=b.specs.map(function(s){var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
-   return '<tr><td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
+   return '<tr><td style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
     '<td class="mono mut" style="font-size:12px">'+(s.vram_gb?s.vram_gb+'GB':'—')+'</td>'+
-    '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+'</td><td class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td>'+
+    '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+'</td><td class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
     '<td class="mono" style="color:'+rc+'">'+(s.reputation_score!=null?s.reputation_score:'—')+'</td>'+
     '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
 rhosts();setInterval(rhosts,8000);
@@ -2066,18 +2070,18 @@ async function loadGpu(){
  w.innerHTML=
   '<div class="cols" style="gap:18px;align-items:flex-start">'+
    '<div style="flex:1.6 1 380px;min-width:300px">'+
-    '<h1 style="font-size:clamp(28px,4vw,40px);margin-bottom:8px">'+(s.gpu_count>1?s.gpu_count+'× ':'')+s.gpu_model+'</h1>'+
+    '<h1 style="font-size:clamp(28px,4vw,40px);margin-bottom:8px">'+(s.gpu_count>1?s.gpu_count+'× ':'')+esc(s.gpu_model)+'</h1>'+
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px">'+status+
       (s.trust?'<span class="badge '+(s.trust.rank>=2?'ok':'')+'" title="'+s.trust.evidence+'">'+s.trust.label+'</span>':'')+
       (s.confidential?'<span class="badge cc" title="Confidential-computing pilot — vendor TEE verification not yet connected">CC pilot</span>':'')+
       (s.region_verified?'<span class="badge ok">Region verified</span>':'')+'</div>'+
     '<div class="card" style="margin-bottom:16px">'+
      '<div class="lbl">Specifications</div>'+
-     row('GPU',(s.gpu_count>1?s.gpu_count+'× ':'')+s.gpu_model)+
+     row('GPU',(s.gpu_count>1?s.gpu_count+'× ':'')+esc(s.gpu_model))+
      row('VRAM',s.vram_gb?s.vram_gb+' GB':'—')+
      row('vCPU',s.cpu||'—')+
      row('System RAM',s.ram_gb?s.ram_gb+' GB':'—')+
-     row('Region',(s.region||'unknown')+(s.region_verified?' (verified)':' (host-reported)'))+
+     row('Region',esc(s.region||'unknown')+(s.region_verified?' (verified)':' (host-reported)'))+
      row('Capacity',s.available_units+' of '+s.total_units+' free')+
     '</div>'+
     '<div class="card" style="margin-bottom:16px">'+
@@ -2154,12 +2158,12 @@ async function prices(){
  tb.innerHTML=b.specs.map(function(s){
   var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
   return '<tr>'+
-   '<td style="font-family:var(--disp);font-weight:600">'+(s.gpu_model||'CPU')+'</td>'+
+   '<td style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
    '<td data-l="VRAM" class="mono mut">'+(s.vram_gb?s.vram_gb+' GB':'—')+'</td>'+
    '<td data-l="Petabyte" class="mono amber" style="font-weight:600">$'+Number(s.price_per_hour).toFixed(2)+'/hr</td>'+
    '<td data-l="Cloud" class="mono mut">'+(s.cloud_reference?'$'+Number(s.cloud_reference).toFixed(2)+'/hr':'<span class="mini">no comparable rate</span>')+'</td>'+
    '<td data-l="You save" class="mono" style="color:var(--pos)">'+(save>0?save+'%':'—')+'</td>'+
-   '<td class="mut mono" style="font-size:12px">'+(s.region||'—')+'</td>'+
+   '<td class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
    '<td><a class="btn btn-teal" style="padding:6px 14px;font-size:12px" href="/gpu/'+s.id+'">View</a></td></tr>';}).join('');
 }
 prices();setInterval(prices,10000);

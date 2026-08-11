@@ -57,6 +57,9 @@ jobs:
       - name: db invariants (money-impossible states rejected at DB layer)
         working-directory: lumaris_api
         run: python db_invariants_test.py
+      - name: security (ip-spoof / cross-tenant refs / stored-xss at write time)
+        working-directory: lumaris_api
+        run: python security_test.py
       - name: agent auto-update is signed (fleet-RCE guard)
         working-directory: desktop-app
         run: python updater_test.py
