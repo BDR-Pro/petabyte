@@ -2603,6 +2603,18 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
     submit_task_result(db, task, data.result or data.proof.get("output_hash"), data.status,
                        content_hash=data.proof.get("content_hash"),
                        signature=data.signature, proof=data.proof)
+    # Real-job re-verification: if this completion is a SHADOW re-run of a sampled job, record
+    # its content hash to the open quorum (a divergent hash vs the honest majority freezes this
+    # node). Then, with probability REVERIFY_SAMPLE_RATE, re-verify THIS job on other nodes.
+    if data.status == "completed":
+        try:
+            import quorum as _quorum
+            _quorum.record_submission(
+                db, task.id, data.proof.get("content_hash") or data.proof.get("output_hash"))
+            import reverify as _reverify
+            _reverify.sample_and_open(db, task)
+        except Exception:
+            logger.exception("real-job re-verification hook failed (non-fatal)")
     if data.status == "completed":
         lat = None
         try:
@@ -5594,6 +5606,30 @@ def benchmark_result(data: BenchmarkResultModel, agent=Depends(api_key_user),
     except ValueError as e:
         raise HTTPException(status_code=401, detail=f"Invalid proof: {e}")
 
+    # Server-time the benchmark + anti-replay: bind this submission to the benchmark task the
+    # PLATFORM dispatched. The server observes the wall-clock from dispatch to result (so the
+    # number is not purely self-reported), and consuming the task means a previously-signed
+    # benchmark cannot be replayed to refresh a stale listing.
+    elapsed_s = None
+    try:
+        from db import Task as _Task
+        btid = int((data.proof or {}).get("task_id") or 0)
+    except Exception:
+        btid = 0
+    if btid:
+        bt = (db.query(_Task).filter(_Task.id == btid, _Task.spec_id == spec.id,
+                                     _Task.task_type == "benchmark").first())
+        if bt is not None:
+            if bt.status == "completed":
+                raise HTTPException(status_code=409,
+                                    detail="benchmark already submitted (replay rejected)")
+            from datetime import datetime as _dt, timezone as _tz
+            start = bt.assigned_at or bt.created_at
+            if start is not None:
+                start = start.replace(tzinfo=_tz.utc) if start.tzinfo is None else start
+                elapsed_s = round(max(0.0, (_dt.now(_tz.utc) - start).total_seconds()), 3)
+            submit_task_result(db, bt, "benchmark", "completed")   # consume -> anti-replay
+
     # Gamer-style authenticity check: compare every benchmark score inside the SIGNED proof
     # (FP16 matmul TFLOPS, Blender Open Data, Cinebench, PugetBench) against PUBLIC reference
     # data for the model the seller CLAIMS to list (spec.gpu_model). The hardware-invariant
@@ -5622,11 +5658,14 @@ def benchmark_result(data: BenchmarkResultModel, agent=Depends(api_key_user),
     except Exception:
         logger.exception("benchmark authenticity check failed (non-fatal)")
 
-    set_benchmark(db, spec, data.tokens_sec, meta, verdict=verdict)
+    if elapsed_s is not None:
+        meta = {**meta, "server_timed": True, "elapsed_s": elapsed_s}
+    set_benchmark(db, spec, data.tokens_sec, meta, verdict=verdict, elapsed_s=elapsed_s)
     from db import record_rep_event
     record_rep_event(db, spec, "benchmark", data.tokens_sec)
     return {"status": "ok", "spec_id": spec.id, "tokens_sec": data.tokens_sec,
-            "benchmark_verdict": verdict}
+            "benchmark_verdict": verdict, "server_timed": elapsed_s is not None,
+            "elapsed_s": elapsed_s}
 
 
 

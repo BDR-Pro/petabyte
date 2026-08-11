@@ -103,19 +103,35 @@ per-object handles + metadata minimization.
   proof** (both agents), and the server persists it (`Task.result_content_hash`). Quorum
   comparison uses this content hash. So a seller commits to the actual output — two honest nodes
   doing the same deterministic work produce the same hash — instead of signing a bare object-ref
-  string. *Remaining:* an independent verifier that re-executes a random fraction of real jobs
-  and compares the stored hashes (the storage is now in place); full server-side recompute of the
-  uploaded object needs real object storage.
-- **Benchmark tier is honestly labelled (#64).** The `benchmark_verified` tier's label is now
-  "Benchmark-reported" and its evidence states the throughput is **self-reported by the node's
-  agent and signed (attributable), not independently measured by the platform** — never "measured".
+  string.
+- **Real-job re-verification is now wired (`reverify.py`).** A random fraction
+  (`REVERIFY_SAMPLE_RATE`, default 0 / opt-in) of completed **deterministic** real jobs
+  (render/transcode/stitch) is **re-executed on independent nodes** and the signed content hashes
+  compared — quorum on *real* work, not just a distinct `test` task. A node whose hash diverges
+  from the honest majority is **frozen for fraud**; with only one shadow a mismatch is
+  inconclusive and holds both for review (never a false freeze). Reuses the QuorumCheck engine.
+  Tests: `reverify_test.py` (honest agree / faker outvoted-and-frozen / sampling gate / no
+  fan-out). *Remaining:* full server-side recompute of the *uploaded object* still needs real
+  object storage; the cross-node hash comparison is in place now.
+- **The benchmark is server-timed + replay-proof.** The platform dispatches the benchmark task
+  and observes the wall-clock from dispatch to result server-side (`Task.assigned_at` →
+  `benchmark_elapsed_s`), and **consumes** the task on submission — so a previously-signed
+  benchmark cannot be replayed to refresh a stale listing (a re-submission gets `409`). The
+  consistent-tier evidence now says the platform *timed* the run; the throughput number is still
+  node-reported (see below).
+- **Benchmark tier is honestly labelled (#64).** A benchmark inconsistent with the claimed GPU
+  model's public reference data is flagged, not rewarded; a bare self-report (no public band) is
+  "Benchmark-reported", stated as **node-reported and signed (attributable), not independently
+  measured** — never "measured".
 
 **Honest gaps (closeable in software — roadmap, not yet enforced)**
 - The strongest validator (`matmul_validation.py`) is **not yet wired into the live result
-  path**. With the signed `content_hash` now stored, wiring it + quorum re-execution of a random
-  fraction of *real* jobs is the next step.
-- Audits/quorum arrive as a distinct `test` task the agent can branch on, and run only when
-  scheduled. **Fix:** subject a random fraction of *real* jobs to redundant re-execution.
+  path**. With the signed `content_hash` stored and `reverify.py` re-executing real jobs, wiring
+  it into the reverify comparison is the next step.
+- The benchmark *number* is still produced by the node's own harness. Server-timing bounds the
+  elapsed wall-clock and binds the result to a fresh dispatch, but a seed-bound workload whose
+  exact FLOP count the server fixes (so the reported rate is checked against server-observed time)
+  is the remaining upgrade.
 
 **Requires hardware attestation**
 - Proving the *specific silicon* (an "H100" really is an H100; VRAM is real) and that work ran

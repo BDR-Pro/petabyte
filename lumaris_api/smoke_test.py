@@ -493,6 +493,9 @@ bph={"task_id":bjob["task_id"],"output_hash":"bench","ts":int(time.time()),"tflo
 _br=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key5}, json={"spec_id":sid5,"tokens_sec":2350.5,"meta":{"model":"llama3-8b","sd_images_sec":4.2},"proof":bph,"signature":sign_proof(sk5,bph)})
 ok("signed benchmark result accepted", _br.status_code==200)
 ok("benchmark consistent with the claimed H100 -> verdict 'consistent'", _br.json().get("benchmark_verdict")=="consistent")
+ok("the platform SERVER-TIMED the benchmark (bound to the dispatched task)", _br.json().get("server_timed")==True)
+ok("re-submitting the same signed benchmark is rejected as a replay (409)",
+   c.post("/jobs/benchmark_result", headers={"X-API-KEY":key5}, json={"spec_id":sid5,"tokens_sec":2350.5,"meta":{},"proof":bph,"signature":sign_proof(sk5,bph)}).status_code==409)
 ok("/specs surfaces tokens/sec", any(s["spec_id"]==sid5 and s["benchmark_tokens_sec"]==2350.5 for s in c.get("/specs", headers=b5h).json()["specs"]))
 # --- TRUST LADDER: a signed benchmark upgrades the level; TEE is never claimed ---
 _t5b=[s for s in c.get("/specs", headers=b5h).json()["specs"] if s["spec_id"]==sid5][0]

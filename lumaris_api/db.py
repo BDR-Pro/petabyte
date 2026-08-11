@@ -194,6 +194,9 @@ class SellerSpec(Base):
     # reference band (gpu_benchmark.classify): consistent | implausibly_low |
     # suspiciously_high | unknown_model | None. Feeds the honest trust ladder.
     benchmark_verdict = Column(String, nullable=True)
+    # server-observed wall-clock (seconds) from dispatching the benchmark task to receiving
+    # the signed result — the platform TIMED it, so the number isn't purely self-reported.
+    benchmark_elapsed_s = Column(Float, nullable=True)
     jobs_completed = Column(Integer, default=0)
     jobs_failed = Column(Integer, default=0)
     fraud_count = Column(Integer, default=0)
@@ -261,11 +264,16 @@ def trust_level_for(spec: "SellerSpec") -> dict:
                                 f"public reference data ({verdict}) and was rejected as "
                                 "corroborating evidence — the listing may be mislabeled."}
         if verdict == "consistent":
+            timed = (f" The platform dispatched and TIMED the benchmark "
+                     f"({round(spec.benchmark_elapsed_s, 1)}s observed), and the result is bound "
+                     f"to that dispatch (no replay)." if getattr(spec, "benchmark_elapsed_s", None)
+                     else "")
             return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-consistent",
                     "evidence": f"Agent-signed hardware report + {tok} that MATCHES public "
                                 "reference data for the claimed GPU model (FP16 TFLOPS / Blender "
-                                "Open Data / Cinebench / PugetBench). Node-reported (not run in a "
-                                "platform enclave), but consistent with the advertised card."}
+                                "Open Data / Cinebench / PugetBench)." + timed +
+                                " Node-reported (not run in a platform enclave), but consistent "
+                                "with the advertised card."}
         if spec.benchmark_tokens_sec:
             return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-reported",
                     "evidence": "Agent-signed hardware report + a node-REPORTED, signed benchmark "
@@ -1542,7 +1550,8 @@ def _ensure_columns():
                   ("auto_price", "BOOLEAN DEFAULT false"), ("public_id", "VARCHAR"),
                   ("is_demo", "BOOLEAN NOT NULL DEFAULT false"),
                   ("tee_attested_at", "TIMESTAMP"),
-                  ("benchmark_verdict", "VARCHAR")],
+                  ("benchmark_verdict", "VARCHAR"),
+                  ("benchmark_elapsed_s", "FLOAT")],
         "users": [("referral_code", "VARCHAR"), ("referred_by", "INTEGER"),
                   ("referral_rewarded", "BOOLEAN DEFAULT false"),
                   ("referral_signup_meta", "VARCHAR"),("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
@@ -2900,7 +2909,7 @@ def get_task_logs(db: Session, task_id: int, after_id: int = 0):
 # ------------------ Benchmarks ------------------
 
 def set_benchmark(db: Session, spec: "SellerSpec", tokens_sec: float, meta: dict,
-                  verdict: str = None) -> None:
+                  verdict: str = None, elapsed_s: float = None) -> None:
     import json as _json
     spec.benchmark_tokens_sec = tokens_sec
     spec.benchmark_meta = _json.dumps(meta or {})
@@ -2908,6 +2917,8 @@ def set_benchmark(db: Session, spec: "SellerSpec", tokens_sec: float, meta: dict
     if verdict is not None:
         # consistency of the reported number with the CLAIMED gpu_model's public band.
         spec.benchmark_verdict = str(verdict)[:32]
+    if elapsed_s is not None:
+        spec.benchmark_elapsed_s = float(elapsed_s)
     db.add(spec); db.commit()
 
 

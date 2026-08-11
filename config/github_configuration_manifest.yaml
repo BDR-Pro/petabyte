@@ -942,6 +942,12 @@ variables:
     description: How long (s) a compute-tx may sit stuck pre-capture before the reaper reclaims its reserved
       GPU unit (default 26h).
     format: int
+  REVERIFY_SAMPLE_RATE:
+    required: false
+    default: '0.0'
+    scope:
+    - platform
+    description: ''
   S3_BUCKET:
     required: false
     default: null

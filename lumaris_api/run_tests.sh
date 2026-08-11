@@ -46,6 +46,7 @@ run_suite "account (reset + cal webhook + demo notify)" python account_test.py
 run_suite "wallet (add funds via stripe checkout)" python wallet_test.py
 run_suite "seller integrity audits (anti-fraud)" python seller_audit_test.py
 run_suite "quorum verification (redundant re-execution)" python quorum_test.py
+run_suite "real-job re-verification (content-hash quorum on real work)" python reverify_test.py
 run_suite "marketplace intelligence (health/routing/trust/timeline)" python marketplace_test.py
 run_suite "github config (manifest/validator/generator/drift)" python config_test.py
 run_suite "ENV_VARS bundle (parser/secret-guard/precedence)" python env_vars_test.py
