@@ -13,15 +13,15 @@ name: Deploy server
 # - The workflow:
 #     1. validates ENV_VARS + Secrets
 #     2. resolves deploy host/user
-#     3. installs a pinned SSH host key
-#     4. generates /etc/lumaris/lumaris.env atomically
+#     3. configures pinned SSH host identity
+#     4. generates /etc/lumaris/lumaris.env
 #     5. starts deployment as a transient systemd job
-#     6. polls deployment using short SSH connections
-#     7. verifies /healthz
-#     8. rolls the env back on failure
+#     6. polls deploy state using short SSH connections
+#     7. polls /healthz using short SSH connections
+#     8. rolls back env on failure
 #     9. writes a sanitized env report
 #
-# Only two standalone GitHub Variables should remain:
+# Standalone Variables:
 #   ENV_VARS
 #   DEPLOY_CONFIG_FROM_GITHUB
 
@@ -109,7 +109,7 @@ jobs:
       SSH_COMMON: >-
         -o StrictHostKeyChecking=yes
         -o UserKnownHostsFile=/home/runner/.ssh/known_hosts
-        -o ConnectTimeout=20
+        -o ConnectTimeout=15
         -o ServerAliveInterval=15
         -o ServerAliveCountMax=4
         -o TCPKeepAlive=yes
@@ -143,7 +143,6 @@ jobs:
           import sys
 
           sys.path.insert(0, "scripts")
-
           import env_vars as ev
 
           vals, errors = ev.parse_bundle(
@@ -185,24 +184,20 @@ jobs:
           chmod 700 ~/.ssh
 
           if [ -z "${DEPLOY_SSH_KEY//[[:space:]]/}" ]; then
-            echo "::error::DEPLOY_SSH_KEY is empty."
+            echo "::error::DEPLOY_SSH_KEY is empty." >&2
             exit 1
           fi
 
-          printf '%s\n' "$DEPLOY_SSH_KEY" \
-            > ~/.ssh/deploy_key
-
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
           if [ -z "${DROPLET_SSH_KNOWN_HOSTS//[[:space:]]/}" ]; then
-            echo "::error::DROPLET_SSH_KNOWN_HOSTS is empty."
-            echo "::error::Refusing deployment without a pinned host key."
+            echo "::error::DROPLET_SSH_KNOWN_HOSTS is empty." >&2
+            echo "::error::Refusing deployment without a pinned host key." >&2
             exit 1
           fi
 
-          printf '%s\n' "$DROPLET_SSH_KNOWN_HOSTS" \
-            > ~/.ssh/known_hosts
-
+          printf '%s\n' "$DROPLET_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
           if ! ssh-keygen \
@@ -210,7 +205,7 @@ jobs:
             -f ~/.ssh/known_hosts \
             >/dev/null; then
 
-            echo "::error::known_hosts does not contain $DROPLET_HOST"
+            echo "::error::known_hosts does not contain $DROPLET_HOST" >&2
             exit 1
           fi
 
@@ -279,15 +274,12 @@ jobs:
                 /tmp/lumaris.env.incoming \
                 /etc/lumaris/lumaris.env
 
-              sudo rm -f \
-                /tmp/lumaris.env.incoming
+              sudo rm -f /tmp/lumaris.env.incoming
 
-              sudo test \
-                -s \
-                /etc/lumaris/lumaris.env
+              sudo test -s /etc/lumaris/lumaris.env
             '
 
-      - name: Verify generated runtime config
+      - name: Verify required runtime config exists
         if: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB == 'true' }}
         run: |
           set -euo pipefail
@@ -298,34 +290,25 @@ jobs:
             "$DROPLET_USER@$DROPLET_HOST" '
               set -euo pipefail
 
-              test_value() {
+              require_key() {
                 key="$1"
 
-                value="$(
-                  sudo awk \
-                    -F= \
-                    -v k="$key" \
-                    "$1 == k {
-                      sub(/^[^=]*=/, \"\")
-                      print
-                      exit
-                    }" \
-                    /etc/lumaris/lumaris.env
-                )"
-
-                if [ -z "$value" ]; then
-                  echo "::error::$key missing or empty in /etc/lumaris/lumaris.env"
+                if ! sudo grep -q "^${key}=." /etc/lumaris/lumaris.env; then
+                  echo "::error::$key is missing or empty in /etc/lumaris/lumaris.env"
                   exit 1
                 fi
               }
 
-              test_value STRIPE_GATEWAY
-              test_value STRIPE_MODE
+              require_key STRIPE_GATEWAY
+              require_key STRIPE_MODE
+              require_key SECRET_KEY
+              require_key SERVER_PRIVATE_KEY
+              require_key DATABASE_URL
 
               echo "required runtime config present"
             '
 
-      - name: Remove stale deploy unit
+      - name: Remove stale transient deploy unit
         run: |
           set -euo pipefail
 
@@ -333,12 +316,17 @@ jobs:
             $SSH_COMMON \
             -i ~/.ssh/deploy_key \
             "$DROPLET_USER@$DROPLET_HOST" '
-              sudo systemctl stop lumaris-github-deploy.service \
-                2>/dev/null || true
+              set +e
+
+              sudo systemctl stop \
+                lumaris-github-deploy.service \
+                2>/dev/null
 
               sudo systemctl reset-failed \
                 lumaris-github-deploy.service \
-                2>/dev/null || true
+                2>/dev/null
+
+              exit 0
             '
 
       - name: Start deploy as transient systemd job
@@ -354,19 +342,19 @@ jobs:
               sudo systemd-run \
                 --unit=lumaris-github-deploy \
                 --property=Type=oneshot \
-                --collect \
                 /bin/bash \
                 /opt/lumaris/deploy/update.sh
             '
 
-      - name: Wait for remote deployment
+      - name: Wait for remote deploy
         run: |
           set -euo pipefail
 
           MAX_ATTEMPTS=150
-          SLEEP_SECONDS=5
+          WAIT_SECONDS=5
 
           for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+
             OUTPUT="$(
               ssh \
                 $SSH_COMMON \
@@ -380,16 +368,17 @@ jobs:
                     --property=ExecMainStatus \
                     --no-pager \
                     2>/dev/null || true
-                ' \
-                2>/dev/null || true
+                ' 2>/dev/null || true
             )"
-
-            echo "Attempt $attempt/$MAX_ATTEMPTS"
-            echo "$OUTPUT"
 
             ACTIVE_STATE="$(
               printf '%s\n' "$OUTPUT" \
                 | sed -n 's/^ActiveState=//p'
+            )"
+
+            SUB_STATE="$(
+              printf '%s\n' "$OUTPUT" \
+                | sed -n 's/^SubState=//p'
             )"
 
             RESULT="$(
@@ -402,7 +391,27 @@ jobs:
                 | sed -n 's/^ExecMainStatus=//p'
             )"
 
+            echo \
+              "deploy attempt=$attempt/$MAX_ATTEMPTS active=${ACTIVE_STATE:-unknown} sub=${SUB_STATE:-unknown} result=${RESULT:-unknown}"
+
+            if [ "$ACTIVE_STATE" = "failed" ]; then
+              echo "::error::Remote deploy entered failed state."
+
+              ssh \
+                $SSH_COMMON \
+                -i ~/.ssh/deploy_key \
+                "$DROPLET_USER@$DROPLET_HOST" \
+                'sudo journalctl \
+                  -u lumaris-github-deploy.service \
+                  -n 250 \
+                  --no-pager' \
+                || true
+
+              exit 1
+            fi
+
             if [ "$ACTIVE_STATE" = "inactive" ]; then
+
               if [ "$RESULT" = "success" ] \
                 && [ "${EXIT_CODE:-0}" = "0" ]; then
 
@@ -410,9 +419,9 @@ jobs:
                 exit 0
               fi
 
-              echo "::error::Remote deployment failed."
-              echo "Result=$RESULT"
-              echo "ExecMainStatus=$EXIT_CODE"
+              echo "::error::Remote deployment completed unsuccessfully."
+              echo "Result=${RESULT:-unknown}"
+              echo "ExecMainStatus=${EXIT_CODE:-unknown}"
 
               ssh \
                 $SSH_COMMON \
@@ -427,26 +436,10 @@ jobs:
               exit 1
             fi
 
-            if [ "$ACTIVE_STATE" = "failed" ]; then
-              echo "::error::Remote deployment entered failed state."
-
-              ssh \
-                $SSH_COMMON \
-                -i ~/.ssh/deploy_key \
-                "$DROPLET_USER@$DROPLET_HOST" \
-                'sudo journalctl \
-                  -u lumaris-github-deploy.service \
-                  -n 250 \
-                  --no-pager' \
-                || true
-
-              exit 1
-            fi
-
-            sleep "$SLEEP_SECONDS"
+            sleep "$WAIT_SECONDS"
           done
 
-          echo "::error::Remote deployment timed out after 12.5 minutes."
+          echo "::error::Remote deployment timed out."
 
           ssh \
             $SSH_COMMON \
@@ -460,58 +453,49 @@ jobs:
 
           exit 1
 
-      - name: Show deploy journal
-        if: always()
-        run: |
-          ssh \
-            $SSH_COMMON \
-            -i ~/.ssh/deploy_key \
-            "$DROPLET_USER@$DROPLET_HOST" \
-            'sudo journalctl \
-              -u lumaris-github-deploy.service \
-              -n 100 \
-              --no-pager \
-              2>/dev/null' \
-            || true
-
       - name: Verify API health
+        if: ${{ vars.DEPLOY_CONFIG_FROM_GITHUB == 'true' }}
         run: |
           set -euo pipefail
 
-          ssh \
-            $SSH_COMMON \
-            -i ~/.ssh/deploy_key \
-            "$DROPLET_USER@$DROPLET_HOST" '
-              set -e
+          MAX_ATTEMPTS=24
+          WAIT_SECONDS=5
+          ok=0
 
-              ok=0
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
 
-              for i in $(seq 1 24); do
-                if curl \
-                  -fsS \
-                  --max-time 5 \
-                  http://127.0.0.1:8000/healthz \
-                  >/dev/null 2>&1; then
+            echo "Health attempt $attempt/$MAX_ATTEMPTS"
 
-                  ok=1
-                  break
-                fi
-
-                sleep 5
-              done
-
-              if [ "$ok" != 1 ]; then
-                echo "::error::API health check failed."
-                exit 1
-              fi
-
+            if ssh \
+              $SSH_COMMON \
+              -i ~/.ssh/deploy_key \
+              "$DROPLET_USER@$DROPLET_HOST" \
+              'curl \
+                -fsS \
+                --connect-timeout 3 \
+                --max-time 5 \
+                http://127.0.0.1:8000/healthz \
+                >/dev/null'
+            then
+              ok=1
               echo "API health OK"
-            '
+              break
+            fi
 
-      - name: Roll back environment on health failure
+            sleep "$WAIT_SECONDS"
+          done
+
+          if [ "$ok" != 1 ]; then
+            echo "::error::API health check failed after deploy."
+            exit 1
+          fi
+
+      - name: Roll back environment on failure
         if: ${{ failure() && vars.DEPLOY_CONFIG_FROM_GITHUB == 'true' }}
         run: |
           set +e
+
+          echo "Attempting environment rollback..."
 
           ssh \
             $SSH_COMMON \
@@ -526,8 +510,6 @@ jobs:
                 exit 0
               fi
 
-              echo "Restoring previous environment..."
-
               sudo install \
                 -m 600 \
                 -o lumaris \
@@ -539,18 +521,82 @@ jobs:
                 lumaris-api \
                 lumaris-reaper
 
-              sleep 5
+              echo "Previous environment restored."
+            ' \
+            || true
 
-              if curl \
+          echo "Waiting briefly before rollback health verification..."
+          sleep 5
+
+          for attempt in $(seq 1 12); do
+
+            if ssh \
+              $SSH_COMMON \
+              -i ~/.ssh/deploy_key \
+              "$DROPLET_USER@$DROPLET_HOST" \
+              'curl \
                 -fsS \
+                --connect-timeout 3 \
                 --max-time 5 \
                 http://127.0.0.1:8000/healthz \
-                >/dev/null 2>&1; then
+                >/dev/null'
+            then
+              echo "Rollback health OK"
+              exit 0
+            fi
 
-                echo "Rollback health OK"
-              else
-                echo "::error::Rollback completed but API is still unhealthy."
-              fi
+            echo "Rollback health attempt $attempt/12 failed"
+            sleep 5
+          done
+
+          echo "::error::Rollback completed but API remains unhealthy."
+
+          ssh \
+            $SSH_COMMON \
+            -i ~/.ssh/deploy_key \
+            "$DROPLET_USER@$DROPLET_HOST" \
+            'sudo journalctl \
+              -u lumaris-api.service \
+              -n 100 \
+              --no-pager' \
+            || true
+
+          exit 0
+
+      - name: API diagnostics on failure
+        if: failure()
+        run: |
+          set +e
+
+          ssh \
+            $SSH_COMMON \
+            -i ~/.ssh/deploy_key \
+            "$DROPLET_USER@$DROPLET_HOST" '
+              echo "=== lumaris-api ==="
+              sudo systemctl status \
+                lumaris-api.service \
+                --no-pager \
+                -l || true
+
+              echo
+              echo "=== lumaris-reaper ==="
+              sudo systemctl status \
+                lumaris-reaper.service \
+                --no-pager \
+                -l || true
+
+              echo
+              echo "=== lumaris-api journal ==="
+              sudo journalctl \
+                -u lumaris-api.service \
+                -n 120 \
+                --no-pager || true
+
+              echo
+              echo "=== port 8000 ==="
+              ss -lntp \
+                | grep ":8000" \
+                || true
             ' \
             || true
 
