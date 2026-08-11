@@ -5,7 +5,7 @@ from fastapi import (
 from fastapi.responses import PlainTextResponse, JSONResponse, Response, HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func, case, or_, distinct
+from sqlalchemy import text, func, case, or_, and_, distinct, cast, Float
 from pydantic import BaseModel, Field, field_validator, model_validator
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -1490,29 +1490,64 @@ def public_spec_detail(public_id: str, db: Session = Depends(get_db)):
 def public_specs(db: Session = Depends(get_db),
                  gpu: Optional[str] = None, region: Optional[str] = None,
                  min_vram: int = 0, max_price: Optional[float] = None,
-                 confidential: Optional[bool] = None, sort: str = "price"):
-    """Public, read-only inventory with search/filter (no auth, limited fields)."""
-    from db import SellerSpec
+                 confidential: Optional[bool] = None, sort: str = "price",
+                 limit: int = Query(200, ge=1, le=200), offset: int = Query(0, ge=0)):
+    """Public, read-only inventory with search/filter (no auth, limited fields).
+
+    Filtering, sorting and pagination run in SQL (indexed columns + a JOIN to the owner) so the
+    handler never loads the whole table into Python — it fetches only the matching page. `count`
+    is the TOTAL number of matches; `specs` is the requested page (`limit`/`offset`). Only the
+    page is enriched with the (pure) reputation/trust/cloud fields."""
+    from db import SellerSpec, User
+    # "live" = online with a fresh heartbeat, expressed in SQL (naive-UTC cutoff matches stored
+    # last_seen and spec_is_live()). Owner must be allowed to take paid jobs (INNER JOIN).
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=HEARTBEAT_TIMEOUT_S)).replace(tzinfo=None)
+    q = (db.query(SellerSpec).join(User, User.id == SellerSpec.user_id)
+         .filter(SellerSpec.attested == True,                        # noqa: E712
+                 SellerSpec.status == "online",
+                 SellerSpec.last_seen.isnot(None),
+                 SellerSpec.last_seen >= cutoff,
+                 SellerSpec.available_units >= 1,
+                 User.can_accept_paid_jobs == True))                 # noqa: E712
+    if gpu:
+        needle = gpu.replace("%", "").replace("_", "")               # GPU names carry no LIKE wildcards
+        q = q.filter(SellerSpec.gpu_model.ilike(f"%{needle}%"))
+    if region:
+        q = q.filter(func.lower(SellerSpec.region) == region.lower())
+    if min_vram:
+        q = q.filter(func.coalesce(SellerSpec.vram_gb, 0) >= min_vram)
+    if max_price is not None:
+        q = q.filter(SellerSpec.price_per_hour <= max_price)
+    if confidential is not None:
+        q = q.filter(SellerSpec.confidential == confidential)
+
+    total = q.count()
+
+    if sort == "vram":
+        q = q.order_by(func.coalesce(SellerSpec.vram_gb, 0).desc(), SellerSpec.id.asc())
+    elif sort == "rep":
+        # The reputation score (0..100) is a PURE function of stored columns, so it can be
+        # ordered on in SQL — same formula as db.compute_reputation (clamp omitted: irrelevant
+        # to ordering). Lets us paginate a reputation-sorted page without loading every row.
+        _done = func.coalesce(SellerSpec.jobs_completed, 0)
+        _failed = func.coalesce(SellerSpec.jobs_failed, 0)
+        _tot = _done + _failed
+        rep_expr = (60.0
+                    + case((_tot > 0, 30.0 * cast(_done, Float) / cast(_tot, Float)
+                            - 15.0 * cast(_failed, Float) / cast(_tot, Float)), else_=0.0)
+                    + case((and_(SellerSpec.benchmark_tokens_sec.isnot(None),
+                                 SellerSpec.benchmark_tokens_sec != 0), 5.0), else_=0.0)
+                    - 25.0 * func.coalesce(SellerSpec.fraud_count, 0))
+        q = q.order_by(rep_expr.desc(), SellerSpec.id.asc())
+    else:   # price (default)
+        q = q.order_by(SellerSpec.price_per_hour.asc(), SellerSpec.id.asc())
+
+    page = q.limit(limit).offset(offset).all()
+
     out = []
-    for spec in db.query(SellerSpec).filter(SellerSpec.attested == True).all():  # noqa: E712
-        if not spec_is_live(spec) or spec.available_units < 1:
-            continue
-        owner = get_user_by_id(db, spec.user_id)
-        if not owner or not owner.can_accept_paid_jobs:
-            continue
-        if gpu and gpu.lower() not in (spec.gpu_model or "").lower():
-            continue
-        if region and region.lower() != (spec.region or "").lower():
-            continue
-        if (spec.vram_gb or 0) < min_vram:
-            continue
-        if max_price is not None and spec.price_per_hour > max_price:
-            continue
-        if confidential is not None and bool(spec.confidential) != confidential:
-            continue
-        total = (spec.jobs_completed or 0) + (spec.jobs_failed or 0)
+    for spec in page:      # only the page is enriched (reputation is a cheap pure computation)
+        total_j = (spec.jobs_completed or 0) + (spec.jobs_failed or 0)
         _rep = compute_reputation(db, spec)
-        _score = _rep["score"] if isinstance(_rep, dict) else _rep
         out.append({"id": spec.public_id,
                     "gpu_model": spec.gpu_model or "CPU",
                     "gpu_count": spec.gpu_count or 0, "vram_gb": spec.vram_gb or 0,
@@ -1522,18 +1557,15 @@ def public_specs(db: Session = Depends(get_db),
                     "auto_price": bool(spec.auto_price),
                     "region": spec.region, "region_verified": bool(spec.region_verified),
                     "confidential": bool(spec.confidential),
-                    "reputation_score": _score,
+                    "reputation_score": _rep["score"] if isinstance(_rep, dict) else _rep,
                     "available_units": spec.available_units,
                     "total_units": spec.total_units,
                     "attested": bool(spec.attested),
                     "trust": trust_level_for(spec),
                     "jobs_completed": spec.jobs_completed, "jobs_failed": spec.jobs_failed,
-                    "success_rate": round(100.0 * spec.jobs_completed / total, 1) if total else None})
-    keyfn = {"price": lambda x: x["price_per_hour"],
-             "rep": lambda x: -x["reputation_score"],
-             "vram": lambda x: -x["vram_gb"]}.get(sort, lambda x: x["price_per_hour"])
-    out.sort(key=keyfn)
-    return {"specs": out, "count": len(out), "aws_reference": float(AWS_REFERENCE_PRICE)}
+                    "success_rate": round(100.0 * spec.jobs_completed / total_j, 1) if total_j else None})
+    return {"specs": out, "count": total, "limit": limit, "offset": offset,
+            "aws_reference": float(AWS_REFERENCE_PRICE)}
 
 
 @app.get("/docs", include_in_schema=False)

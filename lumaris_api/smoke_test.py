@@ -1854,6 +1854,16 @@ ok("public listing id is an opaque handle, not an enumerable int",
    all(isinstance(_s.get("id"), str) and not str(_s.get("id")).isdigit() for _s in _pm["specs"]))
 ok("public /marketplace/specs leaks no identifiers",
    all(set(s).issubset(_allowed) and not (set(s) & _forbidden) for s in _pm["specs"]))
+# SQL filter/sort/pagination: count is the TOTAL matches; specs is a bounded page.
+if _pm["count"] > 1:
+    _pg1=c.get("/marketplace/specs?limit=1&offset=0").json()
+    _pg2=c.get("/marketplace/specs?limit=1&offset=1").json()
+    ok("marketplace paginates in SQL (limit caps the page, count stays the total)",
+       len(_pg1["specs"])==1 and _pg1["count"]==_pm["count"])
+    ok("marketplace offset returns a different node (page 2 != page 1)",
+       _pg1["specs"][0]["id"] != _pg2["specs"][0]["id"])
+ok("price sort is ascending (SQL ORDER BY)",
+   all(_pm["specs"][i]["price_per_hour"] <= _pm["specs"][i+1]["price_per_hour"] for i in range(len(_pm["specs"])-1)))
 
 # Google OAuth stub flow: login -> redirect -> callback -> JWT -> works on /wallet
 lg=c.get("/auth/google/login", follow_redirects=False)
