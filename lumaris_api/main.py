@@ -1863,6 +1863,9 @@ def google_callback(code: str = Query(...), email: Optional[str] = Query(None),
     # TODO(stub): Google OAuth stub login — NEVER enable in production (stub.md #5)
     if os.getenv("GOOGLE_OAUTH_STUB", "").lower() == "true":
         user_email = email or "info@petabyte.market"
+        # The stub is a dev bypass, not a real provider verification — it must NEVER mint a
+        # verified (hence potentially admin/payout-eligible) identity.
+        email_verified = False
     else:
         import httpx as _hx
         tok = _hx.post("https://oauth2.googleapis.com/token", timeout=20, data={
@@ -1875,7 +1878,10 @@ def google_callback(code: str = Query(...), email: Optional[str] = Query(None),
         user_email = info.get("email")
         if not user_email:
             raise HTTPException(status_code=401, detail="Google did not return an email")
-    u = get_or_create_oauth_user(db, user_email, "google")
+        # Honour Google's own verification claim: a Google-verified email is a trusted identity
+        # (unlocks payout eligibility and, if allowlisted, admin).
+        email_verified = bool(info.get("email_verified"))
+    u = get_or_create_oauth_user(db, user_email, "google", email_verified=email_verified)
     token = create_access_token({"sub": u.username, "role": u.role})
     return RedirectResponse(url="/app#t=" + token)
 
@@ -2994,12 +3000,28 @@ def _admin_allowlist() -> set:
     return {u.strip().lower() for u in os.getenv("ADMIN_USERS", "").split(",") if u.strip()}
 
 def _is_admin(u) -> bool:
+    # An admin identity must be one the user cannot silently forge. Two rules:
+    #   * an email-shaped allowlist entry ("has @") is satisfied ONLY by a VERIFIED matching
+    #     email. Never by an unverified email (POST /account/email sets an arbitrary address —
+    #     verification requires the emailed-token flow, i.e. control of the inbox) and never by
+    #     a username (usernames have no character restriction, so "info@petabyte.market" is a
+    #     registerable username; matching it against an email entry would be escalation).
+    #   * a plain (no-@) allowlist entry is matched against the username.
     if not u:
         return False
-    idents = {(u.username or "").lower()}
-    if getattr(u, "email", None):
-        idents.add(u.email.lower())
-    return bool(_admin_allowlist() & idents)
+    allow = _admin_allowlist()
+    if not allow:
+        return False
+    uname = (u.username or "").lower()
+    email = (getattr(u, "email", None) or "").lower()
+    verified = bool(getattr(u, "email_verified", False))
+    for entry in allow:
+        if "@" in entry:
+            if email and verified and entry == email:
+                return True
+        elif uname and entry == uname:
+            return True
+    return False
 
 def require_admin(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
@@ -3338,9 +3360,21 @@ def idle_status(spec_id: int, user: dict = Depends(get_current_user),
 def set_email(data: EmailModel, user: dict = Depends(get_current_user),
               db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
-    me.email = data.email; me.notify_email = data.notify_email
+    new_email = (data.email or "").strip()
+    # Changing the address ALWAYS drops verified status. An email becomes a trusted identity
+    # (payout eligibility, the admin allowlist) only after the /email/verify token flow, which
+    # requires control of the inbox. Without this reset, a user who verified their own address
+    # could switch to a privileged one and carry a stale email_verified=True — the root of the
+    # /account/email -> admin escalation. Setting an email here never grants trust by itself.
+    if new_email.lower() != (me.email or "").lower():
+        me.email_verified = False
+        me.email_token = None
+        me.email_token_exp = None
+    me.email = new_email
+    me.notify_email = data.notify_email
     db.add(me); db.commit()
-    return {"status": "ok", "email": me.email, "notify_email": me.notify_email}
+    return {"status": "ok", "email": me.email, "notify_email": me.notify_email,
+            "email_verified": bool(me.email_verified)}
 
 
 @app.get("/notifications")

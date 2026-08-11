@@ -54,11 +54,14 @@ def ok(label, cond):
         raise AssertionError(label)
 
 PW = "hunter2-correct-horse-xyz"
-def reg(u, email=None):
+def reg(u, email=None, verified=False):
     c.post("/register_user", json={"username": u, "password": PW})
     if email:
         s = dbmod.SessionLocal()
-        usr = dbmod.get_user_by_username(s, u); usr.email = email; s.add(usr); s.commit(); s.close()
+        usr = dbmod.get_user_by_username(s, u); usr.email = email
+        # Admin is conferred only by a VERIFIED email matching ADMIN_USERS (see _is_admin).
+        usr.email_verified = bool(verified)
+        s.add(usr); s.commit(); s.close()
 def login(u):
     return {"Authorization": "Bearer " + c.post("/login", data={"username": u, "password": PW}).json()["access_token"]}
 
@@ -89,7 +92,9 @@ def onboard_seller(seller_user, ok_=True, country="US"):
 # ============================ ONBOARDING ============================
 reg("seller_a", "sa@x.com"); c.post("/change_role", headers=login("seller_a"), json={"role": "seller"})
 reg("seller_b", "sb@x.com"); c.post("/change_role", headers=login("seller_b"), json={"role": "seller"})
-reg("buyer1"); reg("admin@petabyte.market")
+reg("buyer1")
+# The platform admin: ADMIN_USERS is an email, so admin requires a VERIFIED matching email.
+reg("admin@petabyte.market", email="admin@petabyte.market", verified=True)
 
 r = c.post("/payments/connect/account", headers=login("seller_a"), json={"country": "US"})
 ok("connected account created", r.status_code == 200 and r.json()["connected_account_id"].startswith("acct_"))

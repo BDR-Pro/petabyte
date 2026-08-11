@@ -3197,14 +3197,24 @@ def list_issued_keys(db: Session, user_id: int):
 
 # ------------------ Google / passwordless users ------------------
 
-def get_or_create_oauth_user(db: Session, email: str, provider: str = "google") -> "User":
+def get_or_create_oauth_user(db: Session, email: str, provider: str = "google",
+                             email_verified: bool = False) -> "User":
+    # `email_verified` should reflect the PROVIDER's verification claim (e.g. Google's
+    # `email_verified`), NOT a dev stub. A provider-verified email is a trusted identity
+    # (it gates payouts and the admin allowlist), so honour it — but only ever UPGRADE a
+    # user's flag, never downgrade one that was verified another way.
     u = db.query(User).filter(User.username == email).first()
     if u:
+        changed = False
         if not u.email:
-            u.email = email; db.add(u); db.commit()
+            u.email = email; changed = True
+        if email_verified and not u.email_verified:
+            u.email_verified = True; changed = True
+        if changed:
+            db.add(u); db.commit()
         return u
     import secrets as _s
-    u = User(username=email, email=email,
+    u = User(username=email, email=email, email_verified=bool(email_verified),
              password=hash_password("oauth:" + provider + ":" + _s.token_hex(16)),
              role="buyer")
     db.add(u); db.commit(); db.refresh(u)

@@ -1663,6 +1663,10 @@ ok("google user is created/persistent", c.get("/auth/google/callback?code=x&emai
 
 # ==== ADMIN CONSOLE (env-allowlisted, gated) ====
 os.environ["ADMIN_USERS"]="gtest@example.com"   # make the google user an admin (read dynamically)
+# Admin is conferred only by a VERIFIED matching email (see _is_admin). The stub OAuth path
+# deliberately does NOT verify emails, so grant verification here as a real Google login would.
+_sga=dbmod.SessionLocal(); _gu=main.get_user_by_username(_sga,"gtest@example.com")
+_gu.email_verified=True; _sga.add(_gu); _sga.commit(); _sga.close()
 GAH={"Authorization":f"Bearer {gjwt}"}
 NAH={"Authorization":f"Bearer {login('buyer1')}"}   # a normal, non-admin user
 ok("admin page serves to anyone (data still gated)", c.get("/admin").status_code==200 and "console" in c.get("/admin").text)

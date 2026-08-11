@@ -129,6 +129,49 @@ ok("EMAIL_PROVIDER=mailgun selects MailgunProvider",
    isinstance(notify_providers.get_email_provider(), notify_providers.MailgunProvider))
 os.environ["NOTIFY_STUB"] = _prev_stub or "true"
 
+# ---- SECURITY: admin privilege escalation via unverified email is impossible ----
+# ADMIN_USERS is the founder email "info@petabyte.market" (set at the top of this file).
+# A buyer must NOT be able to become admin by claiming that email (or a look-alike username);
+# only a VERIFIED matching email — which requires the emailed-token flow — confers admin.
+
+class _U:                                   # minimal stand-in for _is_admin unit checks
+    def __init__(self, username="", email=None, email_verified=False):
+        self.username = username; self.email = email; self.email_verified = email_verified
+
+
+ADMIN_EMAIL = "info@petabyte.market"
+ok("attacker: unverified email == admin address is NOT admin",
+   main._is_admin(_U("attacker", ADMIN_EMAIL, email_verified=False)) is False)
+ok("attacker: username == admin email (look-alike) is NOT admin",
+   main._is_admin(_U(ADMIN_EMAIL, None, email_verified=False)) is False)
+ok("attacker: verified but DIFFERENT email is NOT admin",
+   main._is_admin(_U("attacker", "someoneelse@example.com", email_verified=True)) is False)
+ok("legit: VERIFIED admin email IS admin (positive control)",
+   main._is_admin(_U("founder", ADMIN_EMAIL, email_verified=True)) is True)
+ok("no allowlist match -> not admin", main._is_admin(_U("nobody", "nobody@x.com", True)) is False)
+
+# End-to-end through the real endpoint + auth: register a buyer, set their email to the admin
+# address via POST /account/email, and confirm they are still NOT admin.
+c.post("/register_user", json={"username": "escalate", "password": "escalate-pass-123"})
+tok = c.post("/login", data={"username": "escalate", "password": "escalate-pass-123"}).json()["access_token"]
+hdr = {"Authorization": f"Bearer {tok}"}
+r = c.post("/account/email", json={"email": ADMIN_EMAIL, "notify_email": True}, headers=hdr)
+ok("POST /account/email sets the address but does NOT verify it", r.status_code == 200
+   and r.json().get("email") == ADMIN_EMAIL and r.json().get("email_verified") is False)
+ok("buyer who claimed the admin email is refused by /admin/whoami (403)",
+   c.get("/admin/whoami", headers=hdr).status_code == 403)
+
+# The stale-verification path: verify the buyer's OWN email, then switch to the admin address.
+# The switch must RESET email_verified, so they still cannot become admin.
+_su = dbmod.SessionLocal()
+_eu = main.get_user_by_username(_su, "escalate")
+_eu.email = "escalate@example.com"; _eu.email_verified = True; _su.commit(); _su.close()
+r2 = c.post("/account/email", json={"email": ADMIN_EMAIL, "notify_email": True}, headers=hdr)
+ok("switching a VERIFIED email to the admin address resets verification",
+   r2.status_code == 200 and r2.json().get("email_verified") is False)
+ok("still refused by /admin/whoami after the verified->admin switch (403)",
+   c.get("/admin/whoami", headers=hdr).status_code == 403)
+
 s.close()
 print(f"\n=== account: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
 raise SystemExit(1 if _fail else 0)
