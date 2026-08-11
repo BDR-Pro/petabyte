@@ -924,6 +924,19 @@ ok("financial_integrity: a deliberately-injected imbalance is DETECTED",
 _fs.close()
 
 
+# ---- canonical funding metrics endpoint (admin-only, read-only, honest) ----
+fnd = c.get("/admin/funding?scope=test", headers=admin)
+ok("admin funding endpoint returns 200 for an admin",
+   fnd.status_code == 200 and "money_minor" in fnd.json() and "rates" in fnd.json())
+ok("funding endpoint reports canonical GMV as an int (minor units)",
+   isinstance(fnd.json()["money_minor"]["gmv_captured"], int))
+ok("funding REAL scope shows no LIVE GMV in this TEST-mode suite",
+   c.get("/admin/funding?scope=real", headers=admin).json()["money_minor"]["gmv_captured"] == 0)
+ok("funding endpoint is admin-only (buyer -> 403)",
+   c.get("/admin/funding", headers=login("buyer1")).status_code == 403)
+ok("funding endpoint rejects an invalid scope (422)",
+   c.get("/admin/funding?scope=bogus", headers=admin).status_code == 422)
+
 print(f"\n=== stripe: {PASSES} passed, {FAILS} failed ===")
 for f in ("stripe_test.db", "stripe_test.db-wal", "stripe_test.db-shm"):
     if os.path.exists(f):

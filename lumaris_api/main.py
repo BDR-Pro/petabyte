@@ -3072,6 +3072,18 @@ def admin_whoami(me=Depends(require_admin)):
     return {"admin": True, "username": me.username}
 
 
+@app.get("/admin/funding", tags=["admin"])
+def admin_funding(scope: str = "real", me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Read-only CANONICAL funding metrics, computed live from authoritative DB rows (never
+    fabricated). This is the investor/founder control-plane number source: GMV, net margin,
+    active buyers/sellers/GPUs, utilization, unfulfilled demand, retention. `scope`:
+    real (LIVE money) | test | demo | all — REAL never includes TEST/demo. Admin-only."""
+    import funding_metrics as _fm
+    if scope not in ("real", "test", "demo", "all"):
+        raise HTTPException(status_code=422, detail="scope must be one of real|test|demo|all")
+    return _fm.funding_snapshot(db, scope=scope)
+
+
 @app.post("/admin/observability/sentry-test", tags=["admin"])
 def admin_sentry_test(request: Request, me=Depends(require_admin), db: Session = Depends(get_db)):
     """Deliberately send ONE test event to Sentry, to verify the pipeline end-to-end.

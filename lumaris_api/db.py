@@ -156,6 +156,9 @@ class User(Base):
     # Seeded demo entity. NEVER shown as real traction: metrics separate demo from
     # real, and the UI badges anything demo as "Demo data".
     is_demo = Column(Boolean, default=False, nullable=False, index=True)
+    # Signup timestamp — powers funding cohorts (retention) + time-to-first-value. Nullable
+    # so pre-existing rows (created before this column) don't block; new users always get it.
+    created_at = Column(DateTime, default=_utcnow, index=True)
 
 
 class SellerSpec(Base):
@@ -1488,7 +1491,8 @@ def _ensure_columns():
                   ("referral_rewarded", "BOOLEAN DEFAULT false"),
                   ("referral_signup_meta", "VARCHAR"),("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
                   ("email_token_exp", "TIMESTAMP"),
-                  ("is_demo", "BOOLEAN NOT NULL DEFAULT false")],
+                  ("is_demo", "BOOLEAN NOT NULL DEFAULT false"),
+                  ("created_at", "TIMESTAMP")],
         "platform": [("bookings_paused", "BOOLEAN DEFAULT false"),
                      ("pause_reason", "VARCHAR"), ("paused_at", "TIMESTAMP"),
                      ("landing_video_id", "VARCHAR"),
