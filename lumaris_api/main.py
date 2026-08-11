@@ -3,7 +3,7 @@ from fastapi import (
     WebSocketDisconnect, Body,
 )
 from fastapi.responses import PlainTextResponse, JSONResponse, Response, HTMLResponse, RedirectResponse
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, case, or_, distinct
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -105,11 +105,15 @@ from db import (
 )
 import db as dbmod
 from auth import create_access_token, verify_token
+# Shared FastAPI dependencies (auth + DB session) live in deps.py so domain routers can use
+# them without importing main. Every Depends(...) below resolves to these same callables.
+from deps import oauth2_scheme, get_current_user, _username, api_key_user  # noqa: F401
 from static_dashboard import DASHBOARD_HTML
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
                    NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML)
-from web_routes import router as web_router   # static public pages (extracted router)
+from web_routes import router as web_router     # static public pages (extracted router)
+from trust_routes import router as trust_router  # trust/transparency API (extracted router)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -492,8 +496,6 @@ if _origins:
         allow_methods=["GET", "POST"],
         allow_headers=["Authorization", "Content-Type", "X-API-KEY", "Idempotency-Key"],
     )
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 
 # ---------------------------------------------------------------------------
@@ -1060,20 +1062,8 @@ class VMDetailsModel(BaseModel):
 
 
 # ------------------- AUTH HELPERS -------------------
-
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
-    try:
-        return verify_token(token)
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-
-def _username(user: dict) -> str:
-    sub = user.get("sub")
-    if not sub:
-        raise HTTPException(status_code=401, detail="Malformed token")
-    return sub
-
+# get_current_user / _username / api_key_user / oauth2_scheme now live in deps.py (imported
+# above) so domain routers can share them without importing main.
 
 # Only these peers may set X-Forwarded-For. If the socket peer isn't a trusted
 # proxy, the header is attacker-controlled: anyone could send
@@ -1212,22 +1202,7 @@ def seller_actor(request: Request, db: Session = Depends(get_db)):
     return owner
 
 
-def api_key_user(x_api_key: str = Header(..., alias="X-API-KEY"),
-                 db: Session = Depends(get_db)):
-    """Authenticate an unattended agent via X-API-KEY (honors revocation)."""
-    try:
-        data = decode_api_key(x_api_key)
-    except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
-    if is_jti_revoked(db, data["jti"]):
-        raise HTTPException(status_code=401, detail="Key revoked")
-    user = get_user_by_username(db, data["u"])
-    if not user:
-        raise HTTPException(status_code=401, detail="Unknown user")
-    user._scopes = data.get("scopes", []) or []
-    user._is_api_key = True          # scopes are an API-KEY concept, not a session one
-    return user
-
+# api_key_user (X-API-KEY agent auth) now lives in deps.py (imported above).
 
 # Keys minted before scopes existed carry none. Treating "no scopes" as FULL ACCESS
 # means a parsing bug, a bad migration, or a truncated field silently becomes root.
@@ -5482,31 +5457,9 @@ def resolve_vm_route(vm_id: str, request: Request, db: Session = Depends(get_db)
             "app_port": vm.app_port, "status": vm.status}
 
 
-# ------------------- PUBLIC TRUST / TRANSPARENCY -------------------
-
-@app.get("/trust/summary", tags=["trust"])
-def trust_summary_endpoint(db: Session = Depends(get_db)):
-    """Public, honest transparency counts (no fabrication; zeros mean zero) — the data behind
-    the /trust page: attested GPUs by tier, benchmark consistency, jobs completed, content-bound
-    + signed results, quorum outcomes, fraud flags, and whether the ledger balances."""
-    import trust
-    return trust.trust_summary(db)
-
-
-@app.get("/jobs/{task_id}/receipt", tags=["trust"])
-def job_receipt(task_id: int, user: dict = Depends(get_current_user),
-                db: Session = Depends(get_db)):
-    """The BUYER's cryptographic receipt for their own job: the node's Ed25519 signature over
-    the exact signed payload, the sha256 of the real output bytes, the node's attested pubkey,
-    the GPU's trust tier + benchmark verdict, and a LIVE server re-verification of that
-    signature. Buyer-scoped: only the job's buyer can read it."""
-    from db import Task
-    me = get_user_by_username(db, _username(user))
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if not task or me is None or task.buyer_id != me.id:
-        raise HTTPException(status_code=404, detail="Job not found")
-    import trust
-    return trust.build_receipt(db, task)
+# Public trust & transparency API (/trust/summary, /jobs/{id}/receipt) lives in trust_routes.py
+# — the first DB+auth domain router extracted from main via deps.py. Mounted below.
+app.include_router(trust_router)
 
 
 # ------------------- BENCHMARKS -------------------
