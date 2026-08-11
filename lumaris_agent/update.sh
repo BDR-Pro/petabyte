@@ -2,15 +2,14 @@
 # Petabyte node agent — pull the latest agent code from the monorepo and restart
 # if it changed. Installed as a systemd timer (petabyte-agent-update.timer).
 #
-# SECURITY — READ THIS. This channel is NOT cryptographically signed yet. TLS
-# authenticates the transport, but a compromised API server or GitHub account could
-# still push code that runs on this machine. Before this runs unattended in the field:
-#   1. Sign the agent bundle with a release Ed25519 key at publish time.
-#   2. Ship that PUBLIC key inside the installer (pin it; never fetch it at runtime).
-#   3. Verify the signature here, BEFORE rsync, and abort on mismatch.
-# Until then the installer leaves this timer DISABLED unless PETABYTE_AUTO_UPDATE=true.
-# The pinned key path below is honoured when present so signing can be rolled out
-# without changing this script again.
+# SECURITY. The signed-bundle channel is ENFORCED: the agent tarball fetched from the API
+# MUST verify against a PINNED release Ed25519 public key before any file is applied. TLS
+# authenticates the transport, but TLS alone would let a compromised API server/object store
+# push root-run code to the whole fleet — so we require a signature too, and FAIL CLOSED:
+#   * no pinned key at $PUBKEY            -> refuse (no unsigned auto-update)
+#   * missing/invalid bundle signature    -> refuse
+# Pin the key by shipping it in the installer (never fetch it at runtime). The installer also
+# leaves the timer DISABLED unless PETABYTE_AUTO_UPDATE=true, so this only runs when opted in.
 set -euo pipefail
 REPO="${PETABYTE_REPO:-https://github.com/BDR-Pro/petabyte.git}"
 SUBDIR="${PETABYTE_AGENT_SUBDIR:-lumaris_agent}"
@@ -35,13 +34,15 @@ API_URL="$(grep -E '^PETABYTE_API_URL=' /etc/petabyte/agent.env 2>/dev/null | cu
 if [ -n "$API_URL" ] \
    && curl -fsSL "$API_URL/agent.tar.gz" -o "$TMP/agent.tar.gz" 2>/dev/null \
    && tar -xzf "$TMP/agent.tar.gz" -C "$TMP" 2>/dev/null && [ -d "$TMP/$SUBDIR" ]; then
-  # If a pinned release key is present, the bundle MUST verify against its signature.
-  # (When no key is pinned we fall back to TLS-only trust — the documented interim state.)
-  if [ -f "$PUBKEY" ]; then
-    curl -fsSL "$API_URL/agent.tar.gz.sig" -o "$TMP/agent.tar.gz.sig" 2>/dev/null || true
-    if ! verify_bundle "$TMP/agent.tar.gz" "$TMP/agent.tar.gz.sig"; then
-      echo "SECURITY: agent bundle signature did not verify against $PUBKEY — refusing update"; exit 1
-    fi
+  # SIGNED UPDATES ONLY — fail closed. The bundle MUST verify against the pinned release key;
+  # we NEVER fall back to TLS-only trust for code that runs as root on the seller's machine.
+  if [ ! -f "$PUBKEY" ]; then
+    echo "SECURITY: no pinned release key at $PUBKEY — refusing to apply an unsigned agent update." \
+         "Ship the release public key in the installer (see update.sh header)."; exit 1
+  fi
+  curl -fsSL "$API_URL/agent.tar.gz.sig" -o "$TMP/agent.tar.gz.sig" 2>/dev/null || true
+  if ! verify_bundle "$TMP/agent.tar.gz" "$TMP/agent.tar.gz.sig"; then
+    echo "SECURITY: agent bundle signature did not verify against $PUBKEY — refusing update"; exit 1
   fi
 else
   # Fallback: clone the repo (needs access if private).

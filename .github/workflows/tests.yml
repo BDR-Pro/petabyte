@@ -51,6 +51,17 @@ jobs:
       - name: matmul result validation (offline)
         working-directory: lumaris_api
         run: python matmul_validation_test.py
+      - name: funding metrics (canonical, scope-separated, honest)
+        working-directory: lumaris_api
+        run: python funding_metrics_test.py
+      - name: db invariants (money-impossible states rejected at DB layer)
+        working-directory: lumaris_api
+        run: python db_invariants_test.py
+      - name: agent auto-update is signed (fleet-RCE guard)
+        working-directory: desktop-app
+        run: python updater_test.py
+      - name: release signer <-> updater round-trip
+        run: python scripts/sign_release_test.py
       - name: account (reset + cal webhook + demo notify)
         working-directory: lumaris_api
         run: python account_test.py
