@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (154)
+## Variables (non-sensitive) (161)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -30,6 +30,13 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `DROPLET_HOST` | **yes** | deployment | *(empty)* | `…` | GitHub Actions deploy | — | Platform deploy target host (IP/DNS). Non-secret: lives in ENV_VARS. |
 | `DROPLET_HOST_OBSERV` | no | deployment | *(empty)* | `…` | GitHub Actions deploy | — | Observability VM host (IP/DNS) for deploy-observability.yml. Non-secret: lives in ENV_VARS. |
 | `DROPLET_USER` | **yes** | deployment | *(empty)* | `…` | GitHub Actions deploy | — | Deploy SSH user (shared by platform + observability deploys). Non-secret: lives in ENV_VARS. |
+| `E2E_ADMIN_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e admin login (TEST account). |
+| `E2E_BASE_URL` | no | ci | `https://test.petabyte.market` | `https://test.petabyte.market` | — | format: url | Target site for the browser-e2e workflow (TEST only; the suite aborts if it detects LIVE mode). |
+| `E2E_BUYER_B_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e second buyer (cross-user isolation, TEST). |
+| `E2E_BUYER_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e funded-buyer login (TEST account). |
+| `E2E_BUYER_ZERO_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e zero-balance-buyer login (TEST). |
+| `E2E_SELLER_B_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e second seller (isolation, TEST). |
+| `E2E_SELLER_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e seller login (TEST account). |
 | `EMAIL_FROM` | no | platform | `no-reply@petabyte.market` | `no-reply@petabyte.market` | api/notify_providers.py | — | — |
 | `EMAIL_PROVIDER` | no | platform | `mailgun` | `mailgun` | api/notify_providers.py | one of: mailgun / ses / sendgrid / postmark | Notification email provider. |
 | `EMAIL_TOKEN_TTL_MIN` | no | platform | `15` | `15` | api/db.py | format: int | — |
@@ -144,8 +151,8 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `SENTRY_TRACES_SAMPLE_RATE` | no | platform | `0.1` | `0.1` | — | format: float | — |
 | `STRIPE_ALLOW_LIVE` | no | platform | `false` | `false` | api/stripe_gateway.py | format: bool; one of: true / false | Second live gate; live keys refused unless true. |
 | `STRIPE_API_VERSION` | no | platform | *(empty)* | `…` | api/stripe_gateway.py | — | — |
-| `STRIPE_FEE_BPS` | no | platform | `290            # 2.9%` | `290            # 2.9%` | — | — | — |
-| `STRIPE_FEE_FIXED_MINOR` | no | platform | `30     # $0.30 — the fixed part that makes tiny jobs unprofitable` | `30     # $0.30 — the fixed part that makes tiny jobs unprofitable` | — | — | — |
+| `STRIPE_FEE_BPS` | no | platform | `290` | `290` | — | — | — |
+| `STRIPE_FEE_FIXED_MINOR` | no | platform | `30` | `30` | — | — | — |
 | `STRIPE_GATEWAY` | no | platform | `fake` | `fake` | api/main.py, api/stripe_demo.py, api/stripe_gateway.py | one of: fake / real | 'real' uses the Stripe SDK; anything else = in-process fake (tests only). |
 | `STRIPE_MODE` | no | platform | `test` | `test` | api/stripe_gateway.py | one of: test / live | Declared Stripe mode; must match key prefixes. |
 | `TEE_ATTESTATION_TTL_S` | no | platform | *(empty)* | `…` | api/db.py | — | — |
@@ -167,7 +174,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `WG_INTERFACE` | no | platform | `wg0` | `wg0` | api/utils.py | — | — |
 | `WG_PUBLIC_KEY` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 
-## Secrets (credentials — never printed, no defaults) (44)
+## Secrets (credentials — never printed, no defaults) (50)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -180,6 +187,12 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `DEPLOY_SSH_KEY` | **yes** | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Private SSH key GitHub Actions uses to deploy to the server. |
 | `DROPLET_SSH_KNOWN_HOSTS` | **yes** | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Pinned SSH host key(s) for the deploy target. Generate with `ssh-keyscan -t ed25519,rsa <host>`, then VERIFY the fingerprint out-of-band before pinning — compare `ssh-keygen -lf` of the scanned key against the fingerprint from the droplet's own console (e.g. `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` over the provider console). ssh-keyscan output is unauthenticated and can be MITM'd, so pinning it unverified only trusts-on-first-use. Verifies the server before any secret is transferred; the deploy fails closed if unset. |
 | `DROPLET_SSH_KNOWN_HOSTS_OBSERV` | no | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Pinned SSH host key(s) for the observability VM. REQUIRED by deploy-observability.yml, which fails closed without it (no trust-on-first-use). Generate with `ssh-keyscan -t ed25519,rsa <observ-host>` and verify the fingerprint out-of-band (provider console) before pinning. |
+| `E2E_ADMIN_PASSWORD` | no | ci | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | browser-e2e admin password (TEST account). |
+| `E2E_BUYER_B_PASSWORD` | no | ci | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | browser-e2e second-buyer password (TEST). |
+| `E2E_BUYER_PASSWORD` | no | ci | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | browser-e2e funded-buyer password (TEST account). |
+| `E2E_BUYER_ZERO_PASSWORD` | no | ci | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | browser-e2e zero-balance-buyer password (TEST). |
+| `E2E_SELLER_B_PASSWORD` | no | ci | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | browser-e2e second-seller password (TEST). |
+| `E2E_SELLER_PASSWORD` | no | ci | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | browser-e2e seller password (TEST account). |
 | `GATEWAY_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, gateway/gateway.py | — | — |
 | `GOOGLE_CLIENT_ID` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
 | `GOOGLE_CLIENT_SECRET` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |

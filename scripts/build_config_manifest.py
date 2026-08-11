@@ -148,6 +148,35 @@ AGENT_VARS = {
                                                       "`ssh-keyscan -t ed25519,rsa <observ-host>` "
                                                       "and verify the fingerprint out-of-band "
                                                       "(provider console) before pinning."},
+    # browser E2E (GitHub Actions -> test.petabyte.market). Optional: absent personas skip.
+    "E2E_BASE_URL": {"required": False, "default": "https://test.petabyte.market",
+                     "secret": False, "scope": ["ci"], "format": "url",
+                     "description": "Target site for the browser-e2e workflow (TEST only; the "
+                                    "suite aborts if it detects LIVE mode)."},
+    "E2E_BUYER_USERNAME": {"required": False, "default": None, "secret": False, "scope": ["ci"],
+                           "description": "browser-e2e funded-buyer login (TEST account)."},
+    "E2E_BUYER_PASSWORD": {"required": False, "default": None, "secret": True, "scope": ["ci"],
+                           "description": "browser-e2e funded-buyer password (TEST account)."},
+    "E2E_BUYER_ZERO_USERNAME": {"required": False, "default": None, "secret": False, "scope": ["ci"],
+                                "description": "browser-e2e zero-balance-buyer login (TEST)."},
+    "E2E_BUYER_ZERO_PASSWORD": {"required": False, "default": None, "secret": True, "scope": ["ci"],
+                                "description": "browser-e2e zero-balance-buyer password (TEST)."},
+    "E2E_BUYER_B_USERNAME": {"required": False, "default": None, "secret": False, "scope": ["ci"],
+                             "description": "browser-e2e second buyer (cross-user isolation, TEST)."},
+    "E2E_BUYER_B_PASSWORD": {"required": False, "default": None, "secret": True, "scope": ["ci"],
+                             "description": "browser-e2e second-buyer password (TEST)."},
+    "E2E_SELLER_USERNAME": {"required": False, "default": None, "secret": False, "scope": ["ci"],
+                            "description": "browser-e2e seller login (TEST account)."},
+    "E2E_SELLER_PASSWORD": {"required": False, "default": None, "secret": True, "scope": ["ci"],
+                            "description": "browser-e2e seller password (TEST account)."},
+    "E2E_SELLER_B_USERNAME": {"required": False, "default": None, "secret": False, "scope": ["ci"],
+                              "description": "browser-e2e second seller (isolation, TEST)."},
+    "E2E_SELLER_B_PASSWORD": {"required": False, "default": None, "secret": True, "scope": ["ci"],
+                              "description": "browser-e2e second-seller password (TEST)."},
+    "E2E_ADMIN_USERNAME": {"required": False, "default": None, "secret": False, "scope": ["ci"],
+                           "description": "browser-e2e admin login (TEST account)."},
+    "E2E_ADMIN_PASSWORD": {"required": False, "default": None, "secret": True, "scope": ["ci"],
+                           "description": "browser-e2e admin password (TEST account)."},
 }
 
 # ---- Curated metadata for important platform vars (allowed values / validation / notes) --

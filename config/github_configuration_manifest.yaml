@@ -126,6 +126,50 @@ variables:
     scope:
     - deployment
     description: 'Deploy SSH user (shared by platform + observability deploys). Non-secret: lives in ENV_VARS.'
+  E2E_ADMIN_USERNAME:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e admin login (TEST account).
+  E2E_BASE_URL:
+    required: false
+    default: https://test.petabyte.market
+    scope:
+    - ci
+    description: Target site for the browser-e2e workflow (TEST only; the suite aborts if it detects LIVE
+      mode).
+    format: url
+  E2E_BUYER_B_USERNAME:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e second buyer (cross-user isolation, TEST).
+  E2E_BUYER_USERNAME:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e funded-buyer login (TEST account).
+  E2E_BUYER_ZERO_USERNAME:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e zero-balance-buyer login (TEST).
+  E2E_SELLER_B_USERNAME:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e second seller (isolation, TEST).
+  E2E_SELLER_USERNAME:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e seller login (TEST account).
   EMAIL_FROM:
     required: false
     default: no-reply@petabyte.market
@@ -1027,13 +1071,13 @@ variables:
     description: ''
   STRIPE_FEE_BPS:
     required: false
-    default: '290            # 2.9%'
+    default: '290'
     scope:
     - platform
     description: ''
   STRIPE_FEE_FIXED_MINOR:
     required: false
-    default: "30     # $0.30 \u2014 the fixed part that makes tiny jobs unprofitable"
+    default: '30'
     scope:
     - platform
     description: ''
@@ -1239,6 +1283,42 @@ secrets:
     description: Pinned SSH host key(s) for the observability VM. REQUIRED by deploy-observability.yml,
       which fails closed without it (no trust-on-first-use). Generate with `ssh-keyscan -t ed25519,rsa
       <observ-host>` and verify the fingerprint out-of-band (provider console) before pinning.
+  E2E_ADMIN_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e admin password (TEST account).
+  E2E_BUYER_B_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e second-buyer password (TEST).
+  E2E_BUYER_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e funded-buyer password (TEST account).
+  E2E_BUYER_ZERO_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e zero-balance-buyer password (TEST).
+  E2E_SELLER_B_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e second-seller password (TEST).
+  E2E_SELLER_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e seller password (TEST account).
   GATEWAY_TOKEN:
     required: false
     default: null
