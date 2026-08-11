@@ -349,6 +349,30 @@ c2 = c.post(f"/payments/{tid_run}/cancel", headers=login("buyer1"))
 ok("cancel of an already-released failed job is idempotent (200, no double release)",
    c2.status_code == 200 and _avail_cx() == base_avail)
 
+# ---- fail_job(): the /jobs/result FAILURE bridge unsticks a RUNNING tx (killer #9) ----
+# When a dispatched job reports FAILED, /jobs/result calls sc.fail_job — which must move the tx
+# out of RUNNING to JOB_FAILED and free the reservation + void the buyer hold immediately, rather
+# than leaving it stuck in RUNNING (buyer can't cancel; unit pinned until the 26h reaper).
+base9 = _avail_cx()
+tid9 = _run_to_running(spec_cx)
+ok("fail_job setup: dispatched job holds a unit", _avail_cx() == base9 - 1)
+_s = dbmod.SessionLocal()
+_tx9 = sc.get_tx_by_public_id(_s, tid9)
+ok("fail_job setup: tx is RUNNING before failure", _tx9.status == "RUNNING")
+_pid9 = _tx9.stripe_payment_intent_id
+sc.fail_job(_s, _tx9, reason="agent reported job failed")
+ok("fail_job moves a failed RUNNING tx to JOB_FAILED (no longer stuck)", _tx9.status == "JOB_FAILED")
+_s.close()
+ok("fail_job frees the reserved GPU unit immediately", _avail_cx() == base9)
+ok("fail_job voids the buyer's authorization hold (a failed job bills nothing)",
+   GW.payment_intents[_pid9]["status"] == "canceled")
+_s = dbmod.SessionLocal()
+_tx9b = sc.get_tx_by_public_id(_s, tid9)
+sc.fail_job(_s, _tx9b, reason="again")
+ok("fail_job is idempotent (stays JOB_FAILED, no double release)",
+   _tx9b.status == "JOB_FAILED" and _avail_cx() == base9)
+_s.close()
+
 
 # ============================ TRANSFER ============================
 # transfer before capture is impossible: use a fresh tx still pre-capture

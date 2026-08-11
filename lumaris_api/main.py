@@ -2435,6 +2435,22 @@ def _auto_settle_compute_tx(db, task):
         return tx.status
 
 
+def _auto_fail_compute_tx(db, task, reason: str = "job reported failed"):
+    """FAILURE counterpart to _auto_settle_compute_tx: fail-close the Stripe-native tx for a job
+    that reported failure so it never lingers in RUNNING (buyer can't cancel, unit pinned). Moves
+    the tx to JOB_FAILED and frees the reservation + voids the buyer's hold. No-op for a task with
+    no paid tx (legacy/unpaid). Best-effort + idempotent — never turns a result POST into a 500."""
+    from db import ComputeTransaction
+    tx = db.query(ComputeTransaction).filter(ComputeTransaction.task_id == task.id).first()
+    if not tx:
+        return None
+    try:
+        return _sc.fail_job(db, tx, reason=reason).status
+    except Exception:
+        logger.exception("auto-fail error for tx %s (job failed)", tx.public_id)
+        return tx.status
+
+
 @app.post("/jobs/result")
 def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
                 db: Session = Depends(get_db)):
@@ -2514,6 +2530,11 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
         # ComputeTransaction now finalizes metering + capture + seller transfer, instead
         # of waiting for a manual admin call. Fail-closed + idempotent (see below).
         compute_tx_status = _auto_settle_compute_tx(db, task)
+    else:
+        # FAILURE bridge: a Stripe-native tx must not stay stuck in RUNNING when its job fails.
+        # Move it to JOB_FAILED and free the reservation + void the buyer's hold (bills nothing).
+        # Legacy bookings stay retained here (failed tasks are retryable — see /tasks/{id}/retry).
+        compute_tx_status = _auto_fail_compute_tx(db, task, reason="job reported failed")
     # NOTE: a failed job is NOT auto-refunded here — failed tasks are retryable
     # (see /tasks/{id}/retry), which relies on the escrow being retained. Escrow is
     # returned by the buyer cancel path and by the reaper when a node goes dead.

@@ -972,6 +972,41 @@ def release_failed_reservation(db, tx: ComputeTransaction, *,
     return tx
 
 
+def fail_job(db, tx: ComputeTransaction, *,
+             reason: str = "job reported failed") -> ComputeTransaction:
+    """A dispatched job FAILED (the agent reported failure, or its result was rejected). Move an
+    in-flight (DISPATCHING/RUNNING) Stripe-native tx to JOB_FAILED and immediately free the GPU
+    reservation + void the buyer's authorization — a failed job bills nothing.
+
+    This is the /jobs/result FAILURE counterpart to the completed -> settle bridge. Without it a
+    Stripe-native job that fails on a still-alive node lingers in RUNNING forever: the buyer's
+    cancel 409s (job looks 'running'), the reserved unit stays pinned, and the FSM's failure
+    edges are never reached until the 26h abandoned-reservation reaper. The tx is left in the
+    truthful JOB_FAILED state (a recognized terminal-failure in marketplace_insight.TX_FAILED),
+    not rewritten to CANCELLED. Idempotent: an already-terminal-failed tx just gets its
+    reservation reclaimed; a pre-dispatch or already-captured tx is left to the cancel/capture
+    paths (nothing to fail here)."""
+    import marketplace_insight as mi
+    if tx.status in mi.TX_FAILED:
+        if tx.booking_id:
+            try:
+                release_failed_reservation(db, tx, reason=reason)
+            except TransactionError:
+                pass
+        return tx
+    if tx.status not in ("DISPATCHING", "RUNNING"):
+        return tx
+    transition(db, tx, "JOB_FAILED", reason=reason)
+    # tx is now terminal-failed, so release_failed_reservation accepts it: void the PI hold
+    # (buyer charged nothing) + free the GPU unit. Best-effort; the reaper repairs on failure.
+    try:
+        release_failed_reservation(db, tx, reason=reason)
+    except Exception:  # noqa: BLE001
+        logger.warning("fail_job: reservation release failed for tx %s (reaper will retry)",
+                       tx.public_id, exc_info=True)
+    return tx
+
+
 # Pre-capture states in which a reservation is legitimately held while the job is in flight.
 _PRE_CAPTURE_ACTIVE = ("GPU_RESERVED", "DISPATCHING", "RUNNING",
                        "METERING_FINALIZED", "PAYMENT_CAPTURE_PENDING")
