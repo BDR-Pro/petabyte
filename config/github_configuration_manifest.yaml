@@ -49,9 +49,33 @@ variables:
     scope:
     - platform
     description: ''
+  BACKUP_DUMP_TIMEOUT_S:
+    required: false
+    default: '1800'
+    scope:
+    - platform
+    description: ''
+  BACKUP_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
   BACKUP_RESCHEDULE_GRACE_S:
     required: false
     default: '900'
+    scope:
+    - platform
+    description: ''
+  BACKUP_RETENTION:
+    required: false
+    default: '30'
+    scope:
+    - platform
+    description: ''
+  BACKUP_S3_PREFIX:
+    required: false
+    default: db-backups
     scope:
     - platform
     description: ''
@@ -794,6 +818,12 @@ variables:
     scope:
     - gpu
     description: Agent self-update source repo (optional).
+  PG_DUMP_BIN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   PLATFORM_AUTH_MARGIN_BPS:
     required: false
     default: '2000'

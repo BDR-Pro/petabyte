@@ -1826,6 +1826,25 @@ def _marketplace_metrics():
                          "labels": {"status": str(_status), "environment": env}, "value": _n})
     except Exception:  # noqa: BLE001
         logger.debug("trust-integrity metrics query failed", exc_info=True)
+    # Disaster-recovery: age of the last successful DB backup (alert when it grows), plus
+    # success/failure counts. Own try — a query error never drops the gauges above.
+    try:
+        import backup as _bk
+        bs = _bk.backup_status(dbs)
+        rows += [
+            {"name": "petabyte_db_backup_last_age_seconds",
+             "doc": "Seconds since the last SUCCESSFUL database backup (-1 if none yet)",
+             "labels": {"environment": env},
+             "value": (bs["last_backup_age_seconds"] if bs["last_backup_age_seconds"] is not None else -1)},
+            {"name": "petabyte_db_backups_ok", "doc": "Successful database backups currently retained",
+             "labels": {"environment": env}, "value": bs["ok_count"]},
+            {"name": "petabyte_db_backups_failed", "doc": "Failed database backup attempts on record",
+             "labels": {"environment": env}, "value": bs["failed_count"]},
+            {"name": "petabyte_db_backup_bytes", "doc": "Total compressed size of retained backups",
+             "labels": {"environment": env}, "value": bs["total_bytes"]},
+        ]
+    except Exception:  # noqa: BLE001
+        logger.debug("backup metrics query failed", exc_info=True)
     finally:
         dbs.close()
     return rows
@@ -3289,6 +3308,48 @@ def admin_dataset_authenticity(limit: int = Query(1000, ge=1, le=50000),
     if fmt == "jsonl":
         return PlainTextResponse(td.to_jsonl(rows), media_type="application/x-ndjson")
     return {"stats": td.dataset_stats(db), "count": len(rows), "rows": rows}
+
+
+@app.get("/admin/backups", tags=["admin"])
+def admin_list_backups(limit: int = Query(50, ge=1, le=500),
+                       me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Disaster-recovery status of the PLATFORM database backups: the health summary (last
+    successful backup + its age, counts, total size) plus the most recent backup rows."""
+    import backup as _bk
+    rows = dbmod.list_database_backups(db, limit=limit)
+    return {"status": _bk.backup_status(db), "count": len(rows), "backups": [{
+        "id": r.id, "s3_uri": r.s3_uri, "s3_key": r.s3_key, "engine": r.engine,
+        "environment": r.environment, "size_bytes": r.size_bytes, "sha256": r.sha256,
+        "status": r.status, "error": r.error,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    } for r in rows]}
+
+
+@app.post("/admin/backups/run", tags=["admin"])
+def admin_run_backup(retention: int = Query(None, ge=0, le=100000),
+                     me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Take a database backup NOW (dump -> gzip -> S3 -> record -> prune). Idempotent to run
+    often; usually driven by cron / a systemd timer via scripts/backup_database.py. Returns the
+    backup summary, or 503 with the reason if the dump/upload fails (which also records a
+    status=failed row so 'no recent backup' alerts fire)."""
+    import backup as _bk
+    try:
+        return _bk.create_backup(db, retention=retention)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"backup failed: {e}")
+
+
+@app.post("/admin/backups/{backup_id}/verify", tags=["admin"])
+def admin_verify_backup(backup_id: int, me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Integrity-check a stored backup: download it and confirm its SHA-256 matches what we
+    recorded and that it still decompresses."""
+    import backup as _bk
+    try:
+        return _bk.verify_backup(db, backup_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"verify failed: {e}")
 
 
 @app.get("/admin/overview")

@@ -63,6 +63,7 @@ run_suite "authenticity training dataset (feature rows + labels export)" python 
 run_suite "seller earnings forecast (net/hr exact + honest estimates)" python earnings_test.py
 run_suite "pricing engine (cloud-anchored, demand+trust, explainable, clamped)" python pricing_engine_test.py
 run_suite "reservation reclaim (abandoned GPU capacity)" python reservation_reclaim_test.py
+run_suite "database backup to S3 (disaster recovery: dump/gzip/sha256/retention/verify)" python backup_test.py
 run_suite "observability smoke (local tier; remote skipped offline)" \
           bash -c "cd .. && python scripts/observability_smoke_test.py"
 run_suite "grafana dashboards (metric-existence + generator determinism)" \
@@ -76,7 +77,7 @@ run_suite "agent sandbox (buyer job can't harm the seller host)" \
           bash -c "cd ../lumaris_agent && python sandbox_test.py"
 run_suite "tunnel (nat + failover)" bash -c "cd ../lumaris_gateway && python tunnel_test.py"
 rm -f smoke.db* adv.db* stripe_test.db* payout_test.db* seller_payable_metric_test.db* \
-      reservation_reclaim_test.db* security.db* ../lumaris_gateway/tunnel.db*
+      reservation_reclaim_test.db* backup_test.db* security.db* ../lumaris_gateway/tunnel.db*
 
 # Informational: honest seller-payout country coverage. This deliberately reports a
 # SHORTFALL (0/100) today and is NOT a gate — coverage grows only through real provider

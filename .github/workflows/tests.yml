@@ -234,6 +234,9 @@ jobs:
       - name: pricing engine (cloud-anchored, demand+trust, explainable, clamped)
         working-directory: lumaris_api
         run: python pricing_engine_test.py
+      - name: database backup to S3 (disaster recovery: dump/gzip/sha256/retention/verify)
+        working-directory: lumaris_api
+        run: python backup_test.py
       - name: agent telemetry (span exception-safety / redaction / trace-join / degrade)
         working-directory: lumaris_agent
         run: python agent_telemetry_test.py

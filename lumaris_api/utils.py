@@ -353,6 +353,96 @@ def mint_presigned_get(key: str, expires: int = 900) -> str:
         "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires)
 
 
+# ------------------ Direct object I/O (server-held creds) ------------------
+#
+# Presigned URLs above are for NODES (which hold no creds). These helpers are for the API
+# itself, which DOES hold the object-storage credentials — used by the platform database
+# backup subsystem (backup.py) to write/read/list/delete dump objects directly. The S3_STUB
+# branch writes to a local directory so tests and offline development need no AWS.
+
+def _s3_stub_root(bucket: str) -> str:
+    import tempfile
+    return os.path.join(tempfile.gettempdir(), "petabyte-s3-stub", bucket)
+
+
+def _require_bucket() -> str:
+    bucket = os.getenv("S3_BUCKET")
+    if not bucket:
+        raise ValueError("S3_BUCKET not configured")
+    return bucket
+
+
+def _s3_stub() -> bool:
+    return os.getenv("S3_STUB", "").lower() == "true"
+
+
+def s3_put_bytes(key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+    """Upload bytes to s3://<S3_BUCKET>/<key> (server-side encrypted) and return the s3:// URI.
+    S3_STUB writes to a local directory instead."""
+    bucket = _require_bucket()
+    if _s3_stub():
+        path = os.path.join(_s3_stub_root(bucket), key)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        return s3_uri(key)
+    extra = {"ContentType": content_type}
+    sse = os.getenv("S3_SSE", "AES256")   # AES256 works on AWS S3 + DO Spaces; "" disables
+    if sse:
+        extra["ServerSideEncryption"] = sse
+    _s3_client().put_object(Bucket=bucket, Key=key, Body=data, **extra)
+    return s3_uri(key)
+
+
+def s3_get_bytes(key: str) -> bytes:
+    """Download the object at s3://<S3_BUCKET>/<key>. S3_STUB reads the local directory."""
+    bucket = _require_bucket()
+    if _s3_stub():
+        with open(os.path.join(_s3_stub_root(bucket), key), "rb") as f:
+            return f.read()
+    return _s3_client().get_object(Bucket=bucket, Key=key)["Body"].read()
+
+
+def s3_list_keys(prefix: str) -> list:
+    """List object keys under a prefix. S3_STUB walks the local directory."""
+    bucket = _require_bucket()
+    if _s3_stub():
+        root = _s3_stub_root(bucket)
+        base = os.path.join(root, prefix)
+        base_dir = base if os.path.isdir(base) else os.path.dirname(base)
+        out = []
+        for dirpath, _dirs, files in os.walk(base_dir if os.path.isdir(base_dir) else root):
+            for fn in files:
+                rel = os.path.relpath(os.path.join(dirpath, fn), root)
+                key = rel.replace(os.sep, "/")
+                if key.startswith(prefix):
+                    out.append(key)
+        return sorted(out)
+    keys, token = [], None
+    client = _s3_client()
+    while True:
+        kw = {"Bucket": bucket, "Prefix": prefix}
+        if token:
+            kw["ContinuationToken"] = token
+        resp = client.list_objects_v2(**kw)
+        keys += [o["Key"] for o in resp.get("Contents", [])]
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+    return sorted(keys)
+
+
+def s3_delete(key: str) -> None:
+    """Delete the object at s3://<S3_BUCKET>/<key>. S3_STUB removes the local file."""
+    bucket = _require_bucket()
+    if _s3_stub():
+        path = os.path.join(_s3_stub_root(bucket), key)
+        if os.path.exists(path):
+            os.remove(path)
+        return
+    _s3_client().delete_object(Bucket=bucket, Key=key)
+
+
 def seal_secret(plaintext: str) -> str:
     """Encrypt a secret at rest with the server key (e.g. a per-task data key)."""
     return _fernet().encrypt(plaintext.encode()).decode()

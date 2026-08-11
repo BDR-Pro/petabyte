@@ -11,6 +11,22 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# pg_dump for platform database backups (backup.py / scripts/backup_database.py). Pinned to 16
+# to match modern managed Postgres — pg_dump refuses to dump a server NEWER than the client, so
+# Debian's default (15) would fail against a PG16 server. Installed from the PostgreSQL APT repo.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends curl ca-certificates gnupg; \
+    install -d /usr/share/postgresql-common/pgdg; \
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc; \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends postgresql-client-16; \
+    apt-get purge -y --auto-remove curl gnupg; \
+    rm -rf /var/lib/apt/lists/*
+
 # Dependencies first (cached layer). All wheels — no compiler/system libs needed.
 COPY lumaris_api/requirements.txt /app/lumaris_api/requirements.txt
 RUN pip install --no-cache-dir -r lumaris_api/requirements.txt

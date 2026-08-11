@@ -985,6 +985,63 @@ class Checkpoint(Base):
     created_at = Column(DateTime, default=_utcnow)
 
 
+class DatabaseBackup(Base):
+    """A disaster-recovery backup of the PLATFORM database (not a buyer's job volume — that's
+    Checkpoint). One row per backup attempt: where the encrypted dump lives in object storage,
+    its size + SHA-256 (integrity), which engine produced it, and whether it succeeded. The
+    bytes live in S3; the DB holds only the reference + hash so a backup can be verified and
+    restored. See backup.py + docs/BACKUP_RUNBOOK.md."""
+    __tablename__ = "database_backups"
+    id = Column(Integer, primary_key=True, index=True)
+    s3_key = Column(String, nullable=False)                 # key within the bucket
+    s3_uri = Column(String, nullable=True)                  # s3://bucket/key
+    engine = Column(String, nullable=False)                 # postgresql | sqlite
+    environment = Column(String, nullable=True)             # development|staging|production
+    size_bytes = Column(Integer, default=0)                 # compressed size
+    sha256 = Column(String, nullable=True)                  # of the compressed object (integrity)
+    status = Column(String, default="ok", index=True)       # ok | failed
+    error = Column(Text, nullable=True)                     # populated when status=failed
+    created_at = Column(DateTime, default=_utcnow, index=True)
+
+
+def record_database_backup(db: Session, *, s3_key, s3_uri, engine, environment,
+                           size_bytes, sha256, status="ok", error=None) -> "DatabaseBackup":
+    row = DatabaseBackup(s3_key=s3_key, s3_uri=s3_uri, engine=engine, environment=environment,
+                         size_bytes=int(size_bytes or 0), sha256=sha256, status=status,
+                         error=(str(error)[:2000] if error else None))
+    db.add(row); db.commit(); db.refresh(row)
+    return row
+
+
+def list_database_backups(db: Session, limit: int = 50, status: str = None) -> list:
+    q = db.query(DatabaseBackup)
+    if status:
+        q = q.filter(DatabaseBackup.status == status)
+    return q.order_by(DatabaseBackup.created_at.desc(), DatabaseBackup.id.desc()).limit(limit).all()
+
+
+def latest_database_backup(db: Session, status: str = "ok") -> "DatabaseBackup":
+    return (db.query(DatabaseBackup).filter(DatabaseBackup.status == status)
+            .order_by(DatabaseBackup.created_at.desc(), DatabaseBackup.id.desc()).first())
+
+
+def prune_database_backups(db: Session, keep: int) -> list:
+    """Delete the DB rows for successful backups beyond the newest `keep`, returning the list of
+    (id, s3_key) removed so the caller can delete the objects. Failed rows are never counted
+    toward retention (they hold no restorable object) but are pruned alongside old ones."""
+    if keep is None or keep < 0:
+        return []
+    ok = (db.query(DatabaseBackup).filter(DatabaseBackup.status == "ok")
+          .order_by(DatabaseBackup.created_at.desc(), DatabaseBackup.id.desc()).all())
+    removed = []
+    for row in ok[keep:]:
+        removed.append((row.id, row.s3_key))
+        db.delete(row)
+    if removed:
+        db.commit()
+    return removed
+
+
 class Notification(Base):
     """Audit log of every notification we attempted to send."""
     __tablename__ = "notifications"

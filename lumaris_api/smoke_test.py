@@ -1861,6 +1861,22 @@ ok("dataset exports as JSONL for training pipelines",
    c.get("/admin/dataset/authenticity?format=jsonl", headers=GAH).headers.get("content-type","").startswith("application/x-ndjson"))
 ok("admin users list flags admin", any(u["username"]=="gtest@example.com" and u["is_admin"] for u in c.get("/admin/users", headers=GAH).json()["users"]))
 ok("admin specs list", c.get("/admin/specs", headers=GAH).status_code==200)
+# --- DISASTER RECOVERY: platform database backup to S3 (S3_STUB in tests) ---
+ok("backups admin list is admin-gated (403 for non-admin)", c.get("/admin/backups", headers=NAH).status_code==403)
+ok("backups run is admin-gated (403 for non-admin)", c.post("/admin/backups/run", headers=NAH).status_code==403)
+_bkr=c.post("/admin/backups/run", headers=GAH)
+# 200 = dumped+uploaded; 503 = dump tool unavailable (e.g. pg_dump missing on the PG run) — either
+# way the attempt must be RECORDED so 'no recent backup' alerting works.
+ok("backup run either succeeds or fails loudly (no silent no-op)", _bkr.status_code in (200,503))
+_bkl=c.get("/admin/backups", headers=GAH).json()
+ok("backups list returns a status summary + rows", "status" in _bkl and isinstance(_bkl.get("backups"),list) and len(_bkl["backups"])>=1)
+if _bkr.status_code==200:
+    _bid=_bkr.json()["backup_id"]
+    ok("successful backup is recorded as ok with a sha256", any(b["id"]==_bid and b["status"]=="ok" and b["sha256"] for b in _bkl["backups"]))
+    ok("stored backup verifies (sha256 + decompresses)", c.post(f"/admin/backups/{_bid}/verify", headers=GAH).json()["ok"] is True)
+    ok("backup status reports a fresh last-backup age", _bkl["status"]["last_backup_age_seconds"] is not None)
+else:
+    ok("a failed backup attempt is recorded (status=failed) for alerting", any(b["status"]=="failed" for b in _bkl["backups"]))
 ok("admin can set the landing video from a full Shorts URL",
    c.post("/admin/landing/video", headers=GAH,
           json={"video":"https://youtube.com/shorts/UUSWYaxboDA?si=x"}).json().get("video_id")=="UUSWYaxboDA")
