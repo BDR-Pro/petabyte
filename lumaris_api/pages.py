@@ -2207,12 +2207,12 @@ SECURITY_HTML = _page("Petabyte — security &amp; trust",
     <h2 style="font-size:18px;margin-bottom:10px" data-ar="ادّعاءات لا نطلقها بعد">Claims we are not making yet</h2>
     <p class="mut" style="font-size:13.5px" data-ar="نفضّل أن نكون موثوقين لا مبهرين. هذه في خارطة الطريق وهي ليست فعّالة اليوم:">We would rather be trusted than impressive. These are on the roadmap and are <b>not</b> live today:</p>
     <ul class="mut" style="font-size:13.5px;margin:10px 0 0 20px">
-      <li style="padding:3px 0" data-ar="إثبات مدعوم عتادياً (SEV-SNP / TDX). الإثبات اليوم موقّع برمجياً من الوكيل.">Hardware-backed attestation (SEV-SNP / TDX). Today's attestation is software-signed by the agent.</li>
-      <li style="padding:3px 0" data-ar="تحقّق مستقل من الأداء المُعلَن عبر قياسات معيارية.">Independent benchmark verification of advertised performance.</li>
+      <li style="padding:3px 0" data-ar="إثبات مدعوم عتادياً عبر مورّد حقيقي (SEV-SNP / TDX / NVIDIA CC). شارة «السرّية» اليوم فاشلة-الإغلاق: لا يمكن للنموذج البرمجي إصدارها في الإنتاج.">Hardware-backed attestation via a real vendor verifier (SEV-SNP / TDX / NVIDIA CC). The <b>confidential</b> badge today is <b>fail-closed</b> — the software stub cannot mint it in production, so it is never faked.</li>
+      <li style="padding:3px 0" data-ar="إعادة قياس الأداء بتوقيت الخادم على عيّنة من المهام الحقيقية (اليوم القياس مُبلّغ من العقدة وموقّع، ويُقارَن ببيانات عامة).">Server-timed benchmark <i>re-measurement</i> on a sample of real jobs. Today a signed benchmark is compared to public reference data (see <a class="teal" href="/trust">Trust</a>) — node-reported, not yet platform-timed.</li>
       <li style="padding:3px 0" data-ar="تدقيق أمني خارجي منشور أو تقرير SOC 2.">A published external security audit or SOC 2 report.</li>
       <li style="padding:3px 0" data-ar="ضمانات رسمية لموقع تخزين البيانات. المنطقة مُبلّغ عنها من المضيف ما لم تُوسم بأنها موثّقة.">Formal data-residency guarantees. Region is host-reported unless marked verified.</li>
     </ul>
-    <p class="mut" style="font-size:13px;margin-top:12px" data-ar="إن كان أي ادّعاء مهمّاً لعبء عملك، اسألنا قبل الحجز —">If a claim matters for your workload, ask us before you book — <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.</p>
+    <p class="mut" style="font-size:13px;margin-top:12px" data-ar="ما نتحقّق منه فعلاً اليوم، بأرقام حيّة:">What we <b>do</b> verify today, with live numbers and a receipt you can re-check yourself: <a class="teal" href="/trust">petabyte.market/trust</a>. If a claim matters for your workload, ask before you book — <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.</p>
   </div>
 </div>
 
@@ -2318,6 +2318,63 @@ async function stat(){
   srow('API',api_ok,detail)+srow('Marketplace',api_ok,nodes)+srow('Settlement',api_ok,api_ok?'operational':'degraded');
 }
 stat();setInterval(stat,15000);
+</script>""")
+
+
+TRUST_HTML = _page("Petabyte — trust &amp; transparency",
+    desc="Live, honest transparency: GPUs by verification tier, jobs completed, cryptographically signed results, quorum checks, and a ledger that balances. Verify your own job.",
+    path="/trust", body="""
+<div class="hero"><div class="wrap" style="padding:60px 24px 18px">
+  <div class="eyebrow"><span class="dot"></span> trust &amp; transparency</div>
+  <h1 style="font-size:clamp(34px,5vw,54px);margin:16px 0 12px">Don't trust us. <span class="grad">Verify.</span></h1>
+  <p class="mut" style="font-size:16px;max-width:64ch">Every number below is a live database aggregate — zeros mean zero, nothing is invented. Each completed job carries a cryptographic receipt you can re-check yourself.</p>
+</div></div>
+
+<div class="wrap" style="padding:26px 24px 8px">
+  <div class="stats" id="trust_stats"><div class="mut mono" style="padding:12px 0">loading live numbers…</div></div>
+</div>
+
+<div class="wrap" style="padding:14px 24px 8px"><div class="cols c2">
+  <div class="card"><div class="lbl">the trust ladder</div>
+    <h2 style="font-size:18px;margin-bottom:8px">A tier is earned, never assumed</h2>
+    <p class="mut" style="font-size:13.5px"><b class="teal">self-reported</b> — registered via the API; nothing proven.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:6px"><b class="teal">agent-verified</b> — the node signed a hardware report with its on-device Ed25519 key.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:6px"><b class="teal">benchmark-consistent</b> — plus a signed benchmark that MATCHES public reference data for the claimed GPU (FP16 TFLOPS, Blender Open Data, Cinebench, PugetBench). A benchmark that contradicts the listing is flagged, not rewarded.</p>
+    <p class="mini" style="margin-top:10px">We do <b>not</b> claim hardware TEE attestation from the software stub — <a class="teal" href="/security">confidential computing</a> is a separate, fail-closed badge.</p>
+  </div>
+  <div class="card"><div class="lbl">verify your own job</div>
+    <h2 style="font-size:18px;margin-bottom:8px">A receipt you can re-check offline</h2>
+    <p class="mut" style="font-size:13.5px">Every completed job exposes a receipt at <span class="mono">/jobs/&lt;id&gt;/receipt</span> (signed in as the buyer). It contains the node's Ed25519 <b>signature</b> over the exact signed payload, the <b>sha256</b> of the real output bytes, and the node's attested <b>public key</b>.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:8px">Reconstruct the message as canonical JSON of the payload and verify the signature against the public key — no need to take our word for it. Our server also re-verifies it live and shows you the result.</p>
+    <p class="mini" style="margin-top:10px">A forged or tampered result is rejected on submission and <b>freezes the seller's payouts</b> pending review.</p>
+  </div>
+</div></div>
+
+<div class="wrap" style="padding:14px 24px 30px"><div class="cols c3">
+  <a class="card" href="/security" style="display:block"><div class="lbl">security</div><h2 style="font-size:16px">What we verify — and don't</h2><p class="mut" style="font-size:13px">Isolation, escrow, attestation, honestly.</p></a>
+  <a class="card" href="/status" style="display:block"><div class="lbl">status</div><h2 style="font-size:16px">Live system status</h2><p class="mut" style="font-size:13px">API, marketplace, settlement health.</p></a>
+  <a class="card" href="/terms" style="display:block"><div class="lbl">legal</div><h2 style="font-size:16px">Terms &amp; escrow</h2><p class="mut" style="font-size:13px">How funds are held and refunded.</p></a>
+</div></div>
+
+<script>
+function tstat(label,val,sub){return '<div class="stat"><div class="stat-n mono">'+val+'</div><div class="stat-l">'+label+(sub?' <span class="mut" style="font-size:11px">'+sub+'</span>':'')+'</div></div>';}
+async function trustload(){
+ try{
+  var s=await (await fetch('/trust/summary')).json();
+  var t=s.trust_tiers||{};
+  var led=s.ledger_balanced===true?'balanced':(s.ledger_balanced===false?'IMBALANCED':'—');
+  document.getElementById('trust_stats').innerHTML=
+    tstat('attested GPUs',s.attested_gpus)+
+    tstat('benchmark-consistent',(t.benchmark_consistent||0))+
+    tstat('confidential nodes',(s.confidential_nodes_active||0))+
+    tstat('jobs completed',s.jobs_completed)+
+    tstat('verifiable receipts',s.verifiable_receipts)+
+    tstat('results bound to output bytes',s.results_content_bound)+
+    tstat('sellers frozen for fraud',s.sellers_fraud_flagged)+
+    tstat('double-entry ledger',led);
+ }catch(e){document.getElementById('trust_stats').innerHTML='<div class="mut mono" style="padding:12px 0">status unavailable</div>';}
+}
+trustload();setInterval(trustload,30000);
 </script>""")
 
 

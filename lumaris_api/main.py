@@ -109,7 +109,7 @@ from static_dashboard import DASHBOARD_HTML
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
                    GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
-                   PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TEMPLATES_HTML,
+                   PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TRUST_HTML, TEMPLATES_HTML,
                    CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML,
                    SELLER_EARNINGS_HTML, RESET_HTML, BUY_HTML, FUNDING_VIEW_HTML)
 from templates_registry import TEMPLATES, public_catalog
@@ -1317,6 +1317,10 @@ def login_page():
 @app.get("/account", response_class=HTMLResponse)
 def account_page():
     return ACCOUNT_HTML
+
+@app.get("/trust", response_class=HTMLResponse)
+def trust_page():
+    return HTMLResponse(TRUST_HTML)
 
 @app.get("/status", response_class=HTMLResponse)
 def status_page():
@@ -2597,7 +2601,8 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
     #    content_hash (sha256 of the real output bytes) so a fraction of real jobs can be
     #    re-executed on independent nodes and compared (quorum) — not just trusted.
     submit_task_result(db, task, data.result or data.proof.get("output_hash"), data.status,
-                       content_hash=data.proof.get("content_hash"))
+                       content_hash=data.proof.get("content_hash"),
+                       signature=data.signature, proof=data.proof)
     if data.status == "completed":
         lat = None
         try:
@@ -5532,6 +5537,33 @@ def resolve_vm_route(vm_id: str, request: Request, db: Session = Depends(get_db)
             "current_spec_id": vm.current_spec_id,
             "tunnel_port": vm.tunnel_port, "node_ip": vm.node_ip,
             "app_port": vm.app_port, "status": vm.status}
+
+
+# ------------------- PUBLIC TRUST / TRANSPARENCY -------------------
+
+@app.get("/trust/summary", tags=["trust"])
+def trust_summary_endpoint(db: Session = Depends(get_db)):
+    """Public, honest transparency counts (no fabrication; zeros mean zero) — the data behind
+    the /trust page: attested GPUs by tier, benchmark consistency, jobs completed, content-bound
+    + signed results, quorum outcomes, fraud flags, and whether the ledger balances."""
+    import trust
+    return trust.trust_summary(db)
+
+
+@app.get("/jobs/{task_id}/receipt", tags=["trust"])
+def job_receipt(task_id: int, user: dict = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    """The BUYER's cryptographic receipt for their own job: the node's Ed25519 signature over
+    the exact signed payload, the sha256 of the real output bytes, the node's attested pubkey,
+    the GPU's trust tier + benchmark verdict, and a LIVE server re-verification of that
+    signature. Buyer-scoped: only the job's buyer can read it."""
+    from db import Task
+    me = get_user_by_username(db, _username(user))
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task or me is None or task.buyer_id != me.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    import trust
+    return trust.build_receipt(db, task)
 
 
 # ------------------- BENCHMARKS -------------------

@@ -330,6 +330,11 @@ class Task(Base):
     enc_key = Column(Text, nullable=True)                  # sealed per-task backup data key
     result = Column(Text, nullable=True)
     result_content_hash = Column(String, nullable=True)   # signed sha256 of the output bytes (#65)
+    # Retained so a buyer can INDEPENDENTLY verify the result offline against the node's
+    # attested Ed25519 pubkey (the verifiable-receipt surface): the exact signed payload and
+    # its signature. Null on older jobs / test workloads.
+    result_signature = Column(String, nullable=True)
+    result_proof = Column(Text, nullable=True)            # JSON: the exact bytes the node signed
     created_at = Column(DateTime, default=_utcnow)
     assigned_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -1555,7 +1560,8 @@ def _ensure_columns():
         "payout_obligations": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
         "payout_batches": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
         "connected_accounts": [("gateway_mode", "VARCHAR")],
-        "tasks": [("result_content_hash", "VARCHAR")],
+        "tasks": [("result_content_hash", "VARCHAR"),
+                  ("result_signature", "VARCHAR"), ("result_proof", "TEXT")],
     }
     try:
         insp = _inspect(engine)
@@ -2295,7 +2301,8 @@ def mark_task_running(db: Session, task: "Task") -> None:
 
 
 def submit_task_result(db: Session, task: "Task", result: str,
-                       status: str = "completed", content_hash: str = None) -> None:
+                       status: str = "completed", content_hash: str = None,
+                       signature: str = None, proof: dict = None) -> None:
     task.result = result
     task.status = status if status in ("completed", "failed", "running") else "completed"
     task.completed_at = _utcnow()
@@ -2304,6 +2311,15 @@ def submit_task_result(db: Session, task: "Task", result: str,
         # so a fraction of real jobs can be independently re-executed and compared (quorum),
         # instead of trusting a signed object-ref string. (#65)
         task.result_content_hash = str(content_hash)[:128]
+    if signature:
+        # Retain the node's Ed25519 signature + the exact signed payload so the BUYER can
+        # verify the result offline against the node's attested pubkey (verifiable receipt).
+        import json as _json
+        task.result_signature = str(signature)[:256]
+        try:
+            task.result_proof = _json.dumps(proof or {}, sort_keys=True)[:4000]
+        except Exception:
+            task.result_proof = None
     db.add(task); db.commit()
 
 

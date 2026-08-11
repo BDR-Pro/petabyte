@@ -255,6 +255,28 @@ ok("booking now released", c.get(f"/bookings/{bkid}", headers=b3h).json()["statu
 ok("seller earned payout (7.2)", round(c.get("/wallet", headers=s3h).json()["earnings"],2)==7.2)
 ok("double-release blocked", c.post(f"/bookings/{bkid}/release", headers=b3h).status_code==409)
 
+# --- VERIFIABLE RECEIPT: the buyer can INDEPENDENTLY re-verify their completed job ---
+_rid=job["task_id"]
+_rc=c.get(f"/jobs/{_rid}/receipt", headers=b3h)
+ok("buyer fetches a verifiable receipt for their completed job", _rc.status_code==200)
+_rcj=_rc.json()
+ok("receipt carries the node's Ed25519 signature + attested pubkey",
+   bool(_rcj["proof"]["signature_b64"]) and bool(_rcj["proof"]["node_pubkey_b64"]))
+ok("the platform RE-VERIFIES the node's signature live (server_reverified)",
+   _rcj["proof"]["server_reverified"]==True)
+ok("receipt shows the GPU trust tier + escrow settlement state",
+   _rcj["gpu"]["trust"]["level"]=="agent_verified" and _rcj["settlement"]["status"]=="released")
+ok("a receipt is buyer-scoped (a different user gets 404, no enumeration)",
+   c.get(f"/jobs/{_rid}/receipt", headers=s3h).status_code==404)
+
+# --- PUBLIC TRUST SUMMARY: honest live counts, nothing fabricated ---
+_ts=c.get("/trust/summary").json()
+ok("trust summary reports honest live counts (>=1 job completed, >=1 receipt)",
+   isinstance(_ts["attested_gpus"],int) and _ts["jobs_completed"]>=1 and _ts["verifiable_receipts"]>=1)
+ok("trust summary reports the double-entry ledger is not broken", _ts["ledger_balanced"] is not False)
+ok("trust summary publishes the honest ladder and never claims TEE from the stub",
+   any(t["level"]=="benchmark_verified" for t in _ts["trust_ladder"]) and "not_claimed" in _ts)
+
 # REFUND ON REAP: new booking, node dies, settle refunds buyer
 c.post("/heartbeat", headers={"X-API-KEY":s3key}, json={"spec_id":sid3})
 bkid2=c.post("/request_vm", headers=b3h, json={"spec_id":sid3,"hours":2}).json()["booking_id"]
