@@ -40,6 +40,7 @@ run_suite "smoke (sqlite)"        python smoke_test.py
 run_suite "adversarial (sqlite)"  python adversarial_test.py
 run_suite "stripe connect (sqlite)" python stripe_test.py
 run_suite "payout routing (sqlite)" python payout_test.py
+run_suite "payout rails (irreversible USDC gated + fail-closed)" python payout_rails_test.py
 run_suite "email (mailgun, offline)" python email_test.py
 run_suite "matmul result validation (offline)" python matmul_validation_test.py
 run_suite "account (reset + cal webhook + demo notify)" python account_test.py

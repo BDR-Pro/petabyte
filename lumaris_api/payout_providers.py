@@ -68,6 +68,15 @@ def screen(method_kind: str, destination: str, country: str = None) -> bool:
         "refusing to send unscreened funds.")
 
 
+class RailDisabled(Exception):
+    """A payout rail is administratively disabled — fail CLOSED (never send) rather than move
+    money the operator hasn't explicitly turned on."""
+
+
+def _flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() == "true"
+
+
 class PayoutProvider:
     def send(self, payout: dict) -> dict:
         raise NotImplementedError
@@ -103,6 +112,12 @@ class TremendousProvider(PayoutProvider):     # gift_card
 
 class CircleUSDCProvider(PayoutProvider):     # usdc
     def send(self, payout: dict) -> dict:
+        # USDC is IRREVERSIBLE. Require an explicit second switch ON TOP of PAYOUT_STUB=false, so a
+        # misconfig or an accidental live payout can never move real crypto. Fails CLOSED.
+        if not _flag("CIRCLE_PAYOUTS_ENABLED"):
+            raise RailDisabled(
+                "USDC payouts are disabled — set CIRCLE_PAYOUTS_ENABLED=true (plus CIRCLE_API_KEY / "
+                "CIRCLE_WALLET_ID) to enable. No USDC was sent.")
         token = os.environ["CIRCLE_API_KEY"]
         base = os.getenv("CIRCLE_API", "https://api.circle.com/v1")
         import uuid as _u

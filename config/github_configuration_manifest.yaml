@@ -105,6 +105,12 @@ variables:
     scope:
     - platform
     description: ''
+  CIRCLE_PAYOUTS_ENABLED:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: ''
   CONNECT_REFRESH_URL:
     required: false
     default: null
