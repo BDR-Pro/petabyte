@@ -55,6 +55,7 @@ run_suite "seller payable metric (mode-separated payout gauge)" python seller_pa
 run_suite "funding metrics (canonical, scope-separated, honest)" python funding_metrics_test.py
 run_suite "db invariants (money-impossible states rejected at DB layer)" python db_invariants_test.py
 run_suite "security (ip-spoof / cross-tenant refs / stored-xss at write time)" python security_test.py
+run_suite "confidential computing (TEE fail-closed in prod + attestation freshness)" python tee_test.py
 run_suite "reservation reclaim (abandoned GPU capacity)" python reservation_reclaim_test.py
 run_suite "observability smoke (local tier; remote skipped offline)" \
           bash -c "cd .. && python scripts/observability_smoke_test.py"

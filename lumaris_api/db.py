@@ -215,6 +215,7 @@ class SellerSpec(Base):
     tee_vendor = Column(String, nullable=True)         # e.g. nvidia-h100-cc, amd-sev-snp
     tee_measurement = Column(String, nullable=True)    # attested enclave measurement
     tee_report = Column(Text, nullable=True)           # raw report (for buyer re-verify)
+    tee_attested_at = Column(DateTime, nullable=True)  # when confidential was last attested (freshness)
     is_demo = Column(Boolean, default=False, nullable=False, index=True)  # seeded demo node
 
 
@@ -1500,7 +1501,8 @@ def _ensure_columns():
                      ("is_demo", "BOOLEAN NOT NULL DEFAULT false")],
         "specs": [("min_price", "FLOAT"), ("max_price", "FLOAT"),
                   ("auto_price", "BOOLEAN DEFAULT false"), ("public_id", "VARCHAR"),
-                  ("is_demo", "BOOLEAN NOT NULL DEFAULT false")],
+                  ("is_demo", "BOOLEAN NOT NULL DEFAULT false"),
+                  ("tee_attested_at", "TIMESTAMP")],
         "users": [("referral_code", "VARCHAR"), ("referred_by", "INTEGER"),
                   ("referral_rewarded", "BOOLEAN DEFAULT false"),
                   ("referral_signup_meta", "VARCHAR"),("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
@@ -2646,7 +2648,39 @@ def set_spec_confidential(db: Session, spec: "SellerSpec", vendor: str,
     spec.tee_vendor = vendor
     spec.tee_measurement = measurement
     spec.tee_report = report
+    spec.tee_attested_at = _utcnow()          # freshness clock — confidential status expires
     db.add(spec); db.commit()
+
+
+def _tee_attestation_ttl_s() -> int:
+    """How long a confidential (TEE) attestation is honored before re-attestation is
+    required. Confidential computing is only meaningful if the enclave state is FRESH —
+    a stale 'confidential=True' from months ago attests nothing about the machine today."""
+    try:
+        return int(os.getenv("TEE_ATTESTATION_TTL_S", str(24 * 3600)))
+    except ValueError:
+        return 24 * 3600
+
+
+def spec_confidential_active(spec, now=None, ttl_s=None) -> bool:
+    """True only if this spec is confidential AND its TEE attestation is still fresh.
+
+    A confidential booking/dispatch must gate on THIS, not the raw `confidential` flag: the
+    flag alone can be stale, and (combined with the production fail-closed verifier in
+    utils.verify_tee_report) this keeps 'confidential' meaning a currently-attested enclave."""
+    if not getattr(spec, "confidential", False):
+        return False
+    ts = getattr(spec, "tee_attested_at", None)
+    if ts is None:
+        return False                          # confidential but never stamped -> not fresh
+    now = now or _utcnow()
+    ttl = _tee_attestation_ttl_s() if ttl_s is None else ttl_s
+    # SQLite round-trips datetimes tz-naive while _utcnow() is tz-aware — compare in naive UTC.
+    if now.tzinfo is not None:
+        now = now.replace(tzinfo=None)
+    if ts.tzinfo is not None:
+        ts = ts.replace(tzinfo=None)
+    return (now - ts).total_seconds() <= ttl
 
 
 

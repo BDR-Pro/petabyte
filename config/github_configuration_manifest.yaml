@@ -1055,7 +1055,25 @@ variables:
     allowed:
     - test
     - live
+  TEE_ATTESTATION_TTL_S:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   TEE_MEASUREMENT_ALLOWLIST:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  TEE_REQUIRE_HARDWARE:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  TEE_VERIFIER:
     required: false
     default: null
     scope:

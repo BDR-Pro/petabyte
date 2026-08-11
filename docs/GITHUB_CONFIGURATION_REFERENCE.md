@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (151)
+## Variables (non-sensitive) (154)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -38,7 +38,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `ENABLE_OTEL` | no | platform | `true` | `true` | — | format: bool; one of: true / false | Enable OpenTelemetry tracing. (reserved: standardized in GitHub config). |
 | `ENABLE_PROMETHEUS` | no | platform | `true` | `true` | — | format: bool; one of: true / false | Enable Prometheus metrics scraping. (reserved: standardized in GitHub config). |
 | `ENABLE_SENTRY` | no | platform | `false` | `false` | — | format: bool; one of: true / false | Enable Sentry error reporting (also needs SENTRY_DSN). (reserved: standardized in GitHub config). |
-| `ENVIRONMENT`<br>`aka APP_ENV` | no | platform | `development` | `development` | api/main.py, api/stripe_gateway.py | one of: development / test / staging / production | Must be 'production' in prod; never leave stubs enabled. |
+| `ENVIRONMENT`<br>`aka APP_ENV` | no | platform | `development` | `development` | api/main.py, api/stripe_gateway.py, api/utils.py | one of: development / test / staging / production | Must be 'production' in prod; never leave stubs enabled. |
 | `ENV_VARS` | no | deployment | *(empty)* | `…` | GitHub Actions deploy | — | THE single Repository Variable holding ALL non-sensitive config as KEY=value; pairs (semicolon-separated, newlines allowed). Generate it with `python scripts/env_bundle.py generate`. Secrets are NEVER placed here — they stay as individual GitHub Secrets. |
 | `GEOIP_DB` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 | `GEOIP_STUB` | no | platform | `true` | `true` | api/utils.py | format: bool; one of: true / false | GeoIP stub. |
@@ -148,7 +148,10 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `STRIPE_FEE_FIXED_MINOR` | no | platform | `30     # $0.30 — the fixed part that makes tiny jobs unprofitable` | `30     # $0.30 — the fixed part that makes tiny jobs unprofitable` | — | — | — |
 | `STRIPE_GATEWAY` | no | platform | `fake` | `fake` | api/main.py, api/stripe_demo.py, api/stripe_gateway.py | one of: fake / real | 'real' uses the Stripe SDK; anything else = in-process fake (tests only). |
 | `STRIPE_MODE` | no | platform | `test` | `test` | api/stripe_gateway.py | one of: test / live | Declared Stripe mode; must match key prefixes. |
+| `TEE_ATTESTATION_TTL_S` | no | platform | *(empty)* | `…` | api/db.py | — | — |
 | `TEE_MEASUREMENT_ALLOWLIST` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
+| `TEE_REQUIRE_HARDWARE` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
+| `TEE_VERIFIER` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 | `TEMPO_ENABLED` | no | platform | `true` | `true` | — | format: bool; one of: true / false | — |
 | `TEMPO_URL` | no | observability | *(empty)* | `https://…` | — | format: url | Tempo base URL. |
 | `TREMENDOUS_API` | no | platform | `https://api.tremendous.com/api/v2` | `https://api.tremendous.com/api/v2` | api/payout_providers.py | — | — |

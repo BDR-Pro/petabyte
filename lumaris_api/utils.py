@@ -207,14 +207,46 @@ def tee_measurement_allowed(measurement: str) -> bool:
     return measurement in allow if allow else False
 
 
+def _tee_require_hardware() -> bool:
+    """True where the SOFTWARE STUB verifier must be refused and a real vendor TEE
+    verifier is required: production, or an explicit opt-in (TEE_REQUIRE_HARDWARE=true).
+
+    This is the honesty gate for confidential computing. The stub proves possession of a
+    signing key, NOT that a job runs in an enclave the host cannot inspect. Letting the stub
+    mint `confidential=True` in production would tell buyers their workload is hidden from the
+    seller when it is not. So in production, attestation FAILS CLOSED until a real verifier
+    (NVIDIA NRAS / AMD SEV-SNP / Intel TDX) is configured — no fake confidential badges."""
+    if os.getenv("TEE_REQUIRE_HARDWARE", "").strip().lower() == "true":
+        return True
+    return os.getenv("ENVIRONMENT", "").strip().lower() == "production"
+
+
+def _resolve_tee_verifier():
+    """Pick the configured TEE verifier (TEE_VERIFIER, default 'stub'). Real vendor verifiers
+    register in the map below. Refuses the software stub wherever hardware is required."""
+    verifiers = {"stub": _verify_stub}   # real verifiers plug in here: nvidia-nras/sev-snp/tdx
+    name = os.getenv("TEE_VERIFIER", "stub").strip().lower()
+    v = verifiers.get(name)
+    if v is None:
+        raise ValueError(f"unknown TEE verifier '{name}' (set TEE_VERIFIER)")
+    if v is _verify_stub and _tee_require_hardware():
+        raise ValueError(
+            "hardware TEE verification is required here (production, or "
+            "TEE_REQUIRE_HARDWARE=true) but only the software stub is configured — refusing "
+            "to mint a confidential attestation. Configure a real vendor verifier "
+            "(NVIDIA NRAS / AMD SEV-SNP / Intel TDX).")
+    return v
+
+
 def verify_tee_report(report: dict, signature_b64: str, expected_nonce: str,
                       max_age_s: int = 600) -> str:
     """Verify a TEE attestation report. Returns the attested measurement.
 
-    Checks: nonce binding (report must carry the server-issued nonce), freshness,
-    measurement allowlist, and the enclave/vendor signature. Raises ValueError on
-    any failure.
+    Checks: a real-verifier requirement (fail closed in production on the stub), nonce
+    binding (report must carry the server-issued nonce), freshness, measurement allowlist,
+    and the enclave/vendor signature. Raises ValueError on any failure.
     """
+    verifier = _resolve_tee_verifier()          # fail closed FIRST if hardware is required
     if report.get("nonce") != expected_nonce:
         raise ValueError("attestation nonce mismatch")
     ts = int(report.get("ts", 0))
@@ -223,7 +255,7 @@ def verify_tee_report(report: dict, signature_b64: str, expected_nonce: str,
     measurement = report.get("measurement", "")
     if not tee_measurement_allowed(measurement):
         raise ValueError("enclave measurement not in allowlist")
-    _verify_stub(report, signature_b64)
+    verifier(report, signature_b64)
     return measurement
 
 

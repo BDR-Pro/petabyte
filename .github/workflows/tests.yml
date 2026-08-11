@@ -60,6 +60,9 @@ jobs:
       - name: security (ip-spoof / cross-tenant refs / stored-xss at write time)
         working-directory: lumaris_api
         run: python security_test.py
+      - name: confidential computing (TEE fail-closed in prod + attestation freshness)
+        working-directory: lumaris_api
+        run: python tee_test.py
       - name: agent auto-update is signed (fleet-RCE guard)
         working-directory: desktop-app
         run: python updater_test.py

@@ -85,7 +85,7 @@ from db import (
     deposit, try_debit, book_with_escrow, mark_booking_active,
     release_booking, refund_booking, settle_dead_specs, get_or_create_platform,
     webhook_already_processed, credit_user_by_username,
-    create_challenge, consume_challenge, set_spec_confidential,
+    create_challenge, consume_challenge, set_spec_confidential, spec_confidential_active,
     create_org, get_org, get_membership, org_members, add_org_member,
     org_deposit, try_org_debit, org_refund, org_usage,
     retry_task, set_task_progress, add_task_log, get_task_logs,
@@ -2272,8 +2272,8 @@ def request_vm(req: RequestVMModel, user: dict = Depends(get_current_user),
         _fail(400, {"code": "OWN_HARDWARE",
                     "message": "This is your own machine. You can't rent from yourself — "
                                "earnings come from other people's jobs."})
-    if req.require_confidential and not spec.confidential:
-        _fail(403, "Spec is not confidential-computing attested")
+    if req.require_confidential and not spec_confidential_active(spec):
+        _fail(403, "Spec is not confidential-computing attested (or its attestation is stale)")
     if req.require_region and ((spec.region or "") != req.require_region or not spec.region_verified):
         _fail(403, f"Spec not in a VERIFIED region {req.require_region}")
     if req.require_country and ((spec.detected_country or "") != req.require_country or not spec.region_verified):
