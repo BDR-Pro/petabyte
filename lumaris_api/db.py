@@ -2126,11 +2126,17 @@ def meter_and_expire(db: Session) -> int:
 # ------------------ Demand-based auto-pricing ------------------
 
 def reprice_specs(db: Session, reference_price: float = None) -> int:
-    """Move each opted-in spec's price with demand for its GPU class, clamped to
-    [min_price, max_price] and always kept below the cloud reference. Opt-in only,
-    always within the seller's own bounds. Returns count repriced."""
-    ref = reference_price if reference_price is not None else \
-        float(os.getenv("AWS_REFERENCE_PRICE", "12.29"))
+    """Recommend a price for each opted-in spec with the shared pricing engine and apply it.
+
+    The old engine slid the listing around the midpoint of the seller's OWN [min,max] band with
+    a demand multiplier — it never asked what the GPU is actually worth. This anchors on the
+    per-GPU cloud on-demand rate (Petabyte's "cheaper than cloud, verified" value prop), then
+    adjusts for demand, verified trust, and premiums via ``pricing_engine.recommend`` — the SAME
+    pure function the /price/recommendation endpoint shows the seller, so the batch and the
+    preview never disagree. Opt-in only (auto_price), always clamped inside the seller's own
+    [min_price, max_price] and kept below cloud. Returns count repriced."""
+    import pricing_engine   # local import: db.py must not depend on it at module load
+    # Per-GPU-class demand: busy / total across live, attested specs of the same GPU model.
     busy_by, total_by = {}, {}
     for s in db.query(SellerSpec).filter(SellerSpec.attested == True).all():  # noqa: E712
         if not spec_is_live(s):
@@ -2140,17 +2146,37 @@ def reprice_specs(db: Session, reference_price: float = None) -> int:
         busy = max(0, total - (s.available_units or 0))
         busy_by[key] = busy_by.get(key, 0) + busy
         total_by[key] = total_by.get(key, 0) + total
+
+    auto = db.query(SellerSpec).filter(SellerSpec.auto_price == True).all()  # noqa: E712
+    # Owner reputation in one query (avoid N+1) — a premium factor in the engine.
+    owner_ids = {s.user_id for s in auto if s.user_id is not None}
+    rep_by = {}
+    if owner_ids:
+        for u in db.query(User).filter(User.id.in_(owner_ids)).all():
+            rep_by[u.id] = u.reputation
+
     n = 0
-    for s in db.query(SellerSpec).filter(SellerSpec.auto_price == True).all():  # noqa: E712
+    for s in auto:
         if s.min_price is None or s.max_price is None or s.max_price < s.min_price:
             continue
         key = (s.gpu_model or "cpu").lower()
         total = total_by.get(key, 1)
         util = (busy_by.get(key, 0) / total) if total else 0.0     # 0..1
-        mult = D("0.85") + D("0.40") * D(util)          # idle 0.85x -> full 1.25x
-        base = (D(s.min_price) + D(s.max_price)) / Decimal(2)
-        price = max(D(s.min_price), min(D(s.max_price), base * mult))
-        price = qc(min(price, D(ref) * D("0.95")))     # never >= cloud reference
+        cloud_ref = pricing_engine.cloud_reference_for(s.gpu_model)
+        if cloud_ref is None and reference_price is not None:
+            cloud_ref = float(reference_price)   # caller-supplied fallback anchor
+        rec = pricing_engine.recommend(
+            cloud_ref,
+            utilization=util,
+            trust_level=trust_level_for(s).get("level"),
+            benchmark_verdict=getattr(s, "benchmark_verdict", None),
+            confidential=spec_confidential_active(s),
+            region_verified=bool(getattr(s, "region_verified", False)),
+            reputation=rep_by.get(s.user_id),
+            min_price=float(s.min_price), max_price=float(s.max_price),
+            current_price=float(s.price_per_hour or 0),
+        )
+        price = qc(D(str(rec["recommended_price"])))
         if abs(price - D(s.price_per_hour)) >= D("0.01"):
             db.add(PriceChange(spec_id=s.id, old_price=s.price_per_hour or 0,
                                new_price=price, utilization=round(util, 3),

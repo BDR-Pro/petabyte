@@ -164,15 +164,12 @@ GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "")                     # gateway -> 
 PAYMENT_WEBHOOK_SECRET = os.getenv("PAYMENT_WEBHOOK_SECRET", "")
 AWS_REFERENCE_PRICE = os.getenv("AWS_REFERENCE_PRICE", "12.29")
 
-# Per-GPU-class on-demand cloud reference rates (USD/hr, approximate, single-GPU).
-# A savings claim is only honest if it compares LIKE FOR LIKE — quoting an H100-class
-# rate against an RTX 4090 listing would manufacture a fake ~97% "discount". Where we
-# don't recognise the GPU, we show NO savings figure rather than an invented one.
-CLOUD_REFERENCE = {
-    "h100": 12.29, "h200": 14.00, "a100": 4.10, "l40": 1.80, "l4": 0.90,
-    "a10": 1.30, "v100": 3.06, "t4": 0.53, "rtx 4090": 0.80, "4090": 0.80,
-    "rtx 4080": 0.60, "rtx 3090": 0.55, "3090": 0.55, "rtx a6000": 1.60, "a6000": 1.60,
-}
+# Per-GPU-class on-demand cloud reference rates + the fair like-for-like lookup live in
+# pricing_engine (shared by the marketplace savings figures, the auto-price batch, and the
+# recommendation endpoint so there is ONE reference table, no drift). A savings claim is only
+# honest LIKE FOR LIKE — where we don't recognise the GPU, cloud_reference_for returns None and
+# we show NO savings figure rather than an invented one.
+from pricing_engine import CLOUD_REFERENCE, cloud_reference_for  # noqa: E402,F401
 
 
 METRIC_DEFINITIONS = {
@@ -195,17 +192,6 @@ METRIC_DEFINITIONS = {
     "contains_demo_data": "True when the numbers include seeded demo entities. Demo "
                           "and real data are separable via scope=demo|real.",
 }
-
-
-def cloud_reference_for(gpu_model: str):
-    """The on-demand cloud rate for THIS GPU class, or None if we can't compare fairly."""
-    if not gpu_model:
-        return None
-    g = gpu_model.lower()
-    for key in sorted(CLOUD_REFERENCE, key=len, reverse=True):
-        if key in g:
-            return CLOUD_REFERENCE[key]
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -2196,6 +2182,52 @@ def node_earnings_forecast(spec_id: int, user: dict = Depends(get_current_user),
     return out
 
 
+@app.get("/nodes/{spec_id}/price/recommendation", tags=["seller"])
+def node_price_recommendation(spec_id: int, user: dict = Depends(get_current_user),
+                              db: Session = Depends(get_db)):
+    """An explainable, performance-anchored price recommendation for one of the seller's nodes.
+
+    Anchors on the per-GPU cloud on-demand rate ("cheaper than cloud, verified"), then adjusts for
+    live demand, verified trust, confidential/region/reputation premiums — and returns every step
+    as a labelled factor so the seller sees WHY. Advisory only: the seller still sets the price
+    (this is also exactly what auto-price applies when the node opts in)."""
+    me = get_user_by_username(db, _username(user))
+    spec = get_spec_by_id(db, spec_id)
+    if not spec or me is None or spec.user_id != me.id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    import pricing_engine
+    # Live demand for THIS GPU class: busy / total across live, attested specs of the same model.
+    key = (spec.gpu_model or "cpu").lower()
+    busy = total = 0
+    for s in db.query(SellerSpec).filter(SellerSpec.attested == True).all():  # noqa: E712
+        if (s.gpu_model or "cpu").lower() != key or not spec_is_live(s):
+            continue
+        t = s.total_units or 1
+        total += t
+        busy += max(0, t - (s.available_units or 0))
+    util = (busy / total) if total else 0.0
+    tl = trust_level_for(spec)
+    rec = pricing_engine.recommend(
+        cloud_reference_for(spec.gpu_model),
+        utilization=util,
+        trust_level=tl.get("level"),
+        benchmark_verdict=getattr(spec, "benchmark_verdict", None),
+        confidential=dbmod.spec_confidential_active(spec),
+        region_verified=bool(getattr(spec, "region_verified", False)),
+        reputation=me.reputation,
+        min_price=(float(spec.min_price) if spec.min_price is not None else None),
+        max_price=(float(spec.max_price) if spec.max_price is not None else None),
+        current_price=float(spec.price_per_hour or 0),
+    )
+    rec["spec_id"] = spec.id
+    rec["gpu_model"] = spec.gpu_model
+    rec["utilization_pct"] = round(util * 100, 1)
+    rec["trust_level"] = tl.get("level")
+    rec["trust_label"] = tl.get("label")
+    rec["auto_price"] = bool(spec.auto_price)
+    return rec
+
+
 # ------------------- BUYER -------------------
 
 @app.post("/request_vm")
@@ -2867,10 +2899,21 @@ def seller_dashboard(user: dict = Depends(get_current_user), db: Session = Depen
                               "fix": "Install the agent — one command on the machine "
                                      "with the GPU.", "action": "/install"}]}
 
-    market = [D(s.price_per_hour) for s in db.query(SellerSpec).filter(
-                 SellerSpec.attested.is_(True)).all() if spec_is_live(s)]
+    # One pass over live, attested specs: the price median (for the "priced above market"
+    # blocker) AND per-GPU-class demand (busy/total) that feeds the price recommendation.
+    market = []
+    class_busy, class_total = {}, {}
+    for s in db.query(SellerSpec).filter(SellerSpec.attested.is_(True)).all():
+        if not spec_is_live(s):
+            continue
+        market.append(D(s.price_per_hour))
+        ck = (s.gpu_model or "cpu").lower()
+        t = s.total_units or 1
+        class_total[ck] = class_total.get(ck, 0) + t
+        class_busy[ck] = class_busy.get(ck, 0) + max(0, t - (s.available_units or 0))
     median = sorted(market)[len(market)//2] if market else None
 
+    import pricing_engine
     nodes, blockers = [], []
     for sp in specs:
         live = spec_is_live(sp)
@@ -2881,6 +2924,23 @@ def seller_dashboard(user: dict = Depends(get_current_user), db: Session = Depen
         earned = sum((D(b.seller_payout) for b in db.query(Booking).filter(
                         Booking.spec_id == sp.id, Booking.status == "released").all()),
                      Decimal(0))
+        # Explainable price recommendation (same engine as /nodes/*/price/recommendation and
+        # the auto-price batch) so the seller sees a suggested number + why, inline.
+        ck = (sp.gpu_model or "cpu").lower()
+        ct = class_total.get(ck, 0)
+        class_util = (class_busy.get(ck, 0) / ct) if ct else (util / 100.0)
+        rec = pricing_engine.recommend(
+            cloud_reference_for(sp.gpu_model),
+            utilization=class_util,
+            trust_level=trust_level_for(sp).get("level"),
+            benchmark_verdict=getattr(sp, "benchmark_verdict", None),
+            confidential=dbmod.spec_confidential_active(sp),
+            region_verified=bool(getattr(sp, "region_verified", False)),
+            reputation=me.reputation,
+            min_price=(float(sp.min_price) if sp.min_price is not None else None),
+            max_price=(float(sp.max_price) if sp.max_price is not None else None),
+            current_price=float(sp.price_per_hour or 0),
+        )
         nodes.append({
             "id": sp.public_id, "gpu_model": sp.gpu_model,
             "online": live, "attested": bool(sp.attested),
@@ -2891,6 +2951,10 @@ def seller_dashboard(user: dict = Depends(get_current_user), db: Session = Depen
             "success_rate": round(100.0 * sp.jobs_completed / total, 1) if total else None,
             "reputation": rep["score"] if isinstance(rep, dict) else rep,
             "earned_total": q(earned),
+            "suggested_price": rec["recommended_price"],
+            "suggested_reason": rec["explanation"],
+            "savings_vs_cloud_pct": rec["savings_vs_cloud_pct"],
+            "auto_price": bool(sp.auto_price),
             "last_seen": sp.last_seen.isoformat() if sp.last_seen else None,
         })
 
@@ -5315,19 +5379,27 @@ def suggest_price(gpu_model: Optional[str] = None, db: Session = Depends(get_db)
         if gpu_model and gpu_model.lower() not in (spec.gpu_model or "").lower():
             continue
         prices.append(spec.price_per_hour)
-    ref = float(AWS_REFERENCE_PRICE)
+    # Per-GPU cloud reference (shared table) so a T4 isn't anchored off an H100-class rate.
+    # Only fall back to the generic AWS reference when we don't recognise the GPU class.
+    cloud_ref = cloud_reference_for(gpu_model)
+    ref = float(cloud_ref) if cloud_ref is not None else float(AWS_REFERENCE_PRICE)
     if prices:
         prices.sort()
         median = prices[len(prices) // 2]
         suggested, low, high = qc(median), qc(prices[0]), qc(prices[-1])
         basis = f"median of {len(prices)} similar live node(s)"
-    else:
-        suggested = qc(D(ref) * D("0.45"))    # ~55% under cloud when no market yet
+    elif cloud_ref is not None:
+        suggested = qc(D(ref) * D("0.45"))    # ~55% under THIS GPU's cloud rate when no market yet
         low, high = qc(D(ref) * D("0.30")), qc(D(ref) * D("0.70"))
-        basis = "no similar nodes online — anchored to ~55% below the cloud reference"
+        basis = "no similar nodes online — anchored ~55% below the cloud reference for this GPU"
+    else:
+        suggested = qc(D(ref) * D("0.45"))
+        low, high = qc(D(ref) * D("0.30")), qc(D(ref) * D("0.70"))
+        basis = "unrecognised GPU + no similar nodes online — anchored to a generic cloud reference"
     return {"gpu_model": gpu_model or "any", "suggested_price": suggested,
             "range_low": low, "range_high": high, "market_samples": len(prices),
-            "cloud_reference": ref, "basis": basis,
+            "cloud_reference": round(ref, 2), "cloud_reference_known": cloud_ref is not None,
+            "basis": basis,
             "note": "Suggestion only — you set your price. Stay below the cloud reference to win bookings."}
 
 

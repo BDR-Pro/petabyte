@@ -1996,6 +1996,13 @@ _asid=c.post("/register_specs", headers=_auth, json={"cpu":8,"ram":32,"gpu_model
 _aat={"cpu":8,"ram":32,"gpu_model":"A100","nonce":"autoseller","ts":int(time.time())}
 c.post("/prove", headers=_auth, json={"spec_id":_asid,"attestation":_aat,"signature":sign_proof(_VENDOR_SK,_aat),"pubkey":base64.b64encode(_VENDOR_SK.public_key().public_bytes_raw()).decode()})
 _ak=c.post("/create_api_key", headers=_auth).json()["api_key"]; c.post("/heartbeat", headers={"X-API-KEY":_ak}, json={"spec_id":_asid})
+# explainable price recommendation: cloud-anchored, inside the seller's band, shows its factors
+_prec=c.get(f"/nodes/{_asid}/price/recommendation", headers=_auth).json()
+ok("price recommendation is cloud-anchored for A100", _prec["anchor_source"]=="cloud" and _prec["cloud_reference"]==4.10)
+ok("price recommendation stays inside the seller's band", 0.5<=_prec["recommended_price"]<=2.0)
+ok("price recommendation shows its factors + a plain explanation",
+   isinstance(_prec.get("factors"),list) and len(_prec["factors"])>=1 and bool(_prec.get("explanation")))
+ok("price recommendation is owner-only", c.get(f"/nodes/{_asid}/price/recommendation", headers=_mh).status_code==404)
 dbmod.reprice_specs(dbmod.SessionLocal())
 _asp=dbmod.get_spec_by_id(dbmod.SessionLocal(),_asid)
 ok("auto-price clamps within [min,max], below cloud", 0.5<=_asp.price_per_hour<=2.0)

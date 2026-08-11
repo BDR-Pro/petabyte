@@ -2515,6 +2515,11 @@ async function scNodes(){
         '<div class="mini" style="margin-top:8px">$'+Number(n.price_per_hour).toFixed(2)+'/hr · '+
           (n.utilization_pct||0)+'% utilized · '+n.jobs_completed+' jobs done'+
           (n.success_rate!=null?(' · '+n.success_rate+'% success'):'')+' · earned $'+Number(n.earned_total||0).toFixed(2)+'</div>'+
+        (n.suggested_price!=null?('<div class="mini" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">'+
+          '<b class="teal">Suggested $'+Number(n.suggested_price).toFixed(2)+'/hr</b>'+
+          (n.savings_vs_cloud_pct!=null?(' <span class="badge ok">~'+Math.round(n.savings_vs_cloud_pct)+'% below cloud</span>'):'')+
+          (n.auto_price?' <span class="badge">auto-price on</span>':'')+
+          '<span class="mut" style="display:block;margin-top:4px">'+esc(n.suggested_reason||'')+'</span></div>'):'')+
       '</div>';}).join('');
   }
   var bl=b.blockers||[];var wb=document.getElementById('nodes_blockers');

@@ -857,6 +857,18 @@ variables:
     - gpu
     description: Seller's offered price per GPU-hour (USD).
     format: float
+  PRICING_CLOUD_DISCOUNT:
+    required: false
+    default: '0.60'
+    scope:
+    - platform
+    description: ''
+  PRICING_DEMAND_SENSITIVITY:
+    required: false
+    default: '0.50'
+    scope:
+    - platform
+    description: ''
   PRODUCT_ANALYTICS_ENABLED:
     required: false
     default: 'true'

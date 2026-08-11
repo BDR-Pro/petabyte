@@ -231,6 +231,9 @@ jobs:
       - name: seller earnings forecast (net/hr exact + honest estimates)
         working-directory: lumaris_api
         run: python earnings_test.py
+      - name: pricing engine (cloud-anchored, demand+trust, explainable, clamped)
+        working-directory: lumaris_api
+        run: python pricing_engine_test.py
       - name: agent telemetry (span exception-safety / redaction / trace-join / degrade)
         working-directory: lumaris_agent
         run: python agent_telemetry_test.py
