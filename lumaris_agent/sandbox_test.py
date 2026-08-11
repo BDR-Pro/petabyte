@@ -127,6 +127,9 @@ ok("agent runs the real Blender Open Data benchmark (workload-relevant)",
    and "blender_optix" in src("_run_benchmark"))
 ok("benchmark scores go INSIDE the signed proof (attributable, not bare meta)",
    "**metrics" in src("_run_benchmark") and "crypto.sign_proof(proof)" in src("_run_benchmark"))
+ok("agent answers the server's FRESH proof-of-work challenge (anti-fabrication/replay)",
+   "bench_seed" in src("_run_benchmark") and "compute_test_hash" in src("_run_benchmark")
+   and "challenge_hash" in src("_run_benchmark"))
 ok("benchmark measurement never crashes the agent (guarded)",
    all("except Exception" in src(fn) and "return None" in src(fn)
        for fn in ("_measure_fp16_tflops", "_measure_blender_score")))

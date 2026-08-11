@@ -410,6 +410,14 @@ def _run_benchmark(task):
     meta = {"harness": ",".join(metrics) or "stub", "metrics": list(metrics)}
     # scores live in the SIGNED proof (attributable); meta is freeform display.
     proof = {"task_id": tid, "output_hash": "benchmark", "ts": int(_t.time()), **metrics}
+    # Answer the server's FRESH proof-of-work challenge (proves this benchmark is a real,
+    # current computation on this node — not a pre-canned or replayed number).
+    _seed, _size = task.get("bench_seed"), task.get("bench_size")
+    if _seed is not None and _size is not None:
+        try:
+            proof["challenge_hash"] = crypto.compute_test_hash(int(_size), int(_seed))
+        except Exception:                            # noqa: BLE001 — never crash the agent
+            pass
     httpx.post(f"{API_URL}/jobs/benchmark_result", headers=HEADERS, timeout=20, json={
         "spec_id": spec_id, "tokens_sec": tokens_sec,
         "meta": meta, "proof": proof, "signature": crypto.sign_proof(proof)})

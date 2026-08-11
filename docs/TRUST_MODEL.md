@@ -113,12 +113,15 @@ per-object handles + metadata minimization.
   Tests: `reverify_test.py` (honest agree / faker outvoted-and-frozen / sampling gate / no
   fan-out). *Remaining:* full server-side recompute of the *uploaded object* still needs real
   object storage; the cross-node hash comparison is in place now.
-- **The benchmark is server-timed + replay-proof.** The platform dispatches the benchmark task
-  and observes the wall-clock from dispatch to result server-side (`Task.assigned_at` →
-  `benchmark_elapsed_s`), and **consumes** the task on submission — so a previously-signed
-  benchmark cannot be replayed to refresh a stale listing (a re-submission gets `409`). The
-  consistent-tier evidence now says the platform *timed* the run; the throughput number is still
-  node-reported (see below).
+- **The benchmark is server-seeded, server-timed, and replay-proof.** Every dispatched benchmark
+  now carries a **fresh server proof-of-work challenge** (`create_benchmark_task` seeds a random
+  `bench_seed`); the node must return the correct `compute_test_hash(size, seed)` for *that* seed
+  **inside the signed proof**. A wrong answer means the number wasn't produced by real, current
+  computation on the node — a fabricated or replayed benchmark can't solve a seed it never saw —
+  so it is rejected (`409`) and **freezes the seller's payouts**. The platform also observes the
+  wall-clock dispatch→result server-side (`Task.assigned_at` → `benchmark_elapsed_s`) and
+  **consumes** the task on submission (a re-submission gets `409`). Tests: `smoke_test.py`
+  (correct answer → `pow_verified`; fabricated answer → `409` + freeze).
 - **Benchmark tier is honestly labelled (#64).** A benchmark inconsistent with the claimed GPU
   model's public reference data is flagged, not rewarded; a bare self-report (no public band) is
   "Benchmark-reported", stated as **node-reported and signed (attributable), not independently
@@ -128,10 +131,12 @@ per-object handles + metadata minimization.
 - The strongest validator (`matmul_validation.py`) is **not yet wired into the live result
   path**. With the signed `content_hash` stored and `reverify.py` re-executing real jobs, wiring
   it into the reverify comparison is the next step.
-- The benchmark *number* is still produced by the node's own harness. Server-timing bounds the
-  elapsed wall-clock and binds the result to a fresh dispatch, but a seed-bound workload whose
-  exact FLOP count the server fixes (so the reported rate is checked against server-observed time)
-  is the remaining upgrade.
+- The benchmark now carries a fresh **server-seeded proof-of-work** (a fabricated/replayed number
+  can't answer the seed) + server-timing, so it proves *real, current computation on the node*.
+  What it does **not** yet prove is that the throughput number came from *that GPU*: the
+  integer proof-of-work runs on any CPU. Making the seeded workload itself the FLOP-heavy GPU
+  matmul, and checking the reported rate against the server-observed time for a server-fixed FLOP
+  count, is the remaining upgrade (the GPU-model signal today is the public-reference band check).
 
 **Requires hardware attestation**
 - Proving the *specific silicon* (an "H100" really is an H100; VRAM is real) and that work ran

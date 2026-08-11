@@ -2923,7 +2923,14 @@ def set_benchmark(db: Session, spec: "SellerSpec", tokens_sec: float, meta: dict
 
 
 def create_benchmark_task(db: Session, spec: "SellerSpec"):
-    task = Task(spec_id=spec.id, task_type="benchmark", status="pending", priority=5)
+    import json as _json
+    import random as _random
+    # A FRESH server challenge rides with every benchmark: the node must return
+    # compute_test_hash(size, seed) for THIS seed, proving it actually ran seeded work now —
+    # a pre-canned or replayed benchmark number can't answer a seed it never saw.
+    challenge = {"bench_seed": _random.randint(1, 2_000_000_000), "bench_size": 50000}
+    task = Task(spec_id=spec.id, task_type="benchmark", status="pending", priority=5,
+                code=_json.dumps(challenge))
     db.add(task); db.commit(); db.refresh(task)
     return task
 

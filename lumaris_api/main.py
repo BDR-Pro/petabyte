@@ -2383,7 +2383,9 @@ def _build_job_payload(task) -> dict:
         return {"task_id": task.id, "task_type": "test",
                 "size": params.get("size"), "seed": params.get("seed"), **_backup}
     if task.task_type == "benchmark":
-        return {"task_id": task.id, "task_type": "benchmark", **_backup}
+        ch = json.loads(task.code or "{}")
+        return {"task_id": task.id, "task_type": "benchmark",
+                "bench_seed": ch.get("bench_seed"), "bench_size": ch.get("bench_size"), **_backup}
     if task.task_type == "render":
         rp = json.loads(task.template_params or "{}")
         return {"task_id": task.id, "task_type": "render", "image": RENDER_IMAGE,
@@ -5529,6 +5531,7 @@ def benchmark_result(data: BenchmarkResultModel, agent=Depends(api_key_user),
     # number is not purely self-reported), and consuming the task means a previously-signed
     # benchmark cannot be replayed to refresh a stale listing.
     elapsed_s = None
+    pow_verified = None
     try:
         from db import Task as _Task
         btid = int((data.proof or {}).get("task_id") or 0)
@@ -5546,7 +5549,24 @@ def benchmark_result(data: BenchmarkResultModel, agent=Depends(api_key_user),
             if start is not None:
                 start = start.replace(tzinfo=_tz.utc) if start.tzinfo is None else start
                 elapsed_s = round(max(0.0, (_dt.now(_tz.utc) - start).total_seconds()), 3)
+            # Server-seeded PROOF-OF-WORK: the node must answer THIS fresh challenge. A wrong
+            # answer means the number wasn't produced by real, fresh computation on the node
+            # (a fabricated/replayed benchmark can't solve a seed it never saw) -> fraud freeze.
+            try:
+                _ch = json.loads(bt.code or "{}")
+                _seed, _size = _ch.get("bench_seed"), _ch.get("bench_size")
+                _got = (data.proof or {}).get("challenge_hash")
+                if _seed is not None and _size is not None and _got is not None:
+                    from db import compute_test_hash
+                    pow_verified = (_got == compute_test_hash(int(_size), int(_seed)))
+            except Exception:
+                logger.exception("benchmark proof-of-work check failed to evaluate")
             submit_task_result(db, bt, "benchmark", "completed")   # consume -> anti-replay
+            if pow_verified is False:
+                import seller_audit
+                seller_audit.freeze_for_fraud(
+                    db, spec, "benchmark proof-of-work mismatch (fabricated/stale challenge answer)")
+                raise HTTPException(status_code=409, detail="benchmark proof-of-work failed")
 
     # Gamer-style authenticity check: compare every benchmark score inside the SIGNED proof
     # (FP16 matmul TFLOPS, Blender Open Data, Cinebench, PugetBench) against PUBLIC reference
@@ -5578,12 +5598,14 @@ def benchmark_result(data: BenchmarkResultModel, agent=Depends(api_key_user),
 
     if elapsed_s is not None:
         meta = {**meta, "server_timed": True, "elapsed_s": elapsed_s}
+    if pow_verified is not None:
+        meta = {**meta, "pow_verified": pow_verified}
     set_benchmark(db, spec, data.tokens_sec, meta, verdict=verdict, elapsed_s=elapsed_s)
     from db import record_rep_event
     record_rep_event(db, spec, "benchmark", data.tokens_sec)
     return {"status": "ok", "spec_id": spec.id, "tokens_sec": data.tokens_sec,
             "benchmark_verdict": verdict, "server_timed": elapsed_s is not None,
-            "elapsed_s": elapsed_s}
+            "elapsed_s": elapsed_s, "pow_verified": pow_verified}
 
 
 

@@ -496,13 +496,17 @@ ok("template job carries image/port/model", tjob["task_type"]=="template" and "v
 c.post("/benchmark", headers=s5h, json={"spec_id":sid5})
 bjob=c.get("/jobs/next", headers={"X-API-KEY":key5}).json()
 ok("benchmark job dispatched", bjob["task_type"]=="benchmark")
+ok("benchmark job carries a FRESH server proof-of-work challenge (seed)", bjob.get("bench_seed") and bjob.get("bench_size"))
 # The agent measures FP16 matmul TFLOPS and puts it INSIDE the SIGNED proof; the server
 # checks it against the CLAIMED model's public band. 720 TFLOPS is in the H100 band.
-bph={"task_id":bjob["task_id"],"output_hash":"bench","ts":int(time.time()),"tflops_fp16":720}
+# It must ALSO answer the server's fresh seeded proof-of-work challenge.
+_pow=dbmod.compute_test_hash(int(bjob["bench_size"]), int(bjob["bench_seed"]))
+bph={"task_id":bjob["task_id"],"output_hash":"bench","ts":int(time.time()),"tflops_fp16":720,"challenge_hash":_pow}
 _br=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key5}, json={"spec_id":sid5,"tokens_sec":2350.5,"meta":{"model":"llama3-8b","sd_images_sec":4.2},"proof":bph,"signature":sign_proof(sk5,bph)})
 ok("signed benchmark result accepted", _br.status_code==200)
 ok("benchmark consistent with the claimed H100 -> verdict 'consistent'", _br.json().get("benchmark_verdict")=="consistent")
 ok("the platform SERVER-TIMED the benchmark (bound to the dispatched task)", _br.json().get("server_timed")==True)
+ok("the node ANSWERED the fresh server proof-of-work challenge (pow_verified)", _br.json().get("pow_verified")==True)
 ok("re-submitting the same signed benchmark is rejected as a replay (409)",
    c.post("/jobs/benchmark_result", headers={"X-API-KEY":key5}, json={"spec_id":sid5,"tokens_sec":2350.5,"meta":{},"proof":bph,"signature":sign_proof(sk5,bph)}).status_code==409)
 ok("/specs surfaces tokens/sec", any(s["spec_id"]==sid5 and s["benchmark_tokens_sec"]==2350.5 for s in c.get("/specs", headers=b5h).json()["specs"]))
@@ -541,6 +545,25 @@ ok("H100 listing measuring T4-class TFLOPS -> verdict 'implausibly_low'",
 _t6=[s for s in c.get("/specs", headers=s6h).json()["specs"] if s["spec_id"]==sid6][0]
 ok("an over-claiming benchmark does NOT upgrade trust (flagged, not benchmark_verified)",
    _t6["trust"]["level"]=="agent_verified" and "flagged" in _t6["trust"]["label"].lower())
+
+# --- BENCHMARK AUTHENTICITY: a fabricated proof-of-work answer is caught + frozen ---
+# A dedicated node claims a benchmark but returns a WRONG answer to the server's fresh seeded
+# challenge — proving the number wasn't produced by real, current computation -> fraud freeze.
+c.post("/register_user", json={"username":"seller8","password":"hunter2-correct-horse"})
+s8h={"Authorization":f"Bearer {login('seller8')}"}
+c.post("/change_role", headers=s8h, json={"role":"seller"})
+sid8=c.post("/register_specs", headers=s8h, json={"cpu":16,"ram":64,"duration":48,"price_per_hour":1.0,"provider":"seller8","gpu_model":"H100","units":1}).json()["spec_id"]
+sk8=Ed25519PrivateKey.generate(); pb8=base64.b64encode(sk8.public_key().public_bytes_raw()).decode()
+at8={"cpu":16,"nonce":"w","ts":int(time.time())}
+c.post("/prove", headers=s8h, json={"spec_id":sid8,"attestation":at8,"signature":sign_proof(sk8,at8),"pubkey":pb8})
+key8=c.post("/create_api_key", headers=s8h).json()["api_key"]
+c.post("/heartbeat", headers={"X-API-KEY":key8}, json={"spec_id":sid8})
+c.post("/benchmark", headers=s8h, json={"spec_id":sid8})
+bjob8=c.get("/jobs/next", headers={"X-API-KEY":key8}).json()
+bph8={"task_id":bjob8["task_id"],"output_hash":"bench","ts":int(time.time()),"tflops_fp16":700,"challenge_hash":"deadbeef"*8}
+_pw=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key8}, json={"spec_id":sid8,"tokens_sec":100.0,"meta":{},"proof":bph8,"signature":sign_proof(sk8,bph8)})
+ok("a fabricated proof-of-work answer is REJECTED (409 proof-of-work failed)",
+   _pw.status_code==409 and "proof-of-work" in _pw.json().get("detail","").lower())
 
 # --- BENCHMARK AUTHENTICITY: a 3D render benchmark (Blender Open Data) works too ---
 # A dedicated RTX 4090 node reports a Blender Open Data score. A score matching the public
