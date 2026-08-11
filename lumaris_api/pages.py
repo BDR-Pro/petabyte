@@ -789,14 +789,14 @@ async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await 
   var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
   var rep=(s.reputation_score!=null?s.reputation_score:'—')+(s.success_rate!=null?' <span class="mut" style="font-size:10px">('+s.success_rate+'%)</span>':'');
   var vram=s.vram_gb?((s.gpu_count>1?s.gpu_count+'× ':'')+s.vram_gb+'GB'):'—';
-  return '<tr><td style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
-   '<td class="mono mut" style="font-size:12px">'+vram+'</td>'+
-   '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+(s.auto_price?' <span class="badge cc" title="demand-priced within seller bounds">auto</span>':'')+'</td>'+
+  return '<tr><td data-l="GPU" style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
+   '<td data-l="VRAM" class="mono mut" style="font-size:12px">'+vram+'</td>'+
+   '<td data-l="$/hr" class="mono amber">$'+s.price_per_hour.toFixed(2)+(s.auto_price?' <span class="badge cc" title="demand-priced within seller bounds">auto</span>':'')+'</td>'+
    '<td data-l="vs cloud" class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
-   '<td>'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
+   '<td data-l="Trust">'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
    '<td data-l="Region" class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
-   '<td class="mono" style="color:'+rc+'">'+rep+'</td>'+
-   '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
+   '<td data-l="Reputation" class="mono" style="color:'+rc+'">'+rep+'</td>'+
+   '<td data-l="Free" class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
 load();setInterval(load,8000);
 </script>""")
 
@@ -2172,13 +2172,13 @@ async function prices(){
  tb.innerHTML=b.specs.map(function(s){
   var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
   return '<tr>'+
-   '<td style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
+   '<td data-l="GPU" style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
    '<td data-l="VRAM" class="mono mut">'+(s.vram_gb?s.vram_gb+' GB':'—')+'</td>'+
    '<td data-l="Petabyte" class="mono amber" style="font-weight:600">$'+Number(s.price_per_hour).toFixed(2)+'/hr</td>'+
    '<td data-l="Cloud" class="mono mut">'+(s.cloud_reference?'$'+Number(s.cloud_reference).toFixed(2)+'/hr':'<span class="mini">no comparable rate</span>')+'</td>'+
    '<td data-l="You save" class="mono" style="color:var(--pos)">'+(save>0?save+'%':'—')+'</td>'+
-   '<td class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
-   '<td><a class="btn btn-teal" style="padding:6px 14px;font-size:12px" href="/gpu/'+s.id+'">View</a></td></tr>';}).join('');
+   '<td data-l="Region" class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
+   '<td>'+'<a class="btn btn-teal" style="padding:6px 14px;font-size:12px" href="/gpu/'+s.id+'">View</a></td></tr>';}).join('');
 }
 prices();setInterval(prices,10000);
 // Benchmark-ordered reference catalog: reference $/hr is monotonic in the FP16 benchmark, so a
