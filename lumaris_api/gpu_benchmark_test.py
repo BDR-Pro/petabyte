@@ -67,6 +67,16 @@ ok("PugetBench Resolve consistent for a 4090",
 ok("PugetBench Premiere is advisory (non-freezing)",
    gb.classify("RTX 4090", 500, metric="pugetbench_premiere")["fraud"] is False)
 
+# ---------------------------------------------------------------- NiceHash mining hashrate (bandwidth proxy)
+ok("a genuine RTX 4090 Ethash hashrate (~120 MH/s) is CONSISTENT",
+   gb.classify("RTX 4090", 120, metric="hashrate_ethash_mhs")["verdict"] == "consistent")
+ok("a 4090 reporting a 3050-class hashrate -> implausibly_low (advisory, never freezes)",
+   gb.classify("RTX 4090", 25, metric="hashrate_ethash_mhs")["verdict"] == "implausibly_low"
+   and gb.classify("RTX 4090", 25, metric="hashrate_ethash_mhs")["fraud"] is False)
+ok("hashrate metric maps common mining algos (daggerhashimoto/ethash/etchash)",
+   gb.HASHRATE_ALGO_METRIC.get("daggerhashimoto") == "hashrate_ethash_mhs"
+   and gb.HASHRATE_ALGO_METRIC.get("etchash") == "hashrate_ethash_mhs")
+
 # ---------------------------------------------------------------- unknowns never flag
 ok("a model absent from a metric's table is unknown_model (recorded, not flagged)",
    gb.classify("A100", 500, metric="blender_optix")["verdict"] == "unknown_model")

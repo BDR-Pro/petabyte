@@ -72,12 +72,16 @@ per-object handles + metadata minimization.
   | `cinebench_2024_gpu` | Cinebench 2024 GPU (Redshift) | Maxon Cinebench | no (advisory) |
   | `pugetbench_resolve` | PugetBench — DaVinci Resolve Studio | pugetsystems.com | no (advisory) |
   | `pugetbench_premiere` | PugetBench — Premiere Pro | pugetsystems.com | no (advisory) |
+  | `hashrate_ethash_mhs` | mining hashrate (DaggerHashimoto/Ethash MH/s) | NiceHash / miner community | no (advisory) |
 
   **Blender is the flagship 3D benchmark** because Petabyte *renders Blender* — the agent already
   shells out to a Blender container, so the benchmark measures the real workload, and Blender Open
   Data publishes a per-GPU median to compare against (`task_fetcher._measure_blender_score` runs
   the official `benchmark-launcher-cli` where installed). Cinebench covers Cinema 4D / Redshift;
-  PugetBench covers the video-editing fleet.
+  PugetBench covers the video-editing fleet. **Mining hashrate** (NiceHash / Ethash) is a
+  *memory-bandwidth* proxy — a different GPU dimension than compute (TFLOPS) or RT-core render — so
+  a card can't fake bandwidth it lacks; a node's idle-mining hashrate (`/nodes/idle_report`) is
+  compared to the public per-GPU number automatically.
 
   A score far below what the claimed card can do → verdict `implausibly_low`; above what it can do
   → `suspiciously_high`; within the (wide) band → `consistent`, shown to buyers as

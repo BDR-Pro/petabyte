@@ -441,6 +441,36 @@ class QuorumCheck(Base):
     finalized_at = Column(DateTime, nullable=True)
 
 
+class BenchmarkSample(Base):
+    """Append-only log of every benchmark / hashrate observation — the labelled training corpus
+    for the GPU-authenticity model (the data moat). GPU + performance signals only; NO PII.
+
+    Each row pairs the raw signals (scores by metric, server-timing, proof-of-work result) with
+    the spec's context at that moment (reputation, job history, attestation) and, over time, the
+    fraud outcome — exactly the (features, label) shape a fraud/authenticity classifier trains on.
+    Growing this dataset with every real benchmark is a compounding, proprietary advantage."""
+    __tablename__ = "benchmark_samples"
+    id = Column(Integer, primary_key=True, index=True)
+    spec_id = Column(Integer, ForeignKey("specs.id"), index=True, nullable=True)
+    seller_id = Column(Integer, index=True, nullable=True)
+    gpu_model = Column(String, nullable=True)
+    source = Column(String, nullable=True)         # 'benchmark' | 'idle_mining'
+    metrics = Column(Text, nullable=True)          # JSON {metric_name: score}
+    verdict = Column(String, nullable=True)        # consistent | implausibly_low | ...
+    pow_verified = Column(Boolean, nullable=True)  # fresh server proof-of-work answered?
+    elapsed_s = Column(Float, nullable=True)       # server-observed wall-clock
+    tokens_sec = Column(Float, nullable=True)
+    # spec-context features (snapshot at sample time)
+    reputation = Column(Integer, nullable=True)
+    jobs_completed = Column(Integer, nullable=True)
+    jobs_failed = Column(Integer, nullable=True)
+    fraud_count = Column(Integer, nullable=True)
+    attested = Column(Boolean, nullable=True)
+    confidential = Column(Boolean, nullable=True)
+    region_verified = Column(Boolean, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+
+
 class Organization(Base):
     """Enterprise/lab account with a shared wallet and optional budget cap."""
     __tablename__ = "orgs"
@@ -2920,6 +2950,32 @@ def set_benchmark(db: Session, spec: "SellerSpec", tokens_sec: float, meta: dict
     if elapsed_s is not None:
         spec.benchmark_elapsed_s = float(elapsed_s)
     db.add(spec); db.commit()
+
+
+def record_benchmark_sample(db: Session, spec: "SellerSpec", *, source: str,
+                            metrics: dict = None, verdict: str = None,
+                            pow_verified: bool = None, elapsed_s: float = None,
+                            tokens_sec: float = None) -> "BenchmarkSample":
+    """Append a labelled training example (features + context) to the authenticity dataset.
+    Best-effort: a logging failure must never break the benchmark/idle path."""
+    import json as _json
+    seller = get_user_by_id(db, spec.user_id) if spec is not None else None
+    row = BenchmarkSample(
+        spec_id=(spec.id if spec is not None else None),
+        seller_id=(spec.user_id if spec is not None else None),
+        gpu_model=(spec.gpu_model if spec is not None else None),
+        source=source, metrics=_json.dumps(metrics or {}), verdict=verdict,
+        pow_verified=pow_verified, elapsed_s=elapsed_s, tokens_sec=tokens_sec,
+        reputation=(getattr(seller, "reputation", None) if seller is not None else None),
+        jobs_completed=(spec.jobs_completed if spec is not None else None),
+        jobs_failed=(spec.jobs_failed if spec is not None else None),
+        fraud_count=(spec.fraud_count if spec is not None else None),
+        attested=(spec.attested if spec is not None else None),
+        confidential=(spec.confidential if spec is not None else None),
+        region_verified=(spec.region_verified if spec is not None else None),
+    )
+    db.add(row); db.commit(); db.refresh(row)
+    return row
 
 
 def create_benchmark_task(db: Session, spec: "SellerSpec"):

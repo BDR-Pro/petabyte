@@ -222,6 +222,12 @@ jobs:
       - name: product analytics (PostHog funnel mirror — off-by-default, no PII)
         working-directory: lumaris_api
         run: python product_analytics_test.py
+      - name: gpu benchmark authenticity (score vs public reference band)
+        working-directory: lumaris_api
+        run: python gpu_benchmark_test.py
+      - name: authenticity training dataset (feature rows + labels export)
+        working-directory: lumaris_api
+        run: python training_data_test.py
       - name: agent telemetry (span exception-safety / redaction / trace-join / degrade)
         working-directory: lumaris_agent
         run: python agent_telemetry_test.py

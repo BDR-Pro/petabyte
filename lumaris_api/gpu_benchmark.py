@@ -100,6 +100,28 @@ _METRICS = {
         "low": 0.30, "high": 1.50, "fraud": 0.25,
         "ref": {"RTX 4090": 9500.0, "RTX 4080": 9000.0, "RTX 3090": 8000.0},
     },
+    # Mining hashrate (NiceHash / miner community). DaggerHashimoto/Ethash is
+    # MEMORY-BANDWIDTH bound, so it's a proxy for a *different* GPU dimension than the
+    # compute (TFLOPS) and render (RT-core) metrics — a card can't fake bandwidth it lacks.
+    # Advisory + a bit tighter than render (bandwidth varies less than clocks), but still never
+    # freezes: driver/LHR/overclock/power-limit move it. A node's idle-mining hashrate feeds it.
+    "hashrate_ethash_mhs": {
+        "label": "Mining hashrate — DaggerHashimoto/Ethash (MH/s)", "unit": "MH/s", "freezes": False,
+        "source": "NiceHash / miner community per-GPU hashrate (memory-bandwidth proxy)",
+        "low": 0.50, "high": 1.30, "fraud": 0.30,
+        "ref": {
+            "RTX 4090": 130.0, "RTX 4080": 95.0, "RTX 4070 TI": 68.0, "RTX 4070": 62.0,
+            "RTX 3090 TI": 132.0, "RTX 3090": 120.0, "RTX 3080": 98.0, "RTX 3070": 62.0,
+            "RTX A6000": 95.0, "RTX A5000": 85.0, "RTX A4000": 55.0,
+            "A100": 175.0, "V100": 90.0,
+        },
+    },
+}
+
+# algorithm name (as an idle-mining agent reports it) -> the metric its hashrate maps to.
+HASHRATE_ALGO_METRIC = {
+    "daggerhashimoto": "hashrate_ethash_mhs", "ethash": "hashrate_ethash_mhs",
+    "etchash": "hashrate_ethash_mhs", "etc": "hashrate_ethash_mhs",
 }
 
 KNOWN_METRICS = tuple(_METRICS)

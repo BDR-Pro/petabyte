@@ -597,6 +597,12 @@ _t7b=[s for s in c.get("/specs", headers=s7h).json()["specs"] if s["spec_id"]==s
 ok("the advisory flag downgrades trust to agent_verified (flagged), not benchmark_verified",
    _t7b["trust"]["level"]=="agent_verified" and "flagged" in _t7b["trust"]["label"].lower())
 
+# --- BENCHMARK AUTHENTICITY: NiceHash mining hashrate vs public data (memory-bandwidth proxy) ---
+# The 4090's idle-mining hashrate (~120 MH/s Ethash) is checked against the public per-GPU number.
+_idle=c.post("/nodes/idle_report", headers={"X-API-KEY":key7}, json={"spec_id":sid7,"algo":"daggerhashimoto","hashrate":120.0,"est_daily_usd":1.5})
+ok("idle-mining hashrate is checked vs public data (RTX 4090 @120 MH/s -> consistent)",
+   _idle.status_code==200 and _idle.json().get("hashrate_verdict")=="consistent")
+
 # --- #5 QUEUE PRIORITY ---
 lowb=book5(); highb=book5()
 tlow=c.post("/create_task", headers=b5h, json={"booking_id":lowb,"task_type":"notebook","code":"low","priority":1}).json()["task_id"]
@@ -1835,6 +1841,15 @@ _ao=c.get("/admin/overview", headers=GAH)
 ok("admin overview ok for admin", _ao.status_code==200 and {"users","specs","jobs","payouts_pending"} <= set(_ao.json()))
 ok("admin whoami true for admin", c.get("/admin/whoami", headers=GAH).json().get("admin")==True)
 ok("admin whoami 403 for non-admin", c.get("/admin/whoami", headers=NAH).status_code==403)
+# --- DATA MOAT: the GPU-authenticity training dataset is collected + admin-exportable ---
+ok("authenticity dataset is admin-gated (403 for non-admin)", c.get("/admin/dataset/authenticity", headers=NAH).status_code==403)
+_ds=c.get("/admin/dataset/authenticity", headers=GAH)
+ok("authenticity dataset exports feature rows collected from real benchmarks + idle reports",
+   _ds.status_code==200 and _ds.json()["stats"]["samples"]>=2 and isinstance(_ds.json()["rows"], list))
+ok("dataset rows carry a supervised label + a ratio-to-public-reference feature",
+   any("label_fraud" in r and any(k.startswith("ratio_") for k in r) for r in _ds.json()["rows"]))
+ok("dataset exports as JSONL for training pipelines",
+   c.get("/admin/dataset/authenticity?format=jsonl", headers=GAH).headers.get("content-type","").startswith("application/x-ndjson"))
 ok("admin users list flags admin", any(u["username"]=="gtest@example.com" and u["is_admin"] for u in c.get("/admin/users", headers=GAH).json()["users"]))
 ok("admin specs list", c.get("/admin/specs", headers=GAH).status_code==200)
 ok("admin can set the landing video from a full Shorts URL",

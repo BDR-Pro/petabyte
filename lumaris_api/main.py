@@ -2369,6 +2369,17 @@ def jobs_next(agent=Depends(api_key_user), db: Session = Depends(get_db)):
     return payload
 
 
+def _record_benchmark_sample(db, spec, *, source, metrics=None, verdict=None,
+                             pow_verified=None, elapsed_s=None, tokens_sec=None):
+    """Append a labelled example to the authenticity training dataset. Never raises."""
+    try:
+        from db import record_benchmark_sample
+        record_benchmark_sample(db, spec, source=source, metrics=metrics, verdict=verdict,
+                                pow_verified=pow_verified, elapsed_s=elapsed_s, tokens_sec=tokens_sec)
+    except Exception:
+        logger.debug("benchmark sample record failed (non-fatal)", exc_info=True)
+
+
 def _build_job_payload(task) -> dict:
     """Build the job envelope returned to the agent. Never includes platform secrets or
     full buyer workload inputs beyond what the job type needs to run."""
@@ -3170,6 +3181,22 @@ def admin_financial_integrity(me=Depends(require_admin), db: Session = Depends(g
     return {"ok": fi["balanced"], "ledger": fi, "payout_backlog": pb}
 
 
+@app.get("/admin/dataset/authenticity", tags=["admin"])
+def admin_dataset_authenticity(limit: int = Query(1000, ge=1, le=50000),
+                               since_id: int = Query(0, ge=0),
+                               fmt: str = Query("json", alias="format"),
+                               me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Export the GPU-authenticity TRAINING dataset — feature rows (score + ratio-to-public-
+    reference per metric) + labels (fraud / verdict), plus headline stats. GPU/perf signals only,
+    no PII. `format=jsonl` returns newline-delimited JSON for direct ingestion by a trainer.
+    `since_id` enables incremental pulls."""
+    import training_data as td
+    rows = td.export_authenticity_dataset(db, limit=limit, since_id=since_id)
+    if fmt == "jsonl":
+        return PlainTextResponse(td.to_jsonl(rows), media_type="application/x-ndjson")
+    return {"stats": td.dataset_stats(db), "count": len(rows), "rows": rows}
+
+
 @app.get("/admin/overview")
 def admin_overview(me=Depends(require_admin), db: Session = Depends(get_db)):
     from db import User, SellerSpec, Task, Booking, Platform, Payout
@@ -3433,7 +3460,21 @@ def idle_report(data: IdleReportModel, agent=Depends(api_key_user),
     if not spec or spec.user_id != agent.id:
         raise HTTPException(status_code=404, detail="Spec not found or not yours")
     record_idle_report(db, spec, data.algo, data.hashrate, data.est_daily_usd)
-    return {"status": "ok"}
+    # Mining hashrate is a memory-bandwidth proxy — compare it to the public per-GPU number for
+    # the CLAIMED model (advisory; too noisy to freeze on). Surfaces a mismatch to the seller
+    # and records a labelled data point for the authenticity model.
+    verdict = None
+    try:
+        from gpu_benchmark import classify, HASHRATE_ALGO_METRIC
+        metric = HASHRATE_ALGO_METRIC.get(str(data.algo or "").lower())
+        if metric and spec.gpu_model and data.hashrate:
+            v = classify(spec.gpu_model, data.hashrate, metric=metric)
+            verdict = v["verdict"]
+            _record_benchmark_sample(db, spec, source="idle_mining",
+                                     metrics={metric: data.hashrate}, verdict=verdict)
+    except Exception:
+        logger.debug("idle hashrate authenticity check failed (non-fatal)", exc_info=True)
+    return {"status": "ok", "hashrate_verdict": verdict}
 
 
 @app.get("/nodes/{spec_id}/idle")
@@ -5601,6 +5642,13 @@ def benchmark_result(data: BenchmarkResultModel, agent=Depends(api_key_user),
     if pow_verified is not None:
         meta = {**meta, "pow_verified": pow_verified}
     set_benchmark(db, spec, data.tokens_sec, meta, verdict=verdict, elapsed_s=elapsed_s)
+    # Labelled data point for the authenticity model (the data moat): the benchmark scores
+    # inside the signed proof + the verdict + proof-of-work + server-timing.
+    _bench_scores = {k: v for k, v in (data.proof or {}).items()
+                     if k in ("tflops_fp16", "blender_optix", "cinebench_2024_gpu",
+                              "pugetbench_resolve", "pugetbench_premiere", "hashrate_ethash_mhs")}
+    _record_benchmark_sample(db, spec, source="benchmark", metrics=_bench_scores, verdict=verdict,
+                             pow_verified=pow_verified, elapsed_s=elapsed_s, tokens_sec=data.tokens_sec)
     from db import record_rep_event
     record_rep_event(db, spec, "benchmark", data.tokens_sec)
     return {"status": "ok", "spec_id": spec.id, "tokens_sec": data.tokens_sec,
