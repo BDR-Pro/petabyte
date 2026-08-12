@@ -1806,11 +1806,18 @@ _rk0 = next(rk for rk in _djj["ranks"] if rk["rank"] == 0)
 _rk1 = next(rk for rk in _djj["ranks"] if rk["rank"] == 1)
 _r0kh = _agent_key_for_spec(_rk0["spec_id"]); _r1kh = _agent_key_for_spec(_rk1["spec_id"])
 _reg = c.post("/jobs/rendezvous", headers=_r0kh, json={"task_id": _rk0["task_id"], "host": "10.9.0.1", "port": 29500})
+c.post("/jobs/rendezvous", headers=_r1kh, json={"task_id": _rk1["task_id"], "host": "10.9.0.2", "port": 29500})
 ok("rank 0 registers the VPN rendezvous address; a joining rank fetches it",
    _reg.status_code == 200
    and c.get(f"/jobs/rendezvous/{_djj['job_id']}", headers=_r1kh).json()["master_addr"] == "10.9.0.1")
 ok("the cluster manifest shows kind=distributed with per-rank status",
    c.get(f"/jobs/manifest/{_djj['job_id']}", headers=_dbh).json()["kind"] == "distributed")
+# "another provider": the cluster exports to the tools an org already runs (MPI/torchrun/Ray/Slurm)
+ok("the cluster exports as an MPI/torchrun hostfile (Petabyte = another node pool, not infra change)",
+   "10.9.0.1 slots=" in c.get(f"/jobs/{_djj['job_id']}/hostfile", headers=_dbh).text)
+_cl = c.get(f"/jobs/{_djj['job_id']}/cluster", headers=_dbh).json()
+ok("the cluster spec hands back launch commands for mpirun / torchrun / ray / srun",
+   {"mpirun", "torchrun", "ray_worker", "slurm_srun"} <= set(_cl["launch"]))
 
 # --- split API portals: /data (buy data) and /devs (build compute), Scalar-rendered, DISJOINT ---
 _dp = c.get("/data"); _vp = c.get("/devs")

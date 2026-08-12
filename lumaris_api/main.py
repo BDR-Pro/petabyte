@@ -108,7 +108,7 @@ from db import (
     all_segments_done, segment_output_refs, set_job_status, get_multinode_job,
     job_segments,
     create_distributed_job, set_rendezvous, rendezvous_info, distributed_job_for_task,
-    rank_for_agent,
+    rank_for_agent, register_peer, cluster_peers, cluster_ready,
 )
 import db as dbmod
 from auth import create_access_token, verify_token
@@ -1860,6 +1860,27 @@ but form **one cluster over the VPN** (torchrun/NCCL). The platform:
 
 Track the cluster at `GET /jobs/manifest/{job_id}` (per-rank status + the master address).
 
+## Bring your own scheduler — Petabyte is just another provider
+
+Big-corp, academic and government workloads already run on **Slurm, MPI, Ray, or Kubernetes** and
+won't rewrite their stack. Adopting Petabyte is adding a **node pool**, not an infra change: every
+rank registers its VPN address, and Petabyte hands the cluster back as the artifacts your launcher
+already consumes.
+
+* `GET /jobs/{job_id}/hostfile` → an **MPI/torchrun hostfile** (`<host> slots=<gpus>`). Run it with
+  your existing `mpirun --hostfile hostfile -np <N> ...` — zero code change.
+* `GET /jobs/{job_id}/cluster` → the full node list + **ready-to-run launch commands** for
+  `mpirun`, `torchrun`, `ray`, and `srun`, plus the master address.
+
+Integration patterns (Petabyte = an extra provider, your control plane stays put):
+* **Slurm** — cloud-burst: point your `ResumeProgram`/`SuspendProgram` at `POST /distributed` so
+  `slurmctld` elastically provisions Petabyte nodes that join your existing controller.
+* **MPI / OpenMPI** — feed the `hostfile` straight into `mpirun`.
+* **Ray** — `ray start --head` on rank 0, `ray start --address=<master>` on the rest (both printed
+  by `/cluster`).
+* **PyTorch** — `torchrun --rdzv_backend=static --master_addr=<master>` from `/cluster`.
+* **Kubernetes** — join the Petabyte nodes as autoscaled GPU workers behind your scheduler.
+
 ## Money model
 
 Rentals are **prepaid into escrow** before any work runs, and released to the seller as the work
@@ -2998,9 +3019,9 @@ def _build_job_payload(task) -> dict:
     if task.task_type == "distributed":
         # One rank of a multi-node cluster. The agent runs `image`/`command` under torchrun with
         # the rank/world_size below, forming an NCCL/gloo cluster with the other ranks OVER THE
-        # VPN. Rank 0 first binds a port and registers it at register_url; the others poll
-        # rendezvous_url until the master address appears, then join. master_addr/port are NOT
-        # baked in here — they only exist once rank 0 comes up (fetched via rendezvous_url).
+        # VPN. EVERY rank POSTs its own VPN address to register_url (so the cluster is exportable as
+        # an MPI hostfile / Ray address); rank 0's registration also becomes the master. Non-master
+        # ranks poll rendezvous_url until the master address appears, then join.
         rp = json.loads(task.template_params or "{}")
         jid = rp.get("job_id")
         return {"task_id": task.id, "task_type": "distributed",
@@ -6128,16 +6149,18 @@ def distributed_job(data: DistributedModel, user: dict = Depends(get_current_use
 
 class RendezvousModel(BaseModel):
     task_id: int
-    host: str = Field(min_length=1, max_length=255)     # rank-0's VPN-reachable address
+    host: str = Field(min_length=1, max_length=255)     # this rank's VPN-reachable address
     port: int = Field(gt=0, le=65535)
+    slots: int = Field(1, ge=1, le=64)                  # GPUs this rank contributes (mpirun slots)
 
 
 @app.post("/jobs/rendezvous", tags=["compute"])
 def jobs_rendezvous_register(data: RendezvousModel, agent=Depends(api_key_user),
                              db: Session = Depends(get_db)):
-    """Rank 0's node registers the cluster's rendezvous address (its VPN host + port), so the
-    other ranks can find and join the master. Only the agent that owns rank 0's task may call it,
-    and only once — the cluster has a single master."""
+    """A rank registers ITS OWN VPN-reachable address for the cluster. Every rank calls this, so the
+    whole cluster becomes addressable (an MPI hostfile / Ray address / torchrun rendezvous). Rank 0
+    additionally becomes the cluster master. An agent may only register a rank it owns, and only
+    rank 0 can set the master — no other rank can hijack it."""
     task = get_task_for_agent(db, data.task_id, agent)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found or not yours")
@@ -6145,14 +6168,17 @@ def jobs_rendezvous_register(data: RendezvousModel, agent=Depends(api_key_user),
     if not job:
         raise HTTPException(status_code=409, detail="Task is not part of a distributed job")
     seg = segment_for_task(db, task.id)
-    if not seg or seg.idx != 0:
-        raise HTTPException(status_code=403, detail="Only rank 0 registers the rendezvous address")
+    if not seg:
+        raise HTTPException(status_code=404, detail="No cluster rank for this task")
     if not _HOSTPORT_RE.match(data.host):
         raise HTTPException(status_code=422, detail="host must be an IP/hostname (VPN address)")
-    if not set_rendezvous(db, job, data.host, data.port):
-        raise HTTPException(status_code=409, detail="Rendezvous already set to a different address")
-    return {"status": "ok", "job_id": job.id, "master_addr": job.master_addr,
-            "master_port": job.master_port, "world_size": job.total_segments}
+    register_peer(db, seg, data.host, data.port, data.slots)   # record THIS rank's address
+    if seg.idx == 0:                                            # rank 0 is also the master
+        if not set_rendezvous(db, job, data.host, data.port):
+            raise HTTPException(status_code=409, detail="Rendezvous already set to a different address")
+    return {"status": "ok", "job_id": job.id, "my_rank": seg.idx, "is_master": seg.idx == 0,
+            "master_addr": job.master_addr, "master_port": job.master_port,
+            "world_size": job.total_segments, "cluster_ready": cluster_ready(db, job)}
 
 
 @app.get("/jobs/rendezvous/{job_id}", tags=["compute"])
@@ -6168,8 +6194,72 @@ def jobs_rendezvous_get(job_id: int, agent=Depends(api_key_user),
     if seg is None:
         raise HTTPException(status_code=404, detail="You have no rank in this job")
     info = rendezvous_info(db, job)
-    info.update({"my_rank": rank, "is_master": rank == 0})
+    info.update({"my_rank": rank, "is_master": rank == 0,
+                 "cluster_ready": cluster_ready(db, job)})
     return info
+
+
+# ---- "Petabyte is just another provider": export the cluster to the tools an org already runs ----
+# Big-corp / academic / gov workloads run on Slurm, MPI, Ray, Kubernetes — they will not rewrite
+# their stack. These endpoints hand the running cluster back as the standard artifacts those tools
+# consume, so adopting Petabyte is "add a node pool", not "change your infrastructure".
+
+def _cluster_launch_cmds(job, peers) -> dict:
+    """Ready-to-run commands that drive THIS cluster from the standard launchers."""
+    import json as _json
+    params = _json.loads(job.params or "{}")
+    cmd = params.get("command") or "<your-entrypoint>"
+    n = job.total_segments
+    total_slots = sum(p["slots"] for p in peers) or n
+    master = f"{job.master_addr}:{job.master_port}" if job.master_addr else "<rank0-host>:<port>"
+    mhost = job.master_addr or "<rank0-host>"
+    mport = job.master_port or 29500
+    return {
+        "mpirun": f"mpirun --hostfile hostfile -np {total_slots} {cmd}",
+        "torchrun": (f"torchrun --nnodes={n} --nproc_per_node=<gpus_per_node> "
+                     f"--node_rank=$RANK --rdzv_backend=static "
+                     f"--master_addr={mhost} --master_port={mport} {cmd}"),
+        "ray_head": f"ray start --head --port={mport}",
+        "ray_worker": f"ray start --address={master}",
+        "slurm_srun": f"srun --nodes={n} --ntasks={total_slots} {cmd}",
+    }
+
+
+@app.get("/jobs/{job_id}/hostfile", response_class=PlainTextResponse, tags=["compute"])
+def cluster_hostfile(job_id: int, user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """The cluster as an MPI/torchrun HOSTFILE (`<host> slots=<gpus>` per line). Drop it into your
+    existing `mpirun --hostfile` — Petabyte is just another set of nodes. Owner-only."""
+    job = get_multinode_job(db, job_id)
+    me = get_user_by_username(db, _username(user))
+    if not job or job.kind != "distributed" or not me or (job.buyer_id != me.id and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="Distributed job not found")
+    peers = cluster_peers(db, job)
+    ready = all(p["registered"] for p in peers) if peers else False
+    lines = [f"# Petabyte cluster job {job.id}: {sum(1 for p in peers if p['registered'])}/"
+             f"{len(peers)} nodes registered (ready={str(ready).lower()})"]
+    for p in peers:
+        if p["registered"]:
+            lines.append(f"{p['host']} slots={p['slots']}")
+    return "\n".join(lines) + "\n"
+
+
+@app.get("/jobs/{job_id}/cluster", tags=["compute"])
+def cluster_spec(job_id: int, user: dict = Depends(get_current_user),
+                 db: Session = Depends(get_db)):
+    """The full cluster spec + ready-to-run launch commands for MPI / torchrun / Ray / Slurm, so
+    your existing scheduler treats Petabyte as another node pool. Owner-only."""
+    job = get_multinode_job(db, job_id)
+    me = get_user_by_username(db, _username(user))
+    if not job or job.kind != "distributed" or not me or (job.buyer_id != me.id and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="Distributed job not found")
+    peers = cluster_peers(db, job)
+    return {"job_id": job.id, "status": job.status, "world_size": job.total_segments,
+            "backend": job.backend, "ready": cluster_ready(db, job),
+            "master": ({"rank": 0, "host": job.master_addr, "port": job.master_port}
+                       if job.master_addr else None),
+            "nodes": peers, "hostfile_url": f"/jobs/{job.id}/hostfile",
+            "launch": _cluster_launch_cmds(job, peers)}
 
 
 @app.post("/solve")

@@ -1134,10 +1134,18 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
     <div class="card"><div class="lbl">Distributed <span class="mut">· 1 job, N GPUs</span></div>
       <p class="mono" style="font-size:12.5px;line-height:2.05">
       POST /distributed <span class="mut">cluster across N machines</span><br>
-      POST /jobs/rendezvous <span class="mut">rank 0 posts VPN addr</span><br>
-      GET /jobs/rendezvous/{job_id} <span class="mut">ranks join</span><br>
-      GET /jobs/manifest/{job_id} <span class="mut">per-rank status</span></p>
+      POST /jobs/rendezvous <span class="mut">each rank posts VPN addr</span><br>
+      GET /jobs/{id}/hostfile <span class="mut">MPI / torchrun hostfile</span><br>
+      GET /jobs/{id}/cluster <span class="mut">nodes + launch cmds</span></p>
       <p class="mut" style="font-size:12px;margin-top:8px">Split one job across up to 100 GPUs on <b>different machines</b>, wired into one <b>torchrun/NCCL cluster over the VPN</b>. Gang-scheduled (one rank per PC), escrowed all-or-nothing.</p></div>
+    <div class="card"><div class="lbl">Use your own scheduler <span class="mut">· another provider</span></div>
+      <p class="mut" style="font-size:13px;margin:4px 0 8px">Already on <b>Slurm, MPI, Ray or Kubernetes</b>? Don't change your stack — burst into Petabyte as an extra node pool. The cluster exports as the artifacts your launcher already reads:</p>
+      <p class="mono" style="font-size:12px;line-height:1.9">
+      mpirun --hostfile hostfile -np N …<br>
+      torchrun --master_addr=&lt;rank0&gt; …<br>
+      ray start --address=&lt;rank0&gt;<br>
+      slurm: ResumeProgram → POST /distributed</p>
+      <p class="mut" style="font-size:12px;margin-top:6px">Petabyte is another provider, not an infra change.</p></div>
     <div class="card"><div class="lbl am">Wallet &amp; payouts</div>
       <p class="mono" style="font-size:12.5px;line-height:2.05">
       GET /wallet <span class="mut">balance + earnings</span><br>

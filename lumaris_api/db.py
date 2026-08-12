@@ -1012,6 +1012,11 @@ class JobSegment(Base):
     range_end = Column(Float, nullable=True)
     output_ref = Column(String, nullable=True)
     status = Column(String, default="pending")         # pending|done
+    # For DISTRIBUTED clusters: this rank's VPN-reachable address, so the whole cluster can be
+    # exported as an MPI hostfile / Ray address / torchrun rdzv endpoint (null for fan-out).
+    peer_host = Column(String, nullable=True)
+    peer_port = Column(Integer, nullable=True)
+    slots = Column(Integer, nullable=True)             # GPUs this rank contributes (mpirun slots)
 
 
 class Checkpoint(Base):
@@ -1934,6 +1939,8 @@ def _ensure_columns():
                   ("result_signature", "VARCHAR"), ("result_proof", "TEXT")],
         "multinode_jobs": [("backend", "VARCHAR"), ("master_addr", "VARCHAR"),
                            ("master_port", "INTEGER"), ("rendezvous_at", "TIMESTAMP")],
+        "job_segments": [("peer_host", "VARCHAR"), ("peer_port", "INTEGER"),
+                         ("slots", "INTEGER")],
     }
     try:
         insp = _inspect(engine)
@@ -3798,6 +3805,31 @@ def rank_for_agent(db: Session, job: "MultiNodeJob", agent_user: "User"):
         if spec and spec.user_id == agent_user.id:
             return seg, seg.idx
     return None, None
+
+
+def register_peer(db: Session, seg: "JobSegment", host: str, port: int, slots: int = 1):
+    """Record a rank's VPN-reachable address so the whole cluster can be exported to the tools an
+    org already runs (an MPI hostfile, a Ray address, a torchrun rendezvous endpoint)."""
+    seg.peer_host = host
+    seg.peer_port = int(port)
+    seg.slots = max(1, int(slots or 1))
+    db.add(seg); db.commit()
+    return seg
+
+
+def cluster_peers(db: Session, job: "MultiNodeJob"):
+    """Every rank of a distributed job, ordered by rank, with its registered VPN address."""
+    segs = (db.query(JobSegment).filter(JobSegment.job_id == job.id)
+            .order_by(JobSegment.idx.asc()).all())
+    return [{"rank": s.idx, "host": s.peer_host, "port": s.peer_port,
+             "slots": (s.slots or 1), "is_master": s.idx == 0,
+             "registered": bool(s.peer_host), "status": s.status} for s in segs]
+
+
+def cluster_ready(db: Session, job: "MultiNodeJob") -> bool:
+    """True once every rank has registered its address (the cluster is fully addressable)."""
+    peers = cluster_peers(db, job)
+    return bool(peers) and all(p["registered"] for p in peers)
 
 
 def job_segments(db: Session, job_id: int):

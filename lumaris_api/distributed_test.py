@@ -122,25 +122,50 @@ rank0, rank1 = rank_seller[0], rank_seller[1]
 task0 = next(rk["task_id"] for rk in j["ranks"] if rk["rank"] == 0)
 task1 = next(rk["task_id"] for rk in j["ranks"] if rk["rank"] == 1)
 
-# ---- rendezvous: only rank 0 registers; the others join ----
-# a non-master rank cannot register the rendezvous address
-rbad = c.post("/jobs/rendezvous", headers=rank1["kh"], json={"task_id": task1, "host": "10.8.0.9", "port": 29500})
-ok("a non-master rank is REFUSED from registering the rendezvous (403)", rbad.status_code == 403)
-# rank 0 registers its VPN-reachable address
+# ---- rendezvous: every rank registers its own VPN address; only rank 0 becomes master ----
+task2 = next(rk["task_id"] for rk in j["ranks"] if rk["rank"] == 2)
+rank2 = rank_seller[2]
+# an agent can only register a rank it OWNS (can't touch another rank's task)
+rhijack = c.post("/jobs/rendezvous", headers=rank1["kh"], json={"task_id": task0, "host": "10.8.0.9", "port": 29500})
+ok("an agent cannot register a rank it does not own (no master hijack, 404)", rhijack.status_code == 404)
+# a non-zero rank registers its OWN address — allowed, but it does NOT become the master
+rr1 = c.post("/jobs/rendezvous", headers=rank1["kh"], json={"task_id": task1, "host": "10.8.0.12", "port": 29500, "slots": 1})
+ok("a non-master rank registers its own address (200) but is NOT the master",
+   rr1.status_code == 200 and rr1.json()["is_master"] is False)
+ok("a non-master registration does NOT set the cluster master",
+   c.get(f"/jobs/rendezvous/{job_id}", headers=rank1["kh"]).json()["master_addr"] is None)
+# rank 0 registers -> it becomes the master
 rreg = c.post("/jobs/rendezvous", headers=rank0["kh"], json={"task_id": task0, "host": "10.8.0.1", "port": 29500})
-ok("rank 0 registers the cluster rendezvous address (its VPN host:port)",
-   rreg.status_code == 200 and rreg.json()["master_addr"] == "10.8.0.1" and rreg.json()["master_port"] == 29500)
-# another rank fetches the address to join
+ok("rank 0's registration sets the cluster master (its VPN host:port)",
+   rreg.status_code == 200 and rreg.json()["is_master"] is True and rreg.json()["master_addr"] == "10.8.0.1")
+# a joining rank fetches the master to join
 rget = c.get(f"/jobs/rendezvous/{job_id}", headers=rank1["kh"]).json()
 ok("a joining rank fetches the master address + its own rank over the VPN",
-   rget["ready"] is True and rget["master_addr"] == "10.8.0.1" and rget["my_rank"] == 1
+   rget["master_addr"] == "10.8.0.1" and rget["my_rank"] == 1
    and rget["is_master"] is False and rget["world_size"] == N)
+# register the last rank so the whole cluster is addressable
+c.post("/jobs/rendezvous", headers=rank2["kh"], json={"task_id": task2, "host": "10.8.0.13", "port": 29500, "slots": 1})
 # an agent with no rank in this job cannot read the rendezvous
 outsider = make_seller(99, 1.0)
 ro = c.get(f"/jobs/rendezvous/{job_id}", headers=outsider["kh"])
 ok("an agent with no rank in the job cannot read its rendezvous (404)", ro.status_code == 404)
 ok("the manifest now shows rendezvous is ready",
    c.get(f"/jobs/manifest/{job_id}", headers=BH).json()["rendezvous_ready"] is True)
+
+# ---- Petabyte is just another provider: export the cluster to the tools an org already runs ----
+hf = c.get(f"/jobs/{job_id}/hostfile", headers=BH)
+hbody = hf.text
+ok("the cluster exports as an MPI/torchrun HOSTFILE (every node's VPN addr + slots)",
+   hf.status_code == 200 and "10.8.0.1 slots=1" in hbody
+   and "10.8.0.12 slots=1" in hbody and "10.8.0.13 slots=1" in hbody)
+cl = c.get(f"/jobs/{job_id}/cluster", headers=BH).json()
+ok("the cluster spec lists every node and is marked ready once all ranks registered",
+   cl["ready"] is True and len(cl["nodes"]) == N and cl["master"]["host"] == "10.8.0.1")
+ok("the cluster spec hands back ready-to-run launch commands for the standard schedulers",
+   "mpirun" in cl["launch"] and "torchrun" in cl["launch"] and "ray_worker" in cl["launch"]
+   and "10.8.0.1" in cl["launch"]["torchrun"])
+ok("hostfile/cluster are owner-only (an outsider agent JWT can't read them)",
+   c.get(f"/jobs/{job_id}/hostfile").status_code in (401, 422))
 
 # ---- completion: the job is done when EVERY rank finishes (no stitch step) ----
 _s = dbm.SessionLocal()
