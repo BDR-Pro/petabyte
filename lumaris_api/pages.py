@@ -889,6 +889,9 @@ $env:PETABYTE_ACTION="uninstall"; irm https://petabyte.market/manage.ps1 | iex</
   <div class="card" style="margin-top:16px"><div class="lbl am" data-ar="استلم أرباحك">Get paid</div>
     <p class="mut" data-ar="رصيد واحد. اسحب في أي وقت أو وفق جدول أسبوعي — تحويل بنكي أو USDC أو بطاقة هدية. فعّل خيار التعدين عند الخمول لتكسب دخلاً في الخلفية كلما لم يكن جهازك مؤجراً.">One balance. Withdraw anytime or on a weekly schedule — bank, USDC, or gift card. Opt in to idle-fallback and earn a background trickle whenever the node isn't rented. <a class="teal" href="/app">Open the app →</a></p>
   </div>
+  <div class="card" style="margin-top:16px"><div class="lbl" data-ar="تفكّر في شراء كرت رسومات؟">Thinking of buying a GPU to rent?</div>
+    <p class="mut" data-ar="احسب الأرباح الصافية، ومتى يسترد الكرت ثمنه، والعائد السنوي لكل كرت — بأرقام شفافة يمكنك تعديلها.">See net earnings, payback time and 1-year ROI per card — transparent numbers you can tune to your own electricity and utilization. <a class="teal" href="/roi">Open the ROI calculator →</a></p>
+  </div>
 </div>
 <script>
 function _esch(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -941,6 +944,112 @@ async function walletStart(a1, btn){
 }
 (function(){var si=document.getElementById('iksignin'),gn=document.getElementById('ikgen');
   if(authed()){if(gn)gn.style.display='';}else{if(si)si.style.display='';}})();
+</script>""")
+
+
+ROI_HTML = _page("Petabyte — GPU ROI calculator",
+    desc="Buy a GPU and rent it: see net earnings, payback time and 1-year ROI per card. Transparent math, editable assumptions, live benchmark-anchored prices.",
+    path="/roi", body="""
+<div class="wrap" style="padding:48px 22px 10px">
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="حاسبة العائد">rig economics</span></div>
+  <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px" data-ar="اشترِ كرت رسومات وأجّره — متى يسترد ثمنه؟">Buy a GPU and rent it — <span class="grad-teal">when does it pay for itself?</span></h1>
+  <p class="mut" style="max-width:64ch" data-ar="نعرض لك الحساب كاملاً: الأرباح بالساعة (من سعر السوق المرتكز على الأداء) ناقص عمولة المنصة والكهرباء، مقابل تكلفة العتاد. عدّل الافتراضات وشاهد نقطة التعادل والعائد السنوي.">Here's the full math: earnings per hour (from the benchmark-anchored market price) minus our fee and electricity, against what the card costs. Tune the assumptions and watch the breakeven and 1-year ROI change.</p>
+</div>
+<div class="wrap" style="padding:6px 22px 0">
+  <div class="card" style="border-color:rgba(240,180,41,.30);background:linear-gradient(180deg,rgba(240,180,41,.05),transparent)">
+    <b class="amber" data-ar="هذا نموذج، وليس وعداً.">This is a model, not a promise.</b>
+    <span class="mut" data-ar="أكبر عامل هو نسبة التشغيل — كم ساعة يستأجر المشترون كرتك فعلاً — وطلب السوق ما زال مبكّراً. اضبط النسبة على ما تتوقعه بواقعية. تكلفة العتاد افتراضها سعر الإطلاق؛ اكتب سعر اليوم الحقيقي. الكهرباء تُحسب أثناء ساعات التأجير فقط.">The biggest factor is <b>utilization</b> — how many hours buyers actually rent your card — and marketplace demand is still early. Set it to what you realistically expect. Hardware cost defaults to launch MSRP, so type in today's real price. Electricity counts GPU load during rented hours only.</span>
+  </div>
+</div>
+<div class="wrap" style="padding:14px 22px 0">
+  <div class="cols c2">
+    <div class="card"><div class="lbl" data-ar="نسبة التشغيل">Utilization — hours actually rented</div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <input id="util" type="range" min="0" max="100" value="40" step="5" style="flex:1" oninput="roiRecalc()"/>
+        <b class="mono teal" id="utilv" style="min-width:3ch;text-align:right">40%</b>
+      </div>
+      <p class="mut" style="font-size:12px;margin-top:6px" data-ar="٤٠٪ ≈ نحو ٩.٦ ساعة تأجير يومياً. كن متحفظاً في البداية.">40% ≈ ~9.6 rented hours/day. Be conservative early on.</p></div>
+    <div class="card"><div class="lbl" data-ar="سعر الكهرباء">Electricity — $ per kWh</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="mut">$</span>
+        <input id="kwh" value="0.12" size="5" inputmode="decimal" style="text-align:right" oninput="roiRecalc()"/>
+        <span class="mut">/ kWh</span>
+      </div>
+      <p class="mut" style="font-size:12px;margin-top:6px" data-ar="متوسط أمريكا ≈ ٠٫١٧؛ كثيرون يدفعون أقل. استخدم سعر فاتورتك.">US avg ≈ $0.17; many pay less. Use your own bill's rate.</p></div>
+  </div>
+</div>
+<div class="wrap" style="padding:14px 22px 6px">
+  <div id="roihead" class="mut mono" style="font-size:13px;margin-bottom:10px"></div>
+  <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;min-width:720px" class="mono">
+      <thead><tr style="text-align:left;border-bottom:1px solid var(--line)">
+        <th style="padding:8px 10px" data-ar="الكرت">GPU</th>
+        <th style="padding:8px 10px" data-ar="تحتفظ/ساعة">You keep /hr</th>
+        <th style="padding:8px 10px" data-ar="كهرباء/ساعة">Power /hr</th>
+        <th style="padding:8px 10px" data-ar="تكلفة العتاد">Hardware $</th>
+        <th style="padding:8px 10px" data-ar="صافي/شهر">Net /mo</th>
+        <th style="padding:8px 10px" data-ar="التعادل">Breakeven</th>
+        <th style="padding:8px 10px" data-ar="العائد السنوي">1-yr ROI</th>
+        <th style="padding:8px 10px"></th>
+      </tr></thead>
+      <tbody id="roirows"><tr><td colspan="8" class="mut" style="padding:14px 10px">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <p id="roidisc" class="mut" style="font-size:11.5px;margin-top:12px"></p>
+  <p class="mut" style="font-size:11.5px;margin-top:4px" data-ar="الأرباح مبنية على السعر المرجعي المرتكز على أداء الكرت (ما يدفعه المشتري) ناقص عمولتنا؛ السعر الفعلي يحدده البائع والطلب. لا شيء هنا مضمون.">Earnings use the benchmark-anchored reference price (what a buyer pays) minus our fee; the real price is set by the seller and demand. Nothing here is guaranteed.</p>
+  <div style="margin-top:18px"><a class="btn btn-amber" href="/install" data-ar="ابدأ مثل المُعدِّن ←">Start earning — paste your wallet →</a></div>
+</div>
+<script>
+var _ROI=null;
+function _e2(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function _money(n){return (n>=0?'':'-')+'$'+Math.abs(n).toFixed(2);}
+function roiCost(el){ if(!_ROI)return; var g=el.getAttribute('data-g'); var v=parseFloat(el.value);
+  for(var i=0;i<_ROI.gpus.length;i++){ if(_ROI.gpus[i].gpu_model===g){ _ROI.gpus[i]._cost=(v>0?v:null); } }
+  roiRecalc(); }
+function roiRecalc(){
+  if(!_ROI)return;
+  var util=parseFloat(document.getElementById('util').value)/100;
+  var kwh=parseFloat((document.getElementById('kwh').value||'').trim()); if(!(kwh>=0))kwh=0;
+  document.getElementById('utilv').textContent=Math.round(util*100)+'%';
+  var rows=_ROI.gpus.map(function(g){
+    var cost=(g._cost&&g._cost>0)?g._cost:g.hardware_cost_usd;
+    var powerHr=(g.tdp_w/1000)*kwh;
+    var netHr=(g.net_price_per_hr-powerHr)*util;      // averaged over the day
+    var netMo=netHr*24*30, netDay=netHr*24;
+    var be=(netDay>0)?(cost/netDay):null;             // days
+    var roi=(cost>0)?(netDay*365/cost*100):null;
+    return {g:g,cost:cost,powerHr:powerHr,netMo:netMo,be:be,roi:roi};
+  });
+  rows.sort(function(a,b){ var an=(a.be==null),bn=(b.be==null); if(an!==bn)return an?1:-1; return (a.be||0)-(b.be||0); });
+  var html=rows.map(function(r){
+    var g=r.g;
+    var beTxt=(r.be==null)?'<span class="mut">— never</span>':((r.be<60)?(r.be.toFixed(0)+' days'):((r.be/30).toFixed(1)+' mo'));
+    var beColor=(r.be==null)?'var(--mut)':((r.be<270)?'var(--teal)':((r.be<540)?'var(--amber)':'var(--mut)'));
+    var roiTxt=(r.roi==null)?'—':(r.roi.toFixed(0)+'%/yr');
+    return '<tr style="border-bottom:1px solid var(--line)">'+
+      '<td style="padding:8px 10px"><b>'+_e2(g.gpu_model)+'</b> <span class="mut" style="font-size:11px">'+(g.benchmark_tflops_fp16||'')+' TF · '+g.tdp_w+'W</span></td>'+
+      '<td style="padding:8px 10px">$'+g.net_price_per_hr.toFixed(2)+'</td>'+
+      '<td style="padding:8px 10px" class="mut">'+_money(r.powerHr)+'</td>'+
+      '<td style="padding:8px 10px"><span class="mut">$</span><input data-g="'+_e2(g.gpu_model)+'" value="'+Math.round(r.cost)+'" size="5" inputmode="decimal" style="width:6ch;text-align:right;background:transparent;border:1px solid var(--line);border-radius:6px;color:inherit;padding:2px 4px" oninput="roiCost(this)"/></td>'+
+      '<td style="padding:8px 10px;color:'+(r.netMo>0?'var(--teal)':'var(--mut)')+'">'+_money(r.netMo)+'</td>'+
+      '<td style="padding:8px 10px;color:'+beColor+'">'+beTxt+'</td>'+
+      '<td style="padding:8px 10px">'+roiTxt+'</td>'+
+      '<td style="padding:8px 10px"><a class="teal" href="'+g.buy_url+'" target="_blank" rel="noopener nofollow sponsored">Buy →</a></td>'+
+      '</tr>';
+  }).join('');
+  document.getElementById('roirows').innerHTML=html||'<tr><td colspan="8" class="mut" style="padding:14px 10px">No data.</td></tr>';
+  var a=_ROI.assumptions;
+  document.getElementById('roihead').textContent='At '+Math.round(util*100)+'% utilization and $'+kwh.toFixed(2)+'/kWh, after our '+a.platform_fee_pct+'% fee — soonest payback first:';
+}
+(function(){
+  fetch('/pricing/roi').then(function(r){return r.json();}).then(function(d){
+    _ROI=d;
+    var disc=(d.affiliate&&d.affiliate.disclosure)?d.affiliate.disclosure:'';
+    if(d.affiliate&&!d.affiliate.enabled){ disc+=' (Affiliate program not enabled yet — links are plain, non-monetised searches.)'; }
+    document.getElementById('roidisc').textContent=disc;
+    roiRecalc();
+  }).catch(function(e){ document.getElementById('roirows').innerHTML='<tr><td colspan="8" class="mut" style="padding:14px 10px">Could not load pricing.</td></tr>'; });
+})();
 </script>""")
 
 

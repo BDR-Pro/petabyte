@@ -112,7 +112,7 @@ from deps import oauth2_scheme, get_current_user, _username, api_key_user  # noq
 from static_dashboard import DASHBOARD_HTML
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
-                   NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML)
+                   NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML)
 from web_routes import router as web_router     # static public pages (extracted router)
 from trust_routes import router as trust_router  # trust/transparency API (extracted router)
 from templates_registry import TEMPLATES, public_catalog
@@ -1257,6 +1257,10 @@ def developers_page():
 @app.get("/install", response_class=HTMLResponse)
 def install_page():
     return INSTALL_HTML
+
+@app.get("/roi", response_class=HTMLResponse)
+def roi_page():
+    return ROI_HTML
 
 @app.get("/keys", response_class=HTMLResponse)
 def keys_page():
@@ -5809,6 +5813,52 @@ def pricing_catalog(db: Session = Depends(get_db)):
             "note": "Reference price is derived monotonically from the FP16 TFLOPS benchmark: a "
                     "slower GPU is never priced above a faster one. Sellers set their own price; "
                     "this is the fair baseline."}
+
+
+@app.get("/pricing/roi", tags=["marketplace"])
+def pricing_roi(kwh: float = Query(0.12, ge=0, le=2.0),
+                utilization: float = Query(0.5, ge=0, le=1.0),
+                db: Session = Depends(get_db)):
+    """"Buy a GPU and rent it" ROI + breakeven, per GPU — every term shown so nothing is a black box.
+
+    Earnings come from the SAME benchmark-anchored reference price the marketplace uses (a buyer's
+    price), minus Petabyte's fee and electricity, scaled by an assumed utilization. Hardware cost
+    defaults to the card's published launch MSRP and is meant to be overridden with today's real
+    price (the buy link shows it). This is a MODEL, not a promise: `utilization` is demand-dependent
+    and the biggest lever — the response says so, and the UI lets you dial it to what you expect."""
+    import hardware_reference as hw
+    take = float(PLATFORM_TAKE_RATE)
+    tag = os.getenv("AFFILIATE_AMAZON_TAG", "").strip()
+    rows = []
+    for model in hw.models():
+        r = hw.roi_row(model, kwh_usd=kwh, utilization=utilization, platform_fee=take)
+        if r is None:
+            continue
+        r["buy_url"] = hw.buy_url(model, tag)
+        rows.append(r)
+    # Soonest breakeven first; unprofitable rows (breakeven None) sink to the bottom.
+    rows.sort(key=lambda x: (x["breakeven_days"] is None, x["breakeven_days"] or 9e18))
+    return {
+        "assumptions": {
+            "kwh_usd": round(kwh, 4),
+            "utilization": round(utilization, 4),
+            "platform_fee_pct": round(take * 100.0, 1),
+            "power_note": "Counts GPU load power during rented hours only; excludes idle/host draw "
+                          "and internet.",
+            "utilization_note": "Utilization is demand-dependent and NOT guaranteed — it is the "
+                                "biggest driver of ROI. Marketplace demand is still early; model "
+                                "conservatively.",
+            "cost_note": "Hardware cost defaults to the card's LAUNCH MSRP; street prices vary — "
+                         "override it with today's real price (see the buy link).",
+        },
+        "affiliate": {
+            "enabled": bool(tag),
+            "disclosure": "As an Amazon Associate, Petabyte may earn a commission from qualifying "
+                          "purchases made through these links — at no extra cost to you.",
+        },
+        "count": len(rows),
+        "gpus": rows,
+    }
 
 
 @app.post("/launch", tags=["compute"])

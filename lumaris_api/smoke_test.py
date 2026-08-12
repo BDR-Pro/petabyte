@@ -1638,6 +1638,26 @@ ok("no stale placeholder key survives — the seller never hand-substitutes pk_y
 ok("price is optional and benchmark-anchored — the page auto-prices, it does not bake in a made-up rate",
    "/pricing/suggest" in _inst and 'placeholder="auto"' in _inst)
 
+# --- GPU ROI / breakeven calculator ("buy a GPU and rent it") + affiliate buy links ---
+_roi = c.get("/pricing/roi?utilization=0.4&kwh=0.12").json()
+ok("/pricing/roi returns per-GPU breakeven + 1-yr ROI from the benchmark price, fee and electricity",
+   _roi.get("count", 0) > 0 and all(
+       k in _roi["gpus"][0] for k in ("gpu_model", "net_per_month", "breakeven_days", "roi_year_pct", "buy_url", "tdp_w", "hardware_cost_usd")))
+ok("ROI response is HONEST: it foregrounds that utilization is demand-dependent, not a promise",
+   "utilization" in _roi.get("assumptions", {}).get("utilization_note", "").lower()
+   and "not guaranteed" in _roi["assumptions"]["utilization_note"].lower())
+ok("ROI rows are sorted soonest-payback-first (breakeven ascending)",
+   [g["breakeven_days"] for g in _roi["gpus"] if g["breakeven_days"] is not None]
+   == sorted(g["breakeven_days"] for g in _roi["gpus"] if g["breakeven_days"] is not None))
+ok("affiliate is DISCLOSED (FTC) and off by default until a tag is configured",
+   "commission" in _roi.get("affiliate", {}).get("disclosure", "").lower()
+   and _roi["affiliate"]["enabled"] is False and "amazon.com" in _roi["gpus"][0]["buy_url"])
+_roip = c.get("/roi").text
+ok("the /roi page renders the calculator (controls + live recompute wired to /pricing/roi)",
+   "roiRecalc" in _roip and "/pricing/roi" in _roip and 'id="util"' in _roip)
+ok("/install links sellers to the ROI calculator (buy-decision funnel)",
+   'href="/roi"' in _inst)
+
 # --- wallet-only onboarding: paste a wallet, get a ONE-LINE installer, no account (like a miner) ---
 ok("the /install page offers a wallet-only start (no login) wired to /nodes/quickstart",
    "walletStart" in _inst and "/nodes/quickstart" in _inst and 'id="qwallet"' in _inst)

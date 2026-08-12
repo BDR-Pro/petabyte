@@ -240,6 +240,9 @@ jobs:
       - name: pricing engine (cloud-anchored, demand+trust, explainable, clamped)
         working-directory: lumaris_api
         run: python pricing_engine_test.py
+      - name: GPU ROI (buy-and-rent breakeven: transparent, honest, affiliate-tagged)
+        working-directory: lumaris_api
+        run: python hardware_reference_test.py
       - name: database backup to S3 (disaster recovery: dump/gzip/sha256/retention/verify)
         working-directory: lumaris_api
         run: python backup_test.py

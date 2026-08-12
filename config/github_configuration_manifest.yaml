@@ -9,6 +9,12 @@ variables:
     scope:
     - platform
     description: Comma-separated admin usernames/emails.
+  AFFILIATE_AMAZON_TAG:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   AGENT_TELEMETRY_ENABLED:
     required: false
     default: 'true'
