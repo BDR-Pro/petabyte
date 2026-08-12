@@ -116,6 +116,14 @@ AGENT_VARS = {
                        "description": "Docker image for the idle NiceHash miner."},
     "NICEHASH_TAKE_RATE": {"required": False, "default": "0.10", "scope": ["platform"], "format": "float",
                            "description": "Platform commission on idle-mining revenue (idle_reconcile tool)."},
+    # spare-disk rental — agent side (platform-side vars live in template.env; see docs/DISK_RENTAL.md)
+    "DISK_FALLBACK": {"required": False, "default": "false", "scope": ["gpu"], "format": "bool",
+                      "description": "Operator opt-in: let this machine rent spare disk to a storage network."},
+    "DISK_PAYOUT_WALLET": {"required": False, "default": None, "scope": ["gpu"],
+                           "description": "Petabyte's platform storage wallet set on every disk node "
+                                          "(earnings pool centrally, credited per node — no per-seller wallet)."},
+    "DISK_DATA_DIR": {"required": False, "default": "/var/lib/petabyte/disk", "scope": ["gpu"],
+                      "description": "Host dir where a storage node keeps its data (per-node subdir)."},
     # distributed compute (one rank of a multi-node cluster; see lumaris_agent/distributed_run.py)
     "AGENT_VPN_ADDR": {"required": False, "default": None, "scope": ["gpu"],
                        "description": "This node's cluster-reachable (VPN) address advertised to peer "
@@ -225,6 +233,18 @@ CURATED = {
                                    "(root@<id>.<zone>). Defaults to BASE_DOMAIN; set to e.g. "
                                    "vm.petabyte.market to put every VM under one wildcard record. "
                                    "See docs/dynamic_dns.md."},
+    "DISK_PROVIDER": {"required": False, "format": "string",
+                      "description": "Default storage-network adapter for disk-rental reconciliation (storj|btfs|sia)."},
+    "DISK_REFERENCE_USD_PER_TB_MONTH": {"required": False, "format": "float",
+                                        "description": "Net $/TB/month reference for the pre-commit disk-rental earnings estimate."},
+    "STORAGE_TAKE_RATE": {"required": False, "format": "float",
+                          "description": "Platform commission on storage-network (disk-rental) earnings."},
+    "MAX_DISK_ALLOC_GB": {"required": False, "format": "int",
+                          "description": "Hard ceiling on how much disk one node may pledge (safety bound)."},
+    "STORAGE_STUB": {"required": False, "format": "bool",
+                     "description": "Offline stub for storage earnings (tests). Real path needs provider creds."},
+    "STORAGE_STUB_EARNINGS": {"required": False, "format": "string",
+                              "description": "Test-only JSON {node_id: usd} for the storage-earnings stub."},
     "PUBLIC_BASE_URL": {"aka": "APP_URL", "format": "url_or_empty",
                         "description": "Public base URL for building share/reset links."},
     "CONNECT_RETURN_URL": {"format": "url_or_empty",

@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (202)
+## Variables (non-sensitive) (211)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -46,6 +46,11 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `DATA_SNAPSHOT_INTERVAL_S` | no | platform | `3600` | `3600` | api/main.py | — | — |
 | `DEFAULT_LANDING_VIDEO_ID` | no | platform | `UUSWYaxboDA` | `UUSWYaxboDA` | api/main.py | — | — |
 | `DEPLOY_CONFIG_FROM_GITHUB` | no | deployment | `false` | `false` | GitHub Actions deploy | — | Rollout gate. When 'true' the deploy generates the server env from GitHub config and pushes it; until then deploys stay code-only. Flip to true after entering all Secrets. |
+| `DISK_DATA_DIR` | no | gpu | `/var/lib/petabyte/disk` | `/var/lib/petabyte/disk` | agent/disk_node.py | — | Host dir where a storage node keeps its data (per-node subdir). |
+| `DISK_FALLBACK` | no | gpu | `false` | `false` | agent/task_fetcher.py | format: bool | Operator opt-in: let this machine rent spare disk to a storage network. |
+| `DISK_PAYOUT_WALLET` | no | gpu | *(empty)* | `…` | agent/task_fetcher.py | — | Petabyte's platform storage wallet set on every disk node (earnings pool centrally, credited per node — no per-seller wallet). |
+| `DISK_PROVIDER` | no | platform | `storj` | `storj` | api/storage_providers.py | format: string | Default storage-network adapter for disk-rental reconciliation (storj\|btfs\|sia). |
+| `DISK_REFERENCE_USD_PER_TB_MONTH` | no | platform | `1.5` | `1.5` | agent/task_fetcher.py, api/main.py | format: float | Net $/TB/month reference for the pre-commit disk-rental earnings estimate. |
 | `DIST_RENDEZVOUS_PORT` | no | gpu | `29500` | `29500` | agent/distributed_run.py, agent/task_fetcher.py | format: int | Port this rank advertises/binds for cluster rendezvous (torchrun master port). |
 | `DIST_RENDEZVOUS_TIMEOUT` | no | gpu | `300` | `300` | agent/task_fetcher.py | format: int | Seconds a joining rank waits for the master to appear before failing (gang). |
 | `DIST_SELFTEST_DIM` | no | gpu | `8` | `8` | agent/task_fetcher.py | format: int | Vector length for the built-in cluster all-reduce self-test. |
@@ -96,6 +101,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `MAILCHIMP_AUDIENCE_ID` | no | platform | *(empty)* | `…` | api/main.py | — | — |
 | `MAILGUN_DOMAIN` | no | platform | `petabyte.market` | `petabyte.market` | api/email_service.py | — | — |
 | `MAX_CONCURRENT_GPU_JOBS` | no | gpu | `1` | `1` | GPU node agent | format: int | Max concurrent paid jobs per GPU node (must stay bounded). (reserved: standardized in GitHub config). |
+| `MAX_DISK_ALLOC_GB` | no | platform | `100000` | `100000` | api/main.py | format: int | Hard ceiling on how much disk one node may pledge (safety bound). |
 | `MAX_DISTRIBUTED_NODES` | no | platform | `100` | `100` | api/main.py | — | — |
 | `MAX_HOURS` | no | gpu | `24` | `24` | agent/provision.py | format: int | Max rentable hours offered. |
 | `MIN_REPUTATION` | no | platform | `50` | `50` | api/db.py | format: int | — |
@@ -189,6 +195,9 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `SENTRY_PROFILES_SAMPLE_RATE` | no | platform | `0.0` | `0.0` | — | format: float | — |
 | `SENTRY_RELEASE` | no | observability | *(empty)* | `…` | — | — | Sentry release tag (defaults to RELEASE / GITHUB_SHA). |
 | `SENTRY_TRACES_SAMPLE_RATE` | no | platform | `0.1` | `0.1` | — | format: float | — |
+| `STORAGE_STUB` | no | platform | `false` | `false` | api/storage_providers.py | format: bool | Offline stub for storage earnings (tests). Real path needs provider creds. |
+| `STORAGE_STUB_EARNINGS` | no | platform | *(empty)* | `…` | api/storage_providers.py | format: string | Test-only JSON {node_id: usd} for the storage-earnings stub. |
+| `STORAGE_TAKE_RATE` | no | platform | `0.10` | `0.10` | api/main.py, api/tools/disk_reconcile.py | format: float | Platform commission on storage-network (disk-rental) earnings. |
 | `STRIPE_ALLOW_LIVE` | no | platform | `false` | `false` | api/stripe_gateway.py | format: bool; one of: true / false | Second live gate; live keys refused unless true. |
 | `STRIPE_API_VERSION` | no | platform | *(empty)* | `…` | api/stripe_gateway.py | — | — |
 | `STRIPE_FEE_BPS` | no | platform | `290` | `290` | — | — | — |

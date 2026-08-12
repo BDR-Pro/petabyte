@@ -255,6 +255,9 @@ jobs:
       - name: distributed EXECUTION (real N-process all-reduce; every rank converges on the right answer)
         working-directory: lumaris_agent
         run: python distributed_run_test.py
+      - name: spare-disk rental (web3/bittorrent storage; per-node attribution + take + idempotent reconcile)
+        working-directory: lumaris_api
+        run: python disk_rental_test.py
       - name: agent WireGuard (keys/config/peers + fail-closed bring-up)
         working-directory: lumaris_agent
         run: python wireguard_test.py

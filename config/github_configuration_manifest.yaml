@@ -223,6 +223,40 @@ variables:
     - deployment
     description: Rollout gate. When 'true' the deploy generates the server env from GitHub config and
       pushes it; until then deploys stay code-only. Flip to true after entering all Secrets.
+  DISK_DATA_DIR:
+    required: false
+    default: /var/lib/petabyte/disk
+    scope:
+    - gpu
+    description: Host dir where a storage node keeps its data (per-node subdir).
+  DISK_FALLBACK:
+    required: false
+    default: 'false'
+    scope:
+    - gpu
+    description: 'Operator opt-in: let this machine rent spare disk to a storage network.'
+    format: bool
+  DISK_PAYOUT_WALLET:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: "Petabyte's platform storage wallet set on every disk node (earnings pool centrally,\
+      \ credited per node \u2014 no per-seller wallet)."
+  DISK_PROVIDER:
+    required: false
+    default: storj
+    scope:
+    - platform
+    description: Default storage-network adapter for disk-rental reconciliation (storj|btfs|sia).
+    format: string
+  DISK_REFERENCE_USD_PER_TB_MONTH:
+    required: false
+    default: '1.5'
+    scope:
+    - platform
+    description: Net $/TB/month reference for the pre-commit disk-rental earnings estimate.
+    format: float
   DIST_RENDEZVOUS_PORT:
     required: false
     default: '29500'
@@ -620,6 +654,13 @@ variables:
     - gpu
     description: 'Max concurrent paid jobs per GPU node (must stay bounded). (reserved: standardized in
       GitHub config).'
+    format: int
+  MAX_DISK_ALLOC_GB:
+    required: false
+    default: '100000'
+    scope:
+    - platform
+    description: Hard ceiling on how much disk one node may pledge (safety bound).
     format: int
   MAX_DISTRIBUTED_NODES:
     required: false
@@ -1300,6 +1341,27 @@ variables:
     scope:
     - platform
     description: ''
+    format: float
+  STORAGE_STUB:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: Offline stub for storage earnings (tests). Real path needs provider creds.
+    format: bool
+  STORAGE_STUB_EARNINGS:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: 'Test-only JSON {node_id: usd} for the storage-earnings stub.'
+    format: string
+  STORAGE_TAKE_RATE:
+    required: false
+    default: '0.10'
+    scope:
+    - platform
+    description: Platform commission on storage-network (disk-rental) earnings.
     format: float
   STRIPE_ALLOW_LIVE:
     required: false

@@ -99,6 +99,8 @@ from db import (
     note_heartbeat, note_job_completed, note_job_failed, note_fraud,
     compute_reputation, recent_rep_events, trust_level_for,
     set_idle_fallback, record_idle_report, idle_credited_total,
+    set_disk_fallback, delete_disk_fallback, record_disk_report, disk_credited_total,
+    disk_node_name, DISK_PROVIDERS,
     add_payout_method, list_payout_methods, get_payout_method,
     request_payout, set_payout_status, list_payouts,
     withdrawable_earnings, is_payout_matured, EARNINGS_HOLD_HOURS, PAYOUT_MATURITY_MIN_JOBS,
@@ -911,6 +913,20 @@ class IdleReportModel(BaseModel):
     est_daily_usd: float = 0.0
 
 
+class DiskFallbackModel(BaseModel):
+    spec_id: int
+    enabled: bool
+    provider: Optional[str] = Field(None, max_length=16)   # storj | btfs | sia
+    alloc_gb: Optional[int] = Field(None, ge=0, le=1_000_000)  # seller's GB cap
+
+
+class DiskReportModel(BaseModel):
+    spec_id: int
+    provider: str = Field(max_length=16)
+    used_gb: float = Field(0.0, ge=0)
+    est_daily_usd: float = Field(0.0, ge=0)
+
+
 class EmailModel(BaseModel):
     email: str
     notify_email: bool = True
@@ -1248,6 +1264,13 @@ DATA_API_UNITS = {
 # (fail-closed) so a real key can't be aliased into free data access by misconfiguration.
 # Distributed (multi-node cluster) jobs: the most GPUs one job may span across DISTINCT nodes.
 MAX_DISTRIBUTED_NODES = int(os.getenv("MAX_DISTRIBUTED_NODES", "100"))
+# Spare-disk rental: hard ceiling on how much disk one node may pledge (safety bound on input).
+MAX_DISK_ALLOC_GB = int(os.getenv("MAX_DISK_ALLOC_GB", "100000"))    # 100 TB
+# Platform commission on storage-network earnings (same shape as NICEHASH_TAKE_RATE).
+STORAGE_TAKE_RATE = float(os.getenv("STORAGE_TAKE_RATE", "0.10"))
+# Honest reference: representative net $/TB/month a node earns on a decentralized storage network,
+# used ONLY for the pre-commit earnings estimate shown to sellers (not a payout figure).
+DISK_REFERENCE_USD_PER_TB_MONTH = float(os.getenv("DISK_REFERENCE_USD_PER_TB_MONTH", "1.5"))
 
 DATA_API_SANDBOX_KEY_PREFIX = "pk_sandbox_"
 DATA_API_SANDBOX_KEY = os.getenv("DATA_API_SANDBOX_KEY", "pk_sandbox_petabyte_dev").strip()
@@ -2729,7 +2752,9 @@ def heartbeat(data: HeartbeatModel, request: Request, owner=Depends(api_key_user
         _earn = None
     return {"status": "ok", "spec_id": spec.id, "state": "online",
             "detected_country": detected, "region_verified": spec.region_verified,
-            "idle_fallback": bool(spec.idle_fallback), "earnings": _earn}
+            "idle_fallback": bool(spec.idle_fallback),
+            "disk": _disk_cfg(spec),      # start/limit/stop the spare-disk storage node
+            "earnings": _earn}
 
 
 @app.get("/nodes/{spec_id}/earnings_forecast", tags=["seller"])
@@ -4222,6 +4247,103 @@ def idle_status(spec_id: int, user: dict = Depends(get_current_user),
             "reported_at": str(spec.idle_reported_at) if spec.idle_reported_at else None,
             "credited_total_usd": idle_credited_total(db, spec.id),
             "worker_id": f"pb-{spec.id}"}
+
+
+# ------------------- Spare-disk rental (rent unused disk to a web3/BitTorrent network) -------------------
+# The disk analogue of idle mining: a seller pledges spare disk to a decentralized storage network
+# (Storj / BTFS / Sia) and earns a background trickle. Each node contributes under a UNIQUE node
+# name (pbdisk-<spec_id>) so a settled payout attributes 1:1 to the seller's unified balance — no
+# per-seller storage wallet, exactly like NiceHash's `pb-<spec_id>` worker id. Opt-in; the seller
+# sets the GB cap and can limit / pause / disable / delete at any time. Runs ALONGSIDE paid GPU jobs
+# (disk != GPU), so it never competes with rentals.
+
+def _disk_cfg(spec) -> dict:
+    """The config the agent needs to start/limit/stop its storage node (sent on the heartbeat)."""
+    return {"enabled": bool(spec.disk_fallback),
+            "provider": spec.disk_provider,
+            "alloc_gb": spec.disk_alloc_gb,
+            "node_name": disk_node_name(spec)}
+
+
+@app.post("/nodes/disk_fallback", tags=["seller"])
+def toggle_disk_fallback(data: DiskFallbackModel, user: dict = Depends(get_current_user),
+                         db: Session = Depends(get_db)):
+    """Opt a node in/out of renting SPARE DISK to a storage network, and set its provider + GB cap.
+    Off by default. Independent of GPU rentals — disk earns even while a paid job runs. The seller
+    owns the cap and can change or disable it here; the node's earnings land in the unified balance
+    (attributed by its node name pbdisk-<id>). Petabyte never holds a per-seller storage wallet."""
+    owner = _require_seller(db, user)
+    spec = _get_spec(db, data.spec_id)
+    if not spec or spec.user_id != owner.id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    provider = (data.provider or spec.disk_provider or "storj").lower()
+    if provider not in DISK_PROVIDERS:
+        raise HTTPException(status_code=422,
+                            detail=f"provider must be one of {sorted(DISK_PROVIDERS)}")
+    alloc = data.alloc_gb
+    if alloc is not None:
+        alloc = max(0, min(int(alloc), MAX_DISK_ALLOC_GB))
+    set_disk_fallback(db, spec, data.enabled, provider=provider, alloc_gb=alloc)
+    return {"status": "ok", "spec_id": spec.id, "disk": _disk_cfg(spec)}
+
+
+@app.delete("/nodes/{spec_id}/disk", tags=["seller"])
+def delete_disk_node(spec_id: int, user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """Cancel + delete disk contribution: disable and clear the config. The agent removes the
+    storage-node container and wipes its data dir on the next heartbeat. Already-credited earnings
+    are unaffected (they're in the seller's balance)."""
+    owner = _require_seller(db, user)
+    spec = _get_spec(db, spec_id)
+    if not spec or spec.user_id != owner.id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    delete_disk_fallback(db, spec)
+    return {"status": "deleted", "spec_id": spec.id, "disk": _disk_cfg(spec)}
+
+
+@app.post("/nodes/disk_report", tags=["seller"])
+def disk_report(data: DiskReportModel, agent=Depends(api_key_user),
+                db: Session = Depends(get_db)):
+    """Agent reports storage-node usage + an estimated daily trickle (for the seller's visibility).
+    The actual earnings are settled separately from the provider by node name (disk_reconcile)."""
+    spec = _get_spec(db, data.spec_id)
+    if not spec or spec.user_id != agent.id:
+        raise HTTPException(status_code=404, detail="Spec not found or not yours")
+    record_disk_report(db, spec, data.provider, data.used_gb, data.est_daily_usd)
+    return {"status": "ok", "spec_id": spec.id, "node_name": disk_node_name(spec)}
+
+
+@app.get("/nodes/{spec_id}/disk", tags=["seller"])
+def disk_status(spec_id: int, user: dict = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    spec = _get_spec(db, spec_id)
+    if not spec or not me or spec.user_id != me.id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    return {"spec_id": spec.id, "disk_fallback": bool(spec.disk_fallback),
+            "provider": spec.disk_provider, "alloc_gb": spec.disk_alloc_gb,
+            "used_gb": spec.disk_used_gb, "est_daily_usd": spec.disk_est_daily_usd,
+            "reported_at": str(spec.disk_reported_at) if spec.disk_reported_at else None,
+            "credited_total_usd": disk_credited_total(db, spec.id),
+            "node_name": disk_node_name(spec)}
+
+
+@app.get("/disk/providers", tags=["seller"])
+def disk_providers():
+    """The storage-network adapters a node can pledge disk to, with an honest net $/TB/month
+    reference for the pre-commit estimate. Actual earnings come from the provider (disk_reconcile);
+    this is a planning figure, not a payout guarantee."""
+    ref = DISK_REFERENCE_USD_PER_TB_MONTH
+    return {"providers": [
+        {"id": "storj", "name": "Storj", "kind": "web3 object storage",
+         "image": "storjlabs/storagenode:latest", "est_usd_per_tb_month": ref},
+        {"id": "btfs", "name": "BitTorrent File System (BTFS)", "kind": "bittorrent / TRON",
+         "image": "btfs/node:latest", "est_usd_per_tb_month": ref},
+        {"id": "sia", "name": "Sia (hostd)", "kind": "web3 storage host",
+         "image": "ghcr.io/siafoundation/hostd:latest", "est_usd_per_tb_month": ref},
+    ], "take_rate": STORAGE_TAKE_RATE,
+       "note": "Each node contributes under a unique name (pbdisk-<id>); earnings land in your "
+               "unified Petabyte balance. Opt-in; you set the GB cap and can disable/delete anytime."}
 
 
 # ------------------- ACCOUNT / NOTIFICATIONS -------------------

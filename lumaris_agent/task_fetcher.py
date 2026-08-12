@@ -74,6 +74,9 @@ def heartbeat_loop():
             if r.status_code == 200:
                 _body = r.json()
                 _platform_idle["enabled"] = bool(_body.get("idle_fallback"))
+                # Spare-disk rental runs ALONGSIDE paid jobs (disk != GPU) — drive it from the
+                # heartbeat, not the job loop. The server sends the current config each beat.
+                _apply_disk_cfg(_body.get("disk"))
                 # Live earnings forecast: show it once under the banner, and expose it to the
                 # desktop dashboard via the shared ui.agent_status dict.
                 _e = _body.get("earnings")
@@ -787,6 +790,109 @@ def stop_idle_miner():
         _idle_running["on"] = False
         if _con:
             _con.line("idle", "idle-mining stopped (paid work takes the GPU)")
+
+
+# ---- Spare-disk rental: earn a trickle by pledging unused disk to a storage network ----
+# Same "earn while otherwise idle" idea as the NiceHash miner, but for DISK — and it runs
+# alongside paid GPU work instead of only when unrented. The operator opts the MACHINE in with
+# DISK_FALLBACK=true; the seller opts the node in + sets the GB cap via the API (delivered on the
+# heartbeat). Each node contributes under its unique name (pbdisk-<spec_id>) -> earnings attribute
+# to the seller's unified balance. The seller can limit / disable / delete at any time.
+_disk_running = {"on": False, "node": None, "alloc": 0, "provider": None}
+
+
+def _disk_opt_in() -> bool:
+    """The MACHINE operator must enable disk rental locally — off by default (fail-closed)."""
+    return os.getenv("DISK_FALLBACK", "").lower() == "true"
+
+
+def _disk_wallet() -> str:
+    """PETABYTE's platform storage wallet (earnings pool centrally, credited per node). Never a
+    per-seller wallet."""
+    return os.getenv("DISK_PAYOUT_WALLET", "")
+
+
+def start_disk_node(provider, node_name, alloc_gb):
+    """Launch (or re-launch on a changed cap) the storage-node container. Idempotent."""
+    import shutil, subprocess
+    import disk_node as _dn
+    if not shutil.which("docker") or not _dn.provider_supported(provider) or int(alloc_gb) < 1:
+        return
+    if (_disk_running["on"] and _disk_running["node"] == node_name
+            and _disk_running["alloc"] == int(alloc_gb)
+            and _disk_running["provider"] == provider):
+        return                                   # already running with this exact config
+    data_dir = _dn.data_dir_for(node_name)
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        subprocess.run(["docker", "rm", "-f", _dn.container_name(node_name)], capture_output=True)
+        cmd = _dn.build_disk_cmd(provider=provider, node_name=node_name, alloc_gb=int(alloc_gb),
+                                 data_dir=data_dir, wallet=_disk_wallet())
+        subprocess.check_call(cmd)
+        _disk_running.update({"on": True, "node": node_name, "alloc": int(alloc_gb),
+                              "provider": provider})
+        if _con:
+            _con.line("disk", f"renting {alloc_gb} GB to {provider} as {node_name}")
+        _report_disk(provider, node_name, int(alloc_gb))
+    except Exception as e:                              # noqa: BLE001 — never crash the agent
+        logging.error(f"disk node start failed: {e}")
+
+
+def stop_disk_node(node_name):
+    """Stop the storage node (pause earning) but KEEP its data — a disable, not a delete."""
+    if not node_name:
+        return
+    import subprocess
+    import disk_node as _dn
+    try:
+        subprocess.run(["docker", "rm", "-f", _dn.container_name(node_name)], capture_output=True)
+    finally:
+        if _disk_running["node"] == node_name:
+            _disk_running.update({"on": False})
+
+
+def remove_disk_node(node_name):
+    """Cancel + delete: stop the node AND wipe its data dir (the seller deleted the contribution)."""
+    if not node_name:
+        return
+    import shutil
+    import disk_node as _dn
+    stop_disk_node(node_name)
+    try:
+        shutil.rmtree(_dn.data_dir_for(node_name), ignore_errors=True)
+        if _con:
+            _con.line("disk", f"deleted disk contribution {node_name} (data wiped)")
+    except Exception as e:                              # noqa: BLE001
+        logging.error(f"disk node remove failed: {e}")
+
+
+def _report_disk(provider, node_name, alloc_gb):
+    """Tell the platform the node's usage + an estimated daily trickle (seller visibility)."""
+    import disk_node as _dn
+    used = _dn.data_dir_bytes_gb(_dn.data_dir_for(node_name))
+    ref = float(os.getenv("DISK_REFERENCE_USD_PER_TB_MONTH", "1.5"))
+    _post("/nodes/disk_report", {"spec_id": int(SPEC_ID), "provider": provider,
+                                 "used_gb": used, "est_daily_usd": _dn.est_daily_usd(alloc_gb, ref)})
+
+
+def _apply_disk_cfg(cfg):
+    """React to the heartbeat's disk config: start / limit / pause / delete the storage node.
+    The MACHINE must be opted in (DISK_FALLBACK=true); otherwise this is a no-op."""
+    if not isinstance(cfg, dict) or not _disk_opt_in():
+        return
+    node = cfg.get("node_name")
+    if cfg.get("enabled"):
+        provider = cfg.get("provider")
+        alloc = int(cfg.get("alloc_gb") or 0)
+        if provider and alloc >= 1:
+            start_disk_node(provider, node, alloc)
+    else:
+        # disabled (pause, keep data) vs deleted (config cleared -> wipe). The server clears the
+        # provider on DELETE, so "no provider" means the seller cancelled the contribution.
+        if cfg.get("provider"):
+            stop_disk_node(node)
+        else:
+            remove_disk_node(node)
 
 
 def job_loop():

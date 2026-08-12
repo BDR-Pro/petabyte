@@ -218,6 +218,17 @@ class SellerSpec(Base):
     idle_hashrate = Column(Float, nullable=True)
     idle_est_daily_usd = Column(Float, nullable=True)
     idle_reported_at = Column(DateTime, nullable=True)
+    # --- rent SPARE DISK to a web3/BitTorrent storage network (Storj/BTFS/Sia), same "earn a
+    # trickle" model as idle mining but for disk. Runs ALONGSIDE paid GPU jobs (disk != GPU), so it
+    # is not preempted. Each node contributes as a UNIQUE node name (pbdisk-<spec_id>) so earnings
+    # attribute 1:1 to the seller's unified balance — no per-seller storage wallet. Opt-in; the
+    # seller sets the GB cap and can pause/disable/delete at any time. ---
+    disk_fallback = Column(Boolean, default=False)   # opt-in: contribute spare disk
+    disk_provider = Column(String, nullable=True)    # storj | btfs | sia (adapter)
+    disk_alloc_gb = Column(Integer, nullable=True)   # seller's hard cap on contributed GB
+    disk_used_gb = Column(Float, nullable=True)      # last reported used GB
+    disk_est_daily_usd = Column(Float, nullable=True)
+    disk_reported_at = Column(DateTime, nullable=True)
     # capacity
     total_units = Column(Integer, default=1, nullable=False)
     available_units = Column(Integer, default=1, nullable=False)
@@ -603,6 +614,7 @@ PLATFORM_REVENUE   = "platform_revenue"
 EXTERNAL_PAYMENTS  = "external:payments"    # the card processor
 EXTERNAL_PAYOUTS   = "external:payouts"     # the bank / USDC rail
 EXTERNAL_MINING    = "external:mining"      # NiceHash
+EXTERNAL_STORAGE   = "external:storage"     # decentralized storage network (Storj/BTFS/Sia)
 EXTERNAL_PROMO     = "external:promo"       # referral / promotional credit (marketing spend)
 
 
@@ -1120,6 +1132,21 @@ class IdleSettlement(Base):
     credited_usd = Column(Money, default=Decimal(0))
     created_at = Column(DateTime, default=_utcnow)
     __table_args__ = (UniqueConstraint("worker_id", "period", name="uq_idle_settle"),)
+
+
+class DiskSettlement(Base):
+    """Idempotent record of storage-network earnings credited per node per period.
+    Mirrors IdleSettlement: one row per (node_id, period); node_id is `pbdisk-<spec_id>`."""
+    __tablename__ = "disk_settlements"
+    id = Column(Integer, primary_key=True, index=True)
+    node_id = Column(String, index=True, nullable=False)
+    period = Column(String, nullable=False)
+    spec_id = Column(Integer, nullable=True)
+    provider = Column(String, nullable=True)
+    gross_usd = Column(Money, default=Decimal(0))
+    credited_usd = Column(Money, default=Decimal(0))
+    created_at = Column(DateTime, default=_utcnow)
+    __table_args__ = (UniqueConstraint("node_id", "period", name="uq_disk_settle"),)
 
 
 class DemoRequest(Base):
@@ -1917,7 +1944,11 @@ def _ensure_columns():
                   ("is_demo", "BOOLEAN NOT NULL DEFAULT false"),
                   ("tee_attested_at", "TIMESTAMP"),
                   ("benchmark_verdict", "VARCHAR"),
-                  ("benchmark_elapsed_s", "FLOAT")],
+                  ("benchmark_elapsed_s", "FLOAT"),
+                  ("disk_fallback", "BOOLEAN DEFAULT false"),
+                  ("disk_provider", "VARCHAR"), ("disk_alloc_gb", "INTEGER"),
+                  ("disk_used_gb", "FLOAT"), ("disk_est_daily_usd", "FLOAT"),
+                  ("disk_reported_at", "TIMESTAMP")],
         "users": [("referral_code", "VARCHAR"), ("referred_by", "INTEGER"),
                   ("referral_rewarded", "BOOLEAN DEFAULT false"),
                   ("referral_signup_meta", "VARCHAR"),("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
@@ -3910,6 +3941,108 @@ def reconcile_idle_earnings(db: Session, earnings: dict, take_rate: float) -> di
 
 def idle_credited_total(db: Session, spec_id: int) -> float:
     rows = db.query(IdleSettlement).filter(IdleSettlement.spec_id == spec_id).all()
+    return round(sum(r.credited_usd for r in rows), 6)
+
+
+
+# ------------------ Spare-disk rental (web3/BitTorrent storage) ------------------
+
+DISK_PROVIDERS = {"storj", "btfs", "sia"}   # supported storage-network adapters
+
+
+def disk_node_name(spec: "SellerSpec") -> str:
+    """The UNIQUE node name this spec contributes storage under — the attribution key that maps
+    a settled storage payout back to exactly one seller (like the NiceHash worker `pb-<id>`)."""
+    return f"pbdisk-{spec.id}"
+
+
+def spec_id_from_disk_node(node_id: str):
+    try:
+        return int(node_id.rsplit("-", 1)[-1])   # "pbdisk-<spec_id>"
+    except (ValueError, AttributeError):
+        return None
+
+
+def set_disk_fallback(db: Session, spec: "SellerSpec", enabled: bool,
+                      provider: str = None, alloc_gb: int = None) -> None:
+    """Opt a node in/out of contributing spare disk, and set its provider + GB cap. Disabling
+    leaves the config so re-enabling is one click; DELETE (delete_disk_fallback) clears it."""
+    spec.disk_fallback = bool(enabled)
+    if provider is not None:
+        spec.disk_provider = provider
+    if alloc_gb is not None:
+        spec.disk_alloc_gb = max(0, int(alloc_gb))
+    db.add(spec); db.commit()
+
+
+def delete_disk_fallback(db: Session, spec: "SellerSpec") -> None:
+    """Cancel + delete: disable and clear the config (the agent then removes the node container
+    and wipes its data dir on the next heartbeat)."""
+    spec.disk_fallback = False
+    spec.disk_provider = None
+    spec.disk_alloc_gb = None
+    spec.disk_used_gb = None
+    spec.disk_est_daily_usd = None
+    db.add(spec); db.commit()
+
+
+def record_disk_report(db: Session, spec: "SellerSpec", provider: str,
+                       used_gb: float, est_daily_usd: float) -> None:
+    spec.disk_provider = provider or spec.disk_provider
+    spec.disk_used_gb = used_gb
+    spec.disk_est_daily_usd = est_daily_usd
+    spec.disk_reported_at = _utcnow()
+    db.add(spec); db.commit()
+
+
+def reconcile_disk_earnings(db: Session, earnings: dict, take_rate: float) -> dict:
+    """earnings = {node_id: {"period": str, "amount": float, "provider": str}} of SETTLED storage
+    payouts. Credits each seller's unified balance (amount * (1-take)); idempotent per
+    (node, period). Same shape/guarantees as reconcile_idle_earnings."""
+    credited = 0
+    seller_total = Decimal(0)
+    platform_total = Decimal(0)
+    plat = get_or_create_platform(db)
+    for node_id, info in earnings.items():
+        period = str(info.get("period"))
+        gross = q(info.get("amount", 0))
+        if gross <= 0:
+            continue
+        rec = DiskSettlement(node_id=node_id, period=period,
+                             spec_id=spec_id_from_disk_node(node_id),
+                             provider=info.get("provider"), gross_usd=gross)
+        db.add(rec)
+        try:
+            db.commit()                     # unique(node,period) -> idempotent claim
+        except IntegrityError:
+            db.rollback()
+            continue                        # already settled this period
+        spec = db.query(SellerSpec).filter(SellerSpec.id == rec.spec_id).first()
+        owner = db.query(User).filter(User.id == spec.user_id).first() if spec else None
+        if not owner:
+            continue
+        seller_cut = q(gross * (Decimal(1) - D(take_rate)))
+        platform_cut = q(gross - seller_cut)
+        owner.earnings = q(D(owner.earnings) + seller_cut)
+        plat.revenue = q(D(plat.revenue) + platform_cut)
+        rec.credited_usd = seller_cut
+        db.add_all([owner, plat, rec])
+        post(db, "disk_rental", legs=[
+            (EXTERNAL_STORAGE,         DEBIT,  gross),
+            (acct_seller(owner.id),    CREDIT, seller_cut, owner.id),
+            (PLATFORM_REVENUE,         CREDIT, platform_cut),
+        ], reference_id=rec.id, description="disk rental settlement",
+           idempotency_key=f"disk:{node_id}:{period}", entry_type="disk_rental")
+        db.commit()
+        credited += 1
+        seller_total += seller_cut
+        platform_total += platform_cut
+    return {"credited_nodes": credited, "seller_total": q(seller_total),
+            "platform_total": q(platform_total)}
+
+
+def disk_credited_total(db: Session, spec_id: int) -> float:
+    rows = db.query(DiskSettlement).filter(DiskSettlement.spec_id == spec_id).all()
     return round(sum(r.credited_usd for r in rows), 6)
 
 
