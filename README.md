@@ -110,6 +110,12 @@ make demo-reset        # wipe and start clean
 All seeded entities are labelled **"Demo data"** and stay separable from real data everywhere
 (GMV/metrics exclude them). Walkthrough: [`docs/PRODUCT_DEMO.md`](docs/PRODUCT_DEMO.md).
 
+### Live investor / YC demos
+
+Running the two-sided marketplace live (real Stripe **TEST** mode, real GPU nodes) — including
+the multi-node **distributed** demo (one buyer, two GPU VMs, one job across both) — is documented
+in one place: [`docs/demo/yc/`](docs/demo/yc/README.md).
+
 ### Local dev (bare)
 
 ```bash
