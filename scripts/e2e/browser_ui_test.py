@@ -258,10 +258,52 @@ def run(pw, buyer_t, seller_t, pub, role_t):
            "; ".join(m for k, m in errs if _serious(m))[:120])
         page.close()
 
+        # ---------- PHONE ergonomics: no iOS-zoom inputs, tappable controls, cards not tables ----------
+        print("\n-- phone: 16px inputs, 44px tap targets, tables become labelled cards --")
+        page = browser.new_page(viewport={"width": 390, "height": 844}, is_mobile=True)
+        errs = []
+        _attach_error_capture(page, errs)
+        page.goto(B + "/marketplace", wait_until="domcontentloaded")
+        page.wait_for_selector('#mrows td[data-l="GPU"]', timeout=20000)   # a real data row, not "loading…"
+        m = page.evaluate("""() => {
+          const vis = el => el.offsetParent !== null && el.getBoundingClientRect().height > 0;
+          const inputs = [...document.querySelectorAll('input:not([type=checkbox]):not([type=radio]),select,textarea')].filter(vis);
+          const btns = [...document.querySelectorAll('.btn,button')].filter(vis).filter(el => (el.textContent||'').trim().length > 1);
+          const td = document.querySelector('.tbl td');
+          return {
+            minFont: inputs.length ? Math.min(...inputs.map(el => parseFloat(getComputedStyle(el).fontSize))) : 99,
+            minBtnH: btns.length ? Math.min(...btns.map(el => Math.round(el.getBoundingClientRect().height))) : 99,
+            tdDisplay: td ? getComputedStyle(td).display : 'none'
+          };
+        }""")
+        ok("phone: form inputs are >=16px so iOS does not zoom on focus", m["minFont"] >= 16, str(m["minFont"]))
+        ok("phone: primary buttons meet the ~44px tap-target minimum", m["minBtnH"] >= 44, str(m["minBtnH"]))
+        ok("phone: the GPU table becomes stacked cards (not a cramped, side-scrolling table)",
+           m["tdDisplay"] in ("block", "flex"), m["tdDisplay"])
+        lab = page.evaluate("""() => {
+          const tds = [...document.querySelectorAll('#mrows td')].filter(td => td.offsetParent !== null && (td.textContent||'').trim());
+          return {total: tds.length, withLabel: tds.filter(td => td.getAttribute('data-l')).length};
+        }""")
+        ok("phone: every marketplace card cell carries its label (data-l)",
+           lab["total"] > 0 and lab["withLabel"] == lab["total"], f"{lab['withLabel']}/{lab['total']}")
+        ok("phone marketplace: no serious JS errors", not [x for k, x in errs if _serious(x)],
+           "; ".join(x for k, x in errs if _serious(x))[:120])
+        page.close()
+
+        # inputs on the auth + onboarding forms must also be zoom-proof, and long code wraps
+        for path, sel in [("/login", "#u"), ("/install", "#calc_price")]:
+            page = browser.new_page(viewport={"width": 390, "height": 844}, is_mobile=True)
+            page.goto(B + path, wait_until="domcontentloaded")
+            page.wait_for_selector(sel, timeout=15000)
+            fs = page.eval_on_selector(sel, "el => parseFloat(getComputedStyle(el).fontSize)")
+            ok(f"phone {path}: input is >=16px (no iOS zoom)", fs >= 16, str(fs))
+            ok(f"phone {path}: no horizontal overflow", _no_overflow(page))
+            page.close()
+
         # ---------- RESPONSIVE across viewports (layout only; no live GPU needed) ----------
         print("\n-- responsive: no horizontal overflow, nav + primary action usable --")
         pages = [("/", "home"), ("/marketplace", "marketplace"), ("/login", "login"),
-                 ("/pricing", "pricing"), ("/install", "install")]
+                 ("/pricing", "pricing"), ("/install", "install"), ("/account", "account")]
         for vname, w, h in VIEWPORTS:
             page = browser.new_page(viewport={"width": w, "height": h})
             errs = []

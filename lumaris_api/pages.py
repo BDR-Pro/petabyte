@@ -290,8 +290,18 @@ html[dir="rtl"] .arrow-fwd::after{content:"\2190"}
   .tbl td::before{content:attr(data-l);font-family:var(--mono);font-size:9.5px;
     letter-spacing:.14em;text-transform:uppercase;color:var(--dim);text-align:start;flex:none}
   .tbl td:empty{display:none}
+  .tbl td .btn{min-height:44px}
   footer .fcols{gap:24px}
   footer .fcol{min-width:44%}
+  /* Phone touch ergonomics: 16px form text stops iOS from zooming on focus; every
+     button/control clears the ~44px minimum tap target so it's thumb-friendly. */
+  input,select,textarea{font-size:16px;padding:12px 14px}
+  input:not([type=checkbox]):not([type=radio]),select,textarea,button,.btn,.signin{min-height:46px}
+  .navbar-toggler{min-height:46px;min-width:46px;display:inline-flex;align-items:center;justify-content:center}
+  .brand{min-height:44px}
+  #forgotlink,#togglelink{display:inline-flex;align-items:center;min-height:44px;padding:0 2px}
+  /* Long install/command lines wrap instead of forcing a sideways swipe of a tiny block. */
+  pre{white-space:pre-wrap;word-break:break-word;overflow-x:hidden}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>"""
@@ -814,14 +824,14 @@ async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await 
   var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
   var rep=(s.reputation_score!=null?s.reputation_score:'—')+(s.success_rate!=null?' <span class="mut" style="font-size:10px">('+s.success_rate+'%)</span>':'');
   var vram=s.vram_gb?((s.gpu_count>1?s.gpu_count+'× ':'')+s.vram_gb+'GB'):'—';
-  return '<tr><td style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
-   '<td class="mono mut" style="font-size:12px">'+vram+'</td>'+
-   '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+(s.auto_price?' <span class="badge cc" title="demand-priced within seller bounds">auto</span>':'')+'</td>'+
+  return '<tr><td data-l="GPU" style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
+   '<td data-l="VRAM" class="mono mut" style="font-size:12px">'+vram+'</td>'+
+   '<td data-l="$/hr" class="mono amber">$'+s.price_per_hour.toFixed(2)+(s.auto_price?' <span class="badge cc" title="demand-priced within seller bounds">auto</span>':'')+'</td>'+
    '<td data-l="vs cloud" class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
-   '<td>'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
+   '<td data-l="trust">'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
    '<td data-l="Region" class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
-   '<td class="mono" style="color:'+rc+'">'+rep+'</td>'+
-   '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');
+   '<td data-l="rep" class="mono" style="color:'+rc+'">'+rep+'</td>'+
+   '<td data-l="free" class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');
  updateSavingsBanner(b.specs);}
 // Lead with the headline the buyer cares about: how much cheaper than the hyperscalers.
 function updateSavingsBanner(specs){
@@ -2284,13 +2294,13 @@ async function prices(){
  tb.innerHTML=b.specs.map(function(s){
   var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
   return '<tr>'+
-   '<td style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
+   '<td data-l="GPU" style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
    '<td data-l="VRAM" class="mono mut">'+(s.vram_gb?s.vram_gb+' GB':'—')+'</td>'+
    '<td data-l="Petabyte" class="mono amber" style="font-weight:600">$'+Number(s.price_per_hour).toFixed(2)+'/hr</td>'+
    '<td data-l="Cloud" class="mono mut">'+(s.cloud_reference?'$'+Number(s.cloud_reference).toFixed(2)+'/hr':'<span class="mini">no comparable rate</span>')+'</td>'+
    '<td data-l="You save" class="mono" style="color:var(--pos)">'+(save>0?save+'%':'—')+'</td>'+
-   '<td class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
-   '<td><a class="btn btn-teal" style="padding:6px 14px;font-size:12px" href="/gpu/'+s.id+'">View</a></td></tr>';}).join('');
+   '<td data-l="Region" class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
+   '<td data-l="" class="tbl-action"><a class="btn btn-teal" style="padding:6px 14px;font-size:12px" href="/gpu/'+s.id+'">View</a></td></tr>';}).join('');
 }
 prices();setInterval(prices,10000);
 </script>""")

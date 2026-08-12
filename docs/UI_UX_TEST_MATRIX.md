@@ -43,6 +43,23 @@ Notes:
   `for=`, wrapping `<label>`, or `aria-label`); no duplicate ids; every `<button>` has an
   accessible name; `<html lang>` present.
 
+## Phone (mobile) ergonomics
+
+Beyond "no horizontal overflow", the phone experience is asserted for the things that
+actually make a small screen usable — measured on a real 390px mobile viewport:
+
+| Check | Browser | Notes |
+|---|:--:|---|
+| Form inputs are **>=16px** so iOS doesn't zoom on focus | ✓ | marketplace, login, install |
+| Primary buttons/controls meet the **~44px tap-target** minimum | ✓ | measured computed height |
+| Multi-column tables become **stacked, labelled cards** (not a side-scrolling table) | ✓ | `.tbl td` display + every cell carries `data-l` |
+| Long install/command blocks **wrap** instead of side-scrolling | ✓ | audited: zero in-page horizontal scrollers on `/install` |
+| No horizontal overflow, nav collapses to a usable hamburger | ✓ | desktop/tablet/mobile sweep incl. `/account` |
+
+Fast-tier guards (TestClient): marketplace rows label every cell (`data-l`) and the page
+ships the `<=720px` breakpoint that upsizes inputs — so a refactor can't silently drop
+the phone card view or reintroduce the iOS zoom-on-focus bug.
+
 ## Role-based value propositions + self-service role switch
 
 | Behaviour | TestClient | Browser | Notes |

@@ -453,6 +453,13 @@ ok("marketplace savings is populated from live data (updateSavingsBanner)",
 ok("marketplace keeps the honest 'benchmark, not a quote' framing",
    "not a quote" in r.text.lower())
 
+# Phone: rows label every cell (so the <720px CSS renders them as readable cards), and
+# the page ships the breakpoint that upsizes inputs to stop iOS zooming on focus.
+ok("marketplace rows label every cell for the phone card view (data-l)",
+   all(('data-l="%s"' % lbl) in r.text for lbl in ["GPU", "VRAM", "$/hr", "vs cloud", "Region"]))
+ok("page ships a phone breakpoint that upsizes inputs to >=16px (no iOS zoom-on-focus)",
+   "max-width:720px" in r.text and "font-size:16px" in r.text)
+
 # Seller: the onboarding + earnings surfaces lead with money and ease.
 r_i = get("/install").text
 ok("/install leads with earnings (keep 90%)", "90%" in r_i and "earn-banner" in r_i)
