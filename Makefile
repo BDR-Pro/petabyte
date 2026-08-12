@@ -3,13 +3,14 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e browser-e2e test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real ui-test browser-ui
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e browser-e2e test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real ui-test browser-ui populate-demo
 
 help:
 	@echo "Petabyte make targets:"
 	@echo "  make investor-demo   Seed labelled demo data + start the server, print accounts & URLs"
 	@echo "  make demo-reset      Wipe and reseed the demo, then start the server"
 	@echo "  make demo-seed       Seed the demo only (no server)"
+	@echo "  make populate-demo   Fill the DB with rich, labelled demo data for UI/UX testing (one command)"
 	@echo "  make demo-test       Run the demo correctness/honesty test suite"
 	@echo "  make stripe-demo     Narrated Stripe Connect flow (test mode, fake gateway)"
 	@echo "  make stripe-test     Run the Stripe Connect test suite (offline assertions)"
@@ -49,6 +50,16 @@ demo-reset:
 
 demo-seed:
 	cd $(API) && bash demo_run.sh seed
+
+# Fill the DB with realistic, LABELLED demo data for UI/UX testing — one command. Superset
+# of the demo seed: the tested base seed + idle-mining/VM enrichments. Enrichments whose
+# feature isn't in this build (e.g. spare-disk, distributed cluster) are auto-skipped, and
+# the summary says so. Then serve the SAME DATABASE_URL to click around.
+#   make populate-demo                        # wipe + seed + enrich ./demo.db
+#   make populate-demo DB=sqlite:///./ui.db   # a named DB file
+#   make populate-demo ARGS=--keep            # enrich WITHOUT wiping (append)
+populate-demo:
+	$(if $(DB),DATABASE_URL=$(DB) )python3 scripts/populate_demo_data.py $(ARGS)
 
 demo-test:
 	cd $(API) && python3 demo_test.py
