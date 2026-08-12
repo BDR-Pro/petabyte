@@ -909,6 +909,7 @@ class PayoutMethodModel(BaseModel):
 class WithdrawModel(BaseModel):
     method_id: int
     amount: float = Field(gt=0)
+    instant: bool = False           # pay a small fee for immediate cash-out; default = free/scheduled
 
 
 class ScheduleModel(BaseModel):
@@ -4064,17 +4065,43 @@ def withdraw(data: WithdrawModel, request: Request,
             "message": f"This destination was added recently and cannot receive funds "
                        f"for {PAYOUT_COOLING_OFF_H}h after being added."})
 
-    p = request_payout(db, me, m, data.amount)
+    from db import instant_payout_fee
+    fee = float(instant_payout_fee(data.amount)) if data.instant else 0.0
+    if data.instant and fee >= data.amount:
+        raise HTTPException(status_code=422, detail={
+            "code": "AMOUNT_TOO_SMALL_FOR_INSTANT",
+            "message": "That amount is too small for an instant payout after the fee — "
+                       "withdraw more, or use the free scheduled payout."})
+    p = request_payout(db, me, m, data.amount, fee=fee)
     if not p:
         raise HTTPException(status_code=402, detail="Insufficient earnings")
     audit(db, "payout.requested", actor=me, resource_type="payout", resource_id=p.id,
           ip=_client_ip(request),
           request_id=getattr(request.state, "request_id", None),
-          detail={"amount_usd": str(p.amount_usd), "kind": p.kind,
+          detail={"amount_usd": str(p.amount_usd), "fee_usd": str(p.fee_usd or 0),
+                  "instant": bool(data.instant), "kind": p.kind,
                   "destination": redact_destination(m.destination)})
     notifications.notify(db, me.id, "payout.requested", amount=p.amount_usd, kind=p.kind)
     return {"status": "ok", "payout_id": p.id, "amount_usd": p.amount_usd,
+            "fee_usd": float(p.fee_usd or 0), "instant": bool(data.instant),
             "payout_status": p.status, "kind": p.kind}
+
+
+@app.get("/wallet/payout_quote", tags=["wallet"])
+def payout_quote(amount: float = Query(..., gt=0),
+                 user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Show the cost BEFORE committing: scheduled payouts are free; instant costs a small fee.
+    Lets the UI present both options honestly so nobody is surprised by a deduction."""
+    from db import instant_payout_fee
+    fee = float(instant_payout_fee(amount))
+    return {
+        "amount_usd": round(amount, 2),
+        "scheduled": {"fee_usd": 0.0, "net_usd": round(amount, 2),
+                      "note": "Free — paid out on your schedule / next batch."},
+        "instant": {"fee_usd": round(fee, 2), "net_usd": round(amount - fee, 2),
+                    "available": fee < amount,
+                    "note": "Paid out right away for a small fee."},
+    }
 
 
 # ------------------- EMAIL VERIFICATION -------------------
@@ -5870,6 +5897,23 @@ def pricing_roi(kwh: float = Query(0.12, ge=0, le=2.0),
         },
         "count": len(rows),
         "gpus": rows,
+    }
+
+
+@app.get("/partners", tags=["marketplace"])
+def partners_list():
+    """Recommended gear & tools for people running a rig (storage, USDC cash-out, parts planner,
+    power). Each link is a plain useful link unless the founder has configured that partner's
+    affiliate/referral URL — then it's monetised (FTC disclosure below). Honest when unset."""
+    import affiliates
+    ps = affiliates.partners()
+    return {
+        "partners": ps,
+        "affiliate": {
+            "enabled": any(p["affiliate"] for p in ps),
+            "disclosure": "Petabyte may earn a commission from purchases or signups made through "
+                          "these partner links — at no extra cost to you.",
+        },
     }
 
 

@@ -1005,6 +1005,11 @@ ROI_HTML = _page("Petabyte — GPU ROI calculator",
   <p class="mut" style="font-size:11.5px;margin-top:4px" data-ar="الأرباح مبنية على السعر المرجعي المرتكز على أداء الكرت (ما يدفعه المشتري) ناقص عمولتنا؛ السعر الفعلي يحدده البائع والطلب. لا شيء هنا مضمون.">Earnings use the benchmark-anchored reference price (what a buyer pays) minus our fee; the real price is set by the seller and demand. Nothing here is guaranteed.</p>
   <div style="margin-top:18px"><a class="btn btn-amber" href="/install" data-ar="ابدأ مثل المُعدِّن ←">Start earning — paste your wallet →</a></div>
 </div>
+<div class="wrap" style="padding:22px 22px 40px">
+  <div class="lbl" style="margin-bottom:12px" data-ar="عتاد وأدوات مفيدة">Gear &amp; tools for your rig</div>
+  <div id="gearlist" class="cols c3"></div>
+  <p id="geardisc" class="mut" style="font-size:11.5px;margin-top:12px"></p>
+</div>
 <script>
 var _ROI=null, _FULL=false;
 function _e2(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -1067,6 +1072,16 @@ function roiRecalc(){
     document.getElementById('roidisc').textContent=disc;
     roiScope(false);
   }).catch(function(e){ document.getElementById('roirows').innerHTML='<tr><td colspan="8" class="mut" style="padding:14px 10px">Could not load pricing.</td></tr>'; });
+  fetch('/partners').then(function(r){return r.json();}).then(function(d){
+    var el=document.getElementById('gearlist'); if(!el)return;
+    el.innerHTML=(d.partners||[]).map(function(p){
+      return '<div class="card"><div class="lbl" style="font-size:11px;letter-spacing:.04em">'+_e2(p.category)+'</div>'+
+        '<a class="teal" href="'+p.url+'" target="_blank" rel="noopener nofollow sponsored" style="font-weight:600">'+_e2(p.name)+' →</a>'+
+        '<p class="mut" style="font-size:12.5px;margin-top:6px">'+_e2(p.blurb)+'</p></div>';
+    }).join('');
+    var gd=document.getElementById('geardisc');
+    if(gd){ gd.textContent=(d.affiliate&&d.affiliate.disclosure)?d.affiliate.disclosure:''; }
+  }).catch(function(e){});
 })();
 </script>""")
 
@@ -1803,10 +1818,24 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
           <input id="amt" type="number" value="50" min="1" size="5" style="width:90px"/>
           <button class="btn-amber" onclick="deposit()">Add funds</button>
           <button class="btn-ghost" onclick="withdraw()">Withdraw</button>
+          <label class="mut" style="font-size:12px;display:flex;align-items:center;gap:4px" data-ar="فوري (رسوم)"><input type="checkbox" id="instant"/> ⚡ instant (fee)</label>
         </div>
       </div>
       <p id="wmsg" class="mut" style="font-size:12.5px;margin-top:12px;display:none"></p>
       <div id="methods" class="mini" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- invite & earn (referrals) -->
+  <div class="wrap" style="padding:26px 22px 4px">
+    <div class="lbl" style="margin-bottom:12px" data-ar="ادعُ واكسب">Invite &amp; earn</div>
+    <div class="card" style="border-color:rgba(79,214,201,.25)">
+      <p class="mut" style="margin-bottom:10px" data-ar="شارك رابطك. عندما يبدأ من تدعوه باستئجار أو إدراج كرت رسومات، تحصلان كلاكما على رصيد.">Share your link. When someone you invite starts renting or listing a GPU, <b class="teal">you both get credit</b> (<span id="refreward">—</span> each).</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input id="reflink" readonly value="" size="34" style="flex:1;min-width:min(320px,80vw);font-family:ui-monospace,monospace"/>
+        <button class="btn-amber" onclick="copyRef(this)" data-ar="انسخ الرابط">Copy link</button>
+      </div>
+      <div class="mini" id="refstat" style="margin-top:12px"></div>
     </div>
   </div>
 
@@ -1890,7 +1919,7 @@ async function boot(){
   document.getElementById('wearn').textContent=money(u.earnings);
   if(new URLSearchParams(location.search).get('funded')==='1'){
     wmsg('Payment received — your balance updates as soon as Stripe confirms.');}
-  loadNodes();loadJobs();loadKeys();loadMethods();loadTemplates();loadVMs();loadEarnings();loadOnboarding();loadDiagnostics();loadBurn();loadEmail();loadNotifs();setInterval(loadBurn,20000);
+  loadNodes();loadJobs();loadKeys();loadMethods();loadTemplates();loadVMs();loadEarnings();loadOnboarding();loadDiagnostics();loadBurn();loadEmail();loadNotifs();loadReferral();setInterval(loadBurn,20000);
 }
 async function loadVMs(){var r=await api('/vm');if(!r.ok)return;var vms=r.body.vms||[];
   if(!vms.length)return; document.getElementById('vmsection').style.display='';
@@ -1973,12 +2002,27 @@ async function deposit(){var a=parseFloat(document.getElementById('amt').value||
   } else if(r.status===400){ wmsg((r.body&&r.body.detail)?r.body.detail:'Enter a valid amount.'); }
   else { wmsg('Could not start checkout — please try again.'); }}
 async function withdraw(){var a=parseFloat(document.getElementById('amt').value||'0');
-  var r=await api('/wallet/withdraw',{method:'POST',body:JSON.stringify({amount:a})});
-  wmsg(r.ok?('Withdrawal of '+money(a)+' requested.'):(r.body&&r.body.detail?r.body.detail:'Add a payout method first.'));loadMethods();}
+  var inst=!!(document.getElementById('instant')&&document.getElementById('instant').checked);
+  if(inst){var q=await api('/wallet/payout_quote?amount='+a);
+    if(q.ok&&q.body&&q.body.instant){ if(!q.body.instant.available){wmsg('Amount too small for an instant payout — use the free scheduled option.');return;}
+      if(!confirm('Instant payout: fee $'+q.body.instant.fee_usd.toFixed(2)+' — you receive $'+q.body.instant.net_usd.toFixed(2)+'.\\n\\nScheduled payouts are free. Continue instant?'))return; } }
+  var body={amount:a,instant:inst}; if(window._pmId)body.method_id=window._pmId;
+  var r=await api('/wallet/withdraw',{method:'POST',body:JSON.stringify(body)});
+  if(r.ok){var f=r.body.fee_usd||0; wmsg('Withdrawal of '+money(r.body.amount_usd)+' requested'+(f>0?(' (instant, fee '+money(f)+')'):' (free, scheduled)')+'.');}
+  else{wmsg(r.body&&r.body.detail?(r.body.detail.message||r.body.detail):'Add a payout method first.');}
+  loadMethods();}
 async function loadMethods(){var r=await api('/wallet/methods');var el=document.getElementById('methods');
-  if(r.ok&&r.body.methods&&r.body.methods.length){el.innerHTML='Payout methods: '+r.body.methods.map(function(m){return '<span class="badge ok">'+(m.kind||m.type||'method')+'</span>';}).join(' ');}
-  else{el.innerHTML='No payout method yet — add bank / USDC / gift card in the <a class="teal" href="/app">dashboard</a> to withdraw.';}}
+  if(r.ok&&r.body.methods&&r.body.methods.length){window._pmId=r.body.methods[0].id;
+    el.innerHTML='Payout methods: '+r.body.methods.map(function(m){return '<span class="badge ok">'+(m.kind||m.type||'method')+'</span>';}).join(' ')+' <span class="mut">· ⚡ instant costs a small fee; scheduled is free</span>';}
+  else{window._pmId=null;el.innerHTML='No payout method yet — add bank / USDC / gift card in the <a class="teal" href="/app">dashboard</a> to withdraw.';}}
 async function loadTemplates(){renderLaunch('launchgrid',['ai','render','art','game'],2);}
+async function loadReferral(){var r=await api('/referral');if(!r.ok)return;var b=r.body;
+  var el=document.getElementById('reflink');if(el)el.value=b.link;
+  var rw=document.getElementById('refreward');if(rw)rw.textContent='$'+Number(b.reward_usd).toFixed(2);
+  var st=document.getElementById('refstat');if(st)st.innerHTML='Invited <b class="teal">'+b.invited+'</b> · qualified <b class="teal">'+b.qualified+'</b> · pending '+b.pending+' · credit earned <b class="amber">$'+Number(b.credit_earned_usd).toFixed(2)+'</b>';}
+function copyRef(btn){var el=document.getElementById('reflink');if(!el)return;el.select();
+  try{navigator.clipboard.writeText(el.value);}catch(e){try{document.execCommand('copy');}catch(_){}}
+  if(btn){var o=btn.textContent;btn.textContent='copied';setTimeout(function(){btn.textContent=o;},1200);}}
 
 // --- ONBOARDING: what do I do next? Buyers and hosts get different funnels. ---
 async function loadOnboarding(){

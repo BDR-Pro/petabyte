@@ -15,7 +15,37 @@ variables:
     scope:
     - platform
     description: ''
+  AFFILIATE_BACKBLAZE_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  AFFILIATE_COINBASE_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  AFFILIATE_ECOFLOW_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   AFFILIATE_NEWEGG_WRAP:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  AFFILIATE_PCPARTPICKER_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  AFFILIATE_WASABI_URL:
     required: false
     default: null
     scope:
@@ -411,6 +441,18 @@ variables:
     - gpu
     description: Enable idle NiceHash mining when no paid job is running.
     format: bool
+  INSTANT_PAYOUT_FEE_MIN:
+    required: false
+    default: '0.50'
+    scope:
+    - platform
+    description: ''
+  INSTANT_PAYOUT_FEE_PCT:
+    required: false
+    default: '0.015'
+    scope:
+    - platform
+    description: ''
   JOB_POLL_INTERVAL:
     required: false
     default: '5'
