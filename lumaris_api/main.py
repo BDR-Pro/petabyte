@@ -6081,6 +6081,62 @@ def data_benchmarks(since_id: int = Query(0, ge=0), limit: int = Query(500, ge=1
             "rows": rows, "usage": usage}
 
 
+@app.get("/api/v1/data/demand", tags=["data"])
+def data_demand(days: int = Query(30, ge=1, le=365),
+                user=Depends(api_key_user), db: Session = Depends(get_db)):
+    """Buyer-side DEMAND index: over the last `days`, real bookings aggregated per GPU model —
+    booking count, GPU-hours rented, GMV, and the average price buyers ACTUALLY paid (realized,
+    not listed). Sandbox/demo bookings are excluded so this is real demand, not inflated. Aggregate
+    only — no buyer identity. Metered."""
+    usage = _meter_data_or_402(user, db)
+    import gpu_benchmark
+    from db import Booking, SellerSpec
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
+    agg, tot_b, tot_h, tot_gmv = {}, 0, 0, 0.0
+    rows = (db.query(Booking, SellerSpec)
+            .join(SellerSpec, SellerSpec.id == Booking.spec_id)
+            .filter(Booking.test == False, Booking.is_demo == False,   # noqa: E712 — real demand only
+                    Booking.created_at >= cutoff).all())
+    for b, sp in rows:
+        key = gpu_benchmark.normalize_model(sp.gpu_model) or (sp.gpu_model or "unknown")
+        a = agg.setdefault(key, {"bookings": 0, "gpu_hours": 0, "gmv": 0.0})
+        h, g = int(b.hours or 0), float(b.gross_amount or 0)
+        a["bookings"] += 1; a["gpu_hours"] += h; a["gmv"] += g
+        tot_b += 1; tot_h += h; tot_gmv += g
+    by_gpu = [{"gpu_model": k, "bookings": a["bookings"], "gpu_hours": a["gpu_hours"],
+               "gmv_usd": round(a["gmv"], 2),
+               "avg_price_per_hour": (round(a["gmv"] / a["gpu_hours"], 2) if a["gpu_hours"] else None)}
+              for k, a in sorted(agg.items(), key=lambda kv: -kv[1]["gmv"])]
+    return {"as_of": datetime.now(timezone.utc).isoformat(), "window_days": days,
+            "totals": {"bookings": tot_b, "gpu_hours": tot_h, "gmv_usd": round(tot_gmv, 2)},
+            "by_gpu": by_gpu, "usage": usage}
+
+
+@app.get("/api/v1/data/workloads", tags=["data"])
+def data_workloads(days: int = Query(30, ge=1, le=365),
+                   user=Depends(api_key_user), db: Session = Depends(get_db)):
+    """Buyer-side WORKLOAD mix: over the last `days`, what buyers actually run — jobs by type
+    (notebook/vm/template) and by launch template (vLLM, Blender, …). Platform audit tasks are
+    excluded. Aggregate counts only — no buyer identity or code. Metered."""
+    usage = _meter_data_or_402(user, db)
+    from db import Task
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
+    by_type, by_template, total = {}, {}, 0
+    for t in db.query(Task).filter(Task.created_at >= cutoff).all():
+        if (t.task_type or "") == "test":     # server-seeded integrity audits, not buyer demand
+            continue
+        total += 1
+        by_type[t.task_type or "unknown"] = by_type.get(t.task_type or "unknown", 0) + 1
+        if t.template:
+            by_template[t.template] = by_template.get(t.template, 0) + 1
+    return {"as_of": datetime.now(timezone.utc).isoformat(), "window_days": days, "total_jobs": total,
+            "by_type": [{"task_type": k, "jobs": v}
+                        for k, v in sorted(by_type.items(), key=lambda kv: -kv[1])],
+            "by_template": [{"template": k, "jobs": v}
+                            for k, v in sorted(by_template.items(), key=lambda kv: -kv[1])],
+            "usage": usage}
+
+
 @app.get("/api/v1/data/usage", tags=["data"])
 def data_usage(user=Depends(api_key_user), db: Session = Depends(get_db)):
     """The caller's data-API usage this month — free to check, never billed. Needs a `data` key."""

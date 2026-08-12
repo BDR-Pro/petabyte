@@ -127,6 +127,19 @@ ok("authenticity dataset: labelled feature rows + corpus stats, metered",
 ok("the sold dataset is ANONYMIZED: no seller_id and no node/spec_id in any row",
    all("seller_id" not in r and "spec_id" not in r for r in _bj["rows"]))
 
+# ---- buyer-side demand datasets (aggregate, real-only, no buyer identity) ----
+_dm = c.get("/api/v1/data/demand", headers=_kh)
+_dmj = _dm.json()
+ok("demand index: totals + per-GPU bookings/GMV/realized-price, metered",
+   _dm.status_code == 200 and "totals" in _dmj and "by_gpu" in _dmj
+   and set(_dmj["totals"]) >= {"bookings", "gpu_hours", "gmv_usd"})
+ok("demand rows carry no buyer identity (aggregate only)",
+   all("buyer_id" not in r and "buyer" not in r for r in _dmj["by_gpu"]))
+_wk = c.get("/api/v1/data/workloads", headers=_kh)
+ok("workload-mix index: jobs by type + template, metered",
+   _wk.status_code == 200 and "by_type" in _wk.json() and "by_template" in _wk.json()
+   and "total_jobs" in _wk.json())
+
 for f in ("data_api_test.db", "data_api_test.db-wal", "data_api_test.db-shm"):
     if os.path.exists(f):
         os.remove(f)

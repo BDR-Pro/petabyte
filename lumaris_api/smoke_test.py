@@ -1735,6 +1735,13 @@ ok("savings + availability datasets are served to a data key",
 _bmk = c.get("/api/v1/data/benchmarks", headers=_dkh).json()
 ok("the authenticity dataset is sold anonymized (stats + rows, no seller_id/spec_id)",
    "stats" in _bmk and all("seller_id" not in r and "spec_id" not in r for r in _bmk.get("rows", [])))
+# buyer-side demand datasets: real-only aggregates, no buyer identity
+_dmd = c.get("/api/v1/data/demand", headers=_dkh).json()
+ok("buyer-side demand index served (totals + per-GPU GMV/realized price, no buyer identity)",
+   "totals" in _dmd and "by_gpu" in _dmd
+   and all("buyer_id" not in r for r in _dmd["by_gpu"]))
+ok("buyer-side workload-mix index served (jobs by type + template)",
+   set(c.get("/api/v1/data/workloads", headers=_dkh).json()) >= {"by_type", "by_template", "total_jobs"})
 
 # --- wallet-only onboarding: paste a wallet, get a ONE-LINE installer, no account (like a miner) ---
 ok("the /install page offers a wallet-only start (no login) wired to /nodes/quickstart",
