@@ -822,46 +822,52 @@ INSTALL_HTML = _page("Petabyte — become a seller",
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px" data-ar="أدرِج كرت رسوماتك بأمرٍ واحد">List your GPU in <span class="grad-teal">one command</span></h1>
   <p class="mut" style="max-width:56ch" data-ar="أي جهاز NVIDIA يمكن أن يصبح عقدة. يتحقق المُثبِّت من عتادك، ويعزل المهام داخل Docker، ويجعلك متصلاً خلال ٣٠ ثانية تقريباً. دون حصرية.">Any NVIDIA machine can become a node. The installer verifies your hardware, sandboxes jobs in Docker, and brings you online in ~30 seconds. No exclusivity.</p>
 </div>
-<div class="wrap" style="padding:6px 22px 0">
+<!-- signed OUT: one prompt to sign in, nothing else to read yet -->
+<div class="wrap" id="iksignin" style="padding:6px 22px 0;display:none">
   <div class="card" style="border-color:rgba(79,214,201,.3);background:linear-gradient(180deg,rgba(79,214,201,.05),transparent)">
-    <div class="lbl" data-ar="الخطوة ١ · مفتاح جهازك">Step 1 · your node key</div>
-    <p class="mut" id="ikhint" data-ar="تتصل الأجهزة عبر مفتاح API — لا تُخزَّن أي كلمة مرور على الجهاز إطلاقاً. سجّل الدخول لإنشاء مفتاح.">Nodes connect with an API key — no password ever lives on the machine. <a class="teal" href="/login">Sign in</a> to generate one.</p>
-    <div id="ikauthed" style="display:none">
-      <p class="mut" style="margin-bottom:12px" data-ar="أنشئ مفتاح جهاز، ثم ألصقه في الأمر أدناه كـ PETABYTE_API_KEY. يسجّل الجهاز نفسه ويثبت عتاده بهذا المفتاح.">Generate a node key, then paste it into the command below as <code class="teal">PETABYTE_API_KEY</code>. The node registers &amp; attests itself with this key.</p>
-      <button class="btn-amber" onclick="mkkey()" data-ar="أنشئ مفتاح جهاز">Create node key</button>
-      <pre id="ikkey" style="display:none;margin-top:14px"></pre>
+    <div class="lbl" data-ar="الخطوة ١ · سجّل الدخول">Step 1 · sign in</div>
+    <p class="mut" data-ar="تتصل الأجهزة عبر مفتاح API — لا تُخزَّن أي كلمة مرور على الجهاز إطلاقاً. سجّل الدخول أو أنشئ حساباً مجانياً لتوليد أمر التثبيت الجاهز.">Nodes connect with an API key — no password ever lives on the machine. <a class="teal" href="/login">Sign in or create a free account</a> and your ready-to-paste installer appears right here.</p>
+  </div>
+</div>
+<!-- signed IN: pick a price (optional) and generate the exact command in one click -->
+<div class="wrap" id="ikgen" style="padding:6px 22px 0;display:none">
+  <div class="card" style="border-color:rgba(79,214,201,.3);background:linear-gradient(180deg,rgba(79,214,201,.05),transparent)">
+    <div class="lbl" data-ar="الخطوة ١ · حدّد سعرك (اختياري)">Step 1 · set your price <span class="mut">(optional)</span></div>
+    <p class="mut" style="margin-bottom:12px" data-ar="اكتب اسم كرت رسوماتك ونقترح سعراً عادلاً بالساعة من الأجهزة الحيّة والمرجع السحابي. غيّره كما تشاء — أو تجاوزه واستخدم الافتراضي.">Type your GPU and we suggest a fair hourly price from live nodes and the cloud reference. Change it if you like — or skip and use the default.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <input id="pgpu" placeholder="e.g. RTX 4090" size="14" onkeydown="if(event.key==='Enter')sugPrice()"/>
+      <button class="btn btn-teal" data-act="sugPrice" data-ar="اقترح">Suggest</button>
+      <span class="mut">$</span>
+      <input id="pprice" value="1.50" size="4" inputmode="decimal" style="text-align:right"/>
+      <span class="mut">/hr</span>
+      <span id="psug" class="mono mut" style="font-size:12.5px"></span>
+    </div>
+    <div style="margin-top:18px">
+      <button class="btn-amber" id="genbtn" data-act="genInstaller" data-ar="أنشئ مفتاحي وأمر التثبيت">Create my node key &amp; installer command</button>
     </div>
   </div>
 </div>
-<div class="wrap" style="padding:12px 22px 30px">
-  <div class="mini" style="margin:6px 0 12px" data-ar="الخطوة ٢ · شغّل المُثبِّت">Step 2 · run the installer</div>
-  <div class="cols c3">
+<!-- generated result: real key + this server's address + your price, already filled in -->
+<div class="wrap" id="ikout" style="padding:12px 22px 6px;display:none">
+  <div class="mini" style="margin:6px 0 10px" data-ar="الخطوة ٢ · شغّل هذا على جهازك">Step 2 · run this on your GPU machine</div>
+  <p class="mut" style="max-width:64ch;margin-bottom:12px" data-ar="يحتوي هذا الأمر على مفتاحك وعنوان هذا الخادم وسعرك — كلها جاهزة. شغّله مرة واحدة: يسجّل الجهاز نفسه، يثبت عتاده، ويتصل. مفتاحك يُعرض هنا فقط.">This command already has your key, this server's address, and your price filled in. Run it once — the node registers, attests its GPU, and comes online. <b class="teal">Your key is shown only here</b>, so copy it now.</p>
+  <div class="cols c2">
     <div class="card"><div class="lbl" data-ar="لينكس · أوبونتو/دبيان">Linux · Ubuntu/Debian</div>
-      <pre>PETABYTE_API_URL=https://petabyte.market \\
-PETABYTE_API_KEY=pk_your_node_key \\
-PRICE_PER_HOUR=1.5 \\
-bash &lt;(curl -fsSL https://petabyte.market/install.sh)</pre></div>
-    <div class="card"><div class="lbl" data-ar="ويندوز · WSL2">Windows · WSL2</div>
-      <pre>$env:PETABYTE_API_URL="https://petabyte.market"
-$env:PETABYTE_API_KEY="pk_your_node_key"
-$env:PRICE_PER_HOUR="1.5"
-irm https://petabyte.market/install.ps1 | iex</pre>
-      <p class="mut" style="font-size:12px;margin-top:9px" data-ar="PowerShell بصلاحيات المدير. يثبّت WSL2 والوكيل.">Elevated PowerShell. Installs WSL2 + the agent.</p></div>
-    <div class="card"><div class="lbl" data-ar="تحقّق">Verify</div>
-      <pre>systemctl status petabyte-agent
+      <pre id="cmdlinux" style="white-space:pre-wrap;word-break:break-all"></pre>
+      <button class="btn btn-teal" style="margin-top:10px" data-act="pbCopy" data-a1="seller_linux" data-ar="نسخ">Copy command</button></div>
+    <div class="card"><div class="lbl" data-ar="ويندوز · PowerShell (يثبّت WSL2)">Windows · PowerShell <span class="mut">(installs WSL2)</span></div>
+      <pre id="cmdwin" style="white-space:pre-wrap;word-break:break-all"></pre>
+      <button class="btn btn-teal" style="margin-top:10px" data-act="pbCopy" data-a1="seller_win" data-ar="نسخ">Copy command</button>
+      <p class="mut" style="font-size:12px;margin-top:9px" data-ar="شغّله في PowerShell بصلاحيات المدير.">Run in an elevated PowerShell window.</p></div>
+  </div>
+  <div class="card" style="margin-top:14px"><div class="lbl" data-ar="ثم راقبه وهو يتصل">Then watch it come online</div>
+    <pre>systemctl status petabyte-agent
 journalctl -u petabyte-agent -f</pre>
-      <p class="mut" style="font-size:12px;margin-top:9px" data-ar="يظهر كرت رسوماتك في السوق خلال دقيقة.">Your GPU appears in the <a class="teal" href="/marketplace">marketplace</a> within a minute.</p></div>
+    <p class="mut" style="font-size:13px;margin-top:9px" data-ar="يظهر كرت رسوماتك في السوق ولوحة التحكم خلال دقيقة.">Your GPU appears in the <a class="teal" href="/marketplace">marketplace</a> and your <a class="teal" href="/app">dashboard</a> within a minute.</p>
   </div>
-  <div class="card" style="margin-top:16px">
-    <div class="lbl" data-ar="كم ينبغي أن أطلب؟">What should I charge?</div>
-    <p class="mut" style="margin-bottom:10px" data-ar="اكتب اسم كرت رسوماتك — نقترح سعراً بناءً على ما تطلبه الأجهزة المشابهة والمرجع السحابي. القرار النهائي دائماً لك.">Type your GPU — we suggest a price from what similar live nodes charge and the cloud reference. You always set the final number.</p>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-      <input id="pgpu" placeholder="e.g. RTX 4090" size="14" onkeydown="if(event.key==='Enter')suggest()"/>
-      <button class="btn btn-teal" onclick="suggest()" data-ar="اقترح سعراً">Suggest a price</button>
-      <span id="psug" class="mono" style="font-size:13px"></span>
-    </div>
-  </div>
-  <div class="card" style="margin-top:16px"><div class="lbl" data-ar="جرّبه دون مخاطرة">Try it risk-free</div>
+</div>
+<div class="wrap" style="padding:12px 22px 30px">
+  <div class="card"><div class="lbl" data-ar="جرّبه دون مخاطرة">Try it risk-free</div>
     <p class="mut" data-ar="يعمل الوكيل داخل بيئة لينكس معزولة — لا يمسّ ألعابك أو ملفاتك، ويعمل فقط حين يكون جهازك خاملاً. أوقفه مؤقتاً متى شئت، أو أزِله تماماً بأمرٍ واحد. وإذا فعّلت Petabyte خاصية WSL لك، فإن إلغاء التثبيت يعيدها كما كانت.">The agent runs in an isolated Linux sandbox — it never touches your games or files, and only works when your PC is idle. <b class="teal">Pause</b> anytime, or <b class="teal">remove it completely</b> in one command. If Petabyte turned on WSL for you, uninstalling turns it back off.</p>
     <pre style="margin-top:10px">$env:PETABYTE_ACTION="pause";     irm https://petabyte.market/manage.ps1 | iex
 $env:PETABYTE_ACTION="uninstall"; irm https://petabyte.market/manage.ps1 | iex</pre>
@@ -871,17 +877,34 @@ $env:PETABYTE_ACTION="uninstall"; irm https://petabyte.market/manage.ps1 | iex</
   </div>
 </div>
 <script>
-async function suggest(){var g=(document.getElementById('pgpu').value||'').trim();
-  var r=await fetch('/pricing/suggest?gpu_model='+encodeURIComponent(g));var b=await r.json();
-  document.getElementById('psug').innerHTML='Suggested <b class="amber">$'+b.suggested_price+'/hr</b> <span class="mut">· '+b.basis+' · cloud ≈ $'+b.cloud_reference+'</span>';}
-(function(){ if(authed()){var a=document.getElementById('ikauthed'),h=document.getElementById('ikhint');if(a)a.style.display='';if(h)h.style.display='none';} })();
-async function mkkey(){
+function _esch(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+async function sugPrice(){var g=(document.getElementById('pgpu').value||'').trim();
+  try{var r=await fetch('/pricing/suggest?gpu_model='+encodeURIComponent(g));var b=await r.json();
+    if(b&&b.suggested_price){document.getElementById('pprice').value=Number(b.suggested_price).toFixed(2);}
+    document.getElementById('psug').innerHTML=(b&&b.suggested_price)?('· '+b.basis+' · cloud ≈ $'+b.cloud_reference):'';
+  }catch(e){document.getElementById('psug').textContent='';}}
+async function genInstaller(a1, btn){
+  if(!authed()){location.href='/login';return;}
+  if(btn&&btn.disabled)return;
+  var lbl=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='Creating…';}
+  var pn=parseFloat((document.getElementById('pprice').value||'').trim()); if(!(pn>0))pn=1.5;
+  var price=pn.toFixed(2);
   await api('/change_role',{method:'POST',body:JSON.stringify({role:'seller'})});   // idempotent
   var r=await api('/create_api_key?days=90&label=node&scopes=node,jobs',{method:'POST'});
-  var el=document.getElementById('ikkey'); el.style.display='';
-  el.textContent = r.ok ? ('Copy now — shown once:\\n\\nPETABYTE_API_KEY='+r.body.api_key)
-                        : 'Could not create a key — make sure you are signed in.';
+  if(btn){btn.disabled=false;btn.textContent=lbl;}
+  if(!(r.ok&&r.body&&r.body.api_key)){alert('Could not create a node key — please make sure you are signed in.');return;}
+  var key=r.body.api_key, origin=location.origin, NL=String.fromCharCode(10);
+  var lin='PETABYTE_API_URL='+origin+' PETABYTE_API_KEY='+key+' PRICE_PER_HOUR='+price+' bash <(curl -fsSL '+origin+'/install.sh)';
+  var win='$env:PETABYTE_API_URL="'+origin+'"'+NL+'$env:PETABYTE_API_KEY="'+key+'"'+NL+'$env:PRICE_PER_HOUR="'+price+'"'+NL+'irm '+origin+'/install.ps1 | iex';
+  window._PBCMDS['seller_linux']=lin; window._PBCMDS['seller_win']=win;
+  document.getElementById('cmdlinux').innerHTML=_esch(lin);
+  document.getElementById('cmdwin').innerHTML=_esch(win);
+  var out=document.getElementById('ikout'); out.style.display='';
+  out.scrollIntoView({behavior:'smooth',block:'start'});
 }
+(function(){var si=document.getElementById('iksignin'),gn=document.getElementById('ikgen');
+  if(authed()){if(gn)gn.style.display='';}else{if(si)si.style.display='';}})();
 </script>""")
 
 
