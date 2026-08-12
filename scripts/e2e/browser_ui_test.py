@@ -109,6 +109,21 @@ def _fresh_buyer(c, name):
     return le.token_for(c, name, PW)
 
 
+def _heartbeat_keepalive(sk, spec_ids, stop):
+    """Keep the seeded GPUs online for the whole run. The emulated node loop only claims
+    jobs; without periodic heartbeats a spec drops out of the marketplace after
+    HEARTBEAT_TIMEOUT_S, which would empty late-running sections (e.g. the phone check)."""
+    with httpx.Client(timeout=10) as hc:
+        while not stop.is_set():
+            for sid in spec_ids:
+                if sid:
+                    try:
+                        hc.post(f"{B}/heartbeat", headers=sk, json={"spec_id": sid})
+                    except Exception:
+                        pass
+            stop.wait(30)
+
+
 PW = "pw-correct-horse-1"
 
 
@@ -264,7 +279,7 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         errs = []
         _attach_error_capture(page, errs)
         page.goto(B + "/marketplace", wait_until="domcontentloaded")
-        page.wait_for_selector('#mrows td[data-l="GPU"]', timeout=20000)   # a real data row, not "loading…"
+        page.wait_for_selector("#fgpu", timeout=15000)   # the filter form — no live GPU needed
         m = page.evaluate("""() => {
           const vis = el => el.offsetParent !== null && el.getBoundingClientRect().height > 0;
           const inputs = [...document.querySelectorAll('input:not([type=checkbox]):not([type=radio]),select,textarea')].filter(vis);
@@ -280,12 +295,19 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         ok("phone: primary buttons meet the ~44px tap-target minimum", m["minBtnH"] >= 44, str(m["minBtnH"]))
         ok("phone: the GPU table becomes stacked cards (not a cramped, side-scrolling table)",
            m["tdDisplay"] in ("block", "flex"), m["tdDisplay"])
-        lab = page.evaluate("""() => {
-          const tds = [...document.querySelectorAll('#mrows td')].filter(td => td.offsetParent !== null && (td.textContent||'').trim());
-          return {total: tds.length, withLabel: tds.filter(td => td.getAttribute('data-l')).length};
-        }""")
-        ok("phone: every marketplace card cell carries its label (data-l)",
-           lab["total"] > 0 and lab["withLabel"] == lab["total"], f"{lab['withLabel']}/{lab['total']}")
+        # the labelled-card check needs a real data row; degrade gracefully instead of
+        # crashing the whole suite if the marketplace happens to be empty.
+        try:
+            page.wait_for_selector('#mrows td[data-l="GPU"]', timeout=15000)
+            lab = page.evaluate("""() => {
+              const tds = [...document.querySelectorAll('#mrows td')].filter(td => td.offsetParent !== null && (td.textContent||'').trim());
+              return {total: tds.length, withLabel: tds.filter(td => td.getAttribute('data-l')).length};
+            }""")
+            ok("phone: every marketplace card cell carries its label (data-l)",
+               lab["total"] > 0 and lab["withLabel"] == lab["total"], f"{lab['withLabel']}/{lab['total']}")
+        except Exception:
+            ok("phone: marketplace rendered a data row for the labelled-card check", False,
+               "no online GPU row within timeout")
         ok("phone marketplace: no serious JS errors", not [x for k, x in errs if _serious(x)],
            "; ".join(x for k, x in errs if _serious(x))[:120])
         page.close()
@@ -352,10 +374,13 @@ def main():
             if not pub:
                 print("no bookable spec — cannot run the browser UI suite")
                 return 1
-            _seed_below_reference_gpu(c, seller_t, sk)   # a GPU cheaper than its cloud ref
+            h100_spec = _seed_below_reference_gpu(c, seller_t, sk)   # a GPU cheaper than its cloud ref
             role_t = _fresh_buyer(c, "roleswitch_web")   # a throwaway user for the role-switch journey
             node_t = threading.Thread(target=be._node_loop, args=(sk, stop), daemon=True)
             node_t.start()
+            # keep the seeded GPU online across the whole suite (late sections need it)
+            threading.Thread(target=_heartbeat_keepalive, args=(sk, [h100_spec], stop),
+                             daemon=True).start()
             try:
                 with sync_playwright() as pw:
                     run(pw, buyer_t, seller_t, pub, role_t)
