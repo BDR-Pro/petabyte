@@ -42,6 +42,21 @@ python main.py
 http://127.0.0.1:5000
 ```
 
+### Diagnose before you start
+
+```bash
+python main.py doctor       # checks env vars, GPU, Docker, and API connectivity
+python main.py doctor --json # same, machine-readable (pure JSON on stdout)
+python main.py --help        # usage + required environment variables
+python main.py --version
+```
+
+`doctor` runs even on an un-configured node and tells you exactly what is missing and what
+to run next (`provision.py`). Console output uses semantic colour that turns off when piped
+or when `NO_COLOR` is set; `PETABYTE_QUIET=1` calms the heartbeat/job log to a clean
+startup summary, and `PETABYTE_VERBOSE=1` turns on debug detail. The on-disk log
+(`petabyte_agent.log`) always keeps full diagnostics.
+
 ### Build Standalone .exe
 
 1. Install PyInstaller:

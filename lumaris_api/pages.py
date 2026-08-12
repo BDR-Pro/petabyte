@@ -53,6 +53,10 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 .navbar-toggler:focus{box-shadow:0 0 0 4px rgba(53,224,208,.15)}
 .navbar-toggler svg{width:18px;height:18px;display:block}
 @media(max-width:991.98px){
+ /* Hide the collapsed menu by default WITHOUT relying on the Bootstrap CDN stylesheet:
+    if that asset is slow or blocked, the off-canvas menu must not create horizontal
+    overflow. Mirrors Bootstrap's own .collapse:not(.show){display:none}. */
+ .navbar-collapse:not(.show){display:none}
  .navbar-collapse{flex-basis:100%;padding:10px 4px 12px}
  .navlinks{flex-direction:column;gap:2px;margin-inline-start:0}
  .navlinks a{padding:9px 13px}
@@ -81,6 +85,7 @@ body{background:
  radial-gradient(1400px 900px at 50% 120%,rgba(20,154,144,.10),transparent 60%),
  var(--abyss);
  color:var(--ink);font-family:var(--body);font-size:14.5px;line-height:1.65;-webkit-font-smoothing:antialiased;
+ overflow-x:clip;
  transition:background-color .3s,color .3s}
 a{color:inherit;text-decoration:none}
 .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
@@ -672,7 +677,7 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
     <h2 style="font-size:19px;margin:6px 0 6px" data-ar="تابع تطوّر Petabyte">Follow how Petabyte is built</h2>
     <p class="mut" style="font-size:13.5px;margin-bottom:14px" data-ar="بريد إلكتروني بين الحين والآخر عن الميزات والتقدّم. لا رسائل مزعجة، وإلغاء الاشتراك بأي وقت.">An occasional email on features and progress. No spam, unsubscribe anytime.</p>
     <div class="filterbar" style="justify-content:center;gap:8px">
-      <input id="nl_email" type="email" data-ar-ph="بريدك الإلكتروني" placeholder="you@example.com" style="flex:1;min-width:200px;max-width:320px"/>
+      <input id="nl_email" type="email" aria-label="Email address" data-ar-ph="بريدك الإلكتروني" placeholder="you@example.com" style="flex:1;min-width:200px;max-width:320px"/>
       <button class="btn btn-teal" data-act="subscribeNewsletter" data-ar="اشترك">Subscribe</button>
     </div>
     <div id="nl_msg" class="mini" style="min-height:18px;margin-top:10px"></div>
@@ -750,11 +755,11 @@ MARKETPLACE_HTML = _page("Petabyte — marketplace",
 </script>
 <div class="wrap" style="padding:12px 22px 30px">
   <div class="panel filterbar" style="padding:16px 18px;margin-bottom:14px">
-    <div class="field"><span data-ar="طراز الكرت">GPU model</span><input id="fgpu" placeholder="H100, 4090…" size="10" onkeydown="if(event.key==='Enter')load()"/></div>
-    <div class="field"><span data-ar="أقصى $/ساعة">Max $/hr</span><input id="fprice" type="number" placeholder="any" size="7" step="0.1" onkeydown="if(event.key==='Enter')load()"/></div>
-    <div class="field"><span data-ar="أدنى ذاكرة">Min VRAM</span><input id="fvram" type="number" placeholder="GB" size="7" onkeydown="if(event.key==='Enter')load()"/></div>
-    <div class="field"><span data-ar="المنطقة">Region</span><input id="fregion" placeholder="any" size="8" onkeydown="if(event.key==='Enter')load()"/></div>
-    <div class="field"><span data-ar="ترتيب حسب">Sort by</span><select id="fsort" onchange="load()"><option value="price" data-ar="الأرخص">Cheapest</option><option value="rep" data-ar="الأكثر ثقة">Most trusted</option><option value="vram" data-ar="أكبر ذاكرة">Most VRAM</option></select></div>
+    <div class="field"><span data-ar="طراز الكرت">GPU model</span><input id="fgpu" aria-label="Filter by GPU model" placeholder="H100, 4090…" size="10" onkeydown="if(event.key==='Enter')load()"/></div>
+    <div class="field"><span data-ar="أقصى $/ساعة">Max $/hr</span><input id="fprice" aria-label="Maximum price per hour" type="number" placeholder="any" size="7" step="0.1" onkeydown="if(event.key==='Enter')load()"/></div>
+    <div class="field"><span data-ar="أدنى ذاكرة">Min VRAM</span><input id="fvram" aria-label="Minimum VRAM in GB" type="number" placeholder="GB" size="7" onkeydown="if(event.key==='Enter')load()"/></div>
+    <div class="field"><span data-ar="المنطقة">Region</span><input id="fregion" aria-label="Filter by region" placeholder="any" size="8" onkeydown="if(event.key==='Enter')load()"/></div>
+    <div class="field"><span data-ar="ترتيب حسب">Sort by</span><select id="fsort" aria-label="Sort results" onchange="load()"><option value="price" data-ar="الأرخص">Cheapest</option><option value="rep" data-ar="الأكثر ثقة">Most trusted</option><option value="vram" data-ar="أكبر ذاكرة">Most VRAM</option></select></div>
     <label class="mini" style="display:flex;align-items:center;gap:6px;padding-bottom:9px"><input id="fconf" type="checkbox" style="width:15px;height:15px;padding:0"/> <span data-ar="سرّية">confidential</span></label>
     <div style="display:flex;gap:8px;padding-bottom:1px">
       <button class="btn btn-teal" onclick="load()" data-ar="تطبيق">Apply</button>
@@ -839,7 +844,7 @@ journalctl -u petabyte-agent -f</pre>
     <div class="lbl" data-ar="كم ينبغي أن أطلب؟">What should I charge?</div>
     <p class="mut" style="margin-bottom:10px" data-ar="اكتب اسم كرت رسوماتك — نقترح سعراً بناءً على ما تطلبه الأجهزة المشابهة والمرجع السحابي. القرار النهائي دائماً لك.">Type your GPU — we suggest a price from what similar live nodes charge and the cloud reference. You always set the final number.</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-      <input id="pgpu" placeholder="e.g. RTX 4090" size="14" onkeydown="if(event.key==='Enter')suggest()"/>
+      <input id="pgpu" aria-label="Your GPU model" placeholder="e.g. RTX 4090" size="14" onkeydown="if(event.key==='Enter')suggest()"/>
       <button class="btn btn-teal" onclick="suggest()" data-ar="اقترح سعراً">Suggest a price</button>
       <span id="psug" class="mono" style="font-size:13px"></span>
     </div>
@@ -1312,9 +1317,9 @@ LOGIN_HTML = _page("Petabyte — sign in", """
   <p class="mut" id="subtitle">Welcome back. Sign in to book compute or manage your nodes.</p>
 
   <div class="card" style="margin-top:20px">
-    <label class="mini" style="display:block;margin-bottom:6px">Username</label>
+    <label class="mini" for="u" style="display:block;margin-bottom:6px">Username</label>
     <input id="u" placeholder="username" style="width:100%" autocomplete="username"/>
-    <label class="mini" style="display:block;margin:14px 0 6px">Password</label>
+    <label class="mini" for="p" style="display:block;margin:14px 0 6px">Password</label>
     <input id="p" type="password" placeholder="password (8+ characters)" style="width:100%" autocomplete="current-password"
            onkeydown="if(event.key==='Enter')go()"/>
     <button class="btn-amber" style="width:100%;justify-content:center;margin-top:18px" onclick="go()">
@@ -1451,7 +1456,7 @@ async function reset(){
 
 ACCOUNT_HTML = _page("Petabyte — your account", """
 <div id="guest" class="wrap" style="max-width:460px;padding:70px 22px;text-align:center">
-  <img src="/static/petabyte-logo.png" style="width:56px;opacity:.8"/>
+  <img src="/static/petabyte-logo.png" alt="Petabyte" style="width:56px;opacity:.8"/>
   <h1 style="font-size:28px;margin:18px 0 8px">Your account</h1>
   <p class="mut">Sign in to see your nodes, jobs, keys, and wallet in one place.</p>
   <div style="margin-top:18px"><a class="btn btn-amber" href="/login">Sign in</a></div>
@@ -1596,7 +1601,7 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
         <div><span class="mini">Earnings</span><div class="mono amber" style="font-size:20px;font-weight:600" id="wearn">—</div></div>
         <div style="flex:1"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <input id="amt" type="number" value="50" min="1" size="5" style="width:90px"/>
+          <input id="amt" type="number" aria-label="Amount to add (USD)" value="50" min="1" size="5" style="width:90px"/>
           <button class="btn-amber" onclick="deposit()">Add funds</button>
           <button class="btn-ghost" onclick="withdraw()">Withdraw</button>
         </div>
@@ -1611,7 +1616,7 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
     <div class="lbl" style="margin-bottom:12px">API keys</div>
     <div class="card">
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-        <input id="klabel" placeholder="label · my-node" size="16"/>
+        <input id="klabel" aria-label="API key label" placeholder="label · my-node" size="16"/>
         <button class="btn-amber" onclick="mkkey()">Create key</button>
         <span class="mut" style="font-size:12px">Shown once — copy immediately.</span>
       </div>

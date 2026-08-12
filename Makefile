@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e browser-e2e test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real
+.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e browser-e2e test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real ui-test browser-ui
 
 help:
 	@echo "Petabyte make targets:"
@@ -18,6 +18,8 @@ help:
 	@echo "  make email-integration  Send a REAL Mailgun email (needs MAILGUN_API_KEY; skips otherwise)"
 	@echo "  make local-e2e       Run the whole platform locally + a buyer/seller/admin flow (offline)"
 	@echo "  make browser-e2e     Drive the full buyer+seller journey through the real browser UI (Playwright)"
+	@echo "  make ui-test         Assert the UI/UX surfaces: web contract + a11y, CLI, packaged exe (no browser)"
+	@echo "  make browser-ui      Responsive + console-error + journey assertions in a real browser (opt-in Playwright)"
 	@echo "  make reconcile       Reconcile internal ledger + transactions vs Stripe (test mode)"
 	@echo "  make audit-ledger    Ledger integrity + booking/payout cross-checks (read-only; fails on drift)"
 	@echo "  make payout-test     Run the provider-neutral global payout routing suite"
@@ -73,6 +75,23 @@ local-e2e:
 # Needs Playwright's Chromium: python -m playwright install chromium
 browser-e2e:
 	python3 scripts/e2e/browser_e2e.py
+
+# UI/UX surface assertions (no browser needed): the web templates' user-facing contract
+# (headings, nav, forms, a11y, prices, failure + empty states), the prettified CLI
+# (colour/no-colour/tables/json), and the packaged .exe entrypoint + packaging.
+ui-test:
+	cd $(API) && python3 audit_frontend.py
+	cd $(API) && python3 audit_js.py
+	cd $(API) && python3 web_ui_test.py
+	cd $(API) && python3 cli/cli_ui_test.py
+	cd $(API) && python3 cli/cli_petabyte_test.py
+	cd lumaris_agent && python3 agent_cli_test.py
+	cd desktop-app && python3 exe_smoke_test.py
+
+# Responsive (desktop/tablet/mobile) + console-error + buyer/seller journey assertions in
+# a real browser. Self-skips (exit 0) without Playwright; CI installs Chromium and runs it.
+browser-ui:
+	python3 scripts/e2e/browser_ui_test.py
 
 # Mailgun transactional email: offline unit suite, and an opt-in real send.
 email-test:

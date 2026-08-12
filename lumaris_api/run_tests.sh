@@ -63,8 +63,26 @@ run_suite "grafana dashboards (metric-existence + generator determinism)" \
                    python observability/grafana/build_dashboards.py && \
                    git diff --exit-code observability/grafana/dashboards"
 run_suite "tunnel (nat + failover)" bash -c "cd ../lumaris_gateway && python tunnel_test.py"
+
+# ---- UI/UX surfaces (web + CLI + packaged exe) -------------------------------
+# CLI output and the packaged .exe are user interface too; these assert that the
+# prettified surfaces render correctly, keep their machine-readable modes, and that the
+# web templates keep their user-facing contract (headings, forms, a11y, prices, failure
+# and empty states). The browser suite is opt-in and self-skips without Playwright.
+run_suite "frontend<->backend contract (dead calls/links/ids)" python audit_frontend.py
+run_suite "rendered JS syntax (a broken <script> = a dead page)" python audit_js.py
+run_suite "web UI contract (render/nav/forms/a11y/failure/empty/weird data)" python web_ui_test.py
+run_suite "cli ui (colour/no-colour/unicode/tables/json/no-drift)" python cli/cli_ui_test.py
+run_suite "buyer cli (subprocess vs real API: table/json/errors/exit codes)" python cli/cli_petabyte_test.py
+run_suite "seller agent cli (doctor/help/version/provision UX)" \
+          bash -c "cd ../lumaris_agent && python agent_cli_test.py"
+run_suite "desktop exe smoke (entrypoint UX + packaging hidden-imports)" \
+          bash -c "cd ../desktop-app && python exe_smoke_test.py"
+run_suite "browser UI (responsive/console-errors/journeys; opt-in Playwright)" \
+          bash -c "cd .. && python scripts/e2e/browser_ui_test.py"
+
 rm -f smoke.db* adv.db* stripe_test.db* payout_test.db* seller_payable_metric_test.db* \
-      reservation_reclaim_test.db* security.db* ../lumaris_gateway/tunnel.db*
+      reservation_reclaim_test.db* security.db* web_ui_test.db* ../lumaris_gateway/tunnel.db*
 
 # Informational: honest seller-payout country coverage. This deliberately reports a
 # SHORTFALL (0/100) today and is NOT a gate — coverage grows only through real provider

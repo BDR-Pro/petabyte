@@ -145,8 +145,8 @@ textarea:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(245,178,61,.1
       <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
     </button>
     <span id="loginbox" style="display:flex;gap:8px;align-items:center">
-      <input id="u" placeholder="username" size="10" autocomplete="username"/>
-      <input id="p" type="password" placeholder="password" size="10" autocomplete="current-password"/>
+      <input id="u" aria-label="Username" placeholder="username" size="10" autocomplete="username"/>
+      <input id="p" type="password" aria-label="Password" placeholder="password" size="10" autocomplete="current-password"/>
       <button class="btn-ghost" onclick="reg()">Create account</button>
       <button class="btn" onclick="login()">Sign in</button>
     </span>
@@ -208,7 +208,7 @@ textarea:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(245,178,61,.1
     <div class="h"><h2 data-ar="شغّل مهمة">Run a job</h2><span class="note" data-ar="يحجز أرخص جهاز مطابق، ويحفظ المبلغ في ضمان، ويبثّ النتيجة">books the cheapest match, escrows, streams the result</span></div>
     <div class="run">
       <div>
-        <textarea id="code" spellcheck="false">print("hello from a petabyte gpu")
+        <textarea id="code" aria-label="Code to run on the GPU" spellcheck="false">print("hello from a petabyte gpu")
 print(6 * 7)</textarea>
         <div style="margin-top:12px"><button class="btn" onclick="runJob()" data-ar="شغّل على أرخص جهاز ←">Run on cheapest GPU →</button></div>
       </div>
