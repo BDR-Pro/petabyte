@@ -1672,6 +1672,31 @@ ok("the /roi page renders the calculator (hours/day + whole-PC toggle wired to /
 ok("/install links sellers to the ROI calculator (buy-decision funnel)",
    'href="/roi"' in _inst)
 
+# --- more revenue sources: partner links, referral surfacing, instant-payout fee ---
+_pt = c.get("/partners").json()
+ok("/partners lists gear across categories (storage, cash-out, parts, power), affiliate off by default",
+   len(_pt.get("partners", [])) >= 4
+   and {"Cloud storage", "Cash out USDC"} <= {p["category"] for p in _pt["partners"]}
+   and _pt["affiliate"]["enabled"] is False
+   and all(p["affiliate"] is False for p in _pt["partners"]))
+ok("the /roi page surfaces the partner gear section", "/partners" in _roip and 'id="gearlist"' in _roip)
+# referral: surfaced on the account page, and its API works for a signed-in user
+c.post("/register_user", json={"username": "refuser1", "password": "hunter2-correct-horse"})
+_rtok = c.post("/login", data={"username": "refuser1", "password": "hunter2-correct-horse"}).json()["access_token"]
+_rh = {"Authorization": "Bearer " + _rtok}
+_rf = c.get("/referral", headers=_rh).json()
+ok("the referral API returns a share link + reward for a signed-in user (both-sides growth loop)",
+   bool(_rf.get("code")) and "?ref=" in _rf.get("link", "") and _rf.get("reward_usd", 0) > 0)
+ok("the account page surfaces the invite-and-earn card (share link + copy)",
+   "loadReferral" in c.get("/account").text and 'id="reflink"' in c.get("/account").text)
+# instant-payout fee: the quote shows free-scheduled vs a disclosed fee, BEFORE committing
+_pq = c.get("/wallet/payout_quote?amount=100", headers=_rh).json()
+ok("payout quote is honest: scheduled is free, instant costs a disclosed fee shown before commit",
+   _pq["scheduled"]["fee_usd"] == 0.0 and _pq["instant"]["fee_usd"] > 0
+   and _pq["instant"]["net_usd"] == round(100 - _pq["instant"]["fee_usd"], 2))
+ok("the account withdraw UI offers the instant (fee) option alongside free scheduled payout",
+   'id="instant"' in c.get("/account").text)
+
 # --- wallet-only onboarding: paste a wallet, get a ONE-LINE installer, no account (like a miner) ---
 ok("the /install page offers a wallet-only start (no login) wired to /nodes/quickstart",
    "walletStart" in _inst and "/nodes/quickstart" in _inst and 'id="qwallet"' in _inst)

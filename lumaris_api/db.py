@@ -71,6 +71,10 @@ def qc(x) -> Decimal:
 PLATFORM_TAKE_RATE = D(os.getenv("PLATFORM_TAKE_RATE", "0.10"))
 HEARTBEAT_TIMEOUT_S = int(os.getenv("HEARTBEAT_TIMEOUT_S", "60"))
 MIN_REPUTATION = int(os.getenv("MIN_REPUTATION", "50"))
+# Instant payout fee: scheduled/batch payouts are FREE; an on-demand instant cash-out costs a
+# small fee (a real revenue line). Percentage with a flat floor. Never exceeds the amount.
+INSTANT_PAYOUT_FEE_PCT = D(os.getenv("INSTANT_PAYOUT_FEE_PCT", "0.015"))
+INSTANT_PAYOUT_FEE_MIN = D(os.getenv("INSTANT_PAYOUT_FEE_MIN", "0.50"))
 
 
 def _utcnow() -> datetime:
@@ -510,7 +514,8 @@ class Payout(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
     method_id = Column(Integer, ForeignKey("payout_methods.id"), nullable=False)
-    amount_usd = Column(Money, nullable=False)
+    amount_usd = Column(Money, nullable=False)       # NET sent to the rail (amount minus any fee)
+    fee_usd = Column(Money, nullable=True, default=Decimal(0))  # instant-payout fee kept by platform
     kind = Column(String, nullable=False)
     status = Column(String, default="requested", nullable=False)
     provider_ref = Column(String, nullable=True)     # provider txn id / tx hash
@@ -3279,6 +3284,7 @@ def try_debit_earnings(db: Session, user_id: int, amount) -> bool:
 
 
 def credit_earnings(db: Session, user_id: int, amount: float) -> None:
+    amount = q(amount)   # coerce to the money type — a float here breaks the in-session evaluator
     db.execute(update(User).where(User.id == user_id)
                .values(earnings=User.earnings + amount))
     db.commit()
@@ -3303,23 +3309,44 @@ def get_payout_method(db: Session, method_id: int, user_id: int):
                     SellerPayoutMethod.user_id == user_id).first())
 
 
+def instant_payout_fee(amount) -> Decimal:
+    """The fee for an INSTANT (on-demand) payout of `amount`: max(flat floor, pct). Never exceeds
+    the amount. Scheduled/batch payouts are free (fee 0) — this is charged only when the seller
+    chooses instant cash-out."""
+    amt = qc(amount)
+    if amt <= 0:
+        return qc(0)
+    fee = INSTANT_PAYOUT_FEE_MIN if INSTANT_PAYOUT_FEE_MIN > (amt * INSTANT_PAYOUT_FEE_PCT) \
+        else (amt * INSTANT_PAYOUT_FEE_PCT)
+    return qc(fee if fee < amt else amt)
+
+
 def request_payout(db: Session, user: "User", method: "SellerPayoutMethod",
-                   amount: float) -> "Payout":
-    """Atomically debit earnings and enqueue a payout. Returns None if short."""
+                   amount: float, *, fee=0.0) -> "Payout":
+    """Atomically debit earnings and enqueue a payout. Returns None if short. `fee` > 0 is the
+    instant-payout fee: the seller's earnings drop by the GROSS `amount`, the rail receives
+    `amount - fee`, and `fee` is booked to PLATFORM_REVENUE (a real revenue leg). fee=0 is the
+    free scheduled/normal path (unchanged)."""
     if amount <= 0 or not method.verified:
         return None
-    if not try_debit_earnings(db, user.id, amount):
+    gross = qc(amount)
+    fee = qc(fee) if (fee and qc(fee) > 0) else qc(0)
+    if fee >= gross:                       # the fee must be smaller than the amount
         return None
-    p = Payout(user_id=user.id, method_id=method.id, amount_usd=qc(amount),
+    net = gross - fee
+    if not try_debit_earnings(db, user.id, gross):
+        return None
+    p = Payout(user_id=user.id, method_id=method.id, amount_usd=net, fee_usd=fee,
                kind=method.kind, status="requested")
     db.add(p); db.flush()
-    # money LEAVES the system: seller earnings drain to the external payout rail.
-    # This was previously not ledgered at all — earnings simply vanished from the books.
-    post(db, "payout", legs=[
-        (acct_seller(user.id), DEBIT,  qc(amount), user.id),
-        (EXTERNAL_PAYOUTS,     CREDIT, qc(amount)),
-    ], reference_id=p.id, description=f"payout via {method.kind}",
-       entry_type="payout")
+    # money LEAVES the system: seller earnings (gross) split into the rail (net) + our fee.
+    legs = [(acct_seller(user.id), DEBIT, gross, user.id),
+            (EXTERNAL_PAYOUTS,     CREDIT, net)]
+    if fee > 0:
+        legs.append((PLATFORM_REVENUE, CREDIT, fee))
+    post(db, "payout", legs=legs, reference_id=p.id,
+         description=f"payout via {method.kind}" + (" (instant)" if fee > 0 else ""),
+         entry_type="payout")
     db.commit(); db.refresh(p)
     return p
 
@@ -3333,8 +3360,9 @@ def set_payout_status(db: Session, payout: "Payout", status: str,
     if reason:
         payout.reason = reason
     db.add(payout); db.commit()
-    if status == "failed":                       # return the money on failure
-        credit_earnings(db, payout.user_id, payout.amount_usd)
+    if status == "failed":                       # return the money on failure — the GROSS
+        # (net that would have been sent + any instant fee), so the seller is fully made whole.
+        credit_earnings(db, payout.user_id, q(payout.amount_usd) + q(payout.fee_usd or 0))
 
 
 def pending_payouts(db: Session):

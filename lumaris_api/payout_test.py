@@ -618,6 +618,48 @@ s.close()
 # restore the real loader
 cap.load_dataset = _orig_load
 
+# ---------------- instant payout fee (a revenue line; scheduled stays free) ----------------
+from db import LedgerTx, LedgerEntry, PLATFORM_REVENUE   # noqa: E402
+s = dbmod.SessionLocal()
+_u = dbmod.create_user(s, "instpayee", "pw-abcdefghij")
+dbmod.credit_earnings(s, _u.id, 100.0)
+_m = dbmod.add_payout_method(s, _u, "usdc", "0xfeed", label="w")
+_m.verified = True; s.add(_m); s.commit()
+
+ok("instant fee floors at the flat minimum for small amounts ($10 -> $0.50)",
+   abs(float(dbmod.instant_payout_fee(10)) - 0.50) < 1e-9)
+ok("instant fee scales by pct on larger amounts ($1000 -> $15.00 at 1.5%)",
+   abs(float(dbmod.instant_payout_fee(1000)) - 15.0) < 1e-9)
+
+# scheduled (free) payout: no fee, full amount sent
+_pf = dbmod.request_payout(s, _u, _m, 20.0)
+ok("scheduled payout charges NO fee and sends the full amount",
+   float(_pf.fee_usd or 0) == 0.0 and float(_pf.amount_usd) == 20.0)
+
+# instant payout: fee deducted, net = amount - fee, fee booked to PLATFORM_REVENUE
+_fee = float(dbmod.instant_payout_fee(40))
+_pi = dbmod.request_payout(s, _u, _m, 40.0, fee=_fee)
+ok("instant payout: net sent = amount - fee, fee recorded on the payout",
+   abs(float(_pi.amount_usd) - (40.0 - _fee)) < 1e-6 and abs(float(_pi.fee_usd) - _fee) < 1e-6)
+ok("earnings drop by the GROSS (20 + 40 = 60), not the net — the fee comes out of the withdrawal",
+   abs(float(dbmod.get_user_by_id(s, _u.id).earnings) - 40.0) < 1e-6)
+_tx = (s.query(LedgerTx).filter(LedgerTx.reference_type == "payout",
+                                LedgerTx.reference_id == str(_pi.id)).first())
+_rev = sum(float(e.amount) for e in s.query(LedgerEntry).filter(LedgerEntry.tx_id == _tx.id).all()
+           if e.account == PLATFORM_REVENUE and e.direction == "credit")
+ok("the instant fee is booked to PLATFORM_REVENUE as a balanced ledger leg (real revenue)",
+   abs(_rev - _fee) < 1e-6)
+
+# a FAILED instant payout refunds the GROSS (net + fee) — seller is fully made whole
+dbmod.set_payout_status(s, _pi, "failed")
+ok("a FAILED instant payout refunds the GROSS (net + fee), not just the net",
+   abs(float(dbmod.get_user_by_id(s, _u.id).earnings) - (40.0 + 40.0)) < 1e-6)
+
+# guard: an amount at/under the fee is refused for instant (fee must be smaller than amount)
+ok("instant is refused when the fee would meet/exceed the amount (no zero/negative payout)",
+   dbmod.request_payout(s, _u, _m, 0.40, fee=float(dbmod.instant_payout_fee(0.40))) is None)
+s.close()
+
 print(f"\n=== payout: {PASSES} passed, {FAILS} failed ===")
 for f in ("payout_test.db", "payout_test.db-wal", "payout_test.db-shm"):
     if os.path.exists(f):
