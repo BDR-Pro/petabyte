@@ -960,7 +960,16 @@ ok("freshly-added destination CANNOT receive money yet (cooling-off)",
 _agedb=_DBS()
 _m=_agedb.query(_PM).filter(_PM.id==mid).first()
 _m.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
+# age this seller's completed bookings past the earnings clearing/dispute hold, as time would —
+# otherwise the just-completed $9 job is still clearing and correctly can't be withdrawn yet.
+from db import Booking as _BK
+for _b in _agedb.query(_BK).filter(_BK.status=="released").all():
+    _b.released_at = datetime.now(timezone.utc) - timedelta(hours=72)
 _agedb.add(_m); _agedb.commit(); _agedb.close()
+
+# earnings from a fresh job are HELD until they clear the dispute/re-verify window
+ok("earnings are held during the clearing window, then become withdrawable once cleared",
+   c.get("/wallet", headers=psh).json()["withdrawable"]==9.0)
 
 # manual withdraw $5 -> earnings 4, payout requested -> worker sends -> confirmed
 w=c.post("/wallet/withdraw", headers=psh, json={"method_id":mid,"amount":5.0})
@@ -1696,6 +1705,13 @@ ok("payout quote is honest: scheduled is free, instant costs a disclosed fee sho
    and _pq["instant"]["net_usd"] == round(100 - _pq["instant"]["fee_usd"], 2))
 ok("the account withdraw UI offers the instant (fee) option alongside free scheduled payout",
    'id="instant"' in c.get("/account").text)
+# anti-fraud payout holds: /wallet surfaces withdrawable-now vs still-clearing + instant eligibility
+_wl = c.get("/wallet", headers=_rh).json()
+ok("/wallet separates withdrawable-now from earnings still in the clearing/dispute hold",
+   all(k in _wl for k in ("earnings", "withdrawable", "clearing", "instant_eligible", "hold_hours"))
+   and _wl["hold_hours"] >= 1)
+ok("a brand-new account is NOT instant-payout eligible (fast cash-out locked until matured)",
+   _wl["instant_eligible"] is False)
 
 # --- paid data API: metered, needs a data-scoped key; /developers documents it ---
 ok("the data API requires an API key (no anonymous access)",

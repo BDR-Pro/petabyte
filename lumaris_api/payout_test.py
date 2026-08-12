@@ -660,6 +660,52 @@ ok("instant is refused when the fee would meet/exceed the amount (no zero/negati
    dbmod.request_payout(s, _u, _m, 0.40, fee=float(dbmod.instant_payout_fee(0.40))) is None)
 s.close()
 
+# ---------------- anti-fraud payout holds (clearing window + instant maturity) ----------------
+import datetime as _dt2  # noqa: E402
+s = dbmod.SessionLocal()
+_hu = dbmod.create_user(s, "holdseller", "pw-abcdefghij")
+dbmod.credit_earnings(s, _hu.id, 100.0)
+_buyer = dbmod.create_user(s, "holdbuyer", "pw-abcdefghij")
+
+
+def _spec_for(uid):
+    sp = dbmod.SellerSpec(user_id=uid, cpu=4, ram=16, price_per_hour=dbmod.q(1),
+                          duration=24, gpu_model="RTX 4090")
+    s.add(sp); s.commit(); return sp.id
+
+
+def _released_booking(seller_id, buyer_id, spec_id, payout, released_at):
+    b = dbmod.Booking(buyer_id=buyer_id, seller_id=seller_id, spec_id=spec_id, hours=1,
+                      price_per_hour=dbmod.q(payout), gross_amount=dbmod.q(payout),
+                      platform_fee=dbmod.q(0), seller_payout=dbmod.q(payout),
+                      status="released", released_at=released_at)
+    s.add(b); s.commit(); return b
+
+
+_now = dbmod._utcnow().replace(tzinfo=None)
+_hspec = _spec_for(_hu.id)
+# a booking released JUST NOW -> its payout is still in the clearing window (held)
+_released_booking(_hu.id, _buyer.id, _hspec, 30.0, _now)
+ok("earnings from a just-completed job are HELD (not withdrawable during the clearing window)",
+   float(dbmod.withdrawable_earnings(s, _hu)) == 70.0)          # 100 earnings - 30 held
+# a booking released well before the window -> already cleared, not held
+_released_booking(_hu.id, _buyer.id, _hspec, 20.0, _now - _dt2.timedelta(hours=dbmod.EARNINGS_HOLD_HOURS + 1))
+ok("earnings that have passed the hold window ARE withdrawable (old completion adds no hold)",
+   float(dbmod.withdrawable_earnings(s, _hu)) == 70.0)          # still 70 — only the recent one holds
+
+# instant-payout maturity: a fresh seller must earn rep + N cleared jobs before fast cash-out
+_newbie = dbmod.create_user(s, "newbieseller", "pw-abcdefghij")
+_nspec = _spec_for(_newbie.id)
+ok("a brand-new seller is NOT instant-eligible (fast cash-out locked)",
+   dbmod.is_payout_matured(s, _newbie) is False)
+for _i in range(dbmod.PAYOUT_MATURITY_MIN_JOBS):
+    _released_booking(_newbie.id, _buyer.id, _nspec, 1.0,
+                      _now - _dt2.timedelta(hours=dbmod.EARNINGS_HOLD_HOURS + 5))
+_newbie.reputation = dbmod.MIN_REPUTATION; s.add(_newbie); s.commit()
+ok("instant unlocks once the seller has cleared N jobs in good standing",
+   dbmod.is_payout_matured(s, _newbie) is True)
+s.close()
+
 print(f"\n=== payout: {PASSES} passed, {FAILS} failed ===")
 for f in ("payout_test.db", "payout_test.db-wal", "payout_test.db-shm"):
     if os.path.exists(f):

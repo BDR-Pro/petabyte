@@ -99,6 +99,7 @@ from db import (
     set_idle_fallback, record_idle_report, idle_credited_total,
     add_payout_method, list_payout_methods, get_payout_method,
     request_payout, set_payout_status, list_payouts,
+    withdrawable_earnings, is_payout_matured, EARNINGS_HOLD_HOURS, PAYOUT_MATURITY_MIN_JOBS,
     create_schedule, list_schedules, run_due_schedules,
     list_notifications,
     create_multinode_job, add_job_segment, segment_for_task, complete_segment,
@@ -4079,6 +4080,21 @@ def withdraw(data: WithdrawModel, request: Request,
             "message": f"This destination was added recently and cannot receive funds "
                        f"for {PAYOUT_COOLING_OFF_H}h after being added."})
 
+    # ANTI-FRAUD HOLD: earnings from a just-completed job clear a dispute/re-verification window
+    # before they can leave. Only pay out what has cleared.
+    _wd = float(withdrawable_earnings(db, me))
+    if data.amount > _wd + 1e-9:
+        raise HTTPException(status_code=402, detail={
+            "code": "EARNINGS_CLEARING",
+            "message": f"${_wd:.2f} is available to withdraw now. The rest is in a "
+                       f"{EARNINGS_HOLD_HOURS}h clearing/dispute window after each job completes.",
+            "withdrawable_usd": round(_wd, 2)})
+    # INSTANT (fast) cash-out is locked until the seller has matured — the fast-exit fraud window.
+    if data.instant and not is_payout_matured(db, me):
+        raise HTTPException(status_code=403, detail={
+            "code": "INSTANT_PAYOUT_LOCKED",
+            "message": f"Instant payout unlocks after {PAYOUT_MATURITY_MIN_JOBS} completed jobs in "
+                       f"good standing. Use the free scheduled payout, or withdraw once earnings clear."})
     from db import instant_payout_fee
     fee = float(instant_payout_fee(data.amount)) if data.instant else 0.0
     if data.instant and fee >= data.amount:
@@ -4107,14 +4123,22 @@ def payout_quote(amount: float = Query(..., gt=0),
     """Show the cost BEFORE committing: scheduled payouts are free; instant costs a small fee.
     Lets the UI present both options honestly so nobody is surprised by a deduction."""
     from db import instant_payout_fee
+    me = get_user_by_username(db, _username(user))
     fee = float(instant_payout_fee(amount))
+    wd = float(withdrawable_earnings(db, me))
+    matured = is_payout_matured(db, me)
     return {
         "amount_usd": round(amount, 2),
+        "withdrawable_now_usd": round(wd, 2),
+        "clearing_usd": round(max(0.0, float(me.earnings) - wd), 2),
+        "hold_hours": EARNINGS_HOLD_HOURS,
         "scheduled": {"fee_usd": 0.0, "net_usd": round(amount, 2),
                       "note": "Free — paid out on your schedule / next batch."},
         "instant": {"fee_usd": round(fee, 2), "net_usd": round(amount - fee, 2),
-                    "available": fee < amount,
-                    "note": "Paid out right away for a small fee."},
+                    "available": fee < amount and matured,
+                    "eligible": matured,
+                    "note": ("Paid out right away for a small fee." if matured else
+                             f"Unlocks after {PAYOUT_MATURITY_MIN_JOBS} completed jobs in good standing.")},
     }
 
 
@@ -5412,7 +5436,12 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
 @app.get("/wallet", tags=["wallet"])
 def wallet(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
-    return {"balance": round(me.balance, 4), "earnings": round(me.earnings, 4)}
+    wd = float(withdrawable_earnings(db, me))
+    return {"balance": round(me.balance, 4), "earnings": round(me.earnings, 4),
+            "withdrawable": round(wd, 4),
+            "clearing": round(max(0.0, float(me.earnings) - wd), 4),
+            "instant_eligible": is_payout_matured(db, me),
+            "hold_hours": EARNINGS_HOLD_HOURS}
 
 
 @app.get("/me", tags=["account"])

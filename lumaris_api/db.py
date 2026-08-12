@@ -75,6 +75,11 @@ MIN_REPUTATION = int(os.getenv("MIN_REPUTATION", "50"))
 # small fee (a real revenue line). Percentage with a flat floor. Never exceeds the amount.
 INSTANT_PAYOUT_FEE_PCT = D(os.getenv("INSTANT_PAYOUT_FEE_PCT", "0.015"))
 INSTANT_PAYOUT_FEE_MIN = D(os.getenv("INSTANT_PAYOUT_FEE_MIN", "0.50"))
+# Anti-fraud payout holds. Earnings from a just-completed job are held for a clearing/dispute +
+# re-verification window before they can be withdrawn. INSTANT payout (fast cash-out) is locked
+# until a seller has matured: minimum reputation AND at least this many completed (released) jobs.
+EARNINGS_HOLD_HOURS = int(os.getenv("EARNINGS_HOLD_HOURS", "24"))
+PAYOUT_MATURITY_MIN_JOBS = int(os.getenv("PAYOUT_MATURITY_MIN_JOBS", "3"))
 
 
 def _utcnow() -> datetime:
@@ -3480,6 +3485,46 @@ def instant_payout_fee(amount) -> Decimal:
     return qc(fee if fee < amt else amt)
 
 
+def seller_cleared_jobs(db: Session, user_id: int) -> int:
+    """Count of this seller's completed (released) paid bookings — the 'verified jobs' bar."""
+    return db.query(Booking).filter(Booking.seller_id == user_id,
+                                    Booking.status == "released").count()
+
+
+def is_payout_matured(db: Session, user) -> bool:
+    """True once a seller is trusted enough for INSTANT (fast) payout: good reputation AND at
+    least PAYOUT_MATURITY_MIN_JOBS completed jobs. New/low-rep sellers must use the free scheduled
+    path (which still respects the clearing hold) — closing the fast-exit fraud window."""
+    uid = getattr(user, "id", user)
+    rep = int(getattr(user, "reputation", 0) or 0)
+    return rep >= MIN_REPUTATION and seller_cleared_jobs(db, uid) >= PAYOUT_MATURITY_MIN_JOBS
+
+
+def held_earnings(db: Session, user_id: int, *, now=None, hold_hours=None) -> Decimal:
+    """Sum of payouts from bookings this seller completed within the clearing/dispute window —
+    money that has been earned but is not yet withdrawable (a window to catch a bad job first)."""
+    now = now or _utcnow()
+    hrs = EARNINGS_HOLD_HOURS if hold_hours is None else int(hold_hours)
+    cutoff = now - timedelta(hours=hrs)
+    if getattr(cutoff, "tzinfo", None) is not None:
+        cutoff = cutoff.replace(tzinfo=None)   # released_at is stored naive-UTC
+    total = Decimal(0)
+    for b in db.query(Booking).filter(Booking.seller_id == user_id,
+                                      Booking.status == "released",
+                                      Booking.released_at.isnot(None),
+                                      Booking.released_at >= cutoff).all():
+        total += D(b.seller_payout)
+    return q(total)
+
+
+def withdrawable_earnings(db: Session, user, *, now=None) -> Decimal:
+    """Earnings a seller can withdraw RIGHT NOW = total earnings minus amounts still in the
+    clearing/dispute hold. Never negative."""
+    u = user if hasattr(user, "earnings") else get_user_by_id(db, user)
+    w = D(u.earnings) - held_earnings(db, u.id, now=now)
+    return q(w if w > 0 else Decimal(0))
+
+
 def request_payout(db: Session, user: "User", method: "SellerPayoutMethod",
                    amount: float, *, fee=0.0) -> "Payout":
     """Atomically debit earnings and enqueue a payout. Returns None if short. `fee` > 0 is the
@@ -3574,8 +3619,11 @@ def run_due_schedules(db: Session, now_utc=None) -> int:
             continue
         user = db.query(User).filter(User.id == sch.user_id).first()
         method = db.query(SellerPayoutMethod).filter(SellerPayoutMethod.id == sch.method_id).first()
-        if user and method and method.verified and (user.earnings or 0) >= sch.min_amount:
-            request_payout(db, user, method, qc(user.earnings))
+        # Only pay out earnings that have CLEARED the hold window (scheduled payouts respect the
+        # same anti-fraud hold as manual ones, so a schedule can't be used to dodge it).
+        avail = withdrawable_earnings(db, user, now=now_utc) if user else Decimal(0)
+        if user and method and method.verified and avail >= q(sch.min_amount) and avail > 0:
+            request_payout(db, user, method, qc(avail))
             fired += 1
         sch.last_run_at = now_utc
         sch.next_run_at = compute_next_run(now_utc, sch.day_of_week, sch.hour,

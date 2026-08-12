@@ -260,6 +260,12 @@ variables:
     scope:
     - ci
     description: browser-e2e seller login (TEST account).
+  EARNINGS_HOLD_HOURS:
+    required: false
+    default: '24'
+    scope:
+    - platform
+    description: ''
   EMAIL_FROM:
     required: false
     default: no-reply@petabyte.market
@@ -837,6 +843,12 @@ variables:
     - 'true'
     - 'false'
     format: bool
+  PAYOUT_MATURITY_MIN_JOBS:
+    required: false
+    default: '3'
+    scope:
+    - platform
+    description: ''
   PAYOUT_READINESS_MAX_AGE_S:
     required: false
     default: '2592000'
