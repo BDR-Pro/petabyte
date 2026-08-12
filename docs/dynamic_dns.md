@@ -10,6 +10,12 @@ so the address you were given is byte-identical. You never edit DNS per VM, and 
 dynamic-DNS updater. One static wildcard record covers every VM forever; the **control plane**, not
 DNS, follows the VM.
 
+**Use the per-VM subdomain `<id>.vm.petabyte.market`, not `vm-<id>@petabyte.market`.** A VM usually
+needs **more than one login user** (`root@` to set up, `app@`/`ubuntu@`/`jupyter@` to run). Putting
+the id in the **host** keeps the SSH **username free** for any of them; putting the id in the
+username (the `vm-<id>@` form) burns that slot and forces a separate handle per user. The subdomain
+also works for HTTP/scp/rsync, not just SSH. See [§3](#3-ssh--and-why-the-subdomain-is-the-canonical-form).
+
 This doc is the **non-code / DNS-records** half. The code side is already built and tested — see
 [§6](#6-whats-already-built--tested). The server software to install (frp + sshpiper) is in
 [`vm-runbook.md`](vm-runbook.md); this doc is the DNS + client + operator setup around it.
@@ -68,55 +74,66 @@ wildcard zone above. `GATEWAY_TOKEN` must be set (shared secret the gateway uses
 
 ---
 
-## 3. SSH — the two routing strategies
+## 3. SSH — and why the subdomain is the canonical form
 
-SSH has no SNI/Host header, so a shared gateway can't read the target hostname from the SSH protocol
-itself. There are two clean ways to tell the gateway which VM you want. Pick one; both survive
-failover with **no DNS change**.
+A VM often has **more than one login user**: you SSH in as `root` to install a driver, as `app`
+(or `ubuntu`, `jupyter`, `postgres`, …) to run the workload, and a script may use a third. The
+naming has to leave room for **`<user>@`** to vary. That is the deciding factor between the two
+strategies:
 
-### A. Username routing (simplest DNS — the built-in default)
+| | `<user>@<id>.vm.petabyte.market` (subdomain — **canonical**) | `vm-<id>@petabyte.market` (username routing — fallback) |
+|---|---|---|
+| **Login user** | **free** — `root@`, `app@`, `ubuntu@`, `jupyter@` all work, same VM | **taken** — the id *is* the username, so there's no slot left for the user |
+| **Multiple users** | one address, any user | needs a **separate handle per user** (`vm-<id>-root`, `vm-<id>-app`), each pre-registered in the router |
+| **HTTP / browser / scp / rsync** | works (real hostname) | SSH-only |
+| **DNS** | one wildcard `*.vm.petabyte.market` | one A record |
+| **Client setup** | one-time `~/.ssh/config` line (SSH has no SNI) | none |
 
-The VM id travels in the SSH **username**, so a single A record is enough and the gateway/sshpiper
-reads the id from the login name.
+So the address the API advertises (`url.ssh` / `url.hostname`) is the **subdomain**. The username
+form is kept only as a zero-config fallback for buyers who won't touch their ssh config — and it is
+explicitly labelled `url.ssh_username_fallback` because it cannot carry a login user.
+
+### A. Subdomain (canonical) — any login user
+
+```bash
+ssh root@<id>.vm.petabyte.market      # driver / setup
+ssh app@<id>.vm.petabyte.market       # run the workload
+scp file app@<id>.vm.petabyte.market:~/     # and scp/rsync/browsers all work too
+```
+
+The id is the **host**; the part before `@` is a normal SSH username the VM's `sshd` authenticates
+(the buyer's key is injected at launch as `ssh_pubkey`, and mapped to whichever users the image
+allows). Raw SSH sends no hostname, so the buyer's client hands the target to the gateway once via
+`~/.ssh/config`:
+
+```ssh-config
+Host *.vm.petabyte.market
+    # do NOT hard-code User here — leave it free so `root@`, `app@`, ... all work
+    ProxyCommand petabyte-connect %h %p
+    # petabyte-connect is a ~15-line helper: open a TCP conn to gw.petabyte.market and send %h
+    # (the VM host) as the handle — exactly lumaris_gateway/gateway.py:buyer_connect. The gateway
+    # resolves %h -> current node; the USERNAME is passed through untouched to the VM's sshd.
+```
+
+- **DNS:** wildcard `*.vm.petabyte.market` → gateway (from [§2](#2-the-dns-records-you-actually-add)).
+- **Config:** `VM_DNS_ZONE=vm.petabyte.market`.
+
+### B. Username routing (fallback — zero client config, single user)
 
 ```bash
 ssh vm-<id>@petabyte.market      # e.g. ssh vm-q7bk2mrelpza@petabyte.market
 ```
 
-- **DNS:** one `A` record for `petabyte.market` (or `gw.petabyte.market`) → gateway. No wildcard
-  needed.
-- **Gateway:** `sshpiperd` selects the upstream from the `vm-<id>` username, then calls
-  `/vm/<id>/route` to find the current node. Config in [`vm-runbook.md`](vm-runbook.md).
-- This is the string the API returns today as `url.ssh`.
+- **DNS:** one `A` record for `petabyte.market` (or `gw.petabyte.market`) → gateway. No wildcard.
+- **Gateway:** `sshpiperd` reads the id from the `vm-<id>` username, then calls `/vm/<id>/route`.
+- **Limitation — this is the whole reason it's the fallback:** the id occupies the username, so it
+  logs into **one implicit user**. To offer `root` *and* `app`, you'd mint distinct handles
+  (`vm-<id>-root@`, `vm-<id>-app@`) and register each in sshpiper — clumsy. Use the subdomain when
+  users vary.
 
-### B. Hostname routing (the `root@<id>.vm.petabyte.market` UX you asked for)
-
-Use the per-VM subdomain and log in as `root` (or any container user). Because raw SSH won't carry
-the hostname, the buyer's SSH client passes the id to the gateway via a tiny `ProxyCommand`. Add this
-**once** to the buyer's `~/.ssh/config`:
-
-```ssh-config
-Host *.vm.petabyte.market
-    User root
-    # Hand the full VM hostname (%h) to the gateway, which resolves it to the current node.
-    ProxyCommand petabyte-connect %h %p
-    # (petabyte-connect is a ~15-line helper: open a TCP conn to gw.petabyte.market and send the
-    #  handle, exactly like lumaris_gateway/gateway.py:buyer_connect. Or use `ssh -J` / `nc` with a
-    #  sshpiper host-routing plugin — see vm-runbook.md.)
-```
-
-Then the exact command works:
-
-```bash
-ssh root@<id>.vm.petabyte.market
-```
-
-- **DNS:** the wildcard `*.vm.petabyte.market` → gateway (from [§2](#2-the-dns-records-you-actually-add)).
-- This is the string the API returns as `url.ssh_hostname` (with `VM_DNS_ZONE=vm.petabyte.market`).
-
-> `root@` is about the **login user inside the container**, not routing. The buyer's public key is
-> injected into the VM (the launch's `ssh_pubkey`), so `root@` authenticates by key. Routing (which
-> machine) is handled by strategy A or B above, independently of the login user.
+> **Login user vs routing are separate concerns.** *Routing* (which machine) is done by the
+> hostname (A) or the `vm-<id>` username (B). The *login user* (`root`/`app`/…) is authenticated by
+> the VM's own `sshd` against the injected key. Only the subdomain keeps both independent.
 
 ---
 
@@ -170,7 +187,8 @@ You are plugging DNS + a gateway into seams that already work and are covered in
 | Piece | Where | Proven by |
 |---|---|---|
 | Stable opaque VM id (non-enumerable) | `db.VMRoute.id` (`_rand_vm_id`) | `vm_dns_test.py` |
-| Address derived only from the id (`vm-<id>@…`, `root@<id>.<zone>`, `https://<id>.<zone>`) | `main._vm_url` | `vm_dns_test.py` |
+| Address derived only from the id (`<user>@<id>.<zone>`, `https://<id>.<zone>`, fallback `vm-<id>@…`) | `main._vm_url` | `vm_dns_test.py` |
+| Hostname carries **no login user** — `root@`/`app@`/`ubuntu@` all reach the same VM | `main._vm_url` | `vm_dns_test.py` |
 | Buyer endpoint never leaks the node IP / placement | `GET /vm/{id}` | `vm_dns_test.py` |
 | Gateway-only id→node resolution (token-gated) | `GET /vm/{id}/route` | `vm_dns_test.py` |
 | Failover keeps the id (restore on a new node) | `db.failover_vm` / `reap_and_failover` | `vm_dns_test.py`, `tunnel_test.py` |
@@ -197,6 +215,7 @@ the connection string unchanged. `vm_dns_test.py` pins the naming contract this 
   frp + sshpiper, a wildcard cert. Nothing here needs new application code; it's the operator setup
   described in [`vm-runbook.md`](vm-runbook.md) plus the DNS records in this doc. It has not yet been
   run against a real internet + a real home router end to end (same caveat `vm-runbook.md` states).
-- **`root@<id>.vm.petabyte.market` specifically:** works via the wildcard + strategy B (hostname
-  routing). The username form (`vm-<id>@petabyte.market`, strategy A) needs even less DNS and is the
-  API's default output.
+- **`<user>@<id>.vm.petabyte.market` specifically:** the API's **canonical** output (`url.ssh` /
+  `url.hostname`), because it keeps the SSH username free for `root`/`app`/`ubuntu`/… on the same
+  VM. The `vm-<id>@petabyte.market` username form is kept only as a labelled zero-config fallback
+  (`url.ssh_username_fallback`) that logs into a single implicit user.

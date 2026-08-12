@@ -7004,18 +7004,25 @@ def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
 
 
 def _vm_url(vm):
-    """The stable, node-independent address for a VM. Failover keeps this constant — it is derived
-    ONLY from the opaque vm id, never from the node's IP, so a backup on a different machine is
-    reachable at the same address with NO DNS change (see docs/dynamic_dns.md). Two routing forms:
-      * ssh          — USERNAME-routed `vm-<id>@<base>` (one A record + sshpiper); the default.
-      * ssh_hostname — HOSTNAME-routed `root@<id>.<VM_DNS_ZONE>` (wildcard `*.<VM_DNS_ZONE>`); the
-                       per-VM-subdomain UX. VM_DNS_ZONE defaults to BASE_DOMAIN; set it to
-                       e.g. `vm.petabyte.market` to namespace VM subdomains under one wildcard."""
+    """The stable, node-independent address for a VM. Failover keeps it constant — derived ONLY
+    from the opaque vm id, never the node's IP, so a backup on a different machine is reachable at
+    the same address with NO DNS change (see docs/dynamic_dns.md).
+
+    CANONICAL form is the per-VM SUBDOMAIN `<id>.<VM_DNS_ZONE>`, because the id is the HOST — which
+    leaves the SSH username FREE for whatever login user the image defines: `root@`, `app@`,
+    `ubuntu@`, `jupyter@`, ... The same VM is reachable as any of them; the hostname carries no
+    user. (VM_DNS_ZONE defaults to BASE_DOMAIN; set it to e.g. `vm.petabyte.market` to put every
+    VM under one wildcard record + one wildcard cert.)
+
+    `ssh_username_fallback` is the zero-client-config alternative (`vm-<id>@<base>`, routed by
+    sshpiper on the username). It is SSH-only AND cannot carry a login user — the id already IS the
+    username — so a second user (root vs app) would need its own handle. Prefer the hostname form."""
     host = f"{vm.id}.{VM_DNS_ZONE}"
-    return {"ssh": f"ssh vm-{vm.id}@{BASE_DOMAIN}",
-            "ssh_hostname": f"ssh root@{host}",
-            "hostname": host,
+    return {"hostname": host,                 # user-agnostic: `<user>@<hostname>` for ANY user
+            "default_user": "root",           # a sensible default; the image may define others
+            "ssh": f"ssh root@{host}",         # any user works: `ssh app@{host}`, `ssh ubuntu@{host}`, ...
             "http": f"https://{host}" if vm.app_port else None,
+            "ssh_username_fallback": f"ssh vm-{vm.id}@{BASE_DOMAIN}",
             "id": vm.id}
 
 

@@ -98,13 +98,21 @@ vm_id = lv["vm_id"]
 url = lv["url"]
 ok("launch returns a stable opaque VM id (not a node id / not an IP)",
    isinstance(vm_id, str) and len(vm_id) >= 8 and not _IP_RE.search(vm_id))
-ok("the username-routed SSH address is derived ONLY from the stable id + base domain",
-   url["ssh"] == f"ssh vm-{vm_id}@petabyte.market")
-ok("the hostname-routed SSH address is exactly root@<id>.vm.<domain> (the per-VM subdomain UX)",
-   url["ssh_hostname"] == f"ssh root@{vm_id}.vm.petabyte.market"
-   and url["hostname"] == f"{vm_id}.vm.petabyte.market")
+ok("the CANONICAL address is the per-VM subdomain <id>.vm.<domain> (id is the HOST)",
+   url["hostname"] == f"{vm_id}.vm.petabyte.market"
+   and url["ssh"] == f"ssh root@{vm_id}.vm.petabyte.market")
+# THE MULTI-USER POINT: the id is in the HOST, so the SSH username is FREE — the same VM is
+# reachable as root@, app@, ubuntu@, jupyter@, ... The hostname bakes in NO user.
+ok("the hostname carries NO login user — <user>@<host> works for ANY user (root/app/ubuntu/...)",
+   "@" not in url["hostname"] and "root" not in url["hostname"]
+   and all(f"ssh {u}@{url['hostname']}".endswith(f"@{vm_id}.vm.petabyte.market")
+           for u in ("root", "app", "ubuntu", "jupyter")))
 ok("the HTTP address is the same per-VM subdomain (one wildcard cert covers it)",
    url["http"] == f"https://{vm_id}.vm.petabyte.market")
+# The fallback exists but CANNOT carry a login user: the id IS the username, so a second user
+# (root vs app) would need its own handle. This is why the subdomain is canonical.
+ok("username-routing fallback puts the id in the USERNAME slot (so it can't also carry a user)",
+   url["ssh_username_fallback"] == f"ssh vm-{vm_id}@petabyte.market")
 ok("the buyer-facing address contains NO node IP (backup can move nodes without a new address)",
    not _IP_RE.search(json.dumps(url)))
 

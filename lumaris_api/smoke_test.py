@@ -2337,7 +2337,10 @@ _vbh={"Authorization":"Bearer "+c.post("/login", data={"username":"vmbuyerX","pa
 c.post("/deposit", headers=_vbh, json={"amount":200})
 _lv=c.post("/launch", headers=_vbh, json={"template":"comfyui","hours":2}).json()
 _vmid=_lv["vm_id"]; _url0=_lv["url"]["ssh"]
-ok("launch returns a stable vm URL", _url0==f"ssh vm-{_vmid}@petabyte.market")
+# Canonical address is the per-VM subdomain (id is the HOST -> the SSH username is free for any
+# login user: root@, app@, ...). The username-routing form is a labelled zero-config fallback.
+ok("launch returns a stable vm URL (subdomain: user is free)", _url0==f"ssh root@{_vmid}.petabyte.market")
+ok("username-routing fallback is offered too", _lv["url"]["ssh_username_fallback"]==f"ssh vm-{_vmid}@petabyte.market")
 ok("VM lands on cheapest node A", dbmod.get_vm_route(dbmod.SessionLocal(),_vmid).current_spec_id==_asp)
 ok("hosting node registers tunnel -> running", c.post("/vm/register_tunnel", headers=_ah, json={"vm_id":_vmid,"tunnel_port":7001}).json().get("vm_status")=="running")
 ok("non-hosting seller can't register tunnel", c.post("/vm/register_tunnel", headers=_bh, json={"vm_id":_vmid,"tunnel_port":9}).status_code==403)
@@ -2347,7 +2350,7 @@ _saf.last_seen=_dt.now(_tz.utc)-_td(seconds=999); _dbf.add(_saf); _dbf.commit()
 _rp,_mig=dbmod.reap_and_failover(_dbf); _dbf.close()
 _vmf=dbmod.get_vm_route(dbmod.SessionLocal(),_vmid)
 ok("failover migrates VM off dead node A -> B", _mig==1 and _vmf.current_spec_id==_bsp)
-ok("stable URL unchanged across failover", f"ssh vm-{_vmid}@petabyte.market"==_url0 and _vmf.migrations==1)
+ok("stable URL unchanged across failover", f"ssh root@{_vmid}.petabyte.market"==_url0 and _vmf.migrations==1)
 ok("node B re-registers -> running again", c.post("/vm/register_tunnel", headers=_bh, json={"vm_id":_vmid,"tunnel_port":7050}).json().get("vm_status")=="running")
 ok("buyer can stop the VM", c.post(f"/vm/{_vmid}/stop", headers=_vbh).status_code==200)
 
