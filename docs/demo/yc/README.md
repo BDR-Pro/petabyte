@@ -7,7 +7,7 @@ results — and neither fakes anything in a way that would mislead.
 | Demo | Story it tells | Nodes | Doc |
 |---|---|---|---|
 | **Single-node marketplace** | "A stranger's GPU, rented and paid, in the browser." The two-sided money loop. | 1 seller GPU + 1 buyer | [`browser-single-node.md`](browser-single-node.md) |
-| **Distributed cluster** | "One job across two machines — real gang-scheduling + execution." The scale loop. | **2 GPU VMs** (2 seller accounts) + 1 buyer | [`distributed-two-gpu-vms.md`](distributed-two-gpu-vms.md) |
+| **Distributed cluster** | "One job across two machines — real gang-scheduling + execution." The scale loop. | **2 GPU VMs** (2 computers — one account or two) + 1 buyer | [`distributed-two-gpu-vms.md`](distributed-two-gpu-vms.md) |
 
 If you only run one thing on stage, run the **single-node** demo — it's the clearest, and the
 payment story is what most people ask about. Add the **distributed** demo to answer "does this
@@ -22,9 +22,11 @@ actually scale past one box?" — the answer is now yes, and it's runnable in ~o
   real GPU, both sides see the money, and the seller payout is held 14 days. No `curl`, no internal
   endpoints touched by hand.
 - *"Can one job span multiple machines?"* → distributed. One buyer launches a **2-node cluster**;
-  the router gang-schedules two **distinct** machines, escrows both all-or-nothing, and each node's
-  agent registers its rank, joins the master, executes, and reports a **signed** result. The
-  cluster completes only when **every** rank does; one dead rank fails the whole run.
+  the router gang-schedules two **distinct machines** (anti-affinity is per-machine, so a single
+  user's two computers — each its own agent + API key — count as two nodes), escrows both
+  all-or-nothing, and each node's agent registers its rank, joins the master, executes, and reports
+  a **signed** result. The cluster completes only when **every** rank does; one dead rank fails the
+  whole run.
 
 ---
 

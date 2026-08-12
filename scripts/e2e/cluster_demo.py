@@ -126,8 +126,9 @@ def main():
                 code, msg = None, r.text[:200]
             hint = ""
             if code == "INSUFFICIENT_DISTINCT_NODES":
-                hint = ("\n  Fix: bring more seller accounts online (one rank per owner). "
-                        "Two VMs must be TWO seller accounts, not one.")
+                hint = ("\n  Fix: bring more distinct COMPUTERS online (one rank per machine). "
+                        "Each computer runs its own agent with its own API key + spec — they can "
+                        "be under one account (a home lab) or several.")
             elif code == "CLUSTER_BOOKING_FAILED":
                 hint = ("\n  Fix: fund the buyer wallet — every rank is escrowed up-front, "
                         "all-or-nothing. Nothing was charged.")

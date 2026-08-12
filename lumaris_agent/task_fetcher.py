@@ -34,9 +34,14 @@ except Exception:                                     # noqa: BLE001 — never b
 logging.basicConfig(level=logging.WARNING, format="[%(asctime)s] %(levelname)s: %(message)s")
 _earn = {"shown": False}                              # latest earnings forecast from heartbeat
 
+# ONE computer == ONE agent process == ONE API key + ONE spec. A single user can run as MANY
+# computers as they own: each machine runs its own agent with its OWN PETABYTE_API_KEY (minted
+# per machine at /create_api_key) and its OWN PETABYTE_SPEC_ID. The platform treats each spec as a
+# distinct machine, so one account's computers can even be gang-scheduled together into one
+# distributed cluster (anti_affinity is per-machine — see router.select_plan / /distributed).
 API_URL = os.getenv("PETABYTE_API_URL")        # e.g. https://petabyte.market
-API_KEY = os.getenv("PETABYTE_API_KEY")        # encrypted key from POST /create_api_key
-SPEC_ID = os.getenv("PETABYTE_SPEC_ID")        # the spec this node serves
+API_KEY = os.getenv("PETABYTE_API_KEY")        # this machine's encrypted key from POST /create_api_key
+SPEC_ID = os.getenv("PETABYTE_SPEC_ID")        # the spec (machine) this agent serves
 HEARTBEAT_S = int(os.getenv("HEARTBEAT_INTERVAL", "15"))
 POLL_S = int(os.getenv("JOB_POLL_INTERVAL", "5"))
 
@@ -660,10 +665,13 @@ def _run_distributed(task):
         report_progress(tid, 15, f"rank {rank}/{world} registered at {host}:{port}")
 
         # 2) resolve the master (rank 0 is itself; other ranks poll until rank 0 registers).
+        # Pass our own task_id so the server returns THIS machine's rank even when one account owns
+        # several ranks (a home lab: many computers on one account, each with its own API key).
         rdzv_url = dist.get("rendezvous_url") or f"/jobs/rendezvous/{job_id}"
 
         def _fetch():
-            return httpx.get(f"{API_URL}{rdzv_url}", headers=HEADERS, timeout=15).json()
+            return httpx.get(f"{API_URL}{rdzv_url}", headers=HEADERS, timeout=15,
+                             params={"task_id": tid}).json()
 
         master = _dist.resolve_master(
             dist, my_host=host, my_port=port, current=reg, fetch=_fetch, sleep=time.sleep,

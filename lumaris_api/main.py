@@ -6142,15 +6142,20 @@ def distributed_job(data: DistributedModel, user: dict = Depends(get_current_use
                                 detail="image is required (or set selftest=true for the cluster self-test)")
         image, command = data.image, data.command
     env = {str(k): str(v) for k, v in (data.env or {}).items()}
-    # Gang-schedule N DISTINCT nodes (select_plan returns one node per provider = distinct PCs).
+    # Gang-schedule N DISTINCT MACHINES. anti_affinity="spec" spreads ranks by machine (spec), not
+    # by owner — so a single user's home lab of N computers (each its own agent + API key + spec)
+    # can form the cluster, and so can N machines across N accounts. (Fan-out redundancy still
+    # uses the default owner-level anti-affinity elsewhere.)
     intent = {"workload": "distributed", "redundancy": n, "hours": data.hours,
-              "gpu_class": data.gpu_class, "region": data.region}
+              "gpu_class": data.gpu_class, "region": data.region, "anti_affinity": "spec"}
     nodes = select_plan(db, intent)["selected"]
     if len(nodes) < n:
         raise HTTPException(status_code=409, detail={
             "code": "INSUFFICIENT_DISTINCT_NODES",
             "message": (f"A distributed job needs {n} GPUs on {n} different machines, but only "
-                        f"{len(nodes)} distinct nodes are available right now."),
+                        f"{len(nodes)} distinct machines are online right now. Each computer runs "
+                        f"its own agent (its own API key + spec); they can be under one account or "
+                        f"several."),
             "requested": n, "available": len(nodes)})
     job = create_distributed_job(db, buyer,
                                  {"image": image, "command": command, "vpn": bool(data.vpn),
@@ -6196,25 +6201,25 @@ def distributed_job(data: DistributedModel, user: dict = Depends(get_current_use
 def distributed_availability(gpu_class: Optional[str] = Query(None, max_length=64),
                              region: Optional[str] = Query(None, max_length=64),
                              db: Session = Depends(get_db)):
-    """How big a cluster can form right now: the count of DISTINCT bookable machines (one rank per
-    provider) and a representative per-node price, so the app can show the max cluster size and an
-    estimated cost before a buyer commits. Aggregate only — no seller identity."""
+    """How big a cluster can form right now: the count of DISTINCT bookable MACHINES (one rank per
+    machine — a single user may contribute several computers, each its own agent/spec) and a
+    representative per-node price, so the app can show the max cluster size and an estimated cost
+    before a buyer commits. Aggregate only — no seller identity."""
     import router as _router
     intent = {}
     if gpu_class:
         intent["gpu_class"] = gpu_class
     if region:
         intent["region"] = region
-    owners = {}
+    # One rank per MACHINE (distinct spec), matching /distributed's anti_affinity="spec": a user's
+    # multiple computers each count as a bookable node.
+    machines = {}
     for cnd in _router.gather_candidates(db, intent):
-        oid = cnd["owner_id"]                       # one rank per provider = one machine
-        p = float(cnd["price"])
-        if oid not in owners or p < owners[oid]:
-            owners[oid] = p
-    prices = sorted(owners.values())
+        machines[cnd["spec"].id] = float(cnd["price"])
+    prices = sorted(machines.values())
     est = (prices[len(prices) // 2] if prices else None)   # median per-node $/hr
-    return {"available_nodes": len(owners),
-            "max_cluster": min(len(owners), MAX_DISTRIBUTED_NODES),
+    return {"available_nodes": len(machines),
+            "max_cluster": min(len(machines), MAX_DISTRIBUTED_NODES),
             "max_nodes_cap": MAX_DISTRIBUTED_NODES,
             "est_price_per_hour": est}
 
@@ -6254,15 +6259,27 @@ def jobs_rendezvous_register(data: RendezvousModel, agent=Depends(api_key_user),
 
 
 @app.get("/jobs/rendezvous/{job_id}", tags=["compute"])
-def jobs_rendezvous_get(job_id: int, agent=Depends(api_key_user),
-                        db: Session = Depends(get_db)):
+def jobs_rendezvous_get(job_id: int, task_id: Optional[int] = Query(None),
+                        agent=Depends(api_key_user), db: Session = Depends(get_db)):
     """A rank fetches everything it needs to join the cluster: its own rank, world_size, the
     backend, and (once rank 0 is up) the master address. Non-master ranks poll until ready=true.
-    Only an agent that owns one of the job's ranks may read it."""
+    Only an agent that owns one of the job's ranks may read it.
+
+    `task_id` disambiguates WHICH rank is asking when ONE account owns several ranks in the same
+    cluster (a home lab: many computers, one account, distinct API keys — the key resolves to the
+    user, so the caller names its own task to get its exact rank). Omitted → the agent's
+    first-owned rank (correct when each rank is a different account)."""
     job = get_multinode_job(db, job_id)
     if not job or job.kind != "distributed":
         raise HTTPException(status_code=404, detail="Distributed job not found")
-    seg, rank = rank_for_agent(db, job, agent)
+    if task_id is not None:
+        task = get_task_for_agent(db, task_id, agent)
+        seg = segment_for_task(db, task_id) if task else None
+        if not task or not seg or seg.job_id != job.id:
+            raise HTTPException(status_code=404, detail="You have no such rank in this job")
+        rank = seg.idx
+    else:
+        seg, rank = rank_for_agent(db, job, agent)
     if seg is None:
         raise HTTPException(status_code=404, detail="You have no rank in this job")
     info = rendezvous_info(db, job)
@@ -7499,6 +7516,10 @@ def create_api_key(days: int = Query(7, ge=1, le=90),
                    label: Optional[str] = Query(None),
                    user: dict = Security(get_current_user),
                    db: Session = Depends(get_db)):
+    """Mint a node/API key. A user may hold MANY keys at once — mint ONE PER COMPUTER so each
+    machine's agent runs with its own key (and its own spec). `label` (e.g. the hostname) makes
+    them easy to tell apart and revoke individually at /account/keys. This is how one account runs
+    a fleet of computers; those distinct machines can even join the same distributed cluster."""
     scope_list = [x.strip() for x in scopes.split(",") if x.strip()] if scopes else list(DEFAULT_KEY_SCOPES)
     api_key, jti = gen_secure_api_key(_username(user), days, scope_list)
     me = get_user_by_username(db, _username(user))

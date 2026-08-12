@@ -26,13 +26,17 @@ top. **Say which one you're showing.**
 
 ## The two hard requirements (read these first)
 
-1. **Two DISTINCT seller accounts — one per VM.** The router enforces anti-affinity: it books
-   **one rank per owner**, so two ranks never land on the same PC. Two VMs registered under the
-   *same* seller account count as one owner → a 2-node cluster is refused with
-   `INSUFFICIENT_DISTINCT_NODES`. Create **`sellerA`** and **`sellerB`**, one per VM.
-2. **Both sellers must be payout-ready.** A node is only bookable when its owner
+1. **Two DISTINCT computers — each its own agent + API key + spec.** Anti-affinity for a
+   distributed cluster is **per machine, not per account**: the router books one rank per *spec*
+   (machine), so two ranks never land on the same registration. A single user can run **many
+   computers** — mint one API key per computer at `/create_api_key` (label them, e.g. `pc0`,
+   `pc1`) and run one agent per box. So the two VMs can be **one account with two keys** (a home
+   lab) *or* two separate accounts — both work. Fewer than N distinct machines online →
+   `INSUFFICIENT_DISTINCT_NODES`. *(Run one agent per physical box; two agents on one box are two
+   specs and would be treated as two machines.)*
+2. **The seller(s) must be payout-ready.** A node is only bookable when its owner
    `can_accept_paid_jobs` — i.e. has completed Stripe **TEST** Connect onboarding
-   (`/seller/payouts`). This is the same gate as the single-node demo, just done twice.
+   (`/seller/payouts`). One account → onboard **once**; two accounts → onboard each.
 
 Plus the usual: the **buyer wallet must be funded** (every rank is escrowed up-front, all-or-
 nothing — `world_size × price × hours`), and the API runs in real Stripe **TEST** mode (see
@@ -44,18 +48,20 @@ nothing — `world_size × price × hours`), and the API runs in real Stripe **T
 
 ### 1. Two seller VMs, each a live node
 
-On **VM A** (as seller `sellerA`) and **VM B** (as seller `sellerB`), run the installer helper —
-it mints a node key, attests the hardware, registers the spec, and starts the agent:
+Recommended: **one account, two computers.** On **VM A** and **VM B**, run the installer helper as
+the *same* seller — it mints a **separate node key per machine**, attests the hardware, registers a
+spec, and starts the agent:
 
 ```bash
-# on each VM, with its OWN seller account
-PETABYTE_API_URL=https://petabyte.market SELLER_USER=sellerA PRICE_PER_HOUR=1.5 \
-  bash scripts/e2e/seller_setup.sh          # VM A
-# …and SELLER_USER=sellerB on VM B
+# on EACH VM, same account — the helper mints that machine's own API key + spec
+PETABYTE_API_URL=https://petabyte.market SELLER_USER=labowner PRICE_PER_HOUR=1.5 \
+  bash scripts/e2e/seller_setup.sh          # run on VM A, then again on VM B
 ```
 
-Then complete Stripe **TEST** Connect onboarding for **both** sellers at `/seller/payouts`. Each
-should show **online · verified · payout-ready** in *Your GPUs*.
+Each machine ends up with its own `PETABYTE_API_KEY` + `PETABYTE_SPEC_ID` in
+`/etc/petabyte/agent.env`. Complete Stripe **TEST** Connect onboarding **once** at
+`/seller/payouts`; both machines then show **online · verified · payout-ready** in *Your GPUs*.
+(Two separate accounts also work — onboard each — but one account + two keys is simpler.)
 
 > No GPU on the VMs? Mode A (self-test) doesn't need one — it's CPU + a TCP port. You can run the
 > whole distributed demo on two plain CPU VMs and it's still a genuine 2-node cluster forming and
@@ -126,7 +132,7 @@ VMs' agents do the execution; the script only reports what the server says.
 
 | You see | Why | The point to make |
 |---|---|---|
-| `INSUFFICIENT_DISTINCT_NODES` | fewer than 2 distinct payout-ready owners online | anti-affinity is real — two ranks never share a machine |
+| `INSUFFICIENT_DISTINCT_NODES` | fewer than 2 distinct payout-ready **machines** online | anti-affinity is per-machine — two ranks never share a registration (one account can supply both) |
 | `CLUSTER_BOOKING_FAILED`, nothing charged | wallet couldn't cover all N ranks | **all-or-nothing** escrow — a half-formed cluster is refused and refunded |
 | cluster goes **failed** when you kill one agent | gang scheduling | one dead rank fails the whole run — no silent partial cluster |
 

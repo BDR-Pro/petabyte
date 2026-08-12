@@ -322,6 +322,80 @@ fj = c.get(f"/jobs/manifest/{rex3['job_id']}", headers=BH).json()
 ok("a single rank reporting FAILED (signed, real endpoint) fails the entire cluster (gang)",
    rd.status_code == 200 and fj["status"] == "failed")
 
+# ---- ONE ACCOUNT, MANY COMPUTERS: a home lab (multiple specs + multiple API keys) forms a cluster ----
+# A single user can run several computers — each its own agent with its OWN API key + spec — and the
+# platform gang-schedules them together. Anti-affinity is per MACHINE, not per account.
+_s = dbm.SessionLocal()
+lab = dbm.create_user(_s, "labowner", "pw-correct-horse-1")
+dbm.set_role(_s, lab.username, "seller"); lab.can_accept_paid_jobs = True
+for i in range(2):                                   # two computers on ONE account
+    sp = dbm.save_specs(_s, lab, {"cpu": 8, "ram": 32, "duration": 24, "price_per_hour": 0.5,
+                                  "provider": f"labowner-pc{i}", "gpu_model": "LabGPU X1",
+                                  "gpu_count": 1, "vram_gb": 24, "units": 1})
+    sp.attested = True; sp.attest_pubkey = _EXEC_PUB; sp.status = "online"
+    sp.last_seen = dbm._utcnow(); sp.available_units = 1; sp.total_units = 1
+    sp.jobs_completed = 50; sp.heartbeats = 200
+    _s.add(sp)
+_s.add(lab); _s.commit()
+lab_id = lab.id
+lab_spec_ids = [sp.id for sp in _s.query(dbm.SellerSpec).filter(dbm.SellerSpec.user_id == lab_id).all()]
+lab_keys = []                                        # one distinct API key per computer, same account
+for i in range(2):
+    k, jti = main.gen_secure_api_key("labowner", 90, ["node", "jobs"])
+    dbm.record_issued_key(_s, lab_id, jti, f"pc{i}", ["node", "jobs"], 90)
+    lab_keys.append(k)
+_s.close()
+ok("one account can hold MANY distinct API keys (one per computer)", len(set(lab_keys)) == 2)
+avl = c.get("/distributed/availability?gpu_class=LabGPU X1").json()
+ok("availability counts a user's multiple computers as multiple bookable nodes (per-machine)",
+   avl["available_nodes"] == 2)
+
+# Differential (before booking, both machines free): distributed spreads by MACHINE, fan-out by OWNER.
+import router as _rtr
+_sd = dbm.SessionLocal()
+sel_spec = _rtr.select_plan(_sd, {"workload": "distributed", "redundancy": 5,
+                            "gpu_class": "LabGPU X1", "anti_affinity": "spec"})["selected"]
+sel_owner = _rtr.select_plan(_sd, {"workload": "render", "redundancy": 5,
+                             "gpu_class": "LabGPU X1"})["selected"]   # default = owner-level
+_sd.close()
+ok("distributed anti-affinity is per-MACHINE: both of one account's computers are selectable",
+   len(sel_spec) == 2)
+ok("fan-out redundancy stays per-OWNER: one account collapses to a single replica (unchanged)",
+   len(sel_owner) == 1)
+
+c.post("/register_user", json={"username": "labbuyer", "password": "pw-correct-horse-1"})
+_lbt = c.post("/login", data={"username": "labbuyer", "password": "pw-correct-horse-1"}).json()["access_token"]
+LBH = {"Authorization": "Bearer " + _lbt}
+_s = dbm.SessionLocal(); dbm.deposit(_s, dbm.get_user_by_username(_s, "labbuyer"), 20.0); _s.commit(); _s.close()
+rlab = c.post("/distributed", headers=LBH,
+              json={"world_size": 2, "hours": 1, "gpu_class": "LabGPU X1", "selftest": True})
+rlabj = rlab.json()
+lab_rank_spec = [rk["spec_id"] for rk in rlabj.get("ranks", [])]
+ok("one user's TWO computers form a 2-node distributed cluster (distinct MACHINES, one account)",
+   rlab.status_code == 200 and len(set(lab_rank_spec)) == 2
+   and all(sid in lab_spec_ids for sid in lab_rank_spec))
+_s = dbm.SessionLocal()
+rank_owners = {_s.query(dbm.SellerSpec).filter(dbm.SellerSpec.id == sid).first().user_id
+               for sid in lab_rank_spec}
+_s.close()
+ok("both ranks are the SAME account's machines (multi-computer single account, not two accounts)",
+   rank_owners == {lab_id})
+
+# each computer registers its OWN rank with its OWN key; task_id disambiguates same-owner ranks
+lab_rank_task = {rk["rank"]: rk["task_id"] for rk in rlabj["ranks"]}
+job_lab = rlabj["job_id"]
+r0 = c.post("/jobs/rendezvous", headers={"X-API-KEY": lab_keys[0]},
+            json={"task_id": lab_rank_task[0], "host": "10.9.0.1", "port": 29500})
+r1 = c.post("/jobs/rendezvous", headers={"X-API-KEY": lab_keys[1]},
+            json={"task_id": lab_rank_task[1], "host": "10.9.0.2", "port": 29500})
+ok("each computer registers its OWN rank with its OWN key (same account, distinct keys)",
+   r0.status_code == 200 and r1.status_code == 200
+   and r0.json()["is_master"] is True and r1.json()["is_master"] is False)
+g_dis = c.get(f"/jobs/rendezvous/{job_lab}?task_id={lab_rank_task[1]}",
+              headers={"X-API-KEY": lab_keys[1]}).json()
+ok("task_id makes the rendezvous return THIS machine's exact rank when one account owns several",
+   g_dis["my_rank"] == 1 and g_dis["master_addr"] == "10.9.0.1")
+
 # ---- the two API surfaces stay separated: /distributed is a compute (not data) endpoint ----
 ok("/distributed is a compute endpoint, documented under the Developer API (/devs), not /data",
    any(p == "/distributed" for p in c.get("/devs/openapi.json").json()["paths"])
