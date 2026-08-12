@@ -6137,6 +6137,51 @@ def data_workloads(days: int = Query(30, ge=1, le=365),
             "usage": usage}
 
 
+@app.get("/api/v1/data/templates", tags=["data"])
+def data_templates(days: int = Query(30, ge=1, le=365),
+                   user=Depends(api_key_user), db: Session = Depends(get_db)):
+    """What templates buyers are actually PURCHASING, and how much: over the last `days`, for each
+    launch template (vLLM, Ollama, Blender, …) — jobs bought, distinct buyers (a COUNT, not
+    identities), GPU-hours, GMV, average spend per job, and the most-requested models inside that
+    template. Only paid, real bookings (sandbox/demo excluded). Aggregate — no buyer identity or
+    code. Metered."""
+    usage = _meter_data_or_402(user, db)
+    import json as _json
+    from db import Task, Booking
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
+    agg = {}
+    rows = (db.query(Task, Booking)
+            .join(Booking, Booking.id == Task.booking_id)
+            .filter(Task.template.isnot(None), Task.created_at >= cutoff,
+                    Booking.test == False, Booking.is_demo == False).all())  # noqa: E712 — real only
+    for t, b in rows:
+        a = agg.setdefault(t.template, {"jobs": 0, "gpu_hours": 0, "gmv": 0.0,
+                                        "buyers": set(), "models": {}})
+        a["jobs"] += 1
+        a["gpu_hours"] += int(b.hours or 0)
+        a["gmv"] += float(b.gross_amount or 0)
+        if b.buyer_id is not None:
+            a["buyers"].add(b.buyer_id)            # counted only — the id is never returned
+        try:
+            params = _json.loads(t.template_params or "{}") or {}
+            model = params.get("model") or params.get("default_model")
+        except Exception:
+            model = None
+        if model:
+            a["models"][model] = a["models"].get(model, 0) + 1
+    out = []
+    for name, a in sorted(agg.items(), key=lambda kv: -kv[1]["jobs"]):
+        top = sorted(a["models"].items(), key=lambda kv: -kv[1])[:5]
+        out.append({"template": name, "jobs": a["jobs"], "unique_buyers": len(a["buyers"]),
+                    "gpu_hours": a["gpu_hours"], "gmv_usd": round(a["gmv"], 2),
+                    "avg_gmv_per_job": (round(a["gmv"] / a["jobs"], 2) if a["jobs"] else None),
+                    "top_models": [{"model": m, "jobs": n} for m, n in top]})
+    return {"as_of": datetime.now(timezone.utc).isoformat(), "window_days": days,
+            "templates_total": len(out),
+            "jobs_total": sum(r["jobs"] for r in out),
+            "templates": out, "usage": usage}
+
+
 @app.get("/api/v1/data/usage", tags=["data"])
 def data_usage(user=Depends(api_key_user), db: Session = Depends(get_db)):
     """The caller's data-API usage this month — free to check, never billed. Needs a `data` key."""

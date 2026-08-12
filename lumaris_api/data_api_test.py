@@ -140,6 +140,27 @@ ok("workload-mix index: jobs by type + template, metered",
    _wk.status_code == 200 and "by_type" in _wk.json() and "by_template" in _wk.json()
    and "total_jobs" in _wk.json())
 
+# seed a REAL paid, templated job so /templates has something to aggregate
+_s = dbm.SessionLocal()
+_du = dbm.get_user_by_username(_s, "dataco")
+_sp = dbm.SellerSpec(user_id=_du.id, cpu=4, ram=16, price_per_hour=dbm.q(1),
+                     duration=24, gpu_model="RTX 4090"); _s.add(_sp); _s.commit()
+_bk = dbm.Booking(buyer_id=_du.id, seller_id=_du.id, spec_id=_sp.id, hours=2,
+                  price_per_hour=dbm.q(1), gross_amount=dbm.q(2), platform_fee=dbm.q(0.2),
+                  seller_payout=dbm.q(1.8), status="released", test=False, is_demo=False)
+_s.add(_bk); _s.commit()
+_s.add(dbm.Task(booking_id=_bk.id, spec_id=_sp.id, buyer_id=_du.id, task_type="template",
+                template="vllm", template_params='{"model":"facebook/opt-125m"}',
+                status="completed")); _s.commit(); _s.close()
+_tp = c.get("/api/v1/data/templates", headers=_kh).json()
+_vllm = next((r for r in _tp["templates"] if r["template"] == "vllm"), None)
+ok("templates-bought index: per template jobs/buyers/GMV + top models, from real paid jobs",
+   _vllm is not None and _vllm["jobs"] >= 1 and _vllm["unique_buyers"] >= 1
+   and _vllm["gmv_usd"] >= 2.0
+   and any(m["model"] == "facebook/opt-125m" for m in _vllm["top_models"]))
+ok("templates dataset leaks no buyer identity (only counts)",
+   all("buyer_id" not in r and "buyers" not in r for r in _tp["templates"]))
+
 for f in ("data_api_test.db", "data_api_test.db-wal", "data_api_test.db-shm"):
     if os.path.exists(f):
         os.remove(f)

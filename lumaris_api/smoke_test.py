@@ -1742,6 +1742,10 @@ ok("buyer-side demand index served (totals + per-GPU GMV/realized price, no buye
    and all("buyer_id" not in r for r in _dmd["by_gpu"]))
 ok("buyer-side workload-mix index served (jobs by type + template)",
    set(c.get("/api/v1/data/workloads", headers=_dkh).json()) >= {"by_type", "by_template", "total_jobs"})
+_tpl = c.get("/api/v1/data/templates", headers=_dkh).json()
+ok("templates-bought index served (per template: jobs, buyers count, GMV, models; no identity)",
+   "templates" in _tpl and "jobs_total" in _tpl
+   and all("buyer_id" not in r and "buyers" not in r for r in _tpl["templates"]))
 
 # --- wallet-only onboarding: paste a wallet, get a ONE-LINE installer, no account (like a miner) ---
 ok("the /install page offers a wallet-only start (no login) wired to /nodes/quickstart",

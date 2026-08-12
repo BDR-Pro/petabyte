@@ -1124,6 +1124,7 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
       GET /api/v1/data/availability <span class="mut">live supply</span><br>
       GET /api/v1/data/demand <span class="mut">bookings, GMV, realized $/hr</span><br>
       GET /api/v1/data/workloads <span class="mut">job &amp; template mix</span><br>
+      GET /api/v1/data/templates <span class="mut">templates bought: jobs, buyers, GMV, models</span><br>
       GET /api/v1/data/market <span class="mut">inventory summary</span><br>
       GET /api/v1/data/benchmarks <span class="mut">authenticity dataset</span><br>
       GET /api/v1/data/usage <span class="mut">your quota (free)</span></p>
