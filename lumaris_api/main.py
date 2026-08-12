@@ -78,6 +78,7 @@ from db import (
     revoke_jti, is_jti_revoked, add_wg_peer,
     record_issued_key, list_issued_keys, get_or_create_oauth_user,
     create_install_token, resolve_install_token,
+    meter_data_call, usage_summary, record_price_snapshot, price_history, _live_price_index,
     idem_begin, idem_finish, idem_abort,
     create_task, claim_next_task, get_task_for_agent, mark_task_running,
     submit_task_result, get_booking_for_buyer,
@@ -267,6 +268,13 @@ def _maintenance_cycle() -> None:
             reconcile_newsletter(db, limit=50)   # deliver any deferred newsletter signups
         except Exception:  # noqa: BLE001 — a mailing-list hiccup must not break maintenance
             logger.exception("newsletter reconcile cycle failed")
+        try:
+            # data-API price history: capture one index snapshot every DATA_SNAPSHOT_INTERVAL_S.
+            if time.time() - _maintenance.get("last_snapshot", 0.0) >= DATA_SNAPSHOT_INTERVAL_S:
+                record_price_snapshot(db)
+                _maintenance["last_snapshot"] = time.time()
+        except Exception:  # noqa: BLE001 — a snapshot hiccup must not break maintenance
+            logger.exception("price snapshot cycle failed")
         _maintenance["last_success"] = time.time()
     finally:
         db.close()
@@ -1208,6 +1216,12 @@ FULL_ACCESS = "*"
 # in someone's living room should not be able to move money.
 DEFAULT_KEY_SCOPES = ("node", "jobs")
 LEGACY_KEYS_ARE_FULL_ACCESS = os.getenv("LEGACY_KEYS_FULL_ACCESS", "false").lower() == "true"
+
+# Paid data API: metered, pay-as-you-go against the wallet balance. Each account gets a free
+# monthly quota; calls beyond it cost DATA_API_PRICE_PER_1K / 1000 each, debited from the wallet.
+DATA_API_FREE_CALLS_MONTH = int(os.getenv("DATA_API_FREE_CALLS_MONTH", "1000"))
+DATA_API_PRICE_PER_1K = float(os.getenv("DATA_API_PRICE_PER_1K", "0.50"))
+DATA_SNAPSHOT_INTERVAL_S = int(os.getenv("DATA_SNAPSHOT_INTERVAL_S", "3600"))
 
 
 def require_scope(user, scope: str):
@@ -5915,6 +5929,84 @@ def partners_list():
                           "these partner links — at no extra cost to you.",
         },
     }
+
+
+# ------------------- PAID DATA API (metered, pay-as-you-go against wallet) -------------------
+# Programmatic access to Petabyte's GPU price index + market data + price HISTORY. Auth with an
+# API key carrying the `data` scope. Every call is metered; calls beyond the free monthly quota
+# are billed per-call from the wallet balance (402 when the balance can't cover it). /usage is
+# free to check and never billed.
+
+def _meter_data_or_402(user, db) -> dict:
+    require_scope(user, "data")
+    m = meter_data_call(db, user.id, free_quota=DATA_API_FREE_CALLS_MONTH,
+                        price_per_call=DATA_API_PRICE_PER_1K / 1000.0)
+    if not m.get("ok"):
+        raise HTTPException(status_code=402, detail={
+            "code": "DATA_API_QUOTA_EXCEEDED",
+            "message": "Your free monthly quota is used up and your wallet balance can't cover the "
+                       "per-call fee. Add funds to your wallet to keep using the data API.",
+            "price_per_call_usd": m.get("price_per_call"),
+            "period": m.get("period")})
+    return m
+
+
+@app.get("/api/v1/data/gpu-prices", tags=["data"])
+def data_gpu_prices(user=Depends(api_key_user), db: Session = Depends(get_db)):
+    """Current GPU price index: benchmark-anchored reference price + live marketplace avg/min/max
+    per model. Metered (needs a `data`-scoped key)."""
+    usage = _meter_data_or_402(user, db)
+    return {"as_of": datetime.now(timezone.utc).isoformat(),
+            "gpus": _live_price_index(db), "usage": usage}
+
+
+@app.get("/api/v1/data/gpu-prices/history", tags=["data"])
+def data_gpu_price_history(gpu_model: Optional[str] = Query(None), days: int = Query(30, ge=1, le=365),
+                          limit: int = Query(2000, ge=1, le=5000),
+                          user=Depends(api_key_user), db: Session = Depends(get_db)):
+    """Historical price-index points (newest first), optionally filtered to one GPU model. This is
+    the premium series recorded from periodic snapshots. Metered."""
+    usage = _meter_data_or_402(user, db)
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
+    rows = price_history(db, gpu_model=gpu_model, since=since, limit=limit)
+    out = [{"captured_at": (r.captured_at.isoformat() if r.captured_at else None),
+            "gpu_model": r.gpu_model,
+            "reference_price": (float(r.reference_price) if r.reference_price is not None else None),
+            "avg_price": (float(r.avg_price) if r.avg_price is not None else None),
+            "min_price": (float(r.min_price) if r.min_price is not None else None),
+            "max_price": (float(r.max_price) if r.max_price is not None else None),
+            "live_count": r.live_count} for r in rows]
+    return {"gpu_model": gpu_model, "days": days, "count": len(out), "points": out, "usage": usage}
+
+
+@app.get("/api/v1/data/market", tags=["data"])
+def data_market(user=Depends(api_key_user), db: Session = Depends(get_db)):
+    """Marketplace summary: how many GPU models have live listings, total live units, and the
+    overall live price range. Metered."""
+    usage = _meter_data_or_402(user, db)
+    idx = _live_price_index(db)
+    listed = [r for r in idx if r["live_count"] > 0]
+    avgs = [r["avg_price"] for r in listed if r["avg_price"] is not None]
+    return {"as_of": datetime.now(timezone.utc).isoformat(),
+            "models_total": len(idx), "models_with_listings": len(listed),
+            "live_units": sum(r["live_count"] for r in idx),
+            "avg_price_low": (min(avgs) if avgs else None),
+            "avg_price_high": (max(avgs) if avgs else None),
+            "usage": usage}
+
+
+@app.get("/api/v1/data/usage", tags=["data"])
+def data_usage(user=Depends(api_key_user), db: Session = Depends(get_db)):
+    """The caller's data-API usage this month — free to check, never billed. Needs a `data` key."""
+    require_scope(user, "data")
+    return usage_summary(db, user.id, free_quota=DATA_API_FREE_CALLS_MONTH)
+
+
+@app.post("/admin/data/snapshot", tags=["admin"])
+def admin_data_snapshot(me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Admin: capture a price-index snapshot now (the maintenance loop also does this hourly)."""
+    n = record_price_snapshot(db)
+    return {"status": "ok", "rows": n}
 
 
 @app.post("/launch", tags=["compute"])

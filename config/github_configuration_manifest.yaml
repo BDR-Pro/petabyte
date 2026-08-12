@@ -167,6 +167,24 @@ variables:
     - platform
     description: Absolute Stripe Connect onboarding return URL; falls back to PUBLIC_BASE_URL when unset.
     format: url_or_empty
+  DATA_API_FREE_CALLS_MONTH:
+    required: false
+    default: '1000'
+    scope:
+    - platform
+    description: ''
+  DATA_API_PRICE_PER_1K:
+    required: false
+    default: '0.50'
+    scope:
+    - platform
+    description: ''
+  DATA_SNAPSHOT_INTERVAL_S:
+    required: false
+    default: '3600'
+    scope:
+    - platform
+    description: ''
   DEFAULT_LANDING_VIDEO_ID:
     required: false
     default: UUSWYaxboDA

@@ -1115,7 +1115,14 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
       <p class="mono" style="font-size:12.5px;line-height:2.05">
       GET /wallet <span class="mut">balance + earnings</span><br>
       POST /wallet/methods <span class="mut">gift · USDC · bank</span><br>
-      POST /wallet/withdraw <span class="mut">cash out</span></p></div>
+      POST /wallet/withdraw <span class="mut">cash out (free / ⚡instant)</span></p></div>
+    <div class="card"><div class="lbl">Data API <span class="mut">· metered</span></div>
+      <p class="mono" style="font-size:12.5px;line-height:2.05">
+      GET /api/v1/data/gpu-prices <span class="mut">price index</span><br>
+      GET /api/v1/data/gpu-prices/history <span class="mut">time-series</span><br>
+      GET /api/v1/data/market <span class="mut">inventory summary</span><br>
+      GET /api/v1/data/usage <span class="mut">your quota (free)</span></p>
+      <p class="mut" style="font-size:12px;margin-top:8px">Needs a <code class="teal">data</code>-scoped key. A free monthly quota, then pay-as-you-go from your wallet balance.</p></div>
   </div>
   <div style="margin-top:18px"><a class="btn btn-amber" href="/docs">Open interactive docs →</a></div>
 </div>""")

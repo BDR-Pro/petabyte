@@ -1697,6 +1697,22 @@ ok("payout quote is honest: scheduled is free, instant costs a disclosed fee sho
 ok("the account withdraw UI offers the instant (fee) option alongside free scheduled payout",
    'id="instant"' in c.get("/account").text)
 
+# --- paid data API: metered, needs a data-scoped key; /developers documents it ---
+ok("the data API requires an API key (no anonymous access)",
+   c.get("/api/v1/data/gpu-prices").status_code in (401, 422))
+c.post("/register_user", json={"username": "dataapiuser", "password": "hunter2-correct-horse"})
+_dtok = c.post("/login", data={"username": "dataapiuser", "password": "hunter2-correct-horse"}).json()["access_token"]
+_dh = {"Authorization": "Bearer " + _dtok}
+_dkey = c.post("/create_api_key?scopes=data&days=30", headers=_dh).json()["api_key"]
+_dkh = {"X-API-KEY": _dkey}
+_gp = c.get("/api/v1/data/gpu-prices", headers=_dkh)
+ok("a data-scoped key can read the metered price index, with a usage receipt attached",
+   _gp.status_code == 200 and "gpus" in _gp.json() and "usage" in _gp.json())
+_nkey2 = c.post("/create_api_key?scopes=node,jobs&days=30", headers=_dh).json()["api_key"]
+ok("a node/jobs key is refused from the data API (scope-gated)",
+   c.get("/api/v1/data/usage", headers={"X-API-KEY": _nkey2}).status_code == 403)
+ok("/developers documents the metered data API", "/api/v1/data/gpu-prices" in c.get("/developers").text)
+
 # --- wallet-only onboarding: paste a wallet, get a ONE-LINE installer, no account (like a miner) ---
 ok("the /install page offers a wallet-only start (no login) wired to /nodes/quickstart",
    "walletStart" in _inst and "/nodes/quickstart" in _inst and 'id="qwallet"' in _inst)

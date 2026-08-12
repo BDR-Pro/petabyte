@@ -1197,6 +1197,165 @@ def resolve_install_token(db: Session, token: str) -> "NodeInstallToken | None":
     return row
 
 
+# ------------------ Paid data API: metering + price-history snapshots ------------------
+
+class ApiUsage(Base):
+    """Per-account metered usage of the data API, one row per calendar month. Every data call is
+    counted; calls beyond the free monthly quota are billed pay-as-you-go against the wallet
+    balance and tallied here (amount_usd)."""
+    __tablename__ = "api_usage"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    period = Column(String, index=True, nullable=False)          # 'YYYY-MM'
+    calls = Column(Integer, default=0, nullable=False)
+    billed_calls = Column(Integer, default=0, nullable=False)
+    amount_usd = Column(Money, default=Decimal(0), nullable=False)
+    updated_at = Column(DateTime, default=_utcnow)
+    __table_args__ = (UniqueConstraint("user_id", "period", name="uq_api_usage_user_period"),)
+
+
+class PriceSnapshot(Base):
+    """A timestamped point in the GPU price index — the raw material the data API sells as history.
+    Written periodically by the maintenance loop; one row per GPU model per capture."""
+    __tablename__ = "price_snapshots"
+    id = Column(Integer, primary_key=True, index=True)
+    captured_at = Column(DateTime, default=_utcnow, index=True, nullable=False)
+    gpu_model = Column(String, index=True, nullable=False)
+    reference_price = Column(Money, nullable=True)   # benchmark-anchored reference $/hr
+    avg_price = Column(Money, nullable=True)         # mean of live listings (null if none online)
+    min_price = Column(Money, nullable=True)
+    max_price = Column(Money, nullable=True)
+    live_count = Column(Integer, default=0, nullable=False)
+
+
+def _period(now=None) -> str:
+    return (now or _utcnow()).strftime("%Y-%m")
+
+
+def charge_wallet(db: Session, user_id: int, amount, *, reference_type: str,
+                  description: str = None) -> bool:
+    """Atomically debit the user's WALLET BALANCE and book the charge to platform revenue.
+    Returns False (no charge) if the balance is insufficient. Balanced double-entry."""
+    amt = q(amount)
+    if amt <= 0:
+        return True
+    if not try_debit(db, user_id, amt):          # atomic, no overspend
+        return False
+    post(db, reference_type, legs=[
+        (acct_buyer(user_id), DEBIT,  amt, user_id),
+        (PLATFORM_REVENUE,    CREDIT, amt),
+    ], reference_id=user_id, description=description or reference_type, entry_type=reference_type)
+    db.commit()
+    return True
+
+
+def meter_data_call(db: Session, user_id: int, *, free_quota: int, price_per_call) -> dict:
+    """Count one data-API call for this user and bill it if it's past the free monthly quota.
+
+    Free calls (within quota) and calls when pricing is 0 are always served. A billable call is
+    served only if the wallet balance covers `price_per_call`; otherwise it is NOT counted and
+    the caller gets ``{"ok": False, "reason": "insufficient_balance"}`` (surface as HTTP 402)."""
+    period = _period()
+    row = (db.query(ApiUsage)
+           .filter(ApiUsage.user_id == user_id, ApiUsage.period == period).first())
+    if row is None:
+        row = ApiUsage(user_id=user_id, period=period, calls=0, billed_calls=0,
+                       amount_usd=Decimal(0))
+        db.add(row); db.flush()
+    price = q(price_per_call)
+    within_free = row.calls < int(free_quota)
+    if within_free or price <= 0:
+        row.calls += 1
+        row.updated_at = _utcnow()
+        db.commit()
+        return {"ok": True, "billed": False, "period": period, "calls": row.calls,
+                "free_quota": int(free_quota),
+                "free_remaining": max(0, int(free_quota) - row.calls)}
+    # past the free quota and pricing is on -> must pay per call
+    if not charge_wallet(db, user_id, price, reference_type="data_api",
+                         description="data API usage"):
+        return {"ok": False, "reason": "insufficient_balance",
+                "price_per_call": float(price), "period": period}
+    row.calls += 1
+    row.billed_calls += 1
+    row.amount_usd = q(D(row.amount_usd) + price)
+    row.updated_at = _utcnow()
+    db.commit()
+    return {"ok": True, "billed": True, "charged": float(price), "period": period,
+            "calls": row.calls, "billed_calls": row.billed_calls,
+            "amount_usd": float(row.amount_usd), "free_quota": int(free_quota),
+            "free_remaining": 0}
+
+
+def usage_summary(db: Session, user_id: int, *, free_quota: int) -> dict:
+    """The caller's data-API usage this month (free to check — not itself billed)."""
+    period = _period()
+    row = (db.query(ApiUsage)
+           .filter(ApiUsage.user_id == user_id, ApiUsage.period == period).first())
+    calls = row.calls if row else 0
+    return {"period": period, "calls": calls,
+            "billed_calls": (row.billed_calls if row else 0),
+            "amount_usd": float(row.amount_usd) if row else 0.0,
+            "free_quota": int(free_quota),
+            "free_remaining": max(0, int(free_quota) - calls)}
+
+
+def _live_price_index(db: Session):
+    """Current index: for each recognised GPU, its benchmark reference price and the live
+    marketplace stats (avg/min/max/count). Shared by the snapshot job and the data endpoint."""
+    import pricing_engine
+    import gpu_benchmark
+    live = {}
+    for s in db.query(SellerSpec).all():
+        if not spec_is_live(s):
+            continue
+        key = gpu_benchmark.normalize_model(s.gpu_model)
+        if key is None:
+            continue
+        live.setdefault(key, []).append(float(s.price_per_hour or 0))
+    rows = []
+    for r in pricing_engine.catalog():
+        ls = live.get(r["gpu_model"], [])
+        rows.append({
+            "gpu_model": r["gpu_model"],
+            "benchmark_tflops_fp16": r.get("benchmark_tflops_fp16"),
+            "reference_price": r.get("reference_price_per_hour"),
+            "avg_price": (round(sum(ls) / len(ls), 2) if ls else None),
+            "min_price": (round(min(ls), 2) if ls else None),
+            "max_price": (round(max(ls), 2) if ls else None),
+            "live_count": len(ls),
+        })
+    return rows
+
+
+def record_price_snapshot(db: Session) -> int:
+    """Write one PriceSnapshot row per GPU model at the current index. Returns rows written."""
+    n = 0
+    for r in _live_price_index(db):
+        db.add(PriceSnapshot(
+            gpu_model=r["gpu_model"],
+            reference_price=(q(r["reference_price"]) if r["reference_price"] is not None else None),
+            avg_price=(q(r["avg_price"]) if r["avg_price"] is not None else None),
+            min_price=(q(r["min_price"]) if r["min_price"] is not None else None),
+            max_price=(q(r["max_price"]) if r["max_price"] is not None else None),
+            live_count=r["live_count"]))
+        n += 1
+    db.commit()
+    return n
+
+
+def price_history(db: Session, *, gpu_model: str = None, since=None, limit: int = 5000):
+    """Historical price-index points, newest first. Optional GPU filter + `since` datetime."""
+    q_ = db.query(PriceSnapshot)
+    if gpu_model:
+        import gpu_benchmark
+        key = gpu_benchmark.normalize_model(gpu_model) or gpu_model
+        q_ = q_.filter(PriceSnapshot.gpu_model == key)
+    if since is not None:
+        q_ = q_.filter(PriceSnapshot.captured_at >= since)
+    return q_.order_by(PriceSnapshot.captured_at.desc()).limit(int(limit)).all()
+
+
 class WGPeer(Base):
     __tablename__ = "wg_peers"
     id = Column(Integer, primary_key=True, index=True)
