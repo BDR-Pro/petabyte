@@ -91,6 +91,16 @@ a{color:inherit;text-decoration:none}
 .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
 .teal{color:var(--teal)}.amber{color:var(--amber)}.mut{color:var(--mut)}
+/* ---------- value-proposition banners (reusable) ----------
+   buyer surfaces lead with savings vs the hyperscalers (green);
+   seller surfaces lead with earnings potential (amber). */
+.savings-banner,.earn-banner{display:flex;align-items:center;gap:10px 14px;margin-top:14px;
+ padding:13px 18px;border-radius:14px;font-family:var(--disp);font-weight:600;font-size:14.5px;flex-wrap:wrap}
+.savings-banner{background:linear-gradient(90deg,rgba(74,222,156,.14),rgba(53,224,208,.05));border:1px solid rgba(74,222,156,.35)}
+.savings-banner b{color:var(--pos);font-size:19px}
+.earn-banner{background:linear-gradient(90deg,rgba(255,178,36,.14),rgba(255,178,36,.04));border:1px solid rgba(255,178,36,.35)}
+.earn-banner b{color:var(--amber);font-size:19px}
+.savings-banner .sub,.earn-banner .sub{font-family:var(--body);font-weight:400;font-size:12.5px;color:var(--mut)}
 h1{font-family:var(--disp);font-weight:800;letter-spacing:-.035em;line-height:1.0}
 h2{font-family:var(--disp);font-weight:700;letter-spacing:-.02em}
 .grad{background:linear-gradient(95deg,var(--teal-br) 10%,var(--amber) 90%);-webkit-background-clip:text;background-clip:text;color:transparent}
@@ -747,6 +757,7 @@ MARKETPLACE_HTML = _page("Petabyte — marketplace",
   <div class="eyebrow"><span class="dot"></span> <span data-ar="المعروض المباشر">live inventory</span></div>
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px" data-ar="كروت الرسومات المتاحة">Available <span class="grad-teal">GPUs</span></h1>
   <p class="mut" id="mnote">Loading verified nodes…</p>
+  <div id="savingsbanner" class="savings-banner" role="status" style="display:none"></div>
   <div id="demobadge" style="display:none;margin-top:8px"><span class="badge cc" title="This marketplace contains seeded demonstration nodes, clearly labelled and never counted as real traction.">Demo data — includes simulated nodes</span></div>
 </div>
 <script>
@@ -798,7 +809,28 @@ async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await 
    '<td>'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
    '<td data-l="Region" class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
    '<td class="mono" style="color:'+rc+'">'+rep+'</td>'+
-   '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
+   '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');
+ updateSavingsBanner(b.specs);}
+// Lead with the headline the buyer cares about: how much cheaper than the hyperscalers.
+function updateSavingsBanner(specs){
+ var banner=document.getElementById('savingsbanner');
+ if(!banner){return;}
+ var maxSave=0,cheaper=0;
+ (specs||[]).forEach(function(s){
+  if(s.cloud_reference && s.price_per_hour < s.cloud_reference){
+   cheaper++;
+   var pc=Math.round((1-s.price_per_hour/s.cloud_reference)*100);
+   if(pc>maxSave){maxSave=pc;}
+  }
+ });
+ if(maxSave>0){
+  banner.innerHTML='<span>Up to <b>'+maxSave+'% cheaper</b> than AWS, GCP &amp; Azure on-demand</span>'+
+   '<span class="sub">'+cheaper+' GPU'+(cheaper===1?'':'s')+' below the on-demand cloud reference for the same class — a benchmark, not a quote.</span>';
+  banner.style.display='';
+ }else{
+  banner.style.display='none';
+ }
+}
 load();setInterval(load,8000);
 </script>""")
 
@@ -809,6 +841,10 @@ INSTALL_HTML = _page("Petabyte — become a seller",
   <div class="eyebrow"><span class="dot"></span> <span data-ar="تسجيل جهاز">node onboarding</span></div>
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px" data-ar="أدرِج كرت رسوماتك بأمرٍ واحد">List your GPU in <span class="grad-teal">one command</span></h1>
   <p class="mut" style="max-width:56ch" data-ar="أي جهاز NVIDIA يمكن أن يصبح عقدة. يتحقق المُثبِّت من عتادك، ويعزل المهام داخل Docker، ويجعلك متصلاً خلال ٣٠ ثانية تقريباً. دون حصرية.">Any NVIDIA machine can become a node. The installer verifies your hardware, sandboxes jobs in Docker, and brings you online in ~30 seconds. No exclusivity.</p>
+  <div class="earn-banner" role="status" style="max-width:640px">
+    <span>You keep <b>90%</b> of every rental</span>
+    <span class="sub">Set your own price · withdraw anytime · online in one command, ~30 seconds.</span>
+  </div>
 </div>
 <div class="wrap" style="padding:6px 22px 0">
   <div class="card" style="border-color:rgba(79,214,201,.3);background:linear-gradient(180deg,rgba(79,214,201,.05),transparent)">
@@ -848,6 +884,7 @@ journalctl -u petabyte-agent -f</pre>
       <button class="btn btn-teal" onclick="suggest()" data-ar="اقترح سعراً">Suggest a price</button>
       <span id="psug" class="mono" style="font-size:13px"></span>
     </div>
+    <div id="earnest" class="mini" style="margin-top:10px"></div>
   </div>
   <div class="card" style="margin-top:16px"><div class="lbl" data-ar="جرّبه دون مخاطرة">Try it risk-free</div>
     <p class="mut" data-ar="يعمل الوكيل داخل بيئة لينكس معزولة — لا يمسّ ألعابك أو ملفاتك، ويعمل فقط حين يكون جهازك خاملاً. أوقفه مؤقتاً متى شئت، أو أزِله تماماً بأمرٍ واحد. وإذا فعّلت Petabyte خاصية WSL لك، فإن إلغاء التثبيت يعيدها كما كانت.">The agent runs in an isolated Linux sandbox — it never touches your games or files, and only works when your PC is idle. <b class="teal">Pause</b> anytime, or <b class="teal">remove it completely</b> in one command. If Petabyte turned on WSL for you, uninstalling turns it back off.</p>
@@ -859,9 +896,25 @@ $env:PETABYTE_ACTION="uninstall"; irm https://petabyte.market/manage.ps1 | iex</
   </div>
 </div>
 <script>
-async function suggest(){var g=(document.getElementById('pgpu').value||'').trim();
-  var r=await fetch('/pricing/suggest?gpu_model='+encodeURIComponent(g));var b=await r.json();
-  document.getElementById('psug').innerHTML='Suggested <b class="amber">$'+b.suggested_price+'/hr</b> <span class="mut">· '+b.basis+' · cloud ≈ $'+b.cloud_reference+'</span>';}
+async function suggest(){
+  var g=(document.getElementById('pgpu').value||'').trim();
+  var r=await fetch('/pricing/suggest?gpu_model='+encodeURIComponent(g));
+  var b=await r.json();
+  var psug=document.getElementById('psug');
+  if(psug){
+    psug.innerHTML='Suggested <b class="amber">$'+b.suggested_price+'/hr</b> <span class="mut">· '+b.basis+' · cloud ≈ $'+b.cloud_reference+'</span>';
+  }
+  // Translate the hourly price into what a seller actually cares about: monthly income.
+  // Honest range: 30–70% utilization, after the 10% platform fee (seller keeps 90%).
+  var price=Number(b.suggested_price)||0;
+  var est=document.getElementById('earnest');
+  if(est && price>0){
+    var lo=Math.round(price*720*0.30*0.9);
+    var hi=Math.round(price*720*0.70*0.9);
+    est.innerHTML='Estimated earnings: <b class="amber">$'+lo.toLocaleString()+'–$'+hi.toLocaleString()+' / month</b>'+
+      ' <span class="mut">at 30–70% utilization, after the 10% fee. You keep 90%.</span>';
+  }
+}
 (function(){ if(authed()){var a=document.getElementById('ikauthed'),h=document.getElementById('ikhint');if(a)a.style.display='';if(h)h.style.display='none';} })();
 async function mkkey(){
   await api('/change_role',{method:'POST',body:JSON.stringify({role:'seller'})});   // idempotent
@@ -1546,6 +1599,8 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
           <span id="role" class="badge"></span>
           <span id="adminbadge" class="badge cc" style="display:none">admin</span>
           <span class="mini">reputation <b id="rep" class="teal"></b></span>
+          <button id="roleswitch" class="btn btn-teal" onclick="switchRole()" aria-label="Switch your role" style="display:none;padding:6px 14px;font-size:12.5px"></button>
+          <span id="rolemsg" class="mini" style="color:var(--bad)"></span>
         </div>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
@@ -1681,6 +1736,15 @@ async function boot(){
   document.getElementById('avatar').textContent=(u.username||'?').slice(0,1).toUpperCase();
   document.getElementById('role').textContent=u.role;
   document.getElementById('role').className='badge '+(u.role==='seller'?'ok':'');
+  // Self-service role switch: sellers lead with earnings, buyers with cheap compute.
+  var rs=document.getElementById('roleswitch');
+  if(rs){
+    var target=(u.role==='seller')?'buyer':'seller';
+    rs.textContent=(u.role==='seller')?'Switch to buying':'Become a seller — earn from your GPU';
+    rs.setAttribute('aria-label',(u.role==='seller')?'Switch your role to buyer':'Switch your role to seller');
+    rs.dataset.target=target;
+    rs.style.display='';
+  }
   if(u.is_admin)document.getElementById('adminbadge').style.display='';
   document.getElementById('rep').textContent=u.reputation;
   document.getElementById('bal').textContent=money(u.balance);
@@ -1780,6 +1844,23 @@ async function loadMethods(){var r=await api('/wallet/methods');var el=document.
   if(r.ok&&r.body.methods&&r.body.methods.length){el.innerHTML='Payout methods: '+r.body.methods.map(function(m){return '<span class="badge ok">'+(m.kind||m.type||'method')+'</span>';}).join(' ');}
   else{el.innerHTML='No payout method yet — add bank / USDC / gift card in the <a class="teal" href="/app">dashboard</a> to withdraw.';}}
 async function loadTemplates(){renderLaunch('launchgrid',['ai','render','art','game'],2);}
+
+// --- ROLE SWITCH: a signed-in user can move between buying and selling. ---
+async function switchRole(){
+  var btn=document.getElementById('roleswitch');
+  if(!btn){return;}
+  var target=btn.dataset.target;
+  var msg=document.getElementById('rolemsg');
+  if(msg){msg.textContent='';}
+  btn.disabled=true;
+  var r=await api('/change_role',{method:'POST',body:JSON.stringify({role:target})});
+  if(r.ok){
+    location.href=(target==='seller')?'/install':'/marketplace';   // land where the new role is useful
+  }else{
+    btn.disabled=false;
+    if(msg){msg.textContent=(r.body&&r.body.detail)?r.body.detail:'Could not switch role — please try again.';}
+  }
+}
 
 // --- ONBOARDING: what do I do next? Buyers and hosts get different funnels. ---
 async function loadOnboarding(){
@@ -2332,6 +2413,10 @@ SELLER_EARNINGS_HTML = _page("Petabyte — seller earnings",
 <div class="wrap" style="padding:52px 24px 8px;max-width:900px">
   <div class="eyebrow"><span class="dot"></span> seller earnings</div>
   <h1 style="font-size:clamp(28px,4.4vw,42px);margin:14px 0 8px">Get paid for your compute</h1>
+  <div class="earn-banner" role="status" style="max-width:660px">
+    <span>You keep <b>90%</b> of every job</span>
+    <span class="sub">Withdraw anytime — bank, USDC, or gift card. A GPU starts earning the moment it is online and verified.</span>
+  </div>
   <p class="mut" id="signedout" style="display:none">Please <a class="teal" href="/login">sign in</a> to set up payouts.</p>
 
   <div id="setup" style="display:none">

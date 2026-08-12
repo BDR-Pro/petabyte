@@ -43,6 +43,16 @@ Notes:
   `for=`, wrapping `<label>`, or `aria-label`); no duplicate ids; every `<button>` has an
   accessible name; `<html lang>` present.
 
+## Role-based value propositions + self-service role switch
+
+| Behaviour | TestClient | Browser | Notes |
+|---|:--:|:--:|---|
+| Buyer marketplace **leads with savings vs AWS/GCP/Azure** | ✓ | ✓ | banner element + `updateSavingsBanner` logic (TestClient); renders a real % from a below-reference GPU (browser). Keeps the honest "benchmark, not a quote" framing. |
+| Seller `/install` **leads with earnings** (keep 90%) + monthly estimate | ✓ | — | earnings banner + `/pricing/suggest`-driven monthly range, after the 10% fee |
+| Seller `/seller/payouts` **leads with earnings** | ✓ | — | earnings banner |
+| Onboarding framed as easy (one command, ~30s) | ✓ | — | assertion guards the copy from regressing |
+| **Self-service role switch** buyer↔seller | ✓ (functional round-trip via `/change_role` + `/me`) | ✓ (click on `/account` → lands on `/install` as seller) | button carries a static `aria-label`; invalid role → 400, not 500 |
+
 ## CLI (buyer CLI, seller agent, tools)
 
 | Surface | Human output | Colour off (NO_COLOR / pipe) | Machine (JSON) | Error UX | Exit codes | Automated |

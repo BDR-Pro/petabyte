@@ -440,6 +440,53 @@ for p in ["/", "/marketplace", "/buy/" + (ctx.get("public_id") or "demo-spec")]:
     ok(f"{p} ships inline script (client render present)", "<script" in r.text)
 
 
+# ============================================ 13. role-based value props + role switch
+section("value props: buyer=cheap-vs-hyperscaler, seller=earnings; self-service role switch")
+
+# Buyer: the marketplace leads with savings vs the named hyperscalers, honestly.
+r, d = dom("/marketplace")
+ok("marketplace has a savings banner element", "savingsbanner" in d.ids)
+ok("marketplace names the hyperscalers (AWS/GCP/Azure)",
+   "AWS" in r.text and ("GCP" in r.text or "Azure" in r.text))
+ok("marketplace savings is populated from live data (updateSavingsBanner)",
+   "updateSavingsBanner" in r.text)
+ok("marketplace keeps the honest 'benchmark, not a quote' framing",
+   "not a quote" in r.text.lower())
+
+# Seller: the onboarding + earnings surfaces lead with money and ease.
+r_i = get("/install").text
+ok("/install leads with earnings (keep 90%)", "90%" in r_i and "earn-banner" in r_i)
+ok("/install shows a monthly earnings estimate", "earnest" in r_i and "month" in r_i.lower())
+ok("/install still frames onboarding as easy (one command / ~30s)",
+   "one command" in r_i.lower() and ("30 second" in r_i.lower() or "~30" in r_i))
+r_s = get("/seller/payouts").text
+ok("/seller/payouts leads with earnings (earn-banner, keep 90%)",
+   "earn-banner" in r_s and "90%" in r_s)
+
+# Role switch: the control exists, is labelled, and is wired to the real endpoint.
+r, d = dom("/account")
+ok("account has a role-switch control", "roleswitch" in d.ids)
+role_btn = [a for t, a in d.buttons if a.get("id") == "roleswitch"]
+ok("role-switch button has an accessible name (aria-label)",
+   bool(role_btn) and role_btn[0].get("aria-label"))
+ok("role-switch is wired to POST /change_role", "/change_role" in r.text and "switchRole" in r.text)
+
+# Functional round-trip: a signed-in user can move buyer -> seller -> buyer.
+client.post("/register_user", json={"username": "role_web", "password": "pw-correct-horse-1"})
+rt = client.post("/login", data={"username": "role_web", "password": "pw-correct-horse-1"}).json().get("access_token")
+H = {"Authorization": f"Bearer {rt}"}
+me0 = client.get("/me", headers=H).json()
+ok("new user starts as a buyer", me0.get("role") == "buyer", me0.get("role"))
+sw1 = client.post("/change_role", headers=H, json={"role": "seller"})
+ok("switch to seller returns ok", sw1.status_code == 200, f"HTTP {sw1.status_code}")
+ok("/me reflects the seller role", client.get("/me", headers=H).json().get("role") == "seller")
+sw2 = client.post("/change_role", headers=H, json={"role": "buyer"})
+ok("switch back to buyer returns ok", sw2.status_code == 200)
+ok("/me reflects the buyer role again", client.get("/me", headers=H).json().get("role") == "buyer")
+ok("an invalid role is rejected (not a 500)",
+   client.post("/change_role", headers=H, json={"role": "wizard"}).status_code == 400)
+
+
 print("\n" + "=" * 60)
 print(f"{'PASS' if not _fail else 'FAIL — ' + str(_fail) + ' failing'}: web UI contract")
 print("=" * 60)
