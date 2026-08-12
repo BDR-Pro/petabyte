@@ -15,6 +15,12 @@ variables:
     scope:
     - platform
     description: ''
+  AFFILIATE_NEWEGG_WRAP:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   AGENT_TELEMETRY_ENABLED:
     required: false
     default: 'true'

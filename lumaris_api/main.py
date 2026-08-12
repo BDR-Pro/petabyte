@@ -5817,44 +5817,56 @@ def pricing_catalog(db: Session = Depends(get_db)):
 
 @app.get("/pricing/roi", tags=["marketplace"])
 def pricing_roi(kwh: float = Query(0.12, ge=0, le=2.0),
-                utilization: float = Query(0.5, ge=0, le=1.0),
+                hours: float = Query(8.0, ge=0, le=24.0),
+                full_build: bool = Query(False),
                 db: Session = Depends(get_db)):
     """"Buy a GPU and rent it" ROI + breakeven, per GPU — every term shown so nothing is a black box.
 
     Earnings come from the SAME benchmark-anchored reference price the marketplace uses (a buyer's
-    price), minus Petabyte's fee and electricity, scaled by an assumed utilization. Hardware cost
-    defaults to the card's published launch MSRP and is meant to be overridden with today's real
-    price (the buy link shows it). This is a MODEL, not a promise: `utilization` is demand-dependent
-    and the biggest lever — the response says so, and the UI lets you dial it to what you expect."""
+    price), minus Petabyte's fee and electricity, for however many `hours` per day you actually rent
+    it out. `full_build=true` accounts for the WHOLE PC (adds a rest-of-build cost + system watts),
+    not just the GPU. Hardware cost defaults to published launch MSRP and is meant to be overridden
+    with today's real price (the buy links show it). This is a MODEL, not a promise: rented hours
+    are demand-dependent and the biggest lever — the response says so."""
     import hardware_reference as hw
     take = float(PLATFORM_TAKE_RATE)
-    tag = os.getenv("AFFILIATE_AMAZON_TAG", "").strip()
+    amz = os.getenv("AFFILIATE_AMAZON_TAG", "").strip()
+    negwrap = os.getenv("AFFILIATE_NEWEGG_WRAP", "").strip()
     rows = []
     for model in hw.models():
-        r = hw.roi_row(model, kwh_usd=kwh, utilization=utilization, platform_fee=take)
+        r = hw.roi_row(model, kwh_usd=kwh, hours_per_day=hours, platform_fee=take, full_build=full_build)
         if r is None:
             continue
-        r["buy_url"] = hw.buy_url(model, tag)
+        r["buy_urls"] = hw.buy_urls(model, amazon_tag=amz, newegg_wrap=negwrap)
         rows.append(r)
     # Soonest breakeven first; unprofitable rows (breakeven None) sink to the bottom.
     rows.sort(key=lambda x: (x["breakeven_days"] is None, x["breakeven_days"] or 9e18))
+    affiliate_on = bool(amz) or bool(negwrap)
     return {
         "assumptions": {
             "kwh_usd": round(kwh, 4),
-            "utilization": round(utilization, 4),
+            "hours_per_day": round(hours, 2),
+            "full_build": bool(full_build),
             "platform_fee_pct": round(take * 100.0, 1),
-            "power_note": "Counts GPU load power during rented hours only; excludes idle/host draw "
-                          "and internet.",
-            "utilization_note": "Utilization is demand-dependent and NOT guaranteed — it is the "
-                                "biggest driver of ROI. Marketplace demand is still early; model "
-                                "conservatively.",
-            "cost_note": "Hardware cost defaults to the card's LAUNCH MSRP; street prices vary — "
-                         "override it with today's real price (see the buy link).",
+            "system_cost_ref_usd": hw.SYSTEM_COST_USD,
+            "system_watts_ref": hw.SYSTEM_WATTS,
+            "scope_note": ("Whole-PC: cost and power include the rest of the build (CPU, board, RAM, "
+                           "PSU, storage, case)." if full_build else
+                           "GPU-only: just the card's cost and power. Toggle full_build to include "
+                           "the rest of the PC."),
+            "power_note": "Counts load power during rented hours only; excludes idle/host draw and "
+                          "internet.",
+            "hours_note": "Rented hours/day are demand-dependent and NOT guaranteed — the biggest "
+                          "driver of ROI. Marketplace demand is still early; model conservatively.",
+            "cost_note": "Hardware cost defaults to LAUNCH MSRP (+ a rest-of-build reference in "
+                         "whole-PC mode); street prices vary — use the buy links for today's price.",
         },
         "affiliate": {
-            "enabled": bool(tag),
-            "disclosure": "As an Amazon Associate, Petabyte may earn a commission from qualifying "
-                          "purchases made through these links — at no extra cost to you.",
+            "enabled": affiliate_on,
+            "amazon": bool(amz),
+            "newegg": bool(negwrap),
+            "disclosure": "Petabyte may earn a commission from qualifying purchases made through "
+                          "these retailer links — at no extra cost to you.",
         },
         "count": len(rows),
         "gpus": rows,

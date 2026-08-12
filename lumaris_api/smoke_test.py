@@ -1638,23 +1638,37 @@ ok("no stale placeholder key survives — the seller never hand-substitutes pk_y
 ok("price is optional and benchmark-anchored — the page auto-prices, it does not bake in a made-up rate",
    "/pricing/suggest" in _inst and 'placeholder="auto"' in _inst)
 
-# --- GPU ROI / breakeven calculator ("buy a GPU and rent it") + affiliate buy links ---
-_roi = c.get("/pricing/roi?utilization=0.4&kwh=0.12").json()
+# --- GPU ROI / breakeven calculator ("buy a GPU and rent it, N hours/day") + affiliate buy links ---
+_roi = c.get("/pricing/roi?hours=8&kwh=0.12").json()
 ok("/pricing/roi returns per-GPU breakeven + 1-yr ROI from the benchmark price, fee and electricity",
    _roi.get("count", 0) > 0 and all(
-       k in _roi["gpus"][0] for k in ("gpu_model", "net_per_month", "breakeven_days", "roi_year_pct", "buy_url", "tdp_w", "hardware_cost_usd")))
-ok("ROI response is HONEST: it foregrounds that utilization is demand-dependent, not a promise",
-   "utilization" in _roi.get("assumptions", {}).get("utilization_note", "").lower()
-   and "not guaranteed" in _roi["assumptions"]["utilization_note"].lower())
+       k in _roi["gpus"][0] for k in ("gpu_model", "net_per_month", "breakeven_days", "roi_year_pct",
+                                      "buy_urls", "gpu_tdp_w", "hardware_cost_usd", "hours_per_day")))
+ok("ROI is driven by an adjustable hours/day, and is HONEST that rented hours aren't guaranteed",
+   _roi["assumptions"]["hours_per_day"] == 8.0
+   and "not guaranteed" in _roi["assumptions"]["hours_note"].lower())
 ok("ROI rows are sorted soonest-payback-first (breakeven ascending)",
    [g["breakeven_days"] for g in _roi["gpus"] if g["breakeven_days"] is not None]
    == sorted(g["breakeven_days"] for g in _roi["gpus"] if g["breakeven_days"] is not None))
-ok("affiliate is DISCLOSED (FTC) and off by default until a tag is configured",
+# whole-PC mode: cost and power include the rest of the build, so payback lengthens
+_full = c.get("/pricing/roi?hours=8&kwh=0.12&full_build=true").json()
+def _bymodel(resp, m): return next(g for g in resp["gpus"] if g["gpu_model"] == m)
+_g0 = _roi["gpus"][0]["gpu_model"]
+ok("full_build=true adds the rest-of-PC cost + watts, so hardware cost and power both rise",
+   _bymodel(_full, _g0)["hardware_cost_usd"] > _bymodel(_roi, _g0)["hardware_cost_usd"]
+   and _bymodel(_full, _g0)["watts_total"] > _bymodel(_roi, _g0)["gpu_tdp_w"]
+   and _full["assumptions"]["full_build"] is True)
+ok("more rented hours/day shortens payback (12h beats 4h)",
+   _bymodel(c.get("/pricing/roi?hours=12").json(), _g0)["breakeven_days"]
+   < _bymodel(c.get("/pricing/roi?hours=4").json(), _g0)["breakeven_days"])
+ok("affiliate is DISCLOSED (FTC), spans multiple retailers, and is off by default until configured",
    "commission" in _roi.get("affiliate", {}).get("disclosure", "").lower()
-   and _roi["affiliate"]["enabled"] is False and "amazon.com" in _roi["gpus"][0]["buy_url"])
+   and _roi["affiliate"]["enabled"] is False
+   and {b["retailer"] for b in _roi["gpus"][0]["buy_urls"]} >= {"Amazon", "Newegg"}
+   and all(b["affiliate"] is False for b in _roi["gpus"][0]["buy_urls"]))
 _roip = c.get("/roi").text
-ok("the /roi page renders the calculator (controls + live recompute wired to /pricing/roi)",
-   "roiRecalc" in _roip and "/pricing/roi" in _roip and 'id="util"' in _roip)
+ok("the /roi page renders the calculator (hours/day + whole-PC toggle wired to /pricing/roi)",
+   "roiRecalc" in _roip and "/pricing/roi" in _roip and 'id="hours"' in _roip and "roiScope" in _roip)
 ok("/install links sellers to the ROI calculator (buy-decision funnel)",
    'href="/roi"' in _inst)
 

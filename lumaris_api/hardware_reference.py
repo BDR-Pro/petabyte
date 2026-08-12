@@ -68,6 +68,13 @@ GEAR = {
 }
 
 
+# Rest-of-build reference for the "whole PC" mode — the parts BESIDES the GPU that a modest but
+# capable host needs (CPU, motherboard, 32GB RAM, ~850W PSU, 1TB NVMe, case/fans). These are
+# EDITABLE reference estimates, not precise facts — the UI lets the buyer type their real numbers.
+SYSTEM_COST_USD = 550     # typical rest-of-build (CPU+board+RAM+PSU+storage+case), USD
+SYSTEM_WATTS = 100        # extra draw beyond the GPU under load (CPU+board+drives+fans), W
+
+
 def _canonical(model):
     """Canonical GPU key (via the same normaliser the benchmark uses), or None."""
     try:
@@ -97,8 +104,7 @@ def models():
 
 
 def buy_url(model, affiliate_tag=""):
-    """An Amazon search link for the card. Appends the Associates tag when configured; without a
-    tag it's a plain (non-monetised) search link, so the feature degrades honestly when unset."""
+    """Back-compat single Amazon link. Prefer buy_urls() for the multi-retailer list."""
     key = _canonical(model) or model
     url = "https://www.amazon.com/s?k=" + quote_plus(str(key) + " graphics card")
     tag = (affiliate_tag or "").strip()
@@ -107,12 +113,42 @@ def buy_url(model, affiliate_tag=""):
     return url
 
 
-def roi_row(model, *, kwh_usd=0.12, utilization=0.5, platform_fee=0.10, hardware_cost=None):
+def buy_urls(model, *, amazon_tag="", newegg_wrap=""):
+    """Buy links across PC-hardware retailers. Each is a plain product SEARCH unless an affiliate
+    hook is configured, so the feature degrades honestly when unset:
+
+      * Amazon — appends the Associates ?tag= when `amazon_tag` is set.
+      * Newegg — its affiliate program runs through a network (Rakuten/Impact), so we don't invent
+        a tag: if `newegg_wrap` (a deeplink template containing "{url}") is configured we route the
+        search through it; otherwise it's a plain Newegg search.
+
+    Returns a list of {retailer, url, affiliate: bool}."""
+    key = _canonical(model) or model
+    q = str(key) + " graphics card"
+    out = []
+    amz = "https://www.amazon.com/s?k=" + quote_plus(q)
+    tag = (amazon_tag or "").strip()
+    if tag:
+        amz += "&tag=" + quote_plus(tag)
+    out.append({"retailer": "Amazon", "url": amz, "affiliate": bool(tag)})
+    neg = "https://www.newegg.com/p/pl?d=" + quote_plus(q)
+    wrap = (newegg_wrap or "").strip()
+    if wrap and "{url}" in wrap:
+        neg = wrap.replace("{url}", quote_plus(neg))
+        out.append({"retailer": "Newegg", "url": neg, "affiliate": True})
+    else:
+        out.append({"retailer": "Newegg", "url": neg, "affiliate": False})
+    return out
+
+
+def roi_row(model, *, kwh_usd=0.12, hours_per_day=8.0, platform_fee=0.10, full_build=False,
+            hardware_cost=None, system_cost_usd=None, system_watts=None):
     """One fully-transparent ROI row for a GPU, or None if we can't price/spec it.
 
-    Every intermediate term is returned so the UI can SHOW the math (and recompute live as the
-    buyer drags the utilization/price/electricity controls). `hardware_cost` overrides the MSRP
-    default. Returns rounded, JSON-friendly numbers."""
+    Models running the rig `hours_per_day` (adjustable, 0-24). `full_build=True` accounts for the
+    WHOLE PC — it adds the rest-of-build cost and the extra system watts, not just the GPU. Every
+    intermediate term is returned so the UI can SHOW the math and recompute live. `hardware_cost`
+    overrides the total cost; `system_cost_usd`/`system_watts` override the rest-of-build refs."""
     import pricing_engine
     key = _canonical(model)
     g = GEAR.get(key) if key else None
@@ -122,13 +158,18 @@ def roi_row(model, *, kwh_usd=0.12, utilization=0.5, platform_fee=0.10, hardware
     if not list_hr or list_hr <= 0:
         return None
     fee = max(0.0, min(0.9, float(platform_fee)))
-    util = max(0.0, min(1.0, float(utilization)))
+    hours = max(0.0, min(24.0, float(hours_per_day)))
     kwh = max(0.0, float(kwh_usd))
-    net_price_hr = list_hr * (1.0 - fee)                 # what you keep per rented hour, before power
-    power_hr = (g["tdp_w"] / 1000.0) * kwh               # electricity per rented hour at load
-    net_hr_avg = (net_price_hr - power_hr) * util        # averaged over the whole day at this utilization
-    net_day = net_hr_avg * 24.0
-    cost = float(hardware_cost) if (hardware_cost and float(hardware_cost) > 0) else float(g["msrp_usd"])
+    sys_cost_ref = float(system_cost_usd) if system_cost_usd is not None else float(SYSTEM_COST_USD)
+    sys_watts_ref = float(system_watts) if system_watts is not None else float(SYSTEM_WATTS)
+    gpu_cost = float(g["msrp_usd"])
+    sys_cost = sys_cost_ref if full_build else 0.0
+    watts = float(g["tdp_w"]) + (sys_watts_ref if full_build else 0.0)
+    cost = float(hardware_cost) if (hardware_cost and float(hardware_cost) > 0) else (gpu_cost + sys_cost)
+    net_price_hr = list_hr * (1.0 - fee)                 # you keep per rented hour, before power
+    power_hr = (watts / 1000.0) * kwh                    # electricity per rented (running) hour
+    net_hr = net_price_hr - power_hr                     # net per rented hour
+    net_day = net_hr * hours                             # only earns while actually rented
     breakeven_days = (cost / net_day) if net_day > 0 else None
     roi_year_pct = ((net_day * 365.0) / cost * 100.0) if cost > 0 else None
     tflops = None
@@ -140,12 +181,21 @@ def roi_row(model, *, kwh_usd=0.12, utilization=0.5, platform_fee=0.10, hardware
     return {
         "gpu_model": key,
         "benchmark_tflops_fp16": (round(float(tflops), 1) if tflops else None),
-        "tdp_w": g["tdp_w"],
-        "hardware_cost_usd": round(cost, 2),
-        "list_price_per_hr": round(float(list_hr), 2),      # what a buyer pays
-        "net_price_per_hr": round(net_price_hr, 4),          # you keep, before power (100% util)
+        "hours_per_day": round(hours, 2),
+        "full_build": bool(full_build),
+        # power
+        "gpu_tdp_w": g["tdp_w"],
+        "system_watts_ref": round(sys_watts_ref),        # extra watts added in full-build mode
+        "watts_total": round(watts),
+        # cost
+        "gpu_cost_usd": round(gpu_cost, 2),              # GPU launch MSRP (editable default)
+        "system_cost_ref": round(sys_cost_ref, 2),       # rest-of-build ref added in full-build mode
+        "hardware_cost_usd": round(cost, 2),             # total used for breakeven (override-aware)
+        # earnings
+        "list_price_per_hr": round(float(list_hr), 2),   # what a buyer pays
+        "net_price_per_hr": round(net_price_hr, 4),      # you keep per rented hr, before power
         "power_cost_per_hr": round(power_hr, 4),
-        "net_per_hr": round(net_hr_avg, 4),                  # averaged at this utilization
+        "net_per_hr": round(net_hr, 4),                  # per rented hour, after power
         "net_per_day": round(net_day, 2),
         "net_per_month": round(net_day * 30.0, 2),
         "net_per_year": round(net_day * 365.0, 2),
