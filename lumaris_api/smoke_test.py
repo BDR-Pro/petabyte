@@ -1763,6 +1763,55 @@ _dev = c.get("/developers").text
 ok("/developers publishes the sandbox key + keyless sample so devs can try before paying",
    main.DATA_API_SANDBOX_KEY in _dev and "/api/v1/data/sample" in _dev)
 
+# --- distributed compute: one job across N GPUs on DIFFERENT machines, wired over the VPN ---
+def _dist_seller(idx):
+    s = dbmod.SessionLocal()
+    u = dbmod.create_user(s, f"dcs{idx}", "pw-correct-horse-1"); dbmod.set_role(s, u.username, "seller")
+    u.can_accept_paid_jobs = True
+    sp = dbmod.save_specs(s, u, {"cpu": 8, "ram": 32, "duration": 24, "price_per_hour": 1.0,
+                                 "provider": f"dcs{idx}", "gpu_model": "RTX 4090",
+                                 "gpu_count": 1, "vram_gb": 24, "units": 1})
+    sp.attested = True; sp.attest_pubkey = "k"; sp.status = "online"; sp.last_seen = dbmod._utcnow()
+    sp.available_units = 1; sp.total_units = 1; sp.jobs_completed = 50; sp.heartbeats = 200
+    s.add_all([u, sp]); s.commit()
+    uid, spid = u.id, sp.id
+    key, jti = main.gen_secure_api_key(u.username, 90, ["node", "jobs"])
+    dbmod.record_issued_key(s, uid, jti, "agent", ["node", "jobs"], 90); s.close()
+    return {"user_id": uid, "spec_id": spid, "kh": {"X-API-KEY": key}}
+
+def _agent_key_for_spec(spec_id):
+    # mint a node/jobs key for whichever spec's owner a rank landed on (robust to router choice)
+    s = dbmod.SessionLocal()
+    sp = dbmod.get_spec_by_id(s, spec_id)
+    u = dbmod.get_user_by_id(s, sp.user_id)
+    key, jti = main.gen_secure_api_key(u.username, 90, ["node", "jobs"])
+    dbmod.record_issued_key(s, u.id, jti, "agent", ["node", "jobs"], 90); s.close()
+    return {"X-API-KEY": key}
+
+_dist_seller(0); _dist_seller(1)   # guarantee >=2 distinct bookable nodes exist
+c.post("/register_user", json={"username": "distbuyer", "password": "pw-correct-horse-1"})
+_dbt = c.post("/login", data={"username": "distbuyer", "password": "pw-correct-horse-1"}).json()["access_token"]
+_dbh = {"Authorization": "Bearer " + _dbt}
+_ds = dbmod.SessionLocal(); dbmod.deposit(_ds, dbmod.get_user_by_username(_ds, "distbuyer"), 50.0); _ds.commit(); _ds.close()
+_dj = c.post("/distributed", headers=_dbh, json={"image": "pytorch/pytorch:2.3.0",
+             "command": "torchrun train.py", "world_size": 2, "hours": 1, "backend": "nccl"})
+_djj = _dj.json()
+ok("POST /distributed forms a 2-GPU cluster across DISTINCT machines (anti-affinity)",
+   _dj.status_code == 200 and _djj["world_size"] == 2
+   and len({rk["spec_id"] for rk in _djj["ranks"]}) == 2)
+ok("a distributed cluster that needs more machines than exist is refused (409, nothing charged)",
+   c.post("/distributed", headers=_dbh, json={"image": "x/y:1", "command": "z",
+          "world_size": 50, "hours": 1}).status_code == 409)
+_rk0 = next(rk for rk in _djj["ranks"] if rk["rank"] == 0)
+_rk1 = next(rk for rk in _djj["ranks"] if rk["rank"] == 1)
+_r0kh = _agent_key_for_spec(_rk0["spec_id"]); _r1kh = _agent_key_for_spec(_rk1["spec_id"])
+_reg = c.post("/jobs/rendezvous", headers=_r0kh, json={"task_id": _rk0["task_id"], "host": "10.9.0.1", "port": 29500})
+ok("rank 0 registers the VPN rendezvous address; a joining rank fetches it",
+   _reg.status_code == 200
+   and c.get(f"/jobs/rendezvous/{_djj['job_id']}", headers=_r1kh).json()["master_addr"] == "10.9.0.1")
+ok("the cluster manifest shows kind=distributed with per-rank status",
+   c.get(f"/jobs/manifest/{_djj['job_id']}", headers=_dbh).json()["kind"] == "distributed")
+
 # --- split API portals: /data (buy data) and /devs (build compute), Scalar-rendered, DISJOINT ---
 _dp = c.get("/data"); _vp = c.get("/devs")
 ok("/data renders a Scalar API reference for the buy-data product",

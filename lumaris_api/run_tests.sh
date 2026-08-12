@@ -65,6 +65,7 @@ run_suite "seller earnings forecast (net/hr exact + honest estimates)" python ea
 run_suite "pricing engine (cloud-anchored, demand+trust, explainable, clamped)" python pricing_engine_test.py
 run_suite "GPU ROI (buy-and-rent breakeven: transparent, honest, affiliate-tagged)" python hardware_reference_test.py
 run_suite "paid data API (metered, pay-as-you-go from wallet, scope-gated, price history)" python data_api_test.py
+run_suite "distributed compute (one job across N GPUs on different machines, VPN cluster, gang-scheduled)" python distributed_test.py
 run_suite "reservation reclaim (abandoned GPU capacity)" python reservation_reclaim_test.py
 run_suite "database backup to S3 (disaster recovery: dump/gzip/sha256/retention/verify)" python backup_test.py
 run_suite "sanctions screen (free public OFAC: country embargo + SDN crypto address, fail-closed)" python sanctions_test.py

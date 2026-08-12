@@ -246,6 +246,9 @@ jobs:
       - name: paid data API (metered, pay-as-you-go from wallet, scope-gated, price history)
         working-directory: lumaris_api
         run: python data_api_test.py
+      - name: distributed compute (one job across N GPUs on different machines, VPN cluster, gang-scheduled)
+        working-directory: lumaris_api
+        run: python distributed_test.py
       - name: database backup to S3 (disaster recovery: dump/gzip/sha256/retention/verify)
         working-directory: lumaris_api
         run: python backup_test.py

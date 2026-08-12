@@ -574,6 +574,12 @@ variables:
     description: 'Max concurrent paid jobs per GPU node (must stay bounded). (reserved: standardized in
       GitHub config).'
     format: int
+  MAX_DISTRIBUTED_NODES:
+    required: false
+    default: '100'
+    scope:
+    - platform
+    description: ''
   MAX_HOURS:
     required: false
     default: '24'

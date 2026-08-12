@@ -976,16 +976,29 @@ def record_routing_decision(db: Session, source: str, user_id, intent: dict,
 
 
 class MultiNodeJob(Base):
-    """A fan-out job (render frames / transcode segments) assembled from N parts."""
+    """A multi-node job assembled from N parts.
+
+    Two shapes share this table:
+      * FAN-OUT (kind=render|transcode): N independent segments + a stitch step. Segments never
+        talk to each other; a dropped one just re-runs.
+      * DISTRIBUTED (kind=distributed): N ranks that form ONE cluster and communicate over the VPN
+        (e.g. torchrun/NCCL all-reduce). rank 0 is the rendezvous master; its VPN-reachable
+        address is stored here and handed to the other ranks so they can join. No stitch step —
+        the job completes when every rank finishes, and fails if any rank dies (gang semantics)."""
     __tablename__ = "multinode_jobs"
     id = Column(Integer, primary_key=True, index=True)
     buyer_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
-    kind = Column(String, nullable=False)              # render|transcode
+    kind = Column(String, nullable=False)              # render|transcode|distributed
     params = Column(Text, nullable=True)
-    total_segments = Column(Integer, default=0)
+    total_segments = Column(Integer, default=0)        # = world_size for a distributed job
     status = Column(String, default="running")         # running|assembling|complete|failed
     output_ref = Column(String, nullable=True)
     stitch_task_id = Column(Integer, nullable=True)
+    # --- distributed-cluster coordination (null for fan-out jobs) ---
+    backend = Column(String, nullable=True)            # nccl|gloo — the collective backend
+    master_addr = Column(String, nullable=True)        # rank-0's VPN-reachable host (rendezvous)
+    master_port = Column(Integer, nullable=True)       # rank-0's rendezvous port
+    rendezvous_at = Column(DateTime, nullable=True)    # when rank 0 registered the address
     created_at = Column(DateTime, default=_utcnow)
 
 
@@ -1919,6 +1932,8 @@ def _ensure_columns():
         "connected_accounts": [("gateway_mode", "VARCHAR")],
         "tasks": [("result_content_hash", "VARCHAR"),
                   ("result_signature", "VARCHAR"), ("result_proof", "TEXT")],
+        "multinode_jobs": [("backend", "VARCHAR"), ("master_addr", "VARCHAR"),
+                           ("master_port", "INTEGER"), ("rendezvous_at", "TIMESTAMP")],
     }
     try:
         insp = _inspect(engine)
@@ -3728,6 +3743,61 @@ def set_job_status(db: Session, job: "MultiNodeJob", status: str,
 
 def get_multinode_job(db: Session, job_id: int):
     return db.query(MultiNodeJob).filter(MultiNodeJob.id == job_id).first()
+
+
+# ------------------- DISTRIBUTED (multi-node cluster) coordination -------------------
+
+def create_distributed_job(db: Session, buyer: "User", params: dict,
+                           world_size: int, backend: str = "nccl"):
+    """A coordinated N-rank cluster (kind='distributed'). total_segments == world_size."""
+    import json as _j
+    job = MultiNodeJob(buyer_id=buyer.id, kind="distributed", params=_j.dumps(params or {}),
+                       total_segments=int(world_size), status="running", backend=backend)
+    db.add(job); db.commit(); db.refresh(job)
+    return job
+
+
+def set_rendezvous(db: Session, job: "MultiNodeJob", addr: str, port: int) -> bool:
+    """Record rank-0's VPN-reachable address so the other ranks can join. First writer wins:
+    once set, a different address is refused (returns False) — the cluster has one master."""
+    if job.master_addr and (job.master_addr != addr or job.master_port != int(port)):
+        return False
+    job.master_addr = addr
+    job.master_port = int(port)
+    if job.rendezvous_at is None:
+        job.rendezvous_at = _utcnow()
+    db.add(job); db.commit()
+    return True
+
+
+def rendezvous_info(db: Session, job: "MultiNodeJob") -> dict:
+    return {"job_id": job.id, "status": job.status, "world_size": job.total_segments,
+            "backend": job.backend, "master_addr": job.master_addr,
+            "master_port": job.master_port, "ready": bool(job.master_addr)}
+
+
+def distributed_job_for_task(db: Session, task_id: int):
+    """The distributed cluster a task belongs to (via its segment), or None."""
+    seg = db.query(JobSegment).filter(JobSegment.task_id == task_id).first()
+    if not seg:
+        return None
+    job = db.query(MultiNodeJob).filter(MultiNodeJob.id == seg.job_id).first()
+    return job if (job and job.kind == "distributed") else None
+
+
+def rank_for_agent(db: Session, job: "MultiNodeJob", agent_user: "User"):
+    """The (segment, rank) this agent owns in the job — the segment whose task runs on a spec
+    owned by this agent. Rank == segment.idx. Returns (None, None) if the agent has no rank here."""
+    segs = (db.query(JobSegment).filter(JobSegment.job_id == job.id)
+            .order_by(JobSegment.idx.asc()).all())
+    for seg in segs:
+        t = db.query(Task).filter(Task.id == seg.task_id).first()
+        if not t:
+            continue
+        spec = db.query(SellerSpec).filter(SellerSpec.id == t.spec_id).first()
+        if spec and spec.user_id == agent_user.id:
+            return seg, seg.idx
+    return None, None
 
 
 def job_segments(db: Session, job_id: int):

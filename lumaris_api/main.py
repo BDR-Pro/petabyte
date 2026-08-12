@@ -107,6 +107,8 @@ from db import (
     create_multinode_job, add_job_segment, segment_for_task, complete_segment,
     all_segments_done, segment_output_refs, set_job_status, get_multinode_job,
     job_segments,
+    create_distributed_job, set_rendezvous, rendezvous_info, distributed_job_for_task,
+    rank_for_agent,
 )
 import db as dbmod
 from auth import create_access_token, verify_token
@@ -1240,6 +1242,9 @@ DATA_API_UNITS = {
 # with `gAAAAA`), so a `pk_sandbox_`-prefixed literal can never be a valid real key, and a real key
 # can never look like the sandbox key. We refuse to honour a sandbox value that lacks the prefix
 # (fail-closed) so a real key can't be aliased into free data access by misconfiguration.
+# Distributed (multi-node cluster) jobs: the most GPUs one job may span across DISTINCT nodes.
+MAX_DISTRIBUTED_NODES = int(os.getenv("MAX_DISTRIBUTED_NODES", "100"))
+
 DATA_API_SANDBOX_KEY_PREFIX = "pk_sandbox_"
 DATA_API_SANDBOX_KEY = os.getenv("DATA_API_SANDBOX_KEY", "pk_sandbox_petabyte_dev").strip()
 if DATA_API_SANDBOX_KEY and not DATA_API_SANDBOX_KEY.startswith(DATA_API_SANDBOX_KEY_PREFIX):
@@ -1839,6 +1844,21 @@ Mint a scoped key on the [keys page](/keys) and send it as **`X-API-KEY`**. Comp
 the **`node`** and **`jobs`** scopes — a different scope from the **`data`** key used by the
 [Data API](/data), which is gated to `data` keys (a `node`/`jobs` key is refused there, 403). The two
 products are documented separately and share **no endpoint**. Pick the product, pick the scope.
+
+## Distributed compute (one job across many GPUs)
+
+`POST /distributed` splits a single job across up to 100 GPUs that live on **different machines**
+but form **one cluster over the VPN** (torchrun/NCCL). The platform:
+
+* gang-schedules N nodes across **distinct providers** — never two ranks on the same PC;
+* **escrows all N up-front, all-or-nothing** — a cluster that can't fully form is refused and
+  refunded (you're charged nothing for a half-formed cluster);
+* assigns ranks `0..N-1` and coordinates **rendezvous**: rank 0 registers its VPN address at
+  `POST /jobs/rendezvous`, the other ranks poll `GET /jobs/rendezvous/{job_id}` to join, then each
+  node runs your container under `torchrun --nnodes=N --node_rank=<rank>`;
+* completes when every rank finishes; a dead rank fails the whole run (gang semantics).
+
+Track the cluster at `GET /jobs/manifest/{job_id}` (per-rank status + the master address).
 
 ## Money model
 
@@ -2975,6 +2995,26 @@ def _build_job_payload(task) -> dict:
         rp = json.loads(task.template_params or "{}")
         return {"task_id": task.id, "task_type": "stitch", "image": FFMPEG_IMAGE,
                 **rp, **_backup}
+    if task.task_type == "distributed":
+        # One rank of a multi-node cluster. The agent runs `image`/`command` under torchrun with
+        # the rank/world_size below, forming an NCCL/gloo cluster with the other ranks OVER THE
+        # VPN. Rank 0 first binds a port and registers it at register_url; the others poll
+        # rendezvous_url until the master address appears, then join. master_addr/port are NOT
+        # baked in here — they only exist once rank 0 comes up (fetched via rendezvous_url).
+        rp = json.loads(task.template_params or "{}")
+        jid = rp.get("job_id")
+        return {"task_id": task.id, "task_type": "distributed",
+                "image": rp.get("image"), "command": rp.get("command"),
+                "gpu": True, "env": rp.get("env") or {},
+                # cluster peers must reach each other over the WireGuard mesh (not the public net)
+                "egress": "cluster",
+                "distributed": {"job_id": jid, "rank": rp.get("rank"),
+                                "world_size": rp.get("world_size"),
+                                "backend": rp.get("backend", "nccl"),
+                                "is_master": bool(rp.get("is_master")),
+                                "register_url": "/jobs/rendezvous",
+                                "rendezvous_url": f"/jobs/rendezvous/{jid}"},
+                **_backup}
     if task.task_type == "template":
         tpl = TEMPLATES.get(task.template, {})
         params = json.loads(task.template_params or "{}")
@@ -3167,6 +3207,8 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
         # Move it to JOB_FAILED and free the reservation + void the buyer's hold (bills nothing).
         # Legacy bookings stay retained here (failed tasks are retryable — see /tasks/{id}/retry).
         compute_tx_status = _auto_fail_compute_tx(db, task, reason="job reported failed")
+        # If this task is one rank of a distributed cluster, a dead rank fails the whole run.
+        _fail_distributed_if_member(db, task)
     # NOTE: a failed job is NOT auto-refunded here — failed tasks are retryable
     # (see /tasks/{id}/retry), which relies on the escrow being retained. Escrow is
     # returned by the buyer cancel path and by the reaper when a node goes dead.
@@ -5840,7 +5882,23 @@ def _advance_manifest(db, task, result_ref):
         return
     job = complete_segment(db, seg, result_ref)
     if job and job.status == "running" and all_segments_done(db, job):
-        _finalize_job(db, job)
+        if job.kind == "distributed":
+            # A coordinated cluster has no stitch step — it is done when every rank finishes.
+            set_job_status(db, job, "complete", output_ref=result_ref)
+        else:
+            _finalize_job(db, job)
+
+
+def _fail_distributed_if_member(db, task):
+    """A distributed cluster is gang-scheduled: if any rank dies, the run can't continue, so the
+    whole job is marked failed. (Escrow on the other ranks is retained/retryable or refunded by
+    the buyer cancel path — same as any failed job.)"""
+    seg = segment_for_task(db, task.id)
+    if not seg:
+        return
+    job = get_multinode_job(db, seg.job_id)
+    if job and job.kind == "distributed" and job.status == "running":
+        set_job_status(db, job, "failed")
 
 
 def _finalize_job(db, job):
@@ -5926,11 +5984,19 @@ def job_manifest(job_id: int, user: dict = Depends(get_current_user),
     if not job or not me or (job.buyer_id != me.id and not _is_admin(me)):
         raise HTTPException(status_code=404, detail="Job not found")
     segs = job_segments(db, job_id)
-    return {"job_id": job.id, "kind": job.kind, "status": job.status,
-            "total_segments": job.total_segments, "output_ref": job.output_ref,
-            "stitch_task_id": job.stitch_task_id,
-            "segments": [{"idx": s.idx, "task_id": s.task_id, "range": [s.range_start, s.range_end],
-                          "status": s.status, "output_ref": s.output_ref} for s in segs]}
+    out = {"job_id": job.id, "kind": job.kind, "status": job.status,
+           "total_segments": job.total_segments, "output_ref": job.output_ref,
+           "stitch_task_id": job.stitch_task_id,
+           "segments": [{"idx": s.idx, "task_id": s.task_id, "range": [s.range_start, s.range_end],
+                         "status": s.status, "output_ref": s.output_ref} for s in segs]}
+    if job.kind == "distributed":
+        # A cluster manifest: world_size, the collective backend, and rank-0's rendezvous address.
+        out.update({"world_size": job.total_segments, "backend": job.backend,
+                    "master_addr": job.master_addr, "master_port": job.master_port,
+                    "rendezvous_ready": bool(job.master_addr),
+                    "ranks": [{"rank": s.idx, "task_id": s.task_id, "status": s.status}
+                              for s in segs]})
+    return out
 
 
 @app.post("/render")
@@ -5972,6 +6038,138 @@ def render_job(data: RenderModel, user: dict = Depends(get_current_user),
             "frame_range": [data.frame_start, data.frame_end], "tasks": tasks,
             "manifest_url": f"/jobs/manifest/{job.id}",
             "estimated_cost": q(sum((D(t["price_per_hour"]) for t in tasks), D(0)) * D(data.hours))}
+
+
+# ------------------- DISTRIBUTED COMPUTE (one job across N GPUs on different machines) -------------------
+# Split a single job across up to MAX_DISTRIBUTED_NODES GPUs that live on DIFFERENT machines but
+# form one cluster over the VPN (torchrun/NCCL all-reduce). The platform gang-schedules N distinct
+# nodes (one per provider = never two ranks on the same PC), escrows all-or-nothing, assigns ranks,
+# and coordinates rendezvous; each node's agent runs the container under torchrun with its rank.
+
+_HOSTPORT_RE = re.compile(r"^[A-Za-z0-9._:\-\[\]]{1,255}$")   # IPv4/IPv6/hostname (VPN address)
+
+
+class DistributedModel(BaseModel):
+    image: str = Field(min_length=3, max_length=300)        # training/compute container image
+    command: Optional[str] = Field(None, max_length=8000)   # torchrun target, e.g. "train.py --epochs 3"
+    world_size: int = Field(ge=2, le=100)                   # GPUs/ranks (hard cap re-checked below)
+    hours: int = Field(ge=1, le=168)
+    gpu_class: Optional[str] = Field(None, max_length=64)
+    region: Optional[str] = Field(None, max_length=64)
+    backend: str = Field("nccl", max_length=16)             # nccl (GPU) | gloo (CPU/fallback)
+    env: Optional[dict] = None
+
+
+@app.post("/distributed", tags=["compute"])
+def distributed_job(data: DistributedModel, user: dict = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """Run ONE job across N GPUs on N different machines, wired into a single cluster over the VPN.
+
+    The router picks N nodes across DISTINCT providers (never two ranks on the same PC), escrows
+    all N up-front (all-or-nothing — a cluster that can't fully form is refused and refunded),
+    assigns ranks 0..N-1, and coordinates rendezvous: rank 0 registers its VPN address, the others
+    join it (torchrun --nnodes=N). The job completes when every rank finishes; if any rank dies the
+    whole run is marked failed (gang semantics)."""
+    buyer = get_user_by_username(db, _username(user))
+    if not buyer:
+        raise HTTPException(status_code=401, detail="Unknown user")
+    if data.backend not in ("nccl", "gloo"):
+        raise HTTPException(status_code=422, detail="backend must be 'nccl' or 'gloo'")
+    n = int(data.world_size)
+    if n < 2 or n > MAX_DISTRIBUTED_NODES:
+        raise HTTPException(status_code=422,
+                            detail=f"world_size must be between 2 and {MAX_DISTRIBUTED_NODES}")
+    env = {str(k): str(v) for k, v in (data.env or {}).items()}
+    # Gang-schedule N DISTINCT nodes (select_plan returns one node per provider = distinct PCs).
+    intent = {"workload": "distributed", "redundancy": n, "hours": data.hours,
+              "gpu_class": data.gpu_class, "region": data.region}
+    nodes = select_plan(db, intent)["selected"]
+    if len(nodes) < n:
+        raise HTTPException(status_code=409, detail={
+            "code": "INSUFFICIENT_DISTINCT_NODES",
+            "message": (f"A distributed job needs {n} GPUs on {n} different machines, but only "
+                        f"{len(nodes)} distinct nodes are available right now."),
+            "requested": n, "available": len(nodes)})
+    job = create_distributed_job(db, buyer, {"image": data.image, "command": data.command},
+                                 world_size=n, backend=data.backend)
+    booked, ranks = [], []
+    for rank, sel in enumerate(nodes[:n]):
+        spec = _get_spec(db, sel["spec_id"])
+        task = _book_segment_task(db, buyer, spec, data.hours, "distributed")
+        if not task:
+            # All-or-nothing: a cluster missing a rank can't train. Unwind every booked rank
+            # (refund escrow + free capacity) so the buyer is charged nothing for a non-cluster.
+            for _, bt in booked:
+                refund_booking(db, bt.booking_id)
+            set_job_status(db, job, "failed")
+            raise HTTPException(status_code=402, detail={
+                "code": "CLUSTER_BOOKING_FAILED",
+                "message": ("Could not reserve every node for the cluster (funds or capacity); "
+                            "nothing was charged."),
+                "booked": len(booked), "needed": n})
+        task.template_params = json.dumps({"job_id": job.id, "rank": rank, "world_size": n,
+                                           "backend": data.backend, "image": data.image,
+                                           "command": data.command, "env": env,
+                                           "is_master": rank == 0})
+        task.volume = f"dist-{job.id}"; db.add(task); db.commit()
+        add_job_segment(db, job, rank, task.id, rank, rank)
+        booked.append((spec, task))
+        ranks.append({"rank": rank, "spec_id": spec.id, "task_id": task.id,
+                      "is_master": rank == 0, "price_per_hour": spec.price_per_hour})
+    est = q(sum((D(r["price_per_hour"]) for r in ranks), D(0)) * D(data.hours))
+    return {"status": "ok", "job_id": job.id, "kind": "distributed", "world_size": n,
+            "backend": data.backend, "hours": data.hours, "ranks": ranks,
+            "master_rank": 0, "estimated_cost": est,
+            "manifest_url": f"/jobs/manifest/{job.id}",
+            "rendezvous_url": f"/jobs/rendezvous/{job.id}",
+            "note": ("Ranks form one cluster over the VPN. Rank 0 registers its address at "
+                     "/jobs/rendezvous; the others poll /jobs/rendezvous/{job_id} to join.")}
+
+
+class RendezvousModel(BaseModel):
+    task_id: int
+    host: str = Field(min_length=1, max_length=255)     # rank-0's VPN-reachable address
+    port: int = Field(gt=0, le=65535)
+
+
+@app.post("/jobs/rendezvous", tags=["compute"])
+def jobs_rendezvous_register(data: RendezvousModel, agent=Depends(api_key_user),
+                             db: Session = Depends(get_db)):
+    """Rank 0's node registers the cluster's rendezvous address (its VPN host + port), so the
+    other ranks can find and join the master. Only the agent that owns rank 0's task may call it,
+    and only once — the cluster has a single master."""
+    task = get_task_for_agent(db, data.task_id, agent)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found or not yours")
+    job = distributed_job_for_task(db, task.id)
+    if not job:
+        raise HTTPException(status_code=409, detail="Task is not part of a distributed job")
+    seg = segment_for_task(db, task.id)
+    if not seg or seg.idx != 0:
+        raise HTTPException(status_code=403, detail="Only rank 0 registers the rendezvous address")
+    if not _HOSTPORT_RE.match(data.host):
+        raise HTTPException(status_code=422, detail="host must be an IP/hostname (VPN address)")
+    if not set_rendezvous(db, job, data.host, data.port):
+        raise HTTPException(status_code=409, detail="Rendezvous already set to a different address")
+    return {"status": "ok", "job_id": job.id, "master_addr": job.master_addr,
+            "master_port": job.master_port, "world_size": job.total_segments}
+
+
+@app.get("/jobs/rendezvous/{job_id}", tags=["compute"])
+def jobs_rendezvous_get(job_id: int, agent=Depends(api_key_user),
+                        db: Session = Depends(get_db)):
+    """A rank fetches everything it needs to join the cluster: its own rank, world_size, the
+    backend, and (once rank 0 is up) the master address. Non-master ranks poll until ready=true.
+    Only an agent that owns one of the job's ranks may read it."""
+    job = get_multinode_job(db, job_id)
+    if not job or job.kind != "distributed":
+        raise HTTPException(status_code=404, detail="Distributed job not found")
+    seg, rank = rank_for_agent(db, job, agent)
+    if seg is None:
+        raise HTTPException(status_code=404, detail="You have no rank in this job")
+    info = rendezvous_info(db, job)
+    info.update({"my_rank": rank, "is_master": rank == 0})
+    return info
 
 
 @app.post("/solve")

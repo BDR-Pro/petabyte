@@ -1131,6 +1131,13 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
       POST /create_task <span class="mut">notebook · template · vm</span><br>
       POST /transcode <span class="mut">video fan-out</span><br>
       POST /render <span class="mut">Blender fan-out</span></p></div>
+    <div class="card"><div class="lbl">Distributed <span class="mut">· 1 job, N GPUs</span></div>
+      <p class="mono" style="font-size:12.5px;line-height:2.05">
+      POST /distributed <span class="mut">cluster across N machines</span><br>
+      POST /jobs/rendezvous <span class="mut">rank 0 posts VPN addr</span><br>
+      GET /jobs/rendezvous/{job_id} <span class="mut">ranks join</span><br>
+      GET /jobs/manifest/{job_id} <span class="mut">per-rank status</span></p>
+      <p class="mut" style="font-size:12px;margin-top:8px">Split one job across up to 100 GPUs on <b>different machines</b>, wired into one <b>torchrun/NCCL cluster over the VPN</b>. Gang-scheduled (one rank per PC), escrowed all-or-nothing.</p></div>
     <div class="card"><div class="lbl am">Wallet &amp; payouts</div>
       <p class="mono" style="font-size:12.5px;line-height:2.05">
       GET /wallet <span class="mut">balance + earnings</span><br>
