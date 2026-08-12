@@ -822,6 +822,20 @@ INSTALL_HTML = _page("Petabyte — become a seller",
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px" data-ar="أدرِج كرت رسوماتك بأمرٍ واحد">List your GPU in <span class="grad-teal">one command</span></h1>
   <p class="mut" style="max-width:56ch" data-ar="أي جهاز NVIDIA يمكن أن يصبح عقدة. يتحقق المُثبِّت من عتادك، ويعزل المهام داخل Docker، ويجعلك متصلاً خلال ٣٠ ثانية تقريباً. دون حصرية.">Any NVIDIA machine can become a node. The installer verifies your hardware, sandboxes jobs in Docker, and brings you online in ~30 seconds. No exclusivity.</p>
 </div>
+<!-- PRIMARY path: as easy as starting a miner — paste a wallet, no account needed -->
+<div class="wrap" style="padding:6px 22px 0">
+  <div class="card" style="border-color:rgba(240,180,41,.35);background:linear-gradient(180deg,rgba(240,180,41,.06),transparent)">
+    <div class="lbl am" data-ar="ابدأ مثل المُعدِّن · بلا حساب">Start like a miner · no account</div>
+    <p class="mut" style="margin-bottom:6px" data-ar="الصق محفظة USDC التي تريد أن تُدفع إليها. هذه هويتك وعنوان استلامك — بلا بريد، بلا كلمة مرور. شغّل الأمر الوحيد الذي نعطيك إياه، ويتصل كرت رسوماتك. (السحب لاحقاً يتطلب تحقق هوية سريع كما يفرض النظام.)">Paste the USDC wallet you want to be paid to. That's your identity <i>and</i> your payout address — no email, no password. Run the one command we hand back and your GPU is online. <b class="teal">Withdrawing later needs a quick identity check</b>, as regulation requires.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
+      <input id="qwallet" placeholder="0x… your USDC wallet" size="30" spellcheck="false" style="font-family:ui-monospace,monospace;min-width:min(340px,90vw)" onkeydown="if(event.key==='Enter')walletStart(null,this)"/>
+      <button class="btn-amber" id="qbtn" data-act="walletStart" data-ar="أنشئ أمر التثبيت">Create my installer</button>
+      <span id="qmsg" class="mono" style="font-size:12.5px"></span>
+    </div>
+    <p class="mut" style="font-size:11.5px;margin-top:9px" data-ar="USDC على إيثريوم أو بوليجون أو Base أو Arbitrum أو Optimism. نفحص العناوين مقابل قائمة OFAC.">USDC on Ethereum, Polygon, Base, Arbitrum or Optimism. Addresses are screened against the OFAC sanctions list.</p>
+  </div>
+</div>
+<div class="wrap" style="padding:14px 22px 0"><div class="mut" style="font-size:12px;text-align:center;letter-spacing:.04em" data-ar="أو استخدم حساباً كاملاً لتحديد سعر مخصص">— or use a full account to set a custom price —</div></div>
 <!-- signed OUT: one prompt to sign in, nothing else to read yet -->
 <div class="wrap" id="iksignin" style="padding:6px 22px 0;display:none">
   <div class="card" style="border-color:rgba(79,214,201,.3);background:linear-gradient(180deg,rgba(79,214,201,.05),transparent)">
@@ -896,7 +910,12 @@ async function genInstaller(a1, btn){
   var r=await api('/create_api_key?days=90&label=node&scopes=node,jobs',{method:'POST'});
   if(btn){btn.disabled=false;btn.textContent=lbl;}
   if(!(r.ok&&r.body&&r.body.api_key)){alert('Could not create a node key — please make sure you are signed in.');return;}
-  var key=r.body.api_key, origin=location.origin, NL=String.fromCharCode(10);
+  _renderInstaller(r.body.api_key, price);
+}
+// Build the ready-to-paste command from a real key. A blank price omits PRICE_PER_HOUR so
+// the node auto-prices from its detected GPU. Shared by the wallet flow and the account flow.
+function _renderInstaller(key, price){
+  var origin=location.origin, NL=String.fromCharCode(10), pset=(price!=='' && price!=null);
   var lin='PETABYTE_API_URL='+origin+' PETABYTE_API_KEY='+key+' '+(pset?('PRICE_PER_HOUR='+price+' '):'')+'bash <(curl -fsSL '+origin+'/install.sh)';
   var win='$env:PETABYTE_API_URL="'+origin+'"'+NL+'$env:PETABYTE_API_KEY="'+key+'"'+NL+(pset?('$env:PRICE_PER_HOUR="'+price+'"'+NL):'')+'irm '+origin+'/install.ps1 | iex';
   window._PBCMDS['seller_linux']=lin; window._PBCMDS['seller_win']=win;
@@ -904,6 +923,26 @@ async function genInstaller(a1, btn){
   document.getElementById('cmdwin').innerHTML=_esch(win);
   var out=document.getElementById('ikout'); out.style.display='';
   out.scrollIntoView({behavior:'smooth',block:'start'});
+}
+// Wallet-only path: no login. Paste a USDC wallet -> mint a node key bound to it -> command.
+async function walletStart(a1, btn){
+  var w=(document.getElementById('qwallet').value||'').trim();
+  var msg=document.getElementById('qmsg');
+  if(!/^0x[0-9a-fA-F]{40}$/.test(w)){ msg.style.color='var(--amber)';
+    msg.textContent='Enter a 0x… wallet address (42 characters).'; return; }
+  if(btn&&btn.disabled)return; var lbl=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='Creating…';} msg.textContent='';
+  try{
+    var r=await fetch('/nodes/quickstart',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:w})});
+    var b=await r.json();
+    if(btn){btn.disabled=false;btn.textContent=lbl;}
+    if(!r.ok || !b.api_key){ msg.style.color='var(--amber)';
+      msg.textContent=(b&&b.detail)?b.detail:'Could not create your installer — try again.'; return; }
+    msg.style.color='var(--teal)'; msg.textContent='✓ ready below';
+    _renderInstaller(b.api_key, '');
+  }catch(e){ if(btn){btn.disabled=false;btn.textContent=lbl;}
+    msg.style.color='var(--amber)'; msg.textContent='Network error — try again.'; }
 }
 (function(){var si=document.getElementById('iksignin'),gn=document.getElementById('ikgen');
   if(authed()){if(gn)gn.style.display='';}else{if(si)si.style.display='';}})();

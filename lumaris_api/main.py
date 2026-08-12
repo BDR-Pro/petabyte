@@ -1964,6 +1964,71 @@ def register_user(data: UserRegisterModel, request: Request, db: Session = Depen
     return resp
 
 
+class NodeQuickstartModel(BaseModel):
+    wallet: str = Field(..., min_length=8, max_length=128)
+    chain: Optional[str] = Field(None, max_length=32)   # informational: eth|polygon|base|arbitrum|optimism
+
+
+# EVM address: 0x + 40 hex. USDC lives on many EVM chains (Ethereum/Polygon/Base/Arbitrum/
+# Optimism), all sharing this format. Non-EVM chains are a documented later extension.
+_EVM_ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+
+@app.post("/nodes/quickstart", tags=["seller"])
+def node_quickstart(data: NodeQuickstartModel, request: Request, db: Session = Depends(get_db)):
+    """Miner-style onboarding: paste the USDC wallet you want to be paid to and get a
+    ready-to-run installer command back — no email, no password, no signup form.
+
+    What it does — and, just as importantly, what it does NOT:
+      * creates (or reuses) a lightweight seller identity keyed to the wallet. The password
+        is random and unusable; the node authenticates with the returned API key, not a login.
+      * records the wallet as your USDC payout DESTINATION, **unverified**. This never makes
+        you payout-ready and never moves a cent: withdrawing earnings later requires identity
+        verification (KYC), exactly as regulation demands — that gate lives in the payout path,
+        not here. Onboarding is the only thing this makes frictionless.
+      * OFAC-screens the address when the sanctions list is configured (the binding, fail-closed
+        screen runs again at payout).
+      * mints a node API key (scopes: node, jobs) and returns it ONCE.
+
+    All nodes started with the same wallet share one balance — like workers under one mining
+    address. Bookability for PAID jobs still depends on the live payout/eligibility checks; a
+    wallet-only node can come online and benchmark, and becomes rentable once its owner verifies.
+    """
+    import sanctions
+    wallet = (data.wallet or "").strip()
+    if not _EVM_ADDR_RE.match(wallet):
+        raise HTTPException(status_code=422, detail=(
+            "Enter a valid USDC wallet address (0x… on Ethereum, Polygon, Base, Arbitrum, or Optimism)."))
+    wallet_l = wallet.lower()   # EVM addresses are case-insensitive — normalise for identity + screen
+    if sanctions.ofac_addresses_available() and sanctions.is_sanctioned_address(wallet_l):
+        raise HTTPException(status_code=403, detail="This address cannot be onboarded.")
+    username = "wallet_" + wallet_l[2:]     # deterministic identity (drop the 0x prefix)
+    me = get_user_by_username(db, username)
+    new_account = False
+    if me is None:
+        me = create_user(db, username, secrets.token_urlsafe(32))   # random, unusable password
+        if me is None:                                              # lost a create race -> reuse
+            me = get_user_by_username(db, username)
+        else:
+            new_account = True
+    if me is None:
+        raise HTTPException(status_code=500, detail="Could not create your node identity.")
+    if me.role != "seller":
+        set_role(db, username, "seller")
+    # Record the wallet as an UNVERIFIED usdc payout destination (idempotent). verified stays
+    # False, so request_payout() refuses it until KYC — capturing the destination moves no money.
+    have = any(pm.kind == "usdc" and (pm.destination or "").lower() == wallet_l
+               for pm in list_payout_methods(db, me.id))
+    if not have:
+        add_payout_method(db, me, "usdc", wallet, label="mining wallet (verify at payout)")
+    api_key, jti = gen_secure_api_key(username, 90, ["node", "jobs"])
+    record_issued_key(db, me.id, jti, "node", ["node", "jobs"], 90)
+    if new_account:
+        obs.event(EVENTS.USER_SIGNED_UP, message="wallet-only node onboarding", user_id=me.id, referred=False)
+    return {"status": "ok", "api_key": api_key, "wallet": wallet, "new_account": new_account,
+            "payout_ready": False,
+            "note": "Onboarding only — withdrawing earnings later requires identity verification (KYC)."}
+
 
 # ------------------- GOOGLE SIGN-IN -------------------
 
