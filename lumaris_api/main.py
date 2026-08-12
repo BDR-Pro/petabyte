@@ -1858,6 +1858,18 @@ but form **one cluster over the VPN** (torchrun/NCCL). The platform:
   node runs your container under `torchrun --nnodes=N --node_rank=<rank>`;
 * completes when every rank finishes; a dead rank fails the whole run (gang semantics).
 
+On each node the agent **executes** its rank: it registers its own VPN address, resolves the
+master, launches your container under `torchrun` wired to `--master_addr/--node_rank/--nnodes`,
+and reports a **signed result** — the same attested-key path every job uses, so a distributed run
+is bound to real hardware. The cluster is marked complete only once **every** rank's signed result
+arrives.
+
+**Validate your cluster first (self-test).** Pass `selftest: true` (no `image`/`command` needed) and
+each rank runs a built-in **cross-process all-reduce** instead of a container: the ranks actually
+talk to each other over the mesh and every rank must converge on the correct global reduction. It's
+the "does my N-node cluster really communicate and reduce correctly?" smoke test to run before
+committing to a long, expensive training job.
+
 Track the cluster at `GET /jobs/manifest/{job_id}` (per-rank status + the master address).
 
 **Private network (VPN).** Pass `vpn: true` to `/distributed` (or `/request_vm`) and the buyer gets
@@ -3038,6 +3050,7 @@ def _build_job_payload(task) -> dict:
                                 "world_size": rp.get("world_size"),
                                 "backend": rp.get("backend", "nccl"),
                                 "is_master": bool(rp.get("is_master")),
+                                "selftest": bool(rp.get("selftest")),
                                 "register_url": "/jobs/rendezvous",
                                 "rendezvous_url": f"/jobs/rendezvous/{jid}"},
                 **_backup}
@@ -6074,9 +6087,15 @@ def render_job(data: RenderModel, user: dict = Depends(get_current_user),
 
 _HOSTPORT_RE = re.compile(r"^[A-Za-z0-9._:\-\[\]]{1,255}$")   # IPv4/IPv6/hostname (VPN address)
 
+# The built-in cluster SELF-TEST sentinel. When a buyer passes selftest=true, the command is
+# rewritten to this so each rank's agent runs a real cross-process all-reduce (proving the ranks
+# actually communicate + reduce correctly) instead of a container. MUST match the agent's
+# distributed_run.SELFTEST_SENTINEL.
+DISTRIBUTED_SELFTEST_SENTINEL = "petabyte:selftest-allreduce"
+
 
 class DistributedModel(BaseModel):
-    image: str = Field(min_length=3, max_length=300)        # training/compute container image
+    image: Optional[str] = Field(None, min_length=3, max_length=300)  # training/compute container image
     command: Optional[str] = Field(None, max_length=8000)   # torchrun target, e.g. "train.py --epochs 3"
     world_size: int = Field(ge=2, le=100)                   # GPUs/ranks (hard cap re-checked below)
     hours: int = Field(ge=1, le=168)
@@ -6085,6 +6104,7 @@ class DistributedModel(BaseModel):
     backend: str = Field("nccl", max_length=16)             # nccl (GPU) | gloo (CPU/fallback)
     env: Optional[dict] = None
     vpn: bool = False                                       # give the buyer a WireGuard tunnel in
+    selftest: bool = False                                  # run the built-in cluster all-reduce self-test
 
 
 @app.post("/distributed", tags=["compute"])
@@ -6096,7 +6116,12 @@ def distributed_job(data: DistributedModel, user: dict = Depends(get_current_use
     all N up-front (all-or-nothing — a cluster that can't fully form is refused and refunded),
     assigns ranks 0..N-1, and coordinates rendezvous: rank 0 registers its VPN address, the others
     join it (torchrun --nnodes=N). The job completes when every rank finishes; if any rank dies the
-    whole run is marked failed (gang semantics)."""
+    whole run is marked failed (gang semantics).
+
+    Pass `selftest: true` to run the built-in CLUSTER SELF-TEST instead of a container: each rank
+    performs a real cross-process all-reduce, proving the N ranks actually communicate and compute
+    the correct global reduction — a no-GPU, no-image "does my cluster really work?" smoke test to
+    run before committing to a long training job. (image/command are then optional.)"""
     buyer = get_user_by_username(db, _username(user))
     if not buyer:
         raise HTTPException(status_code=401, detail="Unknown user")
@@ -6106,6 +6131,16 @@ def distributed_job(data: DistributedModel, user: dict = Depends(get_current_use
     if n < 2 or n > MAX_DISTRIBUTED_NODES:
         raise HTTPException(status_code=422,
                             detail=f"world_size must be between 2 and {MAX_DISTRIBUTED_NODES}")
+    # The self-test needs no buyer image/command; a real training run does. Resolve both here so
+    # the dispatched task carries exactly what the agent needs to execute.
+    if data.selftest:
+        image = data.image or "petabyte/selftest:builtin"   # placeholder — the agent runs no container
+        command = DISTRIBUTED_SELFTEST_SENTINEL
+    else:
+        if not data.image:
+            raise HTTPException(status_code=422,
+                                detail="image is required (or set selftest=true for the cluster self-test)")
+        image, command = data.image, data.command
     env = {str(k): str(v) for k, v in (data.env or {}).items()}
     # Gang-schedule N DISTINCT nodes (select_plan returns one node per provider = distinct PCs).
     intent = {"workload": "distributed", "redundancy": n, "hours": data.hours,
@@ -6118,7 +6153,8 @@ def distributed_job(data: DistributedModel, user: dict = Depends(get_current_use
                         f"{len(nodes)} distinct nodes are available right now."),
             "requested": n, "available": len(nodes)})
     job = create_distributed_job(db, buyer,
-                                 {"image": data.image, "command": data.command, "vpn": bool(data.vpn)},
+                                 {"image": image, "command": command, "vpn": bool(data.vpn),
+                                  "selftest": bool(data.selftest)},
                                  world_size=n, backend=data.backend)
     booked, ranks = [], []
     for rank, sel in enumerate(nodes[:n]):
@@ -6136,8 +6172,9 @@ def distributed_job(data: DistributedModel, user: dict = Depends(get_current_use
                             "nothing was charged."),
                 "booked": len(booked), "needed": n})
         task.template_params = json.dumps({"job_id": job.id, "rank": rank, "world_size": n,
-                                           "backend": data.backend, "image": data.image,
-                                           "command": data.command, "env": env,
+                                           "backend": data.backend, "image": image,
+                                           "command": command, "env": env,
+                                           "selftest": bool(data.selftest),
                                            "is_master": rank == 0})
         task.volume = f"dist-{job.id}"; db.add(task); db.commit()
         add_job_segment(db, job, rank, task.id, rank, rank)

@@ -29,12 +29,39 @@ for f in ("distributed_test.db", "distributed_test.db-wal", "distributed_test.db
     if os.path.exists(f):
         os.remove(f)
 
+import base64  # noqa: E402
+import hashlib  # noqa: E402
+import json as _json  # noqa: E402
+import time as _time  # noqa: E402
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
+
 from fastapi.testclient import TestClient  # noqa: E402
 import main  # noqa: E402
 import db as dbm  # noqa: E402
 
 c = TestClient(main.app)
 _fail = 0
+
+# A real Ed25519 attestation key shared by the execution-slice sellers, so each rank can submit a
+# GENUINELY SIGNED /jobs/result the server verifies against the spec's attested pubkey (the real
+# execution path — not the internal _advance_manifest shortcut the control-plane checks use).
+_EXEC_KEY = Ed25519PrivateKey.generate()
+_EXEC_PUB = base64.b64encode(_EXEC_KEY.public_key().public_bytes_raw()).decode()
+
+
+def _sign(proof: dict) -> str:
+    msg = _json.dumps(proof, sort_keys=True, separators=(",", ":")).encode()
+    return base64.b64encode(_EXEC_KEY.sign(msg)).decode()
+
+
+def _signed_result_body(task_id, status="completed", result=None, content_hash=None):
+    """The exact body the agent's task_fetcher._signed_result builds for a distributed rank."""
+    proof = {"task_id": task_id, "output_hash": (result or status)[:32], "ts": int(_time.time())}
+    if content_hash:
+        proof["content_hash"] = content_hash
+    return {"task_id": task_id, "status": status, "result": result,
+            "proof": proof, "signature": _sign(proof)}
 
 
 def ok(label, cond):
@@ -63,7 +90,10 @@ def make_seller(idx, price=1.0):
     spec = dbm.save_specs(s, u, {"cpu": 8, "ram": 32, "duration": 24, "price_per_hour": price,
                                  "provider": f"dseller{idx}", "gpu_model": "RTX 4090",
                                  "gpu_count": 1, "vram_gb": 24, "units": 1})
-    spec.attested = True; spec.attest_pubkey = "k"; spec.status = "online"
+    # Attest with the REAL shared Ed25519 pubkey so ANY booked rank can submit a signature the
+    # server verifies (the execution slice signs with the matching _EXEC_KEY). Harmless to the
+    # control-plane checks, which never submit a real signed result.
+    spec.attested = True; spec.attest_pubkey = _EXEC_PUB; spec.status = "online"
     spec.last_seen = dbm._utcnow(); spec.available_units = 1; spec.total_units = 1
     spec.jobs_completed = 50; spec.heartbeats = 200
     s.add_all([u, spec]); s.commit()
@@ -71,8 +101,16 @@ def make_seller(idx, price=1.0):
     key, jti = main.gen_secure_api_key(u.username, 90, ["node", "jobs"])
     dbm.record_issued_key(s, uid, jti, "agent", ["node", "jobs"], 90)
     s.close()
-    return {"username": f"dseller{idx}", "user_id": uid, "spec_id": spec_id,
-            "kh": {"X-API-KEY": key}}
+    sv = {"username": f"dseller{idx}", "user_id": uid, "spec_id": spec_id,
+          "kh": {"X-API-KEY": key}}
+    ALL_SELLERS_BY_SPEC[spec_id] = sv     # global registry: sign for whichever spec the router books
+    return sv
+
+
+# Every seller ever created, keyed by spec id — the execution slice signs a result for whichever
+# nodes the router actually gang-schedules (it picks the best-scored distinct owners, not just the
+# freshest sellers), and each is attested with _EXEC_PUB so any of them can produce a valid result.
+ALL_SELLERS_BY_SPEC = {}
 
 
 def _bal(username):
@@ -224,6 +262,65 @@ rn = c.post("/distributed", headers=BH, json={"image": "x/y:1", "command": "z",
             "world_size": 2, "hours": 1}).json()
 ok("a non-VPN cluster refuses to hand out a VPN config (400)",
    c.get(f"/jobs/{rn['job_id']}/vpn_config", headers=BH).status_code == 400)
+
+# ---- EXECUTION LOOP: a real cluster completes via SIGNED /jobs/result (not the internal shortcut) ----
+# The checks above drive completion through main._advance_manifest directly. This slice proves the
+# REAL seller-side execution path: each rank submits a genuinely Ed25519-signed result to the live
+# /jobs/result endpoint (verified against the spec's attested pubkey), and the cluster completes only
+# once EVERY rank has reported — exactly what task_fetcher._run_distributed does on a node.
+[make_seller(40 + i, 1.0) for i in range(N)]     # fresh capacity for the execution slice
+rex = c.post("/distributed", headers=BH, json={"world_size": N, "hours": 1, "selftest": True})
+rexj = rex.json()
+ok("a buyer can launch the built-in cluster SELF-TEST (no image/command required)",
+   rex.status_code == 200 and rexj.get("world_size") == N and len(rexj.get("ranks", [])) == N)
+exec_ranks = rexj["ranks"]
+exec_rank_seller = {rk["rank"]: ALL_SELLERS_BY_SPEC[rk["spec_id"]] for rk in exec_ranks}
+# every honest rank of an all-reduce ends holding the IDENTICAL reduced vector -> identical hash
+_shared_hash = hashlib.sha256(b"reduced-vector-abc").hexdigest()
+job_ex = rexj["job_id"]
+# all but the last rank report completed: the cluster must NOT be complete yet (gang: needs ALL)
+statuses = []
+for rk in exec_ranks[:-1]:
+    sv = exec_rank_seller[rk["rank"]]
+    rr = c.post("/jobs/result", headers=sv["kh"],
+                json=_signed_result_body(rk["task_id"], "completed",
+                                         result=f"allreduce rank {rk['rank']}", content_hash=_shared_hash))
+    statuses.append(rr.status_code)
+ok("each rank's SIGNED result is accepted by the real /jobs/result endpoint (200)",
+   all(sc == 200 for sc in statuses))
+mid = c.get(f"/jobs/manifest/{job_ex}", headers=BH).json()
+ok("the cluster is NOT complete until EVERY rank reports (gang completion, real endpoint)",
+   mid["status"] == "running")
+# the final rank reports -> the whole cluster completes, through the signed path
+last = exec_ranks[-1]
+rr_last = c.post("/jobs/result", headers=exec_rank_seller[last["rank"]]["kh"],
+                 json=_signed_result_body(last["task_id"], "completed",
+                                          result=f"allreduce rank {last['rank']}", content_hash=_shared_hash))
+fin = c.get(f"/jobs/manifest/{job_ex}", headers=BH).json()
+ok("once the LAST rank submits its signed result, the cluster completes (real execution path)",
+   rr_last.status_code == 200 and fin["status"] == "complete")
+
+# a FORGED signature is rejected and the run does not complete (binds result -> attested hardware)
+[make_seller(50 + i, 1.0) for i in range(N)]     # fresh capacity
+rex2 = c.post("/distributed", headers=BH, json={"world_size": N, "hours": 1, "selftest": True}).json()
+frank = rex2["ranks"][0]
+fspec_sv = ALL_SELLERS_BY_SPEC[frank["spec_id"]]
+forged = _signed_result_body(frank["task_id"], "completed", result="forged")
+forged["signature"] = base64.b64encode(b"\x00" * 64).decode()   # not a valid signature
+rf = c.post("/jobs/result", headers=fspec_sv["kh"], json=forged)
+ok("a forged result signature is rejected (401) — results are bound to attested hardware",
+   rf.status_code == 401)
+
+# gang failure via the REAL endpoint: one rank reports FAILED -> the whole cluster fails
+[make_seller(60 + i, 1.0) for i in range(N)]     # fresh capacity
+rex3 = c.post("/distributed", headers=BH, json={"world_size": N, "hours": 1, "selftest": True}).json()
+drank = rex3["ranks"][1]
+dsv = ALL_SELLERS_BY_SPEC[drank["spec_id"]]
+rd = c.post("/jobs/result", headers=dsv["kh"],
+            json=_signed_result_body(drank["task_id"], "failed"))
+fj = c.get(f"/jobs/manifest/{rex3['job_id']}", headers=BH).json()
+ok("a single rank reporting FAILED (signed, real endpoint) fails the entire cluster (gang)",
+   rd.status_code == 200 and fj["status"] == "failed")
 
 # ---- the two API surfaces stay separated: /distributed is a compute (not data) endpoint ----
 ok("/distributed is a compute endpoint, documented under the Developer API (/devs), not /data",

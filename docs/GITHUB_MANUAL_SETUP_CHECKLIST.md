@@ -12,18 +12,37 @@ Under **Variables**, create **`ENV_VARS`** and paste the bundle below (all non-s
 
 ```ini
 ADMIN_USERS=info@petabyte.market;
+AFFILIATE_AMAZON_TAG=;
+AFFILIATE_BACKBLAZE_URL=;
+AFFILIATE_COINBASE_URL=;
+AFFILIATE_ECOFLOW_URL=;
+AFFILIATE_NEWEGG_WRAP=;
+AFFILIATE_PCPARTPICKER_URL=;
+AFFILIATE_WASABI_URL=;
+AGENT_VPN_ENABLED=false;
+AGENT_WG_DIR=/etc/wireguard;
 ALLOWED_ORIGINS=;
 AUTO_SETTLE_ON_RESULT=true;
 AWS_REFERENCE_PRICE=12.29;
 AWS_REGION=us-east-1;
+BACKUP_DUMP_TIMEOUT_S=1800;
+BACKUP_ENABLED=true;
 BACKUP_RESCHEDULE_GRACE_S=900;
+BACKUP_RETENTION=30;
+BACKUP_S3_PREFIX=db-backups;
 BASE_DOMAIN=petabyte.market;
 BIND=127.0.0.1:8000;
 CAL_BOOKING_URL=;
 CIRCLE_API=https://api.circle.com/v1;
+CIRCLE_PAYOUTS_ENABLED=false;
 CONNECT_REFRESH_URL=;
 CONNECT_RETURN_URL=;
+DATA_API_FREE_CALLS_MONTH=100;
+DATA_API_PRICE_PER_1K=0.50;
+DATA_API_SANDBOX_KEY=pk_sandbox_petabyte_dev;
+DATA_SNAPSHOT_INTERVAL_S=3600;
 DEFAULT_LANDING_VIDEO_ID=UUSWYaxboDA;
+EARNINGS_HOLD_HOURS=24;
 EMAIL_FROM=no-reply@petabyte.market;
 EMAIL_PROVIDER=mailgun;
 EMAIL_TOKEN_TTL_MIN=15;
@@ -40,6 +59,8 @@ GOOGLE_REDIRECT_URI=https://petabyte.market/auth/google/callback;
 GRAFANA_ENABLED=true;
 GRAFANA_URL=;
 HEARTBEAT_TIMEOUT_S=60;
+INSTANT_PAYOUT_FEE_MIN=0.50;
+INSTANT_PAYOUT_FEE_PCT=0.015;
 LEGACY_KEYS_FULL_ACCESS=false;
 LOG_FORMAT=json;
 LOG_LEVEL=info;
@@ -48,6 +69,7 @@ LOKI_ENABLED=true;
 LOKI_URL=;
 MAILCHIMP_AUDIENCE_ID=;
 MAILGUN_DOMAIN=petabyte.market;
+MAX_DISTRIBUTED_NODES=100;
 MIN_REPUTATION=50;
 NEWSLETTER_LIST_ADDRESS=newsletter@news.petabyte.market;
 NEWSLETTER_PROVIDER=mailgun;
@@ -62,6 +84,7 @@ OBSERVABILITY_FAILURE_MODE=degrade;
 OBSERVABILITY_QUEUE_SIZE=2048;
 OBSERVABILITY_REQUIRED=false;
 OBSERVABILITY_SERVER_HOST=;
+OFAC_SDN_ADDRESSES_FILE=;
 OTEL_ENABLED=true;
 OTEL_EXPORTER_OTLP_ENDPOINT=;
 OTEL_EXPORTER_OTLP_PROTOCOL=grpc;
@@ -76,10 +99,13 @@ PAYOUT_CAPABILITIES_PATH=;
 PAYOUT_COOLING_OFF_H=24;
 PAYOUT_HOLD_DAYS=14;
 PAYOUT_HOLD_ON_REPORT=true;
+PAYOUT_MATURITY_MIN_JOBS=3;
 PAYOUT_READINESS_MAX_AGE_S=2592000;
 PAYOUT_STUB=true;
 PETABYTE_HOST_ROLE=;
 PETABYTE_OFFLINE_TEST=;
+PETABYTE_RELEASE_PUBKEY=;
+PG_DUMP_BIN=;
 PLATFORM_AUTH_MARGIN_BPS=2000;
 PLATFORM_COMMISSION_BPS=;
 PLATFORM_CURRENCY=usd;
@@ -88,6 +114,12 @@ PLATFORM_FIXED_FEE_MINOR=0;
 PLATFORM_MAX_DURATION_S=86400;
 PLATFORM_MIN_CHARGE_MINOR=50;
 PLATFORM_TAKE_RATE=0.10;
+POSTHOG_HOST=https://us.i.posthog.com;
+PRICING_CLOUD_DISCOUNT=0.60;
+PRICING_DEMAND_SENSITIVITY=0.50;
+PRICING_PERF_BASE=0.02;
+PRICING_PERF_PER_TFLOP=0.00205;
+PRODUCT_ANALYTICS_ENABLED=true;
 PROMETHEUS_ENABLED=true;
 PROMETHEUS_METRICS_PATH=/internal/metrics;
 PROMETHEUS_URL=;
@@ -99,11 +131,13 @@ REDIS_NAMESPACE=petabyte;
 REFERRAL_MONTHLY_CAP=25;
 REFERRAL_REWARD_USD=20;
 RESERVATION_RECLAIM_STUCK_S=93600;
+REVERIFY_SAMPLE_RATE=0.0;
 S3_BUCKET=;
 S3_ENDPOINT=;
 S3_REGION=us-east-1;
 S3_SSE=AES256;
 S3_STUB=true;
+SANCTIONS_EXTRA_COUNTRIES=;
 SANCTIONS_SCREEN_PROVIDER=;
 SELLER_AUDIT_SAMPLE_RATE=0.25;
 SELLER_FRAUD_PENALTY=40;
@@ -166,6 +200,7 @@ Create each under **Secrets**. Required ones (🔴) must exist before the first 
 - **`NICEHASH_ORG_ID`** — ⚪ optional. NiceHash → organization id.
 - **`OTEL_EXPORTER_OTLP_HEADERS`** — ⚪ optional. See the reference doc.
 - **`PAYMENT_WEBHOOK_SECRET`** — ⚪ optional. Stripe deposits webhook signing secret (whsec_…).
+- **`POSTHOG_API_KEY`** — ⚪ optional. See the reference doc.
 - **`POSTMARK_TOKEN`** — ⚪ optional. Postmark (only if EMAIL_PROVIDER=postmark).
 - **`PROMETHEUS_METRICS_TOKEN`** — ⚪ optional. See the reference doc.
 - **`REDIS_PASSWORD`** — ⚪ optional. See the reference doc.
@@ -187,6 +222,7 @@ Create each under **Secrets**. Required ones (🔴) must exist before the first 
 - **`DEPLOY_SSH_KEY`** — 🔴 required. The PRIVATE SSH key authorized on the server (e.g. id_ed25519). Never commit it.
 - **`DROPLET_SSH_KNOWN_HOSTS`** — 🔴 required. Pinned SSH host key(s) for the deploy target. Generate with `ssh-keyscan -t ed25519,rsa <host>`, then VERIFY the fingerprint out-of-band before pinning — compare `ssh-keygen -lf` of the scanned key against the fingerprint from the droplet's own console (e.g. `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` over the provider console). ssh-keyscan output is unauthenticated and can be MITM'd, so pinning it unverified only trusts-on-first-use. Verifies the server before any secret is transferred; the deploy fails closed if unset.
 - **`DROPLET_SSH_KNOWN_HOSTS_OBSERV`** — ⚪ optional. Pinned SSH host key(s) for the observability VM. REQUIRED by deploy-observability.yml, which fails closed without it (no trust-on-first-use). Generate with `ssh-keyscan -t ed25519,rsa <observ-host>` and verify the fingerprint out-of-band (provider console) before pinning.
+- **`RELEASE_SIGNING_KEY`** — ⚪ optional. Ed25519 PEM PRIVATE key that signs desktop-agent releases (release-desktop.yml -> scripts/sign_release.py). Offline key; generate via the release-keygen workflow. Unset -> the exe publishes UNSIGNED and auto-update is fail-closed.
 
 ## 4. GPU node (seller agent) — configured on the node, not the platform
 
@@ -194,6 +230,11 @@ A seller's GPU machine gets its OWN config (it never receives any platform secre
 
 ```ini
 AGENT_TELEMETRY_ENABLED=true;
+AGENT_VPN_ADDR=;
+DIST_RENDEZVOUS_PORT=29500;
+DIST_RENDEZVOUS_TIMEOUT=300;
+DIST_SELFTEST_DIM=8;
+DIST_SELFTEST_TIMEOUT=180;
 GPU_COUNT=1;
 GPU_METRICS_ENABLED=true;
 GPU_METRICS_INTERVAL=10;
@@ -212,6 +253,7 @@ PETABYTE_API_URL=https://petabyte.market;
 PETABYTE_SPEC_ID=;
 PETABYTE_UPDATE_INTERVAL_S=3600;
 PETABYTE_UPDATE_REPO=;
+PETABYTE_VPN_ADDR=;
 PRICE_PER_HOUR=;
 PROVIDER=;
 SANDBOX_IMAGE=python:3.12-slim;

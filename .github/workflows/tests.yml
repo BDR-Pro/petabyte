@@ -249,6 +249,9 @@ jobs:
       - name: distributed compute (one job across N GPUs on different machines, VPN cluster, gang-scheduled)
         working-directory: lumaris_api
         run: python distributed_test.py
+      - name: distributed EXECUTION (real N-process all-reduce; every rank converges on the right answer)
+        working-directory: lumaris_agent
+        run: python distributed_run_test.py
       - name: agent WireGuard (keys/config/peers + fail-closed bring-up)
         working-directory: lumaris_agent
         run: python wireguard_test.py

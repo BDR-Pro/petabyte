@@ -116,6 +116,20 @@ AGENT_VARS = {
                        "description": "Docker image for the idle NiceHash miner."},
     "NICEHASH_TAKE_RATE": {"required": False, "default": "0.10", "scope": ["platform"], "format": "float",
                            "description": "Platform commission on idle-mining revenue (idle_reconcile tool)."},
+    # distributed compute (one rank of a multi-node cluster; see lumaris_agent/distributed_run.py)
+    "AGENT_VPN_ADDR": {"required": False, "default": None, "scope": ["gpu"],
+                       "description": "This node's cluster-reachable (VPN) address advertised to peer "
+                                      "ranks at rendezvous. Auto-detected from the interface if unset."},
+    "PETABYTE_VPN_ADDR": {"required": False, "default": None, "scope": ["gpu"],
+                          "description": "Alias for AGENT_VPN_ADDR (the node's VPN address for peer ranks)."},
+    "DIST_RENDEZVOUS_PORT": {"required": False, "default": "29500", "scope": ["gpu"], "format": "int",
+                             "description": "Port this rank advertises/binds for cluster rendezvous (torchrun master port)."},
+    "DIST_RENDEZVOUS_TIMEOUT": {"required": False, "default": "300", "scope": ["gpu"], "format": "int",
+                                "description": "Seconds a joining rank waits for the master to appear before failing (gang)."},
+    "DIST_SELFTEST_DIM": {"required": False, "default": "8", "scope": ["gpu"], "format": "int",
+                          "description": "Vector length for the built-in cluster all-reduce self-test."},
+    "DIST_SELFTEST_TIMEOUT": {"required": False, "default": "180", "scope": ["gpu"], "format": "int",
+                              "description": "Seconds the built-in all-reduce self-test waits for all ranks."},
     # deployment (GitHub Actions -> server) — all SECRETS
     "DEPLOY_SSH_KEY": {"required": True, "default": None, "secret": True, "scope": ["deployment"],
                        "description": "Private SSH key GitHub Actions uses to deploy to the server."},

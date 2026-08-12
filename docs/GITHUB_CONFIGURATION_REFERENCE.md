@@ -8,25 +8,48 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (161)
+## Variables (non-sensitive) (201)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
 | `ADMIN_USERS` | no | platform | `info@petabyte.market` | `info@petabyte.market` | api/main.py | — | Comma-separated admin usernames/emails. |
+| `AFFILIATE_AMAZON_TAG` | no | platform | *(empty)* | `…` | api/main.py | — | — |
+| `AFFILIATE_BACKBLAZE_URL` | no | platform | *(empty)* | `…` | — | — | — |
+| `AFFILIATE_COINBASE_URL` | no | platform | *(empty)* | `…` | — | — | — |
+| `AFFILIATE_ECOFLOW_URL` | no | platform | *(empty)* | `…` | — | — | — |
+| `AFFILIATE_NEWEGG_WRAP` | no | platform | *(empty)* | `…` | api/main.py | — | — |
+| `AFFILIATE_PCPARTPICKER_URL` | no | platform | *(empty)* | `…` | — | — | — |
+| `AFFILIATE_WASABI_URL` | no | platform | *(empty)* | `…` | — | — | — |
 | `AGENT_TELEMETRY_ENABLED` | no | gpu | `true` | `true` | agent/agent_telemetry.py | format: bool; one of: true / false | Seller-agent telemetry export (degrade-safe if obs down). |
+| `AGENT_VPN_ADDR` | no | gpu | *(empty)* | `…` | agent/distributed_run.py | — | This node's cluster-reachable (VPN) address advertised to peer ranks at rendezvous. Auto-detected from the interface if unset. |
+| `AGENT_VPN_ENABLED` | no | platform | `false` | `false` | agent/wireguard.py | — | — |
+| `AGENT_WG_DIR` | no | platform | `/etc/wireguard` | `/etc/wireguard` | agent/wireguard.py | — | — |
 | `ALLOWED_ORIGINS` | no | platform | *(empty)* | `…` | api/main.py | format: csv_or_empty | CORS origins — empty (same-origin) is the safe default; never '*' in prod. |
 | `AUTO_SETTLE_ON_RESULT` | no | platform | `true` | `true` | api/main.py | format: bool; one of: true / false | — |
-| `AWS_REFERENCE_PRICE` | no | platform | `12.29` | `12.29` | api/db.py, api/main.py | format: float | — |
+| `AWS_REFERENCE_PRICE` | no | platform | `12.29` | `12.29` | api/main.py | format: float | — |
 | `AWS_REGION` | no | platform | `us-east-1` | `us-east-1` | api/notify_providers.py | — | — |
+| `BACKUP_DUMP_TIMEOUT_S` | no | platform | `1800` | `1800` | api/backup.py | — | — |
+| `BACKUP_ENABLED` | no | platform | `true` | `true` | api/backup.py | — | — |
 | `BACKUP_RESCHEDULE_GRACE_S` | no | platform | `900` | `900` | api/db.py | — | — |
+| `BACKUP_RETENTION` | no | platform | `30` | `30` | api/backup.py | — | — |
+| `BACKUP_S3_PREFIX` | no | platform | `db-backups` | `db-backups` | api/backup.py | — | — |
 | `BASE_DOMAIN`<br>`aka APP_DOMAIN` | no | platform | `petabyte.market` | `petabyte.market` | api/main.py | format: hostname | Public application domain. |
 | `BIND` | no | platform | `127.0.0.1:8000` | `127.0.0.1:8000` | api/deploy/gunicorn_conf.py | — | gunicorn bind address; keep 127.0.0.1 behind nginx (never public). |
 | `CAL_BOOKING_URL` | no | platform | *(empty)* | `…` | api/main.py | — | — |
 | `CIRCLE_API` | no | platform | `https://api.circle.com/v1` | `https://api.circle.com/v1` | api/payout_providers.py | — | — |
+| `CIRCLE_PAYOUTS_ENABLED` | no | platform | `false` | `false` | — | — | — |
 | `CONNECT_REFRESH_URL` | no | platform | *(empty)* | `https://…` | api/main.py | format: url_or_empty | Absolute Stripe Connect onboarding refresh URL; falls back to PUBLIC_BASE_URL when unset. |
 | `CONNECT_RETURN_URL` | no | platform | *(empty)* | `https://…` | api/main.py | format: url_or_empty | Absolute Stripe Connect onboarding return URL; falls back to PUBLIC_BASE_URL when unset. |
+| `DATA_API_FREE_CALLS_MONTH` | no | platform | `100` | `100` | api/main.py | — | — |
+| `DATA_API_PRICE_PER_1K` | no | platform | `0.50` | `0.50` | api/main.py | — | — |
+| `DATA_API_SANDBOX_KEY` | no | platform | `pk_sandbox_petabyte_dev` | `pk_sandbox_petabyte_dev` | api/main.py | — | — |
+| `DATA_SNAPSHOT_INTERVAL_S` | no | platform | `3600` | `3600` | api/main.py | — | — |
 | `DEFAULT_LANDING_VIDEO_ID` | no | platform | `UUSWYaxboDA` | `UUSWYaxboDA` | api/main.py | — | — |
 | `DEPLOY_CONFIG_FROM_GITHUB` | no | deployment | `false` | `false` | GitHub Actions deploy | — | Rollout gate. When 'true' the deploy generates the server env from GitHub config and pushes it; until then deploys stay code-only. Flip to true after entering all Secrets. |
+| `DIST_RENDEZVOUS_PORT` | no | gpu | `29500` | `29500` | agent/distributed_run.py, agent/task_fetcher.py | format: int | Port this rank advertises/binds for cluster rendezvous (torchrun master port). |
+| `DIST_RENDEZVOUS_TIMEOUT` | no | gpu | `300` | `300` | agent/task_fetcher.py | format: int | Seconds a joining rank waits for the master to appear before failing (gang). |
+| `DIST_SELFTEST_DIM` | no | gpu | `8` | `8` | agent/task_fetcher.py | format: int | Vector length for the built-in cluster all-reduce self-test. |
+| `DIST_SELFTEST_TIMEOUT` | no | gpu | `180` | `180` | agent/task_fetcher.py | format: int | Seconds the built-in all-reduce self-test waits for all ranks. |
 | `DROPLET_HOST` | **yes** | deployment | *(empty)* | `…` | GitHub Actions deploy | — | Platform deploy target host (IP/DNS). Non-secret: lives in ENV_VARS. |
 | `DROPLET_HOST_OBSERV` | no | deployment | *(empty)* | `…` | GitHub Actions deploy | — | Observability VM host (IP/DNS) for deploy-observability.yml. Non-secret: lives in ENV_VARS. |
 | `DROPLET_USER` | **yes** | deployment | *(empty)* | `…` | GitHub Actions deploy | — | Deploy SSH user (shared by platform + observability deploys). Non-secret: lives in ENV_VARS. |
@@ -37,6 +60,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `E2E_BUYER_ZERO_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e zero-balance-buyer login (TEST). |
 | `E2E_SELLER_B_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e second seller (isolation, TEST). |
 | `E2E_SELLER_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e seller login (TEST account). |
+| `EARNINGS_HOLD_HOURS` | no | platform | `24` | `24` | api/db.py | — | — |
 | `EMAIL_FROM` | no | platform | `no-reply@petabyte.market` | `no-reply@petabyte.market` | api/notify_providers.py | — | — |
 | `EMAIL_PROVIDER` | no | platform | `mailgun` | `mailgun` | api/notify_providers.py | one of: mailgun / ses / sendgrid / postmark | Notification email provider. |
 | `EMAIL_TOKEN_TTL_MIN` | no | platform | `15` | `15` | api/db.py | format: int | — |
@@ -45,7 +69,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `ENABLE_OTEL` | no | platform | `true` | `true` | — | format: bool; one of: true / false | Enable OpenTelemetry tracing. (reserved: standardized in GitHub config). |
 | `ENABLE_PROMETHEUS` | no | platform | `true` | `true` | — | format: bool; one of: true / false | Enable Prometheus metrics scraping. (reserved: standardized in GitHub config). |
 | `ENABLE_SENTRY` | no | platform | `false` | `false` | — | format: bool; one of: true / false | Enable Sentry error reporting (also needs SENTRY_DSN). (reserved: standardized in GitHub config). |
-| `ENVIRONMENT`<br>`aka APP_ENV` | no | platform | `development` | `development` | api/main.py, api/stripe_gateway.py, api/utils.py | one of: development / test / staging / production | Must be 'production' in prod; never leave stubs enabled. |
+| `ENVIRONMENT`<br>`aka APP_ENV` | no | platform | `development` | `development` | api/backup.py, api/main.py, api/stripe_gateway.py, api/utils.py | one of: development / test / staging / production | Must be 'production' in prod; never leave stubs enabled. |
 | `ENV_VARS` | no | deployment | *(empty)* | `…` | GitHub Actions deploy | — | THE single Repository Variable holding ALL non-sensitive config as KEY=value; pairs (semicolon-separated, newlines allowed). Generate it with `python scripts/env_bundle.py generate`. Secrets are NEVER placed here — they stay as individual GitHub Secrets. |
 | `GEOIP_DB` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 | `GEOIP_STUB` | no | platform | `true` | `true` | api/utils.py | format: bool; one of: true / false | GeoIP stub. |
@@ -60,6 +84,8 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `HEARTBEAT_INTERVAL` | no | gpu | `15` | `15` | agent/task_fetcher.py | format: int | Seconds between node heartbeats (a.k.a. GPU_HEARTBEAT_INTERVAL). |
 | `HEARTBEAT_TIMEOUT_S` | no | platform | `60` | `60` | api/db.py | format: int | Seconds before a silent node is reaped. |
 | `IDLE_MINING` | no | gpu | `false` | `false` | agent/task_fetcher.py | format: bool | Enable idle NiceHash mining when no paid job is running. |
+| `INSTANT_PAYOUT_FEE_MIN` | no | platform | `0.50` | `0.50` | api/db.py | — | — |
+| `INSTANT_PAYOUT_FEE_PCT` | no | platform | `0.015` | `0.015` | api/db.py | — | — |
 | `JOB_POLL_INTERVAL` | no | gpu | `5` | `5` | agent/task_fetcher.py | format: int | Seconds between /jobs/next polls. |
 | `LEGACY_KEYS_FULL_ACCESS` | no | platform | `false` | `false` | api/main.py | format: bool; one of: true / false | Legacy scopeless-key escape hatch — MUST be false in production. |
 | `LOG_FORMAT` | no | platform | `json` | `json` | agent/agent_telemetry.py, api/observability.py | one of: json / text | Log format — json in all deployments. |
@@ -70,6 +96,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `MAILCHIMP_AUDIENCE_ID` | no | platform | *(empty)* | `…` | api/main.py | — | — |
 | `MAILGUN_DOMAIN` | no | platform | `petabyte.market` | `petabyte.market` | api/email_service.py | — | — |
 | `MAX_CONCURRENT_GPU_JOBS` | no | gpu | `1` | `1` | GPU node agent | format: int | Max concurrent paid jobs per GPU node (must stay bounded). (reserved: standardized in GitHub config). |
+| `MAX_DISTRIBUTED_NODES` | no | platform | `100` | `100` | api/main.py | — | — |
 | `MAX_HOURS` | no | gpu | `24` | `24` | agent/provision.py | format: int | Max rentable hours offered. |
 | `MIN_REPUTATION` | no | platform | `50` | `50` | api/db.py | format: int | — |
 | `NB_CELL_TIMEOUT` | no | gpu | `120` | `120` | agent/notebook.py | format: int | Per-cell notebook timeout (s). |
@@ -90,6 +117,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `OBSERVABILITY_QUEUE_SIZE` | no | platform | `2048` | `2048` | agent/agent_telemetry.py | format: int | Bounded OTLP export queue size. |
 | `OBSERVABILITY_REQUIRED` | no | observability | `false` | `false` | — | — | Preflight control: when true the deploy FAILS if observability is off/unconfigured (default true in production, false elsewhere). |
 | `OBSERVABILITY_SERVER_HOST` | no | observability | *(empty)* | `…` | — | — | Observability server host (private IP/DNS). |
+| `OFAC_SDN_ADDRESSES_FILE` | no | platform | *(empty)* | `…` | api/sanctions.py | — | — |
 | `OTEL_ENABLED` | no | platform | `true` | `true` | — | format: bool; one of: true / false | Enable OpenTelemetry tracing export. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no | platform | *(empty)* | `https://…` | agent/agent_telemetry.py, api/observability.py | format: url_or_empty | OTLP endpoint of the OpenTelemetry Collector (e.g. http://<obs>:4317). Blank -> tracing no-ops. |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | no | platform | `grpc` | `grpc` | agent/agent_telemetry.py, api/observability.py | one of: grpc / http / http/protobuf | OTLP transport to the Collector. |
@@ -104,14 +132,18 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `PAYOUT_COOLING_OFF_H` | no | platform | `24` | `24` | api/db.py, api/stripe_connect.py | format: int | — |
 | `PAYOUT_HOLD_DAYS` | no | platform | `14` | `14` | api/stripe_connect.py | format: int | Earnings risk-hold before biweekly payout. |
 | `PAYOUT_HOLD_ON_REPORT` | no | platform | `true` | `true` | api/main.py | format: bool; one of: true / false | — |
+| `PAYOUT_MATURITY_MIN_JOBS` | no | platform | `3` | `3` | api/db.py | — | — |
 | `PAYOUT_READINESS_MAX_AGE_S` | no | platform | `2592000` | `2592000` | api/payout_readiness.py | format: int | Max age (s) of provider-synced payout readiness before it fails closed at paid-job authorization (default 30d). |
 | `PAYOUT_STUB` | no | platform | `true` | `true` | api/main.py, api/payout_providers.py | format: bool; one of: true / false | Payout provider stub. |
 | `PETABYTE_API_URL` | **yes** | gpu | `https://petabyte.market` | `https://petabyte.market` | agent/attest_node.py, agent/provision.py, agent/task_fetcher.py, agent/ui.py, api/cli/petabyte.py, gateway/gateway.py | format: url | Public Petabyte API base URL the agent talks to. |
 | `PETABYTE_HOST_ROLE` | no | platform | *(empty)* | `…` | — | — | OTel resource attribute petabyte.host_role (e.g. api, worker). |
 | `PETABYTE_OFFLINE_TEST` | no | platform | *(empty)* | `` | api/main.py | one of:  / 0 / 1 / true / false | Must be unset/0 in production. |
+| `PETABYTE_RELEASE_PUBKEY` | no | platform/deployment | *(empty)* | `…` | api/main.py | — | Base64 Ed25519 PUBLIC release key (not a secret). The release workflow pins it into the exe at build time; the API reads it to pin the key into the served install.sh for Linux/WSL signed auto-update. Pairs with RELEASE_SIGNING_KEY. |
 | `PETABYTE_SPEC_ID` | **yes** | gpu | *(empty)* | `60` | agent/task_fetcher.py, agent/ui.py | format: int | The spec id this node serves. |
 | `PETABYTE_UPDATE_INTERVAL_S` | no | gpu | `3600` | `3600` | GPU node agent | format: int | Agent self-update check interval (s). |
 | `PETABYTE_UPDATE_REPO` | no | gpu | *(empty)* | `…` | GPU node agent | — | Agent self-update source repo (optional). |
+| `PETABYTE_VPN_ADDR` | no | gpu | *(empty)* | `…` | agent/distributed_run.py | — | Alias for AGENT_VPN_ADDR (the node's VPN address for peer ranks). |
+| `PG_DUMP_BIN` | no | platform | *(empty)* | `…` | api/backup.py | — | — |
 | `PLATFORM_AUTH_MARGIN_BPS` | no | platform | `2000` | `2000` | — | — | — |
 | `PLATFORM_COMMISSION_BPS` | no | platform | *(empty)* | `…` | — | — | — |
 | `PLATFORM_CURRENCY`<br>`aka DEFAULT_CURRENCY` | no | platform | `usd` | `usd` | api/pricing.py | — | Platform settlement currency. |
@@ -120,7 +152,13 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `PLATFORM_MAX_DURATION_S` | no | platform | `86400` | `86400` | — | — | — |
 | `PLATFORM_MIN_CHARGE_MINOR` | no | platform | `50` | `50` | — | — | — |
 | `PLATFORM_TAKE_RATE` | no | platform | `0.10` | `0.10` | api/db.py, api/pricing.py | format: float | — |
+| `POSTHOG_HOST` | no | platform | `https://us.i.posthog.com` | `https://us.i.posthog.com` | api/product_analytics.py | — | — |
 | `PRICE_PER_HOUR` | no | gpu | *(empty)* | `0.10` | agent/provision.py | format: float | Seller's offered price per GPU-hour (USD). |
+| `PRICING_CLOUD_DISCOUNT` | no | platform | `0.60` | `0.60` | — | — | — |
+| `PRICING_DEMAND_SENSITIVITY` | no | platform | `0.50` | `0.50` | — | — | — |
+| `PRICING_PERF_BASE` | no | platform | `0.02` | `0.02` | — | — | — |
+| `PRICING_PERF_PER_TFLOP` | no | platform | `0.00205` | `0.00205` | — | — | — |
+| `PRODUCT_ANALYTICS_ENABLED` | no | platform | `true` | `true` | api/product_analytics.py | — | — |
 | `PROMETHEUS_ENABLED` | no | platform | `true` | `true` | — | format: bool; one of: true / false | — |
 | `PROMETHEUS_METRICS_PATH` | no | platform | `/internal/metrics` | `/internal/metrics` | api/main.py | — | Protected Prometheus scrape path (default /internal/metrics). |
 | `PROMETHEUS_URL` | no | observability | *(empty)* | `https://…` | — | format: url | Prometheus base URL (Grafana + smoke test). |
@@ -133,11 +171,13 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `REFERRAL_MONTHLY_CAP` | no | platform | `25` | `25` | api/db.py | — | — |
 | `REFERRAL_REWARD_USD` | no | platform | `20` | `20` | api/db.py | — | — |
 | `RESERVATION_RECLAIM_STUCK_S` | no | platform | `93600` | `93600` | api/stripe_connect.py | format: int | How long (s) a compute-tx may sit stuck pre-capture before the reaper reclaims its reserved GPU unit (default 26h). |
+| `REVERIFY_SAMPLE_RATE` | no | platform | `0.0` | `0.0` | api/reverify.py | — | — |
 | `S3_BUCKET` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 | `S3_ENDPOINT` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 | `S3_REGION` | no | platform | `us-east-1` | `us-east-1` | api/utils.py | — | — |
 | `S3_SSE` | no | platform | `AES256` | `AES256` | api/utils.py | — | — |
 | `S3_STUB` | no | platform | `true` | `true` | api/main.py, api/utils.py | format: bool; one of: true / false | S3 stub. |
+| `SANCTIONS_EXTRA_COUNTRIES` | no | platform | *(empty)* | `…` | api/sanctions.py | — | — |
 | `SANCTIONS_SCREEN_PROVIDER` | no | platform | *(empty)* | `…` | api/payout_providers.py | — | — |
 | `SANDBOX_IMAGE` | no | gpu | `python:3.12-slim` | `python:3.12-slim` | agent/notebook.py | — | Container image for the notebook sandbox. |
 | `SELLER_AUDIT_SAMPLE_RATE` | no | platform | `0.25` | `0.25` | api/seller_audit.py | format: float | — |
@@ -174,7 +214,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `WG_INTERFACE` | no | platform | `wg0` | `wg0` | api/utils.py | — | — |
 | `WG_PUBLIC_KEY` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 
-## Secrets (credentials — never printed, no defaults) (50)
+## Secrets (credentials — never printed, no defaults) (52)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -209,12 +249,14 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `PETABYTE_AGENT_KEY` | no | gpu | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | agent/crypto.py, agent/provision.py | — | Path to the node's Ed25519 signing key (attestation + signed results). |
 | `PETABYTE_API_JWT` | no | gpu | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | agent/attest_node.py | — | Seller JWT (owner of the spec) used during node attestation/enrollment. |
 | `PETABYTE_API_KEY` | **yes** | gpu | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | agent/provision.py, agent/task_fetcher.py, agent/ui.py | — | Encrypted node API key (X-API-KEY) minted at /create_api_key. |
+| `POSTHOG_API_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/product_analytics.py | — | — |
 | `POSTMARK_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/notify_providers.py | — | — |
 | `PROMETHEUS_METRICS_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
 | `PROMETHEUS_REMOTE_WRITE_PASSWORD` | no | observability | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | Prometheus remote-write basic-auth password. |
 | `PROMETHEUS_REMOTE_WRITE_USERNAME` | no | observability | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | Prometheus remote-write basic-auth user. |
 | `REDIS_PASSWORD` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/redis_client.py | — | — |
 | `REDIS_URL` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/redis_client.py | — | — |
+| `RELEASE_SIGNING_KEY` | no | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Ed25519 PEM PRIVATE key that signs desktop-agent releases (release-desktop.yml -> scripts/sign_release.py). Offline key; generate via the release-keygen workflow. Unset -> the exe publishes UNSIGNED and auto-update is fail-closed. |
 | `SECRET_KEY` | **yes** | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/auth.py, api/main.py, api/stripe_demo.py | — | — |
 | `SENDGRID_API_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/notify_providers.py | — | — |
 | `SERVER_PRIVATE_KEY` | **yes** | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/audit_js.py, api/stripe_demo.py, api/utils.py | — | — |

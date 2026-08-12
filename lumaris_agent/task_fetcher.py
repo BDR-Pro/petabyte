@@ -251,6 +251,15 @@ def _egress_flags(task):
     policy = (task.get("egress") or "none").lower()
     if policy == "none":
         return ["--network", "none"]
+    if policy == "cluster":
+        # A distributed rank must reach the OTHER ranks over the WireGuard mesh (and be reachable
+        # on the rendezvous/master port). We share the host network namespace so the container can
+        # use the wg0 interface directly. TRADE-OFF: --network host bypasses the DOCKER-USER egress
+        # firewall install.sh installs for bridged jobs, so cluster jobs are more trusted than
+        # batch jobs. HARDENING ROADMAP: attach the container to a dedicated WG-only docker network
+        # (macvlan/ipvlan bound to wg0) so peers are reachable WITHOUT host-LAN exposure. Until
+        # then, cluster jobs run on nodes the operator has opted into VPN (AGENT_VPN_ENABLED).
+        return ["--network", "host"]
     if policy == "limited":
         # Outbound works for the service; inbound is unreachable because the port is
         # published to 127.0.0.1 only and the ONLY way in is the reverse tunnel we
@@ -616,6 +625,96 @@ def _run_stitch(task):
         shutil.rmtree(work, ignore_errors=True)
 
 
+def _run_distributed(task):
+    """Run ONE rank of a distributed cluster — the seller-side of a multi-node job.
+
+    Closes the execution loop the control plane set up: every rank (1) registers its own
+    VPN-reachable address so the whole cluster is addressable, (2) resolves the master (rank 0
+    is itself; the others poll rendezvous until rank 0 is up), then (3) EXECUTES —
+
+      * the built-in cluster self-test: a real cross-process all-reduce proving the ranks talk to
+        each other and compute the correct global reduction (no GPU / torch / image needed); or
+      * a real training run: launch the buyer's container under torchrun wired to the master
+        address + this rank + the world size.
+
+    A completed rank submits a signed result (the cluster completes when EVERY rank does); any
+    failure submits a signed 'failed' result, which fails the whole gang-scheduled run server-side
+    (see main._fail_distributed_if_member). The coordination logic lives in distributed_run.py so
+    it stays unit-testable without Docker/network."""
+    import distributed_run as _dist
+    tid = task["task_id"]
+    dist = task.get("distributed") or {}
+    rank = int(dist.get("rank", 0))
+    world = int(dist.get("world_size", 1))
+    job_id = dist.get("job_id")
+    backend = dist.get("backend", "nccl")
+    _set_ui(status="running", task=f"Distributed rank {rank}/{world} #{tid}")
+    host = _dist.local_vpn_addr()
+    port = int(os.getenv("DIST_RENDEZVOUS_PORT", str(_dist.DEFAULT_RENDEZVOUS_PORT)))
+    try:
+        # 1) register THIS rank's VPN address so the cluster becomes fully addressable. Rank 0's
+        #    registration also elects it master (server-enforced — no other rank can hijack it).
+        reg = httpx.post(f"{API_URL}{dist.get('register_url', '/jobs/rendezvous')}",
+                         headers=HEADERS, timeout=15,
+                         json={"task_id": tid, "host": host, "port": port, "slots": 1}).json()
+        report_progress(tid, 15, f"rank {rank}/{world} registered at {host}:{port}")
+
+        # 2) resolve the master (rank 0 is itself; other ranks poll until rank 0 registers).
+        rdzv_url = dist.get("rendezvous_url") or f"/jobs/rendezvous/{job_id}"
+
+        def _fetch():
+            return httpx.get(f"{API_URL}{rdzv_url}", headers=HEADERS, timeout=15).json()
+
+        master = _dist.resolve_master(
+            dist, my_host=host, my_port=port, current=reg, fetch=_fetch, sleep=time.sleep,
+            timeout_s=int(os.getenv("DIST_RENDEZVOUS_TIMEOUT", "300")))
+        maddr, mport = master["master_addr"], int(master["master_port"])
+        report_progress(tid, 30, f"cluster formed; master={maddr}:{mport} backend={backend}")
+
+        # 3a) built-in cluster self-test: a genuine cross-process all-reduce over the mesh.
+        if _dist.is_selftest(task):
+            dim = int(os.getenv("DIST_SELFTEST_DIM", "8"))
+            seed = int(job_id or 0)
+            out = _dist.run_allreduce_rank(
+                rank, world, maddr, mport, dim=dim, seed=seed,
+                bind_host=("0.0.0.0" if rank == 0 else None),
+                timeout_s=int(os.getenv("DIST_SELFTEST_TIMEOUT", "180")))
+            ch = crypto.sha256_hex(out["result"])   # every honest rank -> identical reduced vector
+            report_progress(tid, 95, f"all-reduce ok across {out['contributors']} ranks")
+            _post("/jobs/result", _signed_result(
+                tid, status="completed",
+                result=f"allreduce rank {rank}/{world}: sum={out['result']}",
+                content_hash=ch))
+            if _con:
+                _con.line("done", f"cluster self-test rank {rank}/{world} reduced ok")
+            _set_ui(status="idle", task=None, ok=True)
+            return
+
+        # 3b) real training run: launch the buyer container under torchrun with this rank.
+        import shutil, subprocess
+        if not shutil.which("docker"):
+            report_log(tid, "docker not installed; cannot run distributed rank")
+            _post("/jobs/result", _signed_result(tid, status="failed"))
+            _set_ui(status="idle", task=None, fail=True)
+            return
+        argv = _dist.build_torchrun_cmd(
+            image=task.get("image"), command=task.get("command"), rank=rank, world_size=world,
+            master_addr=maddr, master_port=mport, backend=backend,
+            gpu=bool(task.get("gpu")), env=task.get("env") or {},
+            isolation_flags=_isolation_flags(task), egress_flags=_egress_flags(task))
+        report_progress(tid, 45, f"launching torchrun rank {rank}/{world}")
+        subprocess.check_call(argv)
+        report_progress(tid, 100, f"rank {rank}/{world} finished")
+        _post("/jobs/result", _signed_result(
+            tid, status="completed", result=f"distributed rank {rank}/{world} complete"))
+        _set_ui(status="idle", task=None, ok=True)
+    except Exception as e:                              # noqa: BLE001
+        report_log(tid, f"distributed rank {rank}/{world} failed: {e}")
+        # A failed rank fails the whole gang-scheduled cluster (server-side), so report it.
+        _post("/jobs/result", _signed_result(tid, status="failed"))
+        _set_ui(status="idle", task=None, fail=True)
+
+
 def _signed_result(tid, status="completed", result=None, content_hash=None):
     # content_hash is the sha256 of the PLAINTEXT output bytes (deterministic — same work ->
     # same hash), carried INSIDE the signed proof so the seller commits to the actual output,
@@ -721,6 +820,8 @@ def job_loop():
                             _run_transcode(task)
                         elif tt == "stitch":
                             _run_stitch(task)
+                        elif tt == "distributed":
+                            _run_distributed(task)
                         else:
                             _run_vm(task)
                         _tel.event(_tel.EVENTS.JOB_EXECUTION_COMPLETED,

@@ -61,6 +61,13 @@ variables:
     - 'true'
     - 'false'
     format: bool
+  AGENT_VPN_ADDR:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: This node's cluster-reachable (VPN) address advertised to peer ranks at rendezvous. Auto-detected
+      from the interface if unset.
   AGENT_VPN_ENABLED:
     required: false
     default: 'false'
@@ -216,6 +223,34 @@ variables:
     - deployment
     description: Rollout gate. When 'true' the deploy generates the server env from GitHub config and
       pushes it; until then deploys stay code-only. Flip to true after entering all Secrets.
+  DIST_RENDEZVOUS_PORT:
+    required: false
+    default: '29500'
+    scope:
+    - gpu
+    description: Port this rank advertises/binds for cluster rendezvous (torchrun master port).
+    format: int
+  DIST_RENDEZVOUS_TIMEOUT:
+    required: false
+    default: '300'
+    scope:
+    - gpu
+    description: Seconds a joining rank waits for the master to appear before failing (gang).
+    format: int
+  DIST_SELFTEST_DIM:
+    required: false
+    default: '8'
+    scope:
+    - gpu
+    description: Vector length for the built-in cluster all-reduce self-test.
+    format: int
+  DIST_SELFTEST_TIMEOUT:
+    required: false
+    default: '180'
+    scope:
+    - gpu
+    description: Seconds the built-in all-reduce self-test waits for all ranks.
+    format: int
   DROPLET_HOST:
     required: true
     default: null
@@ -947,6 +982,12 @@ variables:
     scope:
     - gpu
     description: Agent self-update source repo (optional).
+  PETABYTE_VPN_ADDR:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: Alias for AGENT_VPN_ADDR (the node's VPN address for peer ranks).
   PG_DUMP_BIN:
     required: false
     default: null

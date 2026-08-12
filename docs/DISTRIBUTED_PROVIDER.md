@@ -84,11 +84,50 @@ unchanged; Petabyte only adds schedulable GPU capacity.
 The same model SkyPilot uses for clouds applies here: Petabyte is another provider of GPU nodes.
 Point your job at the pool and let the cluster spec + hostfile drive the launcher.
 
+## Execution — what each node actually does (not just scheduling)
+
+The endpoints above assemble and export the cluster. **Execution** is the other half: when a node's
+agent claims its rank (`task_type: distributed`), `lumaris_agent/task_fetcher._run_distributed`:
+
+1. **registers** its own VPN-reachable address (`POST /jobs/rendezvous`) so the whole cluster
+   becomes addressable — rank 0's registration also elects it master (server-enforced; no other
+   rank can hijack it);
+2. **resolves the master** — rank 0 is its own master immediately; every other rank polls
+   `GET /jobs/rendezvous/{job_id}` until rank 0 is up (a master that never appears fails the rank,
+   and gang-scheduled, the whole cluster);
+3. **executes** — either
+   * launches your container under `torchrun` wired to `--master_addr / --node_rank / --nnodes`
+     (`distributed_run.build_torchrun_cmd`), or
+   * runs the built-in **cluster self-test** (`selftest: true`): a real cross-process all-reduce; and
+4. **reports a signed result** — the same attested-key path every job uses, so a distributed run is
+   cryptographically bound to real hardware. The cluster is marked complete only once every rank's
+   signed result arrives; any rank reporting `failed` fails the whole gang-scheduled run.
+
+The coordination logic (rendezvous resolution, the torchrun command, the all-reduce collective)
+lives in `lumaris_agent/distributed_run.py`, dependency-free (Python stdlib only), so it runs and is
+tested on any box — no GPU, no torch, no Docker, no WireGuard.
+
+### The cluster self-test (`selftest: true`)
+
+A no-GPU, no-image "does my cluster actually work end-to-end?" smoke test. Each rank performs a real
+all-reduce (reduce→broadcast through the master over TCP): every rank contributes a distinct vector,
+and every rank must end holding the identical, correct element-wise sum. `distributed_run_test.py`
+proves this with **real OS processes** — N independent processes, each a rank, rendezvous through the
+master and reduce over real sockets — asserting all converge on the right answer and that a missing
+rank fails the run (no false success). Production GPU jobs use NCCL's ring all-reduce over the
+WireGuard mesh; this built-in exists to validate the wiring, not to replace NCCL.
+
 ---
 
-**Honesty note.** The endpoints above (gang-scheduling, rendezvous, hostfile/cluster export,
-escrow, gang-failure) are implemented and tested in `lumaris_api/distributed_test.py`. The launcher
-integrations (mpirun / torchrun / ray / Slurm ResumeProgram) are **recipes you run against those
-endpoints** — Petabyte supplies the addressable cluster; your scheduler drives it. Deep first-party
-plugins (a packaged Slurm burst daemon, a K8s device plugin, a SkyPilot cloud adapter) are the
-natural next step and are not claimed to ship today.
+**Honesty note.** Gang-scheduling, rendezvous, hostfile/cluster export, escrow, and gang-failure are
+implemented and tested in `lumaris_api/distributed_test.py`. **Execution is now implemented and
+tested too**: the agent-side rank execution path (`_run_distributed` → register → resolve master →
+`torchrun` launch / built-in all-reduce → signed result), the real signed-result completion + gang
+failure through the live `/jobs/result` endpoint (`distributed_test.py`), and a real multi-process
+all-reduce where every rank converges on the correct answer (`lumaris_agent/distributed_run_test.py`).
+What is still a **recipe you run against these endpoints** (not first-party code): the external
+launcher integrations (mpirun / torchrun / ray / Slurm `ResumeProgram`) — Petabyte supplies the
+addressable, executing cluster; your scheduler drives it. Deep first-party plugins (a packaged Slurm
+burst daemon, a K8s device plugin, a SkyPilot cloud adapter) are the natural next step and are not
+claimed to ship today. The **built-in all-reduce self-test runs on CPU over TCP** and is a wiring
+validator; **NCCL/GPU collectives over the mesh** are what a real training job uses.

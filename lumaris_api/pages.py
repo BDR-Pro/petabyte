@@ -3128,6 +3128,9 @@ CLUSTER_HTML = _page("Petabyte — distributed compute",
         <label style="display:flex;gap:8px;align-items:center;margin-top:14px;cursor:pointer">
           <input id="cl_vpn" type="checkbox"/>
           <span class="mini">Private network (VPN) — get a WireGuard tunnel into your cluster</span></label>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:10px;cursor:pointer">
+          <input id="cl_selftest" type="checkbox" onchange="clusterSelftest()"/>
+          <span class="mini">Cluster self-test first — every rank runs a real all-reduce to prove the cluster communicates and reduces correctly (no image needed)</span></label>
         <label class="mini" style="display:block;margin-top:12px">Container image</label>
         <input id="cl_image" value="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime" style="width:100%;padding:9px;margin-top:4px" class="mono"/>
         <label class="mini" style="display:block;margin-top:12px">Command (each node runs it under torchrun)</label>
@@ -3158,6 +3161,12 @@ CLUSTER_HTML = _page("Petabyte — distributed compute",
 <script>
 var AVAIL={available_nodes:0,max_cluster:0,est_price_per_hour:null};
 function clEl(id){return document.getElementById(id);}
+function clusterSelftest(){
+ // The self-test runs the built-in all-reduce, not a container — grey out image/command so it's
+ // clear they're ignored for this run (the server needs neither).
+ var on=!!(clEl('cl_selftest')&&clEl('cl_selftest').checked);
+ ['cl_image','cl_cmd'].forEach(function(id){var el=clEl(id);if(el){el.disabled=on;el.style.opacity=on?'.45':'';}});
+}
 async function clusterAvail(){
  if(typeof authed==='function'&&!authed()){var so=clEl('cl_signedout');if(so)so.style.display='';}
  try{var r=await fetch('/distributed/availability');if(r.ok)AVAIL=await r.json();}catch(e){}
@@ -3179,6 +3188,7 @@ async function clusterLaunch(){
  var body={image:clEl('cl_image').value.trim(),command:clEl('cl_cmd').value.trim(),
   world_size:Number(clEl('cl_n').value),hours:Number(clEl('cl_hours').value),backend:clEl('cl_backend').value,
   vpn:!!(clEl('cl_vpn')&&clEl('cl_vpn').checked)};
+ if(clEl('cl_selftest')&&clEl('cl_selftest').checked)body.selftest=true;  // built-in all-reduce, no container
  var gc=(clEl('cl_gpu')||{}).value;if(gc)body.gpu_class=gc.trim();
  var rg=(clEl('cl_region')||{}).value;if(rg)body.region=rg.trim();
  var r=await api('/distributed',{method:'POST',body:JSON.stringify(body)});
