@@ -56,8 +56,12 @@ ok("every seeded booking is is_demo",
    s.query(Booking).filter(Booking.is_demo == False).count() == 0)  # noqa: E712
 
 # --- 3. HONESTY: no buyer code executed; result is labelled simulated --------
-completed = s.query(Task).filter(Task.status == "completed", Task.result.isnot(None)).all()
-ok("completed demo jobs carry a SIMULATED, non-executed result label",
+# Only BUYER job types carry a buyer-result. benchmark/test are PLATFORM integrity tasks (their
+# result is e.g. 'benchmark' / a known-answer hash), not buyer code — they're excluded here.
+_BUYER_JOB_TYPES = ("notebook", "template", "render", "transcode", "stitch", "vm", "distributed")
+completed = s.query(Task).filter(Task.status == "completed", Task.result.isnot(None),
+                                 Task.task_type.in_(_BUYER_JOB_TYPES)).all()
+ok("completed demo BUYER jobs carry a SIMULATED, non-executed result label",
    len(completed) >= 1 and all("SIMULATED" in (t.result or "") for t in completed))
 
 # --- 4. money is conserved --------------------------------------------------

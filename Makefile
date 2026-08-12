@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e browser-e2e test-browser-e2e cluster-demo test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real
+.PHONY: help investor-demo demo-reset demo-seed demo-test populate-demo stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e browser-e2e test-browser-e2e cluster-demo test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real
 
 help:
 	@echo "Petabyte make targets:"
@@ -11,6 +11,7 @@ help:
 	@echo "  make demo-reset      Wipe and reseed the demo, then start the server"
 	@echo "  make demo-seed       Seed the demo only (no server)"
 	@echo "  make demo-test       Run the demo correctness/honesty test suite"
+	@echo "  make populate-demo   Fill a DB with realistic labelled demo data for UI/UX testing (docs/populate-data.md)"
 	@echo "  make stripe-demo     Narrated Stripe Connect flow (test mode, fake gateway)"
 	@echo "  make stripe-test     Run the Stripe Connect test suite (offline assertions)"
 	@echo "  make stripe-integration  Real Stripe TEST-mode integration (needs sk_test_; skips otherwise)"
@@ -51,6 +52,16 @@ demo-seed:
 
 demo-test:
 	cd $(API) && python3 demo_test.py
+
+# Fill a DB with realistic, LABELLED demo data for UI/UX testing (superset of the investor demo:
+# also seeds disk rental, idle mining, a distributed cluster, and VMs). See docs/populate-data.md.
+#   make populate-demo                         # -> ./demo.db (wipe + seed + enrich)
+#   make populate-demo DB=sqlite:///./ui.db    # -> a specific SQLite file
+#   make populate-demo ARGS=--keep             # enrich without wiping
+DB ?=
+ARGS ?=
+populate-demo:
+	$(if $(DB),DATABASE_URL=$(DB) ,)python3 scripts/populate_demo_data.py $(ARGS)
 
 # The deterministic Stripe Connect walkthrough (test mode, offline fake gateway).
 stripe-demo:
