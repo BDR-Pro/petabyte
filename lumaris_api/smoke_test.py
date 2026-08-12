@@ -1748,6 +1748,20 @@ ok("templates-bought index served (per template: jobs, buyers count, GMV, models
    and all("buyer_id" not in r and "buyers" not in r for r in _tpl["templates"]))
 ok("data-API monetization is measured + admin-only (revenue scoreboard gated)",
    c.get("/admin/data/revenue", headers=_rh).status_code == 403)
+# try-before-you-buy: a keyless dummy-data sample + a free/unmetered published sandbox key
+_smp = c.get("/api/v1/data/sample")
+ok("keyless /api/v1/data/sample returns labelled example payloads for every dataset (no key, no charge)",
+   _smp.status_code == 200 and _smp.json().get("sandbox") is True
+   and set(_smp.json().get("endpoints", {})) >=
+   {"gpu-prices", "market", "savings", "availability", "benchmarks", "demand", "workloads", "templates"})
+_sbk = {"X-API-KEY": main.DATA_API_SANDBOX_KEY}
+_sbr = c.get("/api/v1/data/gpu-prices", headers=_sbk)
+ok("the published sandbox key reads the REAL endpoints free & unmetered (never billed)",
+   _sbr.status_code == 200 and _sbr.json()["usage"].get("sandbox") is True
+   and _sbr.json()["usage"]["billed"] is False)
+_dev = c.get("/developers").text
+ok("/developers publishes the sandbox key + keyless sample so devs can try before paying",
+   main.DATA_API_SANDBOX_KEY in _dev and "/api/v1/data/sample" in _dev)
 
 # --- wallet-only onboarding: paste a wallet, get a ONE-LINE installer, no account (like a miner) ---
 ok("the /install page offers a wallet-only start (no login) wired to /nodes/quickstart",

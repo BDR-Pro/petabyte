@@ -1232,6 +1232,19 @@ DATA_API_UNITS = {
     "gpu-prices/history": 2, "workloads": 2,
     "demand": 4, "templates": 4, "benchmarks": 5,      # premium: realized $ + the data moat
 }
+# A published SANDBOX key: lets developers exercise the real request/auth/response flow FREE and
+# unmetered (no account, no wallet, never charged). Safe to publish — it only unlocks read access.
+# It lives in its OWN namespace (the `pk_sandbox_` prefix) so it can NEVER be confused with, or used
+# in place of, a real minted API key: seller/node/jobs keys are Fernet ciphertext tokens (they start
+# with `gAAAAA`), so a `pk_sandbox_`-prefixed literal can never be a valid real key, and a real key
+# can never look like the sandbox key. We refuse to honour a sandbox value that lacks the prefix
+# (fail-closed) so a real key can't be aliased into free data access by misconfiguration.
+DATA_API_SANDBOX_KEY_PREFIX = "pk_sandbox_"
+DATA_API_SANDBOX_KEY = os.getenv("DATA_API_SANDBOX_KEY", "pk_sandbox_petabyte_dev").strip()
+if DATA_API_SANDBOX_KEY and not DATA_API_SANDBOX_KEY.startswith(DATA_API_SANDBOX_KEY_PREFIX):
+    logger.error("DATA_API_SANDBOX_KEY must start with %r to stay namespaced away from real API "
+                 "keys — disabling the sandbox key until it is fixed.", DATA_API_SANDBOX_KEY_PREFIX)
+    DATA_API_SANDBOX_KEY = ""
 
 
 def require_scope(user, scope: str):
@@ -1277,7 +1290,8 @@ def investors_page():
 
 @app.get("/developers", response_class=HTMLResponse)
 def developers_page():
-    return DEVELOPERS_HTML
+    # The published sandbox key is shown in the docs so devs can try the live endpoints for free.
+    return DEVELOPERS_HTML.replace("{{SANDBOX_KEY}}", DATA_API_SANDBOX_KEY)
 
 @app.get("/install", response_class=HTMLResponse)
 def install_page():
@@ -5997,7 +6011,37 @@ def partners_list():
 # are billed per-call from the wallet balance (402 when the balance can't cover it). /usage is
 # free to check and never billed.
 
+class _SandboxCaller:
+    """A stand-in 'user' for the published SANDBOX key: authenticated for read access, but with no
+    account, no wallet, and no id — so it can never be billed and never touches per-user state."""
+    is_sandbox = True
+    id = None
+    _is_api_key = True
+    _scopes = ("data",)
+
+
+def data_api_caller(x_api_key: str = Header(..., alias="X-API-KEY"),
+                    db: Session = Depends(get_db)):
+    """Auth for the data API. The published SANDBOX key resolves to a free, unmetered caller so
+    developers can exercise the real request/auth/response flow without an account or wallet; any
+    other key goes through normal API-key auth (and is scoped + metered as usual).
+
+    The sandbox key is matched ONLY when it carries its namespace prefix and exactly equals the
+    configured value — it is never fed to the real key decoder, and it is only honoured on the data
+    API (seller/node/jobs endpoints depend on api_key_user directly, which rejects it). The two key
+    namespaces cannot collide: real keys are Fernet tokens, the sandbox key is a prefixed literal."""
+    if (DATA_API_SANDBOX_KEY
+            and x_api_key.startswith(DATA_API_SANDBOX_KEY_PREFIX)
+            and secrets.compare_digest(x_api_key, DATA_API_SANDBOX_KEY)):
+        return _SandboxCaller()
+    return api_key_user(x_api_key, db)
+
+
 def _meter_data_or_402(user, db, endpoint="gpu-prices") -> dict:
+    if getattr(user, "is_sandbox", False):
+        # The published sandbox key: real data, free and unmetered — never charged, never counted.
+        return {"sandbox": True, "billed": False, "charged": 0.0, "units": 0,
+                "note": "sandbox key — free & unmetered; mint a data-scoped key for production use"}
     require_scope(user, "data")
     units = DATA_API_UNITS.get(endpoint, 1)
     m = meter_data_call(db, user.id, free_quota=DATA_API_FREE_CALLS_MONTH,
@@ -6013,7 +6057,7 @@ def _meter_data_or_402(user, db, endpoint="gpu-prices") -> dict:
 
 
 @app.get("/api/v1/data/gpu-prices", tags=["data"])
-def data_gpu_prices(user=Depends(api_key_user), db: Session = Depends(get_db)):
+def data_gpu_prices(user=Depends(data_api_caller), db: Session = Depends(get_db)):
     """Current GPU price index: benchmark-anchored reference price + live marketplace avg/min/max
     per model. Metered (needs a `data`-scoped key)."""
     usage = _meter_data_or_402(user, db, "gpu-prices")
@@ -6024,7 +6068,7 @@ def data_gpu_prices(user=Depends(api_key_user), db: Session = Depends(get_db)):
 @app.get("/api/v1/data/gpu-prices/history", tags=["data"])
 def data_gpu_price_history(gpu_model: Optional[str] = Query(None), days: int = Query(30, ge=1, le=365),
                           limit: int = Query(2000, ge=1, le=5000),
-                          user=Depends(api_key_user), db: Session = Depends(get_db)):
+                          user=Depends(data_api_caller), db: Session = Depends(get_db)):
     """Historical price-index points (newest first), optionally filtered to one GPU model. This is
     the premium series recorded from periodic snapshots. Metered."""
     usage = _meter_data_or_402(user, db, "gpu-prices/history")
@@ -6041,7 +6085,7 @@ def data_gpu_price_history(gpu_model: Optional[str] = Query(None), days: int = Q
 
 
 @app.get("/api/v1/data/market", tags=["data"])
-def data_market(user=Depends(api_key_user), db: Session = Depends(get_db)):
+def data_market(user=Depends(data_api_caller), db: Session = Depends(get_db)):
     """Marketplace summary: how many GPU models have live listings, total live units, and the
     overall live price range. Metered."""
     usage = _meter_data_or_402(user, db, "market")
@@ -6057,7 +6101,7 @@ def data_market(user=Depends(api_key_user), db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/data/savings", tags=["data"])
-def data_savings(user=Depends(api_key_user), db: Session = Depends(get_db)):
+def data_savings(user=Depends(data_api_caller), db: Session = Depends(get_db)):
     """Cloud-savings index: per GPU, the benchmark-anchored reference price vs the public cloud
     on-demand rate and the % cheaper. Sorted by benchmark. Metered."""
     usage = _meter_data_or_402(user, db, "savings")
@@ -6071,7 +6115,7 @@ def data_savings(user=Depends(api_key_user), db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/data/availability", tags=["data"])
-def data_availability(user=Depends(api_key_user), db: Session = Depends(get_db)):
+def data_availability(user=Depends(data_api_caller), db: Session = Depends(get_db)):
     """Live supply index: how many nodes are online per GPU model and per region right now.
     Aggregate counts only — no seller identity. Metered."""
     usage = _meter_data_or_402(user, db, "availability")
@@ -6097,7 +6141,7 @@ def data_availability(user=Depends(api_key_user), db: Session = Depends(get_db))
 
 @app.get("/api/v1/data/benchmarks", tags=["data"])
 def data_benchmarks(since_id: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=5000),
-                    user=Depends(api_key_user), db: Session = Depends(get_db)):
+                    user=Depends(data_api_caller), db: Session = Depends(get_db)):
     """The GPU-authenticity dataset (the data moat): per-observation benchmark scores, their ratio
     to the public per-model reference, server-timing, proof-of-work result, and the fraud/verdict
     LABELS — the (features, label) corpus a fraud/authenticity model trains on. ANONYMIZED: no
@@ -6115,7 +6159,7 @@ def data_benchmarks(since_id: int = Query(0, ge=0), limit: int = Query(500, ge=1
 
 @app.get("/api/v1/data/demand", tags=["data"])
 def data_demand(days: int = Query(30, ge=1, le=365),
-                user=Depends(api_key_user), db: Session = Depends(get_db)):
+                user=Depends(data_api_caller), db: Session = Depends(get_db)):
     """Buyer-side DEMAND index: over the last `days`, real bookings aggregated per GPU model —
     booking count, GPU-hours rented, GMV, and the average price buyers ACTUALLY paid (realized,
     not listed). Sandbox/demo bookings are excluded so this is real demand, not inflated. Aggregate
@@ -6146,7 +6190,7 @@ def data_demand(days: int = Query(30, ge=1, le=365),
 
 @app.get("/api/v1/data/workloads", tags=["data"])
 def data_workloads(days: int = Query(30, ge=1, le=365),
-                   user=Depends(api_key_user), db: Session = Depends(get_db)):
+                   user=Depends(data_api_caller), db: Session = Depends(get_db)):
     """Buyer-side WORKLOAD mix: over the last `days`, what buyers actually run — jobs by type
     (notebook/vm/template) and by launch template (vLLM, Blender, …). Platform audit tasks are
     excluded. Aggregate counts only — no buyer identity or code. Metered."""
@@ -6171,7 +6215,7 @@ def data_workloads(days: int = Query(30, ge=1, le=365),
 
 @app.get("/api/v1/data/templates", tags=["data"])
 def data_templates(days: int = Query(30, ge=1, le=365),
-                   user=Depends(api_key_user), db: Session = Depends(get_db)):
+                   user=Depends(data_api_caller), db: Session = Depends(get_db)):
     """What templates buyers are actually PURCHASING, and how much: over the last `days`, for each
     launch template (vLLM, Ollama, Blender, …) — jobs bought, distinct buyers (a COUNT, not
     identities), GPU-hours, GMV, average spend per job, and the most-requested models inside that
@@ -6214,9 +6258,72 @@ def data_templates(days: int = Query(30, ge=1, le=365),
             "templates": out, "usage": usage}
 
 
+# The example payloads served by /api/v1/data/sample. Static, keyless, clearly-fake numbers so a
+# developer can see the exact shape of every dataset (and the `usage` envelope) BEFORE they mint a
+# key or spend a cent. Everything here is labelled sandbox/example — it is not real market data.
+_DATA_API_SAMPLE = {
+    "sandbox": True,
+    "note": ("Example payloads with FAKE numbers — the real shapes you get from /api/v1/data/*. "
+             "Try the live endpoints free with the sandbox key 'X-API-KEY: "
+             + DATA_API_SANDBOX_KEY + "', then mint a data-scoped key for production."),
+    "usage_envelope": {"sandbox": True, "billed": False, "charged": 0.0, "units": 0,
+                       "note": "billed:true and charged:$ appear here on a real, metered key"},
+    "endpoints": {
+        "gpu-prices": {
+            "as_of": "2026-01-01T00:00:00+00:00",
+            "gpus": [{"gpu_model": "RTX 4090", "reference_price": 0.44,
+                      "avg_price": 0.41, "min_price": 0.35, "max_price": 0.49, "live_count": 12}]},
+        "gpu-prices/history": {
+            "gpu_model": "RTX 4090", "days": 30, "count": 1,
+            "points": [{"captured_at": "2026-01-01T00:00:00+00:00", "gpu_model": "RTX 4090",
+                        "reference_price": 0.44, "avg_price": 0.41, "min_price": 0.35,
+                        "max_price": 0.49, "live_count": 12}]},
+        "market": {"as_of": "2026-01-01T00:00:00+00:00", "models_total": 18,
+                   "models_with_listings": 9, "live_units": 74,
+                   "avg_price_low": 0.09, "avg_price_high": 2.10},
+        "savings": {"as_of": "2026-01-01T00:00:00+00:00", "median_savings_vs_cloud_pct": 72.0,
+                    "gpus": [{"gpu_model": "RTX 4090", "reference_price": 0.44,
+                              "cloud_reference_usd_hr": 1.60, "savings_vs_cloud_pct": 72.5}]},
+        "availability": {"as_of": "2026-01-01T00:00:00+00:00", "live_nodes_total": 74,
+                         "by_gpu": [{"gpu_model": "RTX 4090", "live_nodes": 21}],
+                         "by_region": [{"region": "us-east", "live_nodes": 30}]},
+        "benchmarks": {"count": 1, "since_id": 0, "next_since_id": 1001,
+                       "stats": {"samples": 1, "consistent_pct": 100.0},
+                       "rows": [{"sample_id": 1001, "gpu_model": "RTX 4090", "source": "benchmark",
+                                 "tflops_fp16": 320.0, "ratio_to_reference": 0.99,
+                                 "pow_verified": True, "label_verdict": "consistent"}]},
+        "demand": {"as_of": "2026-01-01T00:00:00+00:00", "window_days": 30,
+                   "totals": {"bookings": 128, "gpu_hours": 954, "gmv_usd": 412.30},
+                   "by_gpu": [{"gpu_model": "RTX 4090", "bookings": 61, "gpu_hours": 402,
+                               "gmv_usd": 176.40, "avg_price_per_hour": 0.44}]},
+        "workloads": {"as_of": "2026-01-01T00:00:00+00:00", "window_days": 30, "total_jobs": 128,
+                      "by_type": [{"task_type": "template", "jobs": 74}],
+                      "by_template": [{"template": "vllm", "jobs": 41}]},
+        "templates": {"as_of": "2026-01-01T00:00:00+00:00", "window_days": 30, "templates_total": 1,
+                      "jobs_total": 41,
+                      "templates": [{"template": "vllm", "jobs": 41, "unique_buyers": 17,
+                                     "gpu_hours": 210, "gmv_usd": 92.40, "avg_gmv_per_job": 2.25,
+                                     "top_models": [{"model": "meta-llama/Llama-3-8B", "jobs": 12}]}]},
+    },
+}
+
+
+@app.get("/api/v1/data/sample", tags=["data"])
+def data_sample():
+    """KEYLESS example data — no API key, no account, no charge. Returns a labelled FAKE payload for
+    every dataset so developers can see the exact response shape before signing up. Use the sandbox
+    key against the real endpoints for live data, then mint a data-scoped key for production."""
+    return _DATA_API_SAMPLE
+
+
 @app.get("/api/v1/data/usage", tags=["data"])
-def data_usage(user=Depends(api_key_user), db: Session = Depends(get_db)):
-    """The caller's data-API usage this month — free to check, never billed. Needs a `data` key."""
+def data_usage(user=Depends(data_api_caller), db: Session = Depends(get_db)):
+    """The caller's data-API usage this month — free to check, never billed. Needs a `data` key
+    (or the sandbox key, whose usage is never tracked)."""
+    if getattr(user, "is_sandbox", False):
+        return {"sandbox": True, "period": None, "calls": 0, "billed_calls": 0,
+                "amount_usd": 0.0, "free_quota": DATA_API_FREE_CALLS_MONTH,
+                "note": "sandbox key — usage is not tracked; free & unmetered"}
     require_scope(user, "data")
     return usage_summary(db, user.id, free_quota=DATA_API_FREE_CALLS_MONTH)
 

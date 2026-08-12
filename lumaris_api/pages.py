@@ -1129,6 +1129,16 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
       GET /api/v1/data/benchmarks <span class="mut">authenticity dataset</span><br>
       GET /api/v1/data/usage <span class="mut">your quota (free)</span></p>
       <p class="mut" style="font-size:12px;margin-top:8px">Needs a <code class="teal">data</code>-scoped key. A free monthly quota, then pay-as-you-go from your wallet balance. Datasets are aggregate/anonymized — no seller identity.</p></div>
+    <div class="card" style="border-color:rgba(79,214,201,.3);background:linear-gradient(180deg,rgba(79,214,201,.05),transparent)">
+      <div class="lbl">Try it free <span class="mut">· no signup</span></div>
+      <p class="mut" style="font-size:12.5px;margin:2px 0 10px">Two ways to explore before you spend a cent:</p>
+      <p class="mono" style="font-size:12.5px;line-height:1.9">
+      <b class="teal">1 · Dummy data, keyless.</b> Example payloads for every dataset:</p>
+      <div class="codeline" style="margin:6px 0 12px"><code>curl -s https://petabyte.market/api/v1/data/sample</code></div>
+      <p class="mono" style="font-size:12.5px;line-height:1.9">
+      <b class="teal">2 · Real data, sandbox key.</b> Live endpoints, free &amp; unmetered:</p>
+      <div class="codeline" style="margin:6px 0 8px"><code>curl -s https://petabyte.market/api/v1/data/gpu-prices -H "X-API-KEY: {{SANDBOX_KEY}}"</code></div>
+      <p class="mut" style="font-size:12px;margin-top:8px">The sandbox key <code class="teal">{{SANDBOX_KEY}}</code> is read-only, never billed, and safe to publish. When you're ready for production, mint a <code class="teal">data</code>-scoped key and top up your wallet.</p></div>
   </div>
   <div style="margin-top:18px"><a class="btn btn-amber" href="/docs">Open interactive docs →</a></div>
 </div>""")

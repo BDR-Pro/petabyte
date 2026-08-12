@@ -179,6 +179,12 @@ variables:
     scope:
     - platform
     description: ''
+  DATA_API_SANDBOX_KEY:
+    required: false
+    default: pk_sandbox_petabyte_dev
+    scope:
+    - platform
+    description: ''
   DATA_SNAPSHOT_INTERVAL_S:
     required: false
     default: '3600'

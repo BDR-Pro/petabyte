@@ -175,6 +175,71 @@ ok("revenue metric reflects real billed calls (all-time revenue > 0, paying acco
    _rev_sb["revenue_usd_total"] > 0 and _rev_sb["billed_calls_total"] >= 3
    and _rev_sb["paying_accounts_month"] >= 1)
 
+# ---- developer onboarding: try before you buy (sandbox key + keyless sample) ----
+# The published SANDBOX key exercises the REAL endpoints, free & unmetered — no account, no wallet,
+# never billed, and no data scope needed. Think Stripe's test key.
+_sbh = {"X-API-KEY": main.DATA_API_SANDBOX_KEY}
+_sb = c.get("/api/v1/data/gpu-prices", headers=_sbh)
+ok("the sandbox key authenticates the real endpoint (200) and serves live data",
+   _sb.status_code == 200 and isinstance(_sb.json().get("gpus"), list))
+ok("a sandbox call is FREE & unmetered (sandbox flag set, never billed, $0 charged)",
+   _sb.json()["usage"].get("sandbox") is True and _sb.json()["usage"]["billed"] is False
+   and abs(_sb.json()["usage"].get("charged", 0.0)) < 1e-9)
+# even a PREMIUM dataset (benchmarks, weight 5) is free under the sandbox key — no scope, no charge
+_sbb = c.get("/api/v1/data/benchmarks?limit=3", headers=_sbh)
+ok("the sandbox key reaches premium datasets free too (no data scope required)",
+   _sbb.status_code == 200 and _sbb.json()["usage"].get("sandbox") is True
+   and abs(_sbb.json()["usage"].get("charged", 0.0)) < 1e-9)
+# and it never records usage / never moves money
+_su = c.get("/api/v1/data/usage", headers=_sbh).json()
+ok("sandbox /usage reports it is untracked (never billed)",
+   _su.get("sandbox") is True and _su["billed_calls"] == 0 and abs(_su["amount_usd"]) < 1e-9)
+_s = dbm.SessionLocal()
+_sandbox_rows = _s.query(dbm.ApiUsage).filter(dbm.ApiUsage.user_id.is_(None)).count()
+_s.close()
+ok("sandbox calls create no ApiUsage rows and touch no wallet (nothing to bill)", _sandbox_rows == 0)
+
+# the keyless /api/v1/data/sample returns example payloads for EVERY dataset — no key at all
+_sample = c.get("/api/v1/data/sample")
+_sj = _sample.json()
+ok("/api/v1/data/sample is keyless (200 with no X-API-KEY) and flagged sandbox/example",
+   _sample.status_code == 200 and _sj.get("sandbox") is True)
+ok("the sample covers every published dataset so devs see each shape before paying",
+   set(_sj.get("endpoints", {})) >=
+   {"gpu-prices", "gpu-prices/history", "market", "savings", "availability",
+    "benchmarks", "demand", "workloads", "templates"})
+ok("the sample publishes the sandbox key so devs can go from dummy data to live data",
+   main.DATA_API_SANDBOX_KEY in (_sj.get("note") or ""))
+
+# a bogus (non-sandbox) key is still rejected — the sandbox path doesn't weaken real auth
+ok("a random non-sandbox key is still rejected (401), sandbox is an exact match only",
+   c.get("/api/v1/data/gpu-prices", headers={"X-API-KEY": "not-the-sandbox-key"}).status_code == 401)
+
+# ---- the two key NAMESPACES cannot collide or cross over ----
+# The sandbox key is honoured ONLY on the data API; it can never act as a seller/node/jobs key.
+ok("the sandbox key is REFUSED on a seller/node endpoint (can't onboard a node or pull jobs)",
+   c.get("/jobs/next", headers=_sbh).status_code == 401)
+# Real minted keys are Fernet tokens; they can NEVER carry the sandbox prefix. Disjoint by design.
+ok("the sandbox key carries its own namespace prefix (pk_sandbox_), unlike any real key",
+   main.DATA_API_SANDBOX_KEY.startswith(main.DATA_API_SANDBOX_KEY_PREFIX))
+ok("a real minted key (data / node) never looks like the sandbox key (no prefix collision)",
+   not _key.startswith(main.DATA_API_SANDBOX_KEY_PREFIX)
+   and not _nkey.startswith(main.DATA_API_SANDBOX_KEY_PREFIX)
+   and _key != main.DATA_API_SANDBOX_KEY and _nkey != main.DATA_API_SANDBOX_KEY)
+# Fail-closed config: a sandbox value WITHOUT the prefix is refused (a real key can't be aliased in).
+from main import _SandboxCaller  # noqa: E402
+import main as _mm  # noqa: E402
+_saved = _mm.DATA_API_SANDBOX_KEY
+_fcs = dbm.SessionLocal()
+try:
+    _mm.DATA_API_SANDBOX_KEY = _key            # pretend an operator pasted a REAL key here
+    _res = _mm.data_api_caller(x_api_key=_key, db=_fcs)
+    ok("even if a real key is mis-set as the sandbox key, it is NOT treated as sandbox (no prefix)",
+       not isinstance(_res, _SandboxCaller))
+finally:
+    _mm.DATA_API_SANDBOX_KEY = _saved
+    _fcs.close()
+
 for f in ("data_api_test.db", "data_api_test.db-wal", "data_api_test.db-shm"):
     if os.path.exists(f):
         os.remove(f)
