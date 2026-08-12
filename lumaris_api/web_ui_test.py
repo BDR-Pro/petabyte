@@ -456,12 +456,23 @@ ok("marketplace keeps the honest 'benchmark, not a quote' framing",
 # Seller: the onboarding + earnings surfaces lead with money and ease.
 r_i = get("/install").text
 ok("/install leads with earnings (keep 90%)", "90%" in r_i and "earn-banner" in r_i)
-ok("/install shows a monthly earnings estimate", "earnest" in r_i and "month" in r_i.lower())
 ok("/install still frames onboarding as easy (one command / ~30s)",
    "one command" in r_i.lower() and ("30 second" in r_i.lower() or "~30" in r_i))
 r_s = get("/seller/payouts").text
 ok("/seller/payouts leads with earnings (earn-banner, keep 90%)",
    "earn-banner" in r_s and "90%" in r_s)
+
+# NiceHash-style profitability calculator: a GPU + a utilization slider + live outputs.
+ok("/install has an interactive earnings calculator", "Earnings calculator" in r_i)
+ok("calculator has a labelled utilization range slider",
+   'id="calc_util"' in r_i and 'type="range"' in r_i and 'aria-label="Expected utilization' in r_i)
+ok("calculator has an editable price input labelled with for=",
+   'id="calc_price"' in r_i and 'for="calc_price"' in r_i)
+ok("calculator shows per-day / month / year outputs",
+   all(x in r_i for x in ("calc_day", "calc_month", "calc_year")) and "per month" in r_i.lower())
+ok("calculator recomputes on input (recalc wired to slider + price)",
+   "function recalc(" in r_i and r_i.count("oninput=\"recalc()\"") >= 2)
+ok("calculator states the fee/keep-90% honestly", "90%" in r_i and "10%" in r_i)
 
 # Role switch: the control exists, is labelled, and is wired to the real endpoint.
 r, d = dom("/account")

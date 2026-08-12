@@ -216,6 +216,48 @@ def run(pw, buyer_t, seller_t, pub, role_t):
            "; ".join(m for k, m in errs if _serious(m))[:120])
         page.close()
 
+        # ---------- SELLER value prop: the earnings calculator is LIVE + correct ----------
+        print("\n-- seller: NiceHash-style earnings calculator responds to the slider --")
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        errs = []
+        _attach_error_capture(page, errs)
+        page.goto(B + "/install", wait_until="domcontentloaded")
+        page.wait_for_selector("#calc_month", timeout=15000)
+        page.fill("#calc_price", "2.00")
+
+        def month_at(util):
+            page.eval_on_selector(
+                "#calc_util",
+                "(el, v) => { el.value = String(v); el.dispatchEvent(new Event('input', {bubbles:true})); }",
+                util)
+            txt = (page.text_content("#calc_month") or "$0").replace("$", "").replace(",", "")
+            try:
+                return int(txt)
+            except ValueError:
+                return 0
+
+        high = month_at(100)
+        low = month_at(25)
+        ok("calculator shows a non-zero monthly estimate", high > 0, str(high))
+        ok("dragging utilization up increases earnings (slider is live)", high > low, f"{high} vs {low}")
+        ok("earnings scale correctly with utilization (100% == 4x25%)",
+           abs(high - low * 4) <= 5, f"{high} vs {low}*4")
+        label = page.text_content("#calc_util_val") or ""
+        ok("the utilization % label tracks the slider", "25%" in label or "100%" in label, label)
+        # 'Suggest a price' pulls a server-derived rate into the calculator
+        page.fill("#pgpu", "H100")
+        page.click("button:has-text('Suggest a price')")
+        page.wait_for_function(
+            "() => { var p = document.getElementById('calc_price'); return p && parseFloat(p.value) > 0; }",
+            timeout=10000)
+        ok("'Suggest a price' fills a server-derived rate",
+           float(page.input_value("#calc_price")) > 0)
+        page.set_viewport_size({"width": 390, "height": 844})
+        ok("calculator [mobile]: output grid does not overflow", _no_overflow(page))
+        ok("calculator: no serious JS errors", not [m for k, m in errs if _serious(m)],
+           "; ".join(m for k, m in errs if _serious(m))[:120])
+        page.close()
+
         # ---------- RESPONSIVE across viewports (layout only; no live GPU needed) ----------
         print("\n-- responsive: no horizontal overflow, nav + primary action usable --")
         pages = [("/", "home"), ("/marketplace", "marketplace"), ("/login", "login"),

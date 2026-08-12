@@ -101,6 +101,18 @@ a{color:inherit;text-decoration:none}
 .earn-banner{background:linear-gradient(90deg,rgba(255,178,36,.14),rgba(255,178,36,.04));border:1px solid rgba(255,178,36,.35)}
 .earn-banner b{color:var(--amber);font-size:19px}
 .savings-banner .sub,.earn-banner .sub{font-family:var(--body);font-weight:400;font-size:12.5px;color:var(--mut)}
+/* ---------- earnings calculator (NiceHash-style: pick a GPU, drag utilization,
+   watch the numbers move) ---------- */
+.calc-controls{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;margin:14px 0 6px}
+.calc-controls .field label,.calc-util label{display:block;font-size:12px;color:var(--mut);margin-bottom:5px}
+.calc-controls input{width:150px;max-width:100%}
+.calc-util{margin:12px 0 16px;max-width:460px}
+.calc-util input[type=range]{width:100%;accent-color:var(--amber);height:22px;cursor:pointer}
+.calc-out{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:520px}
+.calc-tile{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:15px 10px;text-align:center}
+.calc-n{font-family:var(--disp);font-weight:800;font-size:clamp(19px,4.4vw,27px);letter-spacing:-.02em;color:var(--amber)}
+.calc-l{font-size:11px;color:var(--mut);margin-top:3px;text-transform:uppercase;letter-spacing:.05em}
+@media(max-width:520px){.calc-out{grid-template-columns:1fr}.calc-controls input{width:100%}}
 h1{font-family:var(--disp);font-weight:800;letter-spacing:-.035em;line-height:1.0}
 h2{font-family:var(--disp);font-weight:700;letter-spacing:-.02em}
 .grad{background:linear-gradient(95deg,var(--teal-br) 10%,var(--amber) 90%);-webkit-background-clip:text;background-clip:text;color:transparent}
@@ -877,14 +889,30 @@ journalctl -u petabyte-agent -f</pre>
       <p class="mut" style="font-size:12px;margin-top:9px" data-ar="يظهر كرت رسوماتك في السوق خلال دقيقة.">Your GPU appears in the <a class="teal" href="/marketplace">marketplace</a> within a minute.</p></div>
   </div>
   <div class="card" style="margin-top:16px">
-    <div class="lbl" data-ar="كم ينبغي أن أطلب؟">What should I charge?</div>
-    <p class="mut" style="margin-bottom:10px" data-ar="اكتب اسم كرت رسوماتك — نقترح سعراً بناءً على ما تطلبه الأجهزة المشابهة والمرجع السحابي. القرار النهائي دائماً لك.">Type your GPU — we suggest a price from what similar live nodes charge and the cloud reference. You always set the final number.</p>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-      <input id="pgpu" aria-label="Your GPU model" placeholder="e.g. RTX 4090" size="14" onkeydown="if(event.key==='Enter')suggest()"/>
+    <div class="lbl" data-ar="كم يمكن أن أربح؟">Earnings calculator</div>
+    <p class="mut" style="margin-bottom:6px" data-ar="اكتب اسم كرت رسوماتك لاقتراح سعر، ثم اسحب مؤشّر الاستخدام لترى دخلك المتوقّع. أنت تحدّد السعر النهائي وتحتفظ بـ٩٠٪.">Type your GPU for a suggested rate, then drag utilization to see what it could earn. You set the final price and keep 90%.</p>
+    <div class="calc-controls">
+      <div class="field">
+        <label for="pgpu">GPU model</label>
+        <input id="pgpu" placeholder="e.g. RTX 4090" onkeydown="if(event.key==='Enter')suggest()"/>
+      </div>
+      <div class="field">
+        <label for="calc_price">Your price ($/hr)</label>
+        <input id="calc_price" type="number" step="0.05" min="0" value="1.50" oninput="recalc()"/>
+      </div>
       <button class="btn btn-teal" onclick="suggest()" data-ar="اقترح سعراً">Suggest a price</button>
-      <span id="psug" class="mono" style="font-size:13px"></span>
     </div>
-    <div id="earnest" class="mini" style="margin-top:10px"></div>
+    <div class="calc-util">
+      <label for="calc_util">Utilization &mdash; <b id="calc_util_val" class="amber">50%</b> <span class="mut" style="font-weight:400">of the time rented</span></label>
+      <input id="calc_util" type="range" min="0" max="100" value="50" step="5" oninput="recalc()" aria-label="Expected utilization percent"/>
+    </div>
+    <div class="calc-out">
+      <div class="calc-tile"><div class="calc-n" id="calc_day">$0</div><div class="calc-l">per day</div></div>
+      <div class="calc-tile"><div class="calc-n" id="calc_month">$0</div><div class="calc-l">per month</div></div>
+      <div class="calc-tile"><div class="calc-n" id="calc_year">$0</div><div class="calc-l">per year</div></div>
+    </div>
+    <p id="psug" class="mini mut" style="margin-top:12px"></p>
+    <p class="mini mut" style="margin-top:4px" data-ar="تقديرات بعد رسوم المنصة ١٠٪ (تحتفظ بـ٩٠٪). الأرباح الفعلية تعتمد على الطلب الحقيقي.">Estimates after the 10% platform fee — you keep 90%. Actual earnings depend on real demand.</p>
   </div>
   <div class="card" style="margin-top:16px"><div class="lbl" data-ar="جرّبه دون مخاطرة">Try it risk-free</div>
     <p class="mut" data-ar="يعمل الوكيل داخل بيئة لينكس معزولة — لا يمسّ ألعابك أو ملفاتك، ويعمل فقط حين يكون جهازك خاملاً. أوقفه مؤقتاً متى شئت، أو أزِله تماماً بأمرٍ واحد. وإذا فعّلت Petabyte خاصية WSL لك، فإن إلغاء التثبيت يعيدها كما كانت.">The agent runs in an isolated Linux sandbox — it never touches your games or files, and only works when your PC is idle. <b class="teal">Pause</b> anytime, or <b class="teal">remove it completely</b> in one command. If Petabyte turned on WSL for you, uninstalling turns it back off.</p>
@@ -896,25 +924,37 @@ $env:PETABYTE_ACTION="uninstall"; irm https://petabyte.market/manage.ps1 | iex</
   </div>
 </div>
 <script>
+// Earnings calculator: hourly price x hours x utilization, minus the 10% fee. Recompute
+// on every keystroke/drag so the numbers move like NiceHash's profitability calculator.
+var CALC_KEEP=0.9;   // seller keeps 90% (10% platform fee)
+function setMoney(id,v){
+  var el=document.getElementById(id);
+  if(el){el.textContent='$'+Math.round(v).toLocaleString();}
+}
+function recalc(){
+  var price=parseFloat(document.getElementById('calc_price').value||'0')||0;
+  var util=parseInt(document.getElementById('calc_util').value||'0',10)/100;
+  var uv=document.getElementById('calc_util_val');
+  if(uv){uv.textContent=Math.round(util*100)+'%';}
+  var perDay=price*24*util*CALC_KEEP;
+  setMoney('calc_day',perDay);
+  setMoney('calc_month',perDay*30);
+  setMoney('calc_year',perDay*365);
+}
 async function suggest(){
   var g=(document.getElementById('pgpu').value||'').trim();
   var r=await fetch('/pricing/suggest?gpu_model='+encodeURIComponent(g));
   var b=await r.json();
+  var pr=document.getElementById('calc_price');
+  if(pr && b.suggested_price){pr.value=b.suggested_price;}
   var psug=document.getElementById('psug');
   if(psug){
-    psug.innerHTML='Suggested <b class="amber">$'+b.suggested_price+'/hr</b> <span class="mut">· '+b.basis+' · cloud ≈ $'+b.cloud_reference+'</span>';
+    psug.innerHTML='Suggested rate for '+(g?esc(g):'this GPU')+': <b class="amber">$'+esc(b.suggested_price)+
+      '/hr</b> · '+esc(b.basis||'')+' · cloud on-demand &asymp; $'+esc(b.cloud_reference)+'/hr';
   }
-  // Translate the hourly price into what a seller actually cares about: monthly income.
-  // Honest range: 30–70% utilization, after the 10% platform fee (seller keeps 90%).
-  var price=Number(b.suggested_price)||0;
-  var est=document.getElementById('earnest');
-  if(est && price>0){
-    var lo=Math.round(price*720*0.30*0.9);
-    var hi=Math.round(price*720*0.70*0.9);
-    est.innerHTML='Estimated earnings: <b class="amber">$'+lo.toLocaleString()+'–$'+hi.toLocaleString()+' / month</b>'+
-      ' <span class="mut">at 30–70% utilization, after the 10% fee. You keep 90%.</span>';
-  }
+  recalc();
 }
+recalc();   // alive from first paint
 (function(){ if(authed()){var a=document.getElementById('ikauthed'),h=document.getElementById('ikhint');if(a)a.style.display='';if(h)h.style.display='none';} })();
 async function mkkey(){
   await api('/change_role',{method:'POST',body:JSON.stringify({role:'seller'})});   // idempotent
