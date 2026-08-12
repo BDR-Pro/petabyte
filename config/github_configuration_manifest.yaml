@@ -169,7 +169,7 @@ variables:
     format: url_or_empty
   DATA_API_FREE_CALLS_MONTH:
     required: false
-    default: '1000'
+    default: '100'
     scope:
     - platform
     description: ''

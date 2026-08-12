@@ -79,6 +79,7 @@ from db import (
     record_issued_key, list_issued_keys, get_or_create_oauth_user,
     create_install_token, resolve_install_token,
     meter_data_call, usage_summary, record_price_snapshot, price_history, _live_price_index,
+    data_api_revenue,
     idem_begin, idem_finish, idem_abort,
     create_task, claim_next_task, get_task_for_agent, mark_task_running,
     submit_task_result, get_booking_for_buyer,
@@ -1218,11 +1219,19 @@ FULL_ACCESS = "*"
 DEFAULT_KEY_SCOPES = ("node", "jobs")
 LEGACY_KEYS_ARE_FULL_ACCESS = os.getenv("LEGACY_KEYS_FULL_ACCESS", "false").lower() == "true"
 
-# Paid data API: metered, pay-as-you-go against the wallet balance. Each account gets a free
-# monthly quota; calls beyond it cost DATA_API_PRICE_PER_1K / 1000 each, debited from the wallet.
-DATA_API_FREE_CALLS_MONTH = int(os.getenv("DATA_API_FREE_CALLS_MONTH", "1000"))
-DATA_API_PRICE_PER_1K = float(os.getenv("DATA_API_PRICE_PER_1K", "0.50"))
+# Paid data API: metered, pay-as-you-go against the wallet balance. Each account gets a small
+# monthly TRIAL (not a giveaway); past it, calls cost DATA_API_PRICE_PER_1K/1000 x the endpoint's
+# price weight, debited from the wallet. Premium datasets are priced higher via DATA_API_UNITS.
+DATA_API_FREE_CALLS_MONTH = int(os.getenv("DATA_API_FREE_CALLS_MONTH", "100"))   # monthly trial
+DATA_API_PRICE_PER_1K = float(os.getenv("DATA_API_PRICE_PER_1K", "0.50"))        # base rate / 1k
 DATA_SNAPSHOT_INTERVAL_S = int(os.getenv("DATA_SNAPSHOT_INTERVAL_S", "3600"))
+# Per-endpoint price weight (commodity = 1; premium = higher). A weighted call costs
+# base_price x weight and consumes `weight` of the trial. Tiered, honest monetization.
+DATA_API_UNITS = {
+    "gpu-prices": 1, "market": 1, "availability": 1, "savings": 1,
+    "gpu-prices/history": 2, "workloads": 2,
+    "demand": 4, "templates": 4, "benchmarks": 5,      # premium: realized $ + the data moat
+}
 
 
 def require_scope(user, scope: str):
@@ -2043,6 +2052,28 @@ def _marketplace_metrics():
         logger.debug("backup metrics query failed", exc_info=True)
     finally:
         dbs.close()
+    # Data-API monetization gauges — so revenue is MEASURED, not guessed.
+    dbr = SessionLocal()
+    try:
+        r = data_api_revenue(dbr)
+        rows += [
+            {"name": "petabyte_data_api_revenue_usd",
+             "doc": "All-time data-API revenue booked to platform revenue (USD)",
+             "labels": {"environment": env}, "value": r["revenue_usd_total"]},
+            {"name": "petabyte_data_api_revenue_usd_month",
+             "doc": "Data-API revenue this calendar month (USD)",
+             "labels": {"environment": env}, "value": r["revenue_usd_month"]},
+            {"name": "petabyte_data_api_billed_calls",
+             "doc": "All-time billed (paid) data-API calls",
+             "labels": {"environment": env}, "value": r["billed_calls_total"]},
+            {"name": "petabyte_data_api_paying_accounts_month",
+             "doc": "Accounts that paid for data-API calls this month",
+             "labels": {"environment": env}, "value": r["paying_accounts_month"]},
+        ]
+    except Exception:  # noqa: BLE001
+        logger.debug("data-api revenue metrics query failed", exc_info=True)
+    finally:
+        dbr.close()
     return rows
 
 
@@ -5966,14 +5997,15 @@ def partners_list():
 # are billed per-call from the wallet balance (402 when the balance can't cover it). /usage is
 # free to check and never billed.
 
-def _meter_data_or_402(user, db) -> dict:
+def _meter_data_or_402(user, db, endpoint="gpu-prices") -> dict:
     require_scope(user, "data")
+    units = DATA_API_UNITS.get(endpoint, 1)
     m = meter_data_call(db, user.id, free_quota=DATA_API_FREE_CALLS_MONTH,
-                        price_per_call=DATA_API_PRICE_PER_1K / 1000.0)
+                        price_per_call=DATA_API_PRICE_PER_1K / 1000.0, units=units)
     if not m.get("ok"):
         raise HTTPException(status_code=402, detail={
             "code": "DATA_API_QUOTA_EXCEEDED",
-            "message": "Your free monthly quota is used up and your wallet balance can't cover the "
+            "message": "Your monthly trial is used up and your wallet balance can't cover the "
                        "per-call fee. Add funds to your wallet to keep using the data API.",
             "price_per_call_usd": m.get("price_per_call"),
             "period": m.get("period")})
@@ -5984,7 +6016,7 @@ def _meter_data_or_402(user, db) -> dict:
 def data_gpu_prices(user=Depends(api_key_user), db: Session = Depends(get_db)):
     """Current GPU price index: benchmark-anchored reference price + live marketplace avg/min/max
     per model. Metered (needs a `data`-scoped key)."""
-    usage = _meter_data_or_402(user, db)
+    usage = _meter_data_or_402(user, db, "gpu-prices")
     return {"as_of": datetime.now(timezone.utc).isoformat(),
             "gpus": _live_price_index(db), "usage": usage}
 
@@ -5995,7 +6027,7 @@ def data_gpu_price_history(gpu_model: Optional[str] = Query(None), days: int = Q
                           user=Depends(api_key_user), db: Session = Depends(get_db)):
     """Historical price-index points (newest first), optionally filtered to one GPU model. This is
     the premium series recorded from periodic snapshots. Metered."""
-    usage = _meter_data_or_402(user, db)
+    usage = _meter_data_or_402(user, db, "gpu-prices/history")
     since = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
     rows = price_history(db, gpu_model=gpu_model, since=since, limit=limit)
     out = [{"captured_at": (r.captured_at.isoformat() if r.captured_at else None),
@@ -6012,7 +6044,7 @@ def data_gpu_price_history(gpu_model: Optional[str] = Query(None), days: int = Q
 def data_market(user=Depends(api_key_user), db: Session = Depends(get_db)):
     """Marketplace summary: how many GPU models have live listings, total live units, and the
     overall live price range. Metered."""
-    usage = _meter_data_or_402(user, db)
+    usage = _meter_data_or_402(user, db, "market")
     idx = _live_price_index(db)
     listed = [r for r in idx if r["live_count"] > 0]
     avgs = [r["avg_price"] for r in listed if r["avg_price"] is not None]
@@ -6028,7 +6060,7 @@ def data_market(user=Depends(api_key_user), db: Session = Depends(get_db)):
 def data_savings(user=Depends(api_key_user), db: Session = Depends(get_db)):
     """Cloud-savings index: per GPU, the benchmark-anchored reference price vs the public cloud
     on-demand rate and the % cheaper. Sorted by benchmark. Metered."""
-    usage = _meter_data_or_402(user, db)
+    usage = _meter_data_or_402(user, db, "savings")
     import pricing_engine
     rows = pricing_engine.catalog()
     savings = [r["savings_vs_cloud_pct"] for r in rows if r.get("savings_vs_cloud_pct") is not None]
@@ -6042,7 +6074,7 @@ def data_savings(user=Depends(api_key_user), db: Session = Depends(get_db)):
 def data_availability(user=Depends(api_key_user), db: Session = Depends(get_db)):
     """Live supply index: how many nodes are online per GPU model and per region right now.
     Aggregate counts only — no seller identity. Metered."""
-    usage = _meter_data_or_402(user, db)
+    usage = _meter_data_or_402(user, db, "availability")
     import gpu_benchmark
     from db import SellerSpec
     by_model, by_region, total = {}, {}, 0
@@ -6070,7 +6102,7 @@ def data_benchmarks(since_id: int = Query(0, ge=0), limit: int = Query(500, ge=1
     to the public per-model reference, server-timing, proof-of-work result, and the fraud/verdict
     LABELS — the (features, label) corpus a fraud/authenticity model trains on. ANONYMIZED: no
     seller identity and no node id. `since_id` supports incremental pulls. Metered."""
-    usage = _meter_data_or_402(user, db)
+    usage = _meter_data_or_402(user, db, "benchmarks")
     import training_data as td
     rows = td.export_authenticity_dataset(db, limit=limit, since_id=since_id)
     for r in rows:
@@ -6088,7 +6120,7 @@ def data_demand(days: int = Query(30, ge=1, le=365),
     booking count, GPU-hours rented, GMV, and the average price buyers ACTUALLY paid (realized,
     not listed). Sandbox/demo bookings are excluded so this is real demand, not inflated. Aggregate
     only — no buyer identity. Metered."""
-    usage = _meter_data_or_402(user, db)
+    usage = _meter_data_or_402(user, db, "demand")
     import gpu_benchmark
     from db import Booking, SellerSpec
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
@@ -6118,7 +6150,7 @@ def data_workloads(days: int = Query(30, ge=1, le=365),
     """Buyer-side WORKLOAD mix: over the last `days`, what buyers actually run — jobs by type
     (notebook/vm/template) and by launch template (vLLM, Blender, …). Platform audit tasks are
     excluded. Aggregate counts only — no buyer identity or code. Metered."""
-    usage = _meter_data_or_402(user, db)
+    usage = _meter_data_or_402(user, db, "workloads")
     from db import Task
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
     by_type, by_template, total = {}, {}, 0
@@ -6145,7 +6177,7 @@ def data_templates(days: int = Query(30, ge=1, le=365),
     identities), GPU-hours, GMV, average spend per job, and the most-requested models inside that
     template. Only paid, real bookings (sandbox/demo excluded). Aggregate — no buyer identity or
     code. Metered."""
-    usage = _meter_data_or_402(user, db)
+    usage = _meter_data_or_402(user, db, "templates")
     import json as _json
     from db import Task, Booking
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
@@ -6194,6 +6226,17 @@ def admin_data_snapshot(me=Depends(require_admin), db: Session = Depends(get_db)
     """Admin: capture a price-index snapshot now (the maintenance loop also does this hourly)."""
     n = record_price_snapshot(db)
     return {"status": "ok", "rows": n}
+
+
+@app.get("/admin/data/revenue", tags=["admin"])
+def admin_data_revenue(me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Admin: data-API monetization scoreboard — billed calls + revenue (month + all-time),
+    read from the ledger. Also exposed as Prometheus gauges (petabyte_data_api_*)."""
+    r = data_api_revenue(db)
+    r["pricing"] = {"base_per_1k_usd": DATA_API_PRICE_PER_1K,
+                    "free_trial_calls_month": DATA_API_FREE_CALLS_MONTH,
+                    "endpoint_weights": DATA_API_UNITS}
+    return r
 
 
 @app.post("/launch", tags=["compute"])

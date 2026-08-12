@@ -81,13 +81,14 @@ ok("a billable call with no balance is REFUSED (402 quota exceeded), not given a
 
 # fund the wallet, then billable calls succeed and each costs $1
 _s = dbm.SessionLocal(); _u = dbm.get_user_by_username(_s, "dataco"); dbm.deposit(_s, _u, 5.0); _s.commit(); _s.close()
+# both are commodity (weight 1) -> each costs the $1 base rate exactly
 r4 = c.get("/api/v1/data/gpu-prices", headers=_kh)
-ok("after funding, a billable call succeeds and is marked billed + charged $1.00",
+ok("after funding, a billable call succeeds and is marked billed + charged $1.00 (weight 1)",
    r4.status_code == 200 and r4.json()["usage"]["billed"] is True
    and abs(r4.json()["usage"]["charged"] - 1.0) < 1e-9)
-r5 = c.get("/api/v1/data/gpu-prices/history?days=1", headers=_kh)
-ok("price history is served (billable) and returns recorded points",
-   r5.status_code == 200 and r5.json()["count"] > 0)
+r5 = c.get("/api/v1/data/market", headers=_kh)
+ok("market summary is served (billable, weight 1 -> $1)",
+   r5.status_code == 200 and abs(r5.json()["usage"]["charged"] - 1.0) < 1e-9)
 
 # /usage is free to check and does not itself count as a billed call
 _u1 = c.get("/api/v1/data/usage", headers=_kh).json()
@@ -106,11 +107,16 @@ ok("the wallet balance dropped by exactly the fees charged ($5 - $2 = $3)", abs(
 ok("data-API fees are booked to PLATFORM_REVENUE (real revenue, double-entry)", abs(_rev - 2.0) < 1e-9)
 
 # ---- more monetized datasets (all metered, aggregate/anonymized) ----
-_s = dbm.SessionLocal(); _u = dbm.get_user_by_username(_s, "dataco"); dbm.deposit(_s, _u, 10.0); _s.commit(); _s.close()
+_s = dbm.SessionLocal(); _u = dbm.get_user_by_username(_s, "dataco"); dbm.deposit(_s, _u, 50.0); _s.commit(); _s.close()
+# TIERED pricing: a premium dataset (benchmarks, weight 5) costs more than a commodity one
+# (savings, weight 1) — proper monetization, not one flat rate.
 _sv = c.get("/api/v1/data/savings", headers=_kh)
-ok("savings index: per-GPU cheaper-than-cloud %, metered",
+ok("savings index: per-GPU cheaper-than-cloud %, metered (weight 1 -> $1)",
    _sv.status_code == 200 and isinstance(_sv.json().get("gpus"), list)
-   and _sv.json()["usage"]["billed"] is True)
+   and abs(_sv.json()["usage"]["charged"] - 1.0) < 1e-9)
+_hist = c.get("/api/v1/data/gpu-prices/history?days=1", headers=_kh)
+ok("price history served (billable) and returns recorded points",
+   _hist.status_code == 200 and _hist.json()["count"] > 0)
 _av = c.get("/api/v1/data/availability", headers=_kh)
 ok("availability index: live supply by GPU + region (aggregate counts, no identity)",
    _av.status_code == 200 and "live_nodes_total" in _av.json()
@@ -124,6 +130,8 @@ _s.commit(); _s.close()
 _bj = c.get("/api/v1/data/benchmarks?limit=10", headers=_kh).json()
 ok("authenticity dataset: labelled feature rows + corpus stats, metered",
    _bj["count"] >= 1 and "stats" in _bj and any("label_verdict" in r for r in _bj["rows"]))
+ok("TIERED pricing: the premium benchmarks dataset (weight 5) costs 5x the commodity rate",
+   abs(_bj["usage"]["charged"] - 5.0) < 1e-9)
 ok("the sold dataset is ANONYMIZED: no seller_id and no node/spec_id in any row",
    all("seller_id" not in r and "spec_id" not in r for r in _bj["rows"]))
 
@@ -160,6 +168,12 @@ ok("templates-bought index: per template jobs/buyers/GMV + top models, from real
    and any(m["model"] == "facebook/opt-125m" for m in _vllm["top_models"]))
 ok("templates dataset leaks no buyer identity (only counts)",
    all("buyer_id" not in r and "buyers" not in r for r in _tp["templates"]))
+
+# ---- monetization is MEASURED: revenue scoreboard reflects the billed calls ----
+_s = dbm.SessionLocal(); _rev_sb = dbm.data_api_revenue(_s); _s.close()
+ok("revenue metric reflects real billed calls (all-time revenue > 0, paying account counted)",
+   _rev_sb["revenue_usd_total"] > 0 and _rev_sb["billed_calls_total"] >= 3
+   and _rev_sb["paying_accounts_month"] >= 1)
 
 for f in ("data_api_test.db", "data_api_test.db-wal", "data_api_test.db-shm"):
     if os.path.exists(f):

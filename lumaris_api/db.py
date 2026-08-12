@@ -1254,12 +1254,15 @@ def charge_wallet(db: Session, user_id: int, amount, *, reference_type: str,
     return True
 
 
-def meter_data_call(db: Session, user_id: int, *, free_quota: int, price_per_call) -> dict:
-    """Count one data-API call for this user and bill it if it's past the free monthly quota.
+def meter_data_call(db: Session, user_id: int, *, free_quota: int, price_per_call, units=1) -> dict:
+    """Count one data-API call for this user and bill it if it's past the free monthly TRIAL quota.
 
-    Free calls (within quota) and calls when pricing is 0 are always served. A billable call is
-    served only if the wallet balance covers `price_per_call`; otherwise it is NOT counted and
-    the caller gets ``{"ok": False, "reason": "insufficient_balance"}`` (surface as HTTP 402)."""
+    `units` is the endpoint's price weight (commodity=1, premium>1): the charge is
+    price_per_call * units, and each call consumes `units` of the free trial (so premium calls
+    burn the trial faster). A billable call is served only if the wallet balance covers the charge;
+    otherwise it is NOT counted and the caller gets ``{"ok": False, "reason": "insufficient_balance"}``
+    (surface as HTTP 402). Pricing 0 keeps the API free."""
+    units = max(1, int(units))
     period = _period()
     row = (db.query(ApiUsage)
            .filter(ApiUsage.user_id == user_id, ApiUsage.period == period).first())
@@ -1267,29 +1270,50 @@ def meter_data_call(db: Session, user_id: int, *, free_quota: int, price_per_cal
         row = ApiUsage(user_id=user_id, period=period, calls=0, billed_calls=0,
                        amount_usd=Decimal(0))
         db.add(row); db.flush()
-    price = q(price_per_call)
-    within_free = row.calls < int(free_quota)
-    if within_free or price <= 0:
-        row.calls += 1
+    charge = q(D(str(price_per_call)) * units)
+    within_free = row.calls < int(free_quota)     # trial measured in call-units already consumed
+    if within_free or charge <= 0:
+        row.calls += units
         row.updated_at = _utcnow()
         db.commit()
-        return {"ok": True, "billed": False, "period": period, "calls": row.calls,
+        return {"ok": True, "billed": False, "period": period, "calls": row.calls, "units": units,
                 "free_quota": int(free_quota),
                 "free_remaining": max(0, int(free_quota) - row.calls)}
-    # past the free quota and pricing is on -> must pay per call
-    if not charge_wallet(db, user_id, price, reference_type="data_api",
+    # past the free trial and pricing is on -> must pay
+    if not charge_wallet(db, user_id, charge, reference_type="data_api",
                          description="data API usage"):
         return {"ok": False, "reason": "insufficient_balance",
-                "price_per_call": float(price), "period": period}
-    row.calls += 1
+                "price_per_call": float(charge), "period": period}
+    row.calls += units
     row.billed_calls += 1
-    row.amount_usd = q(D(row.amount_usd) + price)
+    row.amount_usd = q(D(row.amount_usd) + charge)
     row.updated_at = _utcnow()
     db.commit()
-    return {"ok": True, "billed": True, "charged": float(price), "period": period,
+    return {"ok": True, "billed": True, "charged": float(charge), "units": units, "period": period,
             "calls": row.calls, "billed_calls": row.billed_calls,
             "amount_usd": float(row.amount_usd), "free_quota": int(free_quota),
             "free_remaining": 0}
+
+
+def data_api_revenue(db: Session) -> dict:
+    """Data-API monetization scoreboard: billed calls + revenue this month and all-time.
+    Revenue is read from the ledger (PLATFORM_REVENUE credits tagged 'data_api') — the books."""
+    period = _period()
+    month = db.query(ApiUsage).filter(ApiUsage.period == period).all()
+    allrows = db.query(ApiUsage).all()
+    rev_total = q(sum((D(e.amount) for e in db.query(LedgerEntry)
+                       .filter(LedgerEntry.entry_type == "data_api",
+                               LedgerEntry.direction == CREDIT,
+                               LedgerEntry.account == PLATFORM_REVENUE).all()), Decimal(0)))
+    return {
+        "period": period,
+        "revenue_usd_month": float(q(sum((D(r.amount_usd) for r in month), Decimal(0)))),
+        "revenue_usd_total": float(rev_total),
+        "billed_calls_month": sum(int(r.billed_calls or 0) for r in month),
+        "billed_calls_total": sum(int(r.billed_calls or 0) for r in allrows),
+        "calls_month": sum(int(r.calls or 0) for r in month),
+        "paying_accounts_month": sum(1 for r in month if (r.billed_calls or 0) > 0),
+    }
 
 
 def usage_summary(db: Session, user_id: int, *, free_quota: int) -> dict:
