@@ -35,7 +35,7 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 <link rel="icon" type="image/png" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/static/petabyte-mark-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
 <script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 <style>
@@ -48,10 +48,13 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 .navbar{--bs-navbar-padding-y:0;--bs-navbar-padding-x:0}
 /* the nav is dense (6 links + AR + theme + sign-in + 2 buttons); give it room and
    collapse to the hamburger earlier so nothing wraps mid-label */
-@media(min-width:992px) and (max-width:1180px){.navlinks a{padding:7px 8px;font-size:12.5px}.navcta{gap:6px}}
+@media(min-width:992px) and (max-width:1260px){.navlinks a{padding:7px 8px;font-size:12.5px}.navcta{gap:6px}.navcta .btn{padding:8px 13px;font-size:12.5px}nav .wrap{gap:10px}}
 .navbar-toggler{border:1px solid var(--line2);border-radius:999px;padding:7px 11px;color:var(--mut)}
 .navbar-toggler:focus{box-shadow:0 0 0 4px rgba(53,224,208,.15)}
 .navbar-toggler svg{width:18px;height:18px;display:block}
+/* mirror Bootstrap's .d-lg-none without depending on the CDN stylesheet: the hamburger is
+   for mobile only, so hide it on desktop even if Bootstrap fails to load. */
+@media(min-width:992px){.navbar-toggler{display:none!important}}
 @media(max-width:991.98px){
  /* Hide the collapsed menu by default WITHOUT relying on the Bootstrap CDN stylesheet:
     if that asset is slow or blocked, the off-canvas menu must not create horizontal
@@ -61,21 +64,21 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
  .navlinks{flex-direction:column;gap:2px;margin-inline-start:0}
  .navlinks a{padding:9px 13px}
  .navcta{margin-inline-start:0;margin-top:8px;flex-wrap:wrap}}
-:root{--abyss:#030711;--depth:#0A1226;--depth2:#0D1832;--line:#16223F;--line2:#243456;
---ink:#F2F6FF;--mut:#9BA9C9;--dim:#5C6C8F;
---teal:#35E0D0;--teal-br:#8FF5E8;--deep:#149A90;--amber:#FFB224;--amber-br:#FFD076;
---pos:#4ADE9C;--warn:#F0A44B;--bad:#F0718A;
---gA:rgba(255,178,36,.05);--gB:rgba(53,224,208,.10);--gV:rgba(124,58,237,.09);
---navbg:rgba(10,18,38,.66);--hair:#101A32;
---panel:var(--depth);--panel2:#081020;
---disp:'Sora',sans-serif;--body:'Figtree',sans-serif;--mono:'JetBrains Mono',monospace;
+:root{--abyss:#070C18;--depth:#0F1828;--depth2:#14223C;--line:#213152;--line2:#2E4066;
+--ink:#EDF2FC;--mut:#9EABC7;--dim:#657493;
+--teal:#3AE0CF;--teal-br:#93F6EA;--deep:#12A093;--amber:#FFBE45;--amber-br:#FFD684;
+--pos:#4FE0A0;--warn:#F2B450;--bad:#F2748C;
+--gA:rgba(255,190,66,.06);--gB:rgba(58,224,207,.11);--gV:rgba(129,90,240,.10);
+--navbg:rgba(13,21,39,.74);--hair:#152037;
+--panel:var(--depth);--panel2:#0B1626;
+--disp:'Sora',system-ui,sans-serif;--body:'Inter',system-ui,sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace;
 --r:18px;--r-sm:12px}
 html[data-theme=light]{
- --abyss:#EEF3F9;--depth:#FFFFFF;--depth2:#F6FAFD;--line:#DCE6F0;--line2:#C0D1E1;
- --ink:#0E1A2E;--mut:#4B5D75;--dim:#7E90A7;
- --teal:#0B9D92;--teal-br:#0FBCAE;--deep:#0A7E76;--amber:#B37410;--amber-br:#D6952A;
+ --abyss:#EEF3FA;--depth:#FFFFFF;--depth2:#F6FAFD;--line:#E1EAF3;--line2:#C8D7E5;
+ --ink:#0F1C30;--mut:#4E6079;--dim:#8091A8;
+ --teal:#0B9C90;--teal-br:#0FBCAE;--deep:#0A7E76;--amber:#AE720F;--amber-br:#D0902A;
  --gA:rgba(255,178,36,.10);--gB:rgba(15,188,174,.12);--gV:rgba(124,58,237,.06);
- --navbg:rgba(255,255,255,.72);--hair:#E7EEF5;--panel:#FFFFFF;--panel2:#F4F8FC}
+ --navbg:rgba(255,255,255,.80);--hair:#EAF0F6;--panel:#FFFFFF;--panel2:#F5F9FC}
 *{box-sizing:border-box;margin:0;padding:0}
 ::selection{background:rgba(53,224,208,.28)}
 body{background:
@@ -119,10 +122,10 @@ h2{font-family:var(--disp);font-weight:700;letter-spacing:-.02em}
 .grad-teal{background:linear-gradient(95deg,var(--teal-br),var(--deep));-webkit-background-clip:text;background-clip:text;color:transparent}
 /* ---------- nav: floating glass pill ---------- */
 nav{z-index:40;padding:14px 0 6px;background:linear-gradient(180deg,var(--abyss) 30%,transparent)}
-nav .wrap{display:flex;align-items:center;gap:22px;height:58px;background:var(--navbg);
- border:1px solid var(--line);border-radius:999px;padding:0 12px 0 20px;
+nav .wrap{display:flex;align-items:center;gap:14px;min-height:58px;background:var(--navbg);
+ border:1px solid var(--line);border-radius:26px;padding:6px 12px 6px 20px;flex-wrap:wrap;row-gap:6px;
  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
- box-shadow:0 12px 40px -18px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.04)}
+ box-shadow:0 12px 40px -18px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.05)}
 .brand{display:flex;align-items:center;gap:10px;font-family:var(--disp);font-weight:700;font-size:18px;letter-spacing:-.02em}
 .brand img{width:26px;height:26px;display:block;filter:drop-shadow(0 0 8px rgba(53,224,208,.5))}
 .brand .p{color:var(--teal)}
@@ -131,6 +134,19 @@ nav .wrap{display:flex;align-items:center;gap:22px;height:58px;background:var(--
 .navlinks a:hover{color:var(--ink);background:rgba(255,255,255,.05)}
 .navlinks a.active{color:var(--teal);background:rgba(53,224,208,.10)}
 .navcta{margin-inline-start:auto;display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.navcta .btn{padding:9px 16px;font-size:13px}
+/* signed-in account chip: a compact identity pill instead of loose inline text */
+#mename{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+ background:rgba(58,224,207,.09);border:1px solid rgba(58,224,207,.24);padding:6px 12px}
+/* the marketing "Book a demo" CTA is redundant once you're signed in — reclaim the room */
+html[data-auth=in] #navdemo{display:none!important}
+/* signed-in carries more controls (account + admin + sign out); compact them so the bar
+   stays a single tidy row instead of wrapping. */
+html[data-auth=in] .navlinks a{padding:6px 8px;font-size:12.5px}
+html[data-auth=in] .navcta{gap:6px}
+html[data-auth=in] .navcta .btn{padding:8px 14px;font-size:12.5px}
+html[data-auth=in] nav .wrap{gap:10px}
+html[data-auth=in] #mename{max-width:112px}
 .signin{font-size:13px;font-weight:500;color:var(--mut);padding:7px 10px;border-radius:999px;transition:color .15s;white-space:nowrap}
 /* auth-state visibility, decided before first paint (no flash of the wrong button) */
 html[data-auth=in] #signinlink{display:none!important}
@@ -162,12 +178,14 @@ button:active,.btn:active{transform:translateY(1px)}
 /* ---------- surfaces ---------- */
 .panel{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r)}
 .card{position:relative;background:linear-gradient(180deg,var(--depth2),var(--panel2));border:1px solid var(--line);border-radius:var(--r);padding:22px;
+ box-shadow:0 1px 2px rgba(0,0,0,.18),0 10px 30px -24px rgba(0,0,0,.5);
  transition:transform .18s,border-color .18s,box-shadow .18s}
+html[data-theme=light] .card{box-shadow:0 1px 2px rgba(16,32,60,.05),0 12px 30px -22px rgba(16,32,60,.18)}
 .card::before{content:"";position:absolute;inset:0;border-radius:var(--r);padding:1px;
- background:linear-gradient(140deg,rgba(53,224,208,.25),transparent 34%,transparent 70%,rgba(255,178,36,.14));
+ background:linear-gradient(140deg,rgba(58,224,207,.30),transparent 36%,transparent 68%,rgba(255,190,66,.16));
  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;
- opacity:0;transition:opacity .2s;pointer-events:none}
-.card:hover{transform:translateY(-3px);box-shadow:0 20px 50px -26px rgba(53,224,208,.45)}
+ opacity:0;transition:opacity .25s;pointer-events:none}
+.card:hover{transform:translateY(-3px);border-color:var(--line2);box-shadow:0 24px 56px -28px rgba(58,224,207,.40),0 4px 14px -8px rgba(0,0,0,.4)}
 .card:hover::before{opacity:1}
 .cols{display:flex;flex-wrap:wrap;gap:16px}
 .c2>*{flex:1 1 calc(50% - 8px);min-width:250px}
@@ -255,8 +273,9 @@ html[data-theme=light] .hexbg{opacity:.10}
 /* ---------- Arabic / RTL ----------
    RTL is not "flip everything". Numbers, money, code, curl commands and monospace
    identifiers must stay LTR even inside an Arabic sentence, or a price reads backwards. */
-html[dir="rtl"] body{font-family:'IBM Plex Sans Arabic','Figtree',system-ui,sans-serif}
-html[dir="rtl"] h1,html[dir="rtl"] h2,html[dir="rtl"] h3{font-family:'IBM Plex Sans Arabic','Sora',sans-serif;letter-spacing:0}
+html[dir="rtl"] body{font-family:'Cairo','Inter',system-ui,sans-serif;font-size:15px}
+html[dir="rtl"] h1,html[dir="rtl"] h2,html[dir="rtl"] h3{font-family:'Cairo','Sora',sans-serif;letter-spacing:0;font-weight:700}
+html[dir="rtl"] .eyebrow,html[dir="rtl"] .lbl,html[dir="rtl"] .mini{letter-spacing:.05em}
 html[dir="rtl"] .eyebrow,html[dir="rtl"] .lbl,html[dir="rtl"] .mini{letter-spacing:0}
 /* these carry meaning in one direction only */
 html[dir="rtl"] .mono,html[dir="rtl"] code,html[dir="rtl"] .codeline,
@@ -326,7 +345,7 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
   </button>
   <a class="signin" id="signinlink" href="/login">Sign in</a>
   <a class="signin" id="signoutlink" href="#" onclick="signout();return false" style="display:none">Sign out</a>
-  <a class="btn btn-ghost" href="/demo" data-ar="احجز عرضاً">Book a demo</a>
+  <a class="btn btn-ghost" id="navdemo" href="/demo" data-ar="احجز عرضاً">Book a demo</a>
   <a class="btn btn-amber" href="/app">Open app</a>
 </div>
 </div>

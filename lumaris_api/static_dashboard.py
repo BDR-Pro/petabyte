@@ -5,17 +5,18 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <script>(function(){try{var l=localStorage.getItem('pb_lang')||'en';document.documentElement.setAttribute('lang',l);document.documentElement.setAttribute('dir',l==='ar'?'rtl':'ltr');}catch(e){}})();</script>
 <script>(function(){try{var t=localStorage.getItem('pb_theme');if(t!=='light'&&t!=='dark')t=(window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#0B1020; --panel:#141A2E; --panel2:#101627; --line:#232C45; --line2:#2E3958;
-  --ink:#EAEEF7; --mut:#8A93AD; --amber:#F5B23D; --cyan:#4FD6C9; --grid:#151C33;
-  --pos:#57D9A3; --warn:#F0A44B; --bad:#E5788B;
-  --disp:'Space Grotesk',system-ui,sans-serif; --body:'Inter',system-ui,sans-serif; --mono:'JetBrains Mono',ui-monospace,monospace;
+  /* aligned to the shared design tokens (pages.py) so /app is the same product */
+  --bg:#070C18; --panel:#0F1828; --panel2:#0B1626; --line:#213152; --line2:#2E4066;
+  --ink:#EDF2FC; --mut:#9EABC7; --amber:#FFBE45; --cyan:#3AE0CF; --grid:#152037;
+  --pos:#4FE0A0; --warn:#F2B450; --bad:#F2748C;
+  --disp:'Sora',system-ui,sans-serif; --body:'Inter',system-ui,sans-serif; --mono:'JetBrains Mono',ui-monospace,monospace;
   /* code editor + console: dark by default */
-  --editor-bg:#0B1122; --editor-ink:#EAEEF7; --console-ink:#BFE9E2;
+  --editor-bg:#0B1626; --editor-ink:#EDF2FC; --console-ink:#BFE9E2;
 }
-html[data-theme=light]{--bg:#EDF3F8;--panel:#FFFFFF;--panel2:#F5F9FC;--line:#DBE5EE;--line2:#C2D2DF;--ink:#0F1B2D;--mut:#4B5C72;--amber:#B87814;--cyan:#0E9C93;--grid:#E6EDF3;--editor-bg:#F5F9FC;--editor-ink:#0F1B2D;--console-ink:#0E5C55;}
+html[data-theme=light]{--bg:#EEF3FA;--panel:#FFFFFF;--panel2:#F6FAFD;--line:#E1EAF3;--line2:#C8D7E5;--ink:#0F1C30;--mut:#4E6079;--amber:#AE720F;--cyan:#0B9C90;--grid:#EAF0F6;--editor-bg:#F6FAFD;--editor-ink:#0F1C30;--console-ink:#0A6B63;}
 html[data-theme=light] body{background:radial-gradient(1200px 500px at 80% -10%,rgba(245,178,61,.10),transparent 60%),radial-gradient(900px 500px at 0% 0%,rgba(20,179,168,.10),transparent 55%),var(--bg)}
 html[data-theme=light] .bar{background:rgba(237,243,248,.82)}
 html[data-theme=light] input{background:#FFFFFF}
@@ -27,8 +28,8 @@ html[data-theme=light] h1 .grad{background:linear-gradient(100deg,#B87814,#0E9C9
 .tt svg{width:16px;height:16px}.tt .moon{display:none}
 html[data-theme=light] .tt .sun{display:none}html[data-theme=light] .tt .moon{display:inline-flex}
 body{transition:background-color .3s,color .3s}
-html[dir="rtl"] body{font-family:'IBM Plex Sans Arabic',var(--body)}
-html[dir="rtl"] h1,html[dir="rtl"] h2{font-family:'IBM Plex Sans Arabic',var(--disp)}
+html[dir="rtl"] body{font-family:'Cairo',var(--body)}
+html[dir="rtl"] h1,html[dir="rtl"] h2{font-family:'Cairo',var(--disp);font-weight:700}
 html[dir="rtl"] .mono,html[dir="rtl"] textarea,html[dir="rtl"] .console,html[dir="rtl"] input[type=number],html[dir="rtl"] pre{direction:ltr;text-align:left;unicode-bidi:isolate}
 html[dir="rtl"] .auth{margin-left:0;margin-right:auto}
 html[dir="rtl"] .navlinks{margin-left:0;margin-right:18px}
@@ -127,8 +128,8 @@ textarea:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(245,178,61,.1
 <body>
 <div class="bar"><div class="wrap">
   <a class="logo" href="/" style="text-decoration:none;color:inherit">
-    <svg class="spark" viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" fill="#F5B23D"/></svg>
-    Petabyte
+    <img src="/static/petabyte-logo.png" alt="Petabyte" class="spark" style="filter:drop-shadow(0 0 8px rgba(58,224,207,.5))"/>
+    <span>Petabyte<span style="color:var(--cyan)">.</span></span>
   </a>
   <nav class="navlinks">
     <a href="/marketplace">Marketplace</a>
@@ -145,10 +146,8 @@ textarea:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(245,178,61,.1
       <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
     </button>
     <span id="loginbox" style="display:flex;gap:8px;align-items:center">
-      <input id="u" aria-label="Username" placeholder="username" size="10" autocomplete="username"/>
-      <input id="p" type="password" aria-label="Password" placeholder="password" size="10" autocomplete="current-password"/>
-      <button class="btn-ghost" onclick="reg()">Create account</button>
-      <button class="btn" onclick="login()">Sign in</button>
+      <a class="btn-ghost" href="/login">Create account</a>
+      <a class="btn" href="/login">Sign in</a>
     </span>
     <span id="who" class="who" style="display:none"></span>
     <button id="signout" class="btn-ghost" style="display:none" onclick="signout()">Sign out</button>
