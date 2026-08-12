@@ -864,9 +864,9 @@ INSTALL_HTML = _page("Petabyte — become a seller",
 <!-- generated result: real key + this server's address + your price, already filled in -->
 <div class="wrap" id="ikout" style="padding:12px 22px 6px;display:none">
   <div class="mini" style="margin:6px 0 10px" data-ar="الخطوة ٢ · شغّل هذا على جهازك">Step 2 · run this on your GPU machine</div>
-  <p class="mut" style="max-width:64ch;margin-bottom:12px" data-ar="يحتوي هذا الأمر على مفتاحك وعنوان هذا الخادم — جاهزين. شغّله مرة واحدة: يسجّل الجهاز نفسه، يثبت عتاده، ويتصل. إن لم تحدد سعراً، يسعّر الجهاز نفسه من مقياس أداء كرت رسوماته. مفتاحك يُعرض هنا فقط.">This command already has your key and this server's address filled in. Run it once — the node registers, attests its GPU, and comes online. If you didn't set a price, the node prices itself from its GPU's benchmark. <b class="teal">Your key is shown only here</b>, so copy it now.</p>
+  <p class="mut" style="max-width:64ch;margin-bottom:12px" data-ar="أمر واحد يثبّت الوكيل، يقيس أداء كرت رسوماتك، ويتصل — لا مفتاح تلصقه، ولا خطوات تفاعلية. إن لم تحدد سعراً، يسعّر الجهاز نفسه من مقياس الأداء. عامل هذا الرابط كأنه كلمة مرور: كل تشغيل يُسجّل جهازاً باسم حسابك، وينتهي خلال ٣٠ يوماً.">One command installs the agent, benchmarks your GPU, and brings the node online — <b class="teal">no key to paste, nothing interactive</b>. If you didn't set a price, the node auto-prices from its benchmark. Treat this link like a password: each run enrols a worker under your account, and it expires in 30 days.</p>
   <div class="cols c2">
-    <div class="card"><div class="lbl" data-ar="لينكس · أوبونتو/دبيان">Linux · Ubuntu/Debian</div>
+    <div class="card"><div class="lbl" data-ar="لينكس · ماك">Linux · macOS <span class="mut">— paste in a terminal</span></div>
       <pre id="cmdlinux" style="white-space:pre-wrap;word-break:break-all"></pre>
       <button class="btn btn-teal" style="margin-top:10px" data-act="pbCopy" data-a1="seller_linux" data-ar="نسخ">Copy command</button></div>
     <div class="card"><div class="lbl" data-ar="ويندوز · PowerShell (يثبّت WSL2)">Windows · PowerShell <span class="mut">(installs WSL2)</span></div>
@@ -902,29 +902,24 @@ async function genInstaller(a1, btn){
   if(btn&&btn.disabled)return;
   var lbl=btn?btn.textContent:'';
   if(btn){btn.disabled=true;btn.textContent='Creating…';}
-  // Explicit price wins; a blank field means "let the node auto-price from its GPU's
-  // benchmark" — so we OMIT the var rather than baking in an invented default.
+  // Explicit price pins the rate; a blank field lets each node auto-price from its GPU benchmark.
   var pt=(document.getElementById('pprice').value||'').trim(), pn=parseFloat(pt);
-  var pset=(pt!==''&&pn>0), price=pset?pn.toFixed(2):'';
-  await api('/change_role',{method:'POST',body:JSON.stringify({role:'seller'})});   // idempotent
-  var r=await api('/create_api_key?days=90&label=node&scopes=node,jobs',{method:'POST'});
+  var body=(pt!==''&&pn>0)?JSON.stringify({price:pn}):JSON.stringify({});
+  var r=await api('/nodes/install_token',{method:'POST',body:body});
   if(btn){btn.disabled=false;btn.textContent=lbl;}
-  if(!(r.ok&&r.body&&r.body.api_key)){alert('Could not create a node key — please make sure you are signed in.');return;}
-  _renderInstaller(r.body.api_key, price);
+  if(!(r.ok&&r.body&&r.body.install)){alert('Could not create your installer — please make sure you are signed in.');return;}
+  _renderCmds(r.body.install.linux, r.body.install.windows);
 }
-// Build the ready-to-paste command from a real key. A blank price omits PRICE_PER_HOUR so
-// the node auto-prices from its detected GPU. Shared by the wallet flow and the account flow.
-function _renderInstaller(key, price){
-  var origin=location.origin, NL=String.fromCharCode(10), pset=(price!=='' && price!=null);
-  var lin='PETABYTE_API_URL='+origin+' PETABYTE_API_KEY='+key+' '+(pset?('PRICE_PER_HOUR='+price+' '):'')+'bash <(curl -fsSL '+origin+'/install.sh)';
-  var win='$env:PETABYTE_API_URL="'+origin+'"'+NL+'$env:PETABYTE_API_KEY="'+key+'"'+NL+(pset?('$env:PRICE_PER_HOUR="'+price+'"'+NL):'')+'irm '+origin+'/install.ps1 | iex';
-  window._PBCMDS['seller_linux']=lin; window._PBCMDS['seller_win']=win;
-  document.getElementById('cmdlinux').innerHTML=_esch(lin);
+// Fill the two command boxes from the server-built one-liners and reveal them. The whole command
+// is a single curl|bash / irm|iex — no key to paste, nothing interactive. Shared by both paths.
+function _renderCmds(linux, win){
+  window._PBCMDS['seller_linux']=linux; window._PBCMDS['seller_win']=win;
+  document.getElementById('cmdlinux').innerHTML=_esch(linux);
   document.getElementById('cmdwin').innerHTML=_esch(win);
   var out=document.getElementById('ikout'); out.style.display='';
   out.scrollIntoView({behavior:'smooth',block:'start'});
 }
-// Wallet-only path: no login. Paste a USDC wallet -> mint a node key bound to it -> command.
+// Wallet-only path: no login. Paste a USDC wallet -> a token-bound one-liner comes back.
 async function walletStart(a1, btn){
   var w=(document.getElementById('qwallet').value||'').trim();
   var msg=document.getElementById('qmsg');
@@ -937,10 +932,10 @@ async function walletStart(a1, btn){
       body:JSON.stringify({wallet:w})});
     var b=await r.json();
     if(btn){btn.disabled=false;btn.textContent=lbl;}
-    if(!r.ok || !b.api_key){ msg.style.color='var(--amber)';
+    if(!r.ok || !b.install){ msg.style.color='var(--amber)';
       msg.textContent=(b&&b.detail)?b.detail:'Could not create your installer — try again.'; return; }
     msg.style.color='var(--teal)'; msg.textContent='✓ ready below';
-    _renderInstaller(b.api_key, '');
+    _renderCmds(b.install.linux, b.install.windows);
   }catch(e){ if(btn){btn.disabled=false;btn.textContent=lbl;}
     msg.style.color='var(--amber)'; msg.textContent='Network error — try again.'; }
 }

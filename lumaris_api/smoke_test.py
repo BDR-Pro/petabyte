@@ -1633,22 +1633,42 @@ ok("seller onboarding generates the whole installer in one click (change_role + 
    "genInstaller" in _inst)
 ok("the generated command is copy-buttoned via the delegated pbCopy handler (no manual key paste)",
    'data-act="pbCopy"' in _inst and 'data-a1="seller_linux"' in _inst and 'data-a1="seller_win"' in _inst)
-ok("the installer URL is the server the seller is actually on (location.origin, not a hardcoded host)",
-   "location.origin" in _inst)
 ok("no stale placeholder key survives — the seller never hand-substitutes pk_your_node_key anymore",
    "pk_your_node_key" not in _inst)
 ok("price is optional and benchmark-anchored — the page auto-prices, it does not bake in a made-up rate",
    "/pricing/suggest" in _inst and 'placeholder="auto"' in _inst)
 
-# --- wallet-only onboarding: paste a wallet, get a command, no account (like starting a miner) ---
+# --- wallet-only onboarding: paste a wallet, get a ONE-LINE installer, no account (like a miner) ---
 ok("the /install page offers a wallet-only start (no login) wired to /nodes/quickstart",
    "walletStart" in _inst and "/nodes/quickstart" in _inst and 'id="qwallet"' in _inst)
 _qw = "0xABCDEF0123456789abcdef0123456789ABCDEF01"
 _qr = c.post("/nodes/quickstart", json={"wallet": _qw})
-ok("POST /nodes/quickstart mints a node key from just a wallet — no email/password",
-   _qr.status_code == 200 and bool(_qr.json().get("api_key")) and _qr.json().get("new_account") is True)
+_qj = _qr.json()
+ok("POST /nodes/quickstart returns a token-bound ONE-LINE installer from just a wallet — no signup",
+   _qr.status_code == 200 and _qj.get("new_account") is True and bool(_qj.get("install_token"))
+   and "| bash" in _qj.get("install", {}).get("linux", "")
+   and "/i/" in _qj.get("install", {}).get("linux", "")
+   and _qj.get("install", {}).get("windows", "").endswith("| iex")
+   and ".ps1" in _qj.get("install", {}).get("windows", ""))
 ok("quickstart is explicit that it is NOT payout-ready (KYC still required at withdrawal)",
-   _qr.json().get("payout_ready") is False and "KYC" in _qr.json().get("note", ""))
+   _qj.get("payout_ready") is False and "KYC" in _qj.get("note", ""))
+ok("the one-liner URL is host-relative to this server (built from the request, not a hardcoded host)",
+   "://testserver/i/" in _qj.get("install", {}).get("linux", "") and "petabyte.market" not in _qj.get("install", {}).get("linux", ""))
+# the one-liner works: fetching /i/<token> serves a runnable installer with a FRESH key baked in
+_qtok = _qj["install_token"]
+_qsh = c.get("/i/" + _qtok)
+ok("GET /i/<token> serves a non-interactive Linux installer with a minted key + this server baked in",
+   _qsh.status_code == 200 and "PETABYTE_API_KEY='" in _qsh.text
+   and "PETABYTE_API_URL='" in _qsh.text and "petabyte-agent" in _qsh.text)
+_qps = c.get("/i/" + _qtok + ".ps1")
+ok("GET /i/<token>.ps1 serves the Windows one-liner installer (env baked in)",
+   _qps.status_code == 200 and "$env:PETABYTE_API_KEY='" in _qps.text)
+ok("an unknown/expired install token 404s (fail-closed, no key handed out)",
+   c.get("/i/definitely-not-a-real-token").status_code == 404)
+# wallet flow auto-prices -> the token pins NO price, so no `export PRICE_PER_HOUR` is injected
+# (the base script still *references* the var to read it; we assert no pinned value was baked in)
+ok("the wallet one-liner pins no price (each node auto-prices from its GPU benchmark)",
+   "export PRICE_PER_HOUR=" not in _qsh.text)
 # the wallet becomes an UNVERIFIED usdc payout destination — captured, but it can move no money
 import db as _dbq
 _qs = _dbq.SessionLocal()
@@ -1667,7 +1687,18 @@ finally:
 # same wallet again -> reuse the identity (workers share one balance, like a mining address)
 _qr2 = c.post("/nodes/quickstart", json={"wallet": _qw.lower()})
 ok("re-onboarding the same wallet reuses the identity (idempotent, one balance per wallet)",
-   _qr2.status_code == 200 and _qr2.json().get("new_account") is False and bool(_qr2.json().get("api_key")))
+   _qr2.status_code == 200 and _qr2.json().get("new_account") is False and bool(_qr2.json().get("install_token")))
+# account path: a signed-in seller gets the same one-liner, and CAN pin a price
+c.post("/register_user", json={"username": "onel_seller", "password": "hunter2-correct-horse"})
+_oltok = c.post("/login", data={"username": "onel_seller", "password": "hunter2-correct-horse"}).json()["access_token"]
+_olh = {"Authorization": "Bearer " + _oltok}
+ok("POST /nodes/install_token requires sign-in (no anonymous minting on this path)",
+   c.post("/nodes/install_token", json={}).status_code in (401, 403))
+_olr = c.post("/nodes/install_token", json={"price": 2.5}, headers=_olh)
+ok("a signed-in seller gets the same token one-liner (account path), with a pinned price",
+   _olr.status_code == 200 and "| bash" in _olr.json().get("install", {}).get("linux", ""))
+ok("the pinned price is baked into the served installer (PRICE_PER_HOUR set)",
+   "PRICE_PER_HOUR='2.5" in c.get("/i/" + _olr.json()["install_token"]).text)
 # a malformed address is refused with a helpful 422 (not a 500, not a silent stub)
 ok("a non-address is refused (422), never silently accepted",
    c.post("/nodes/quickstart", json={"wallet": "definitely-not-a-wallet"}).status_code == 422)

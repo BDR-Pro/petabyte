@@ -1142,6 +1142,56 @@ class RevokedApiKey(Base):
     revoked_at = Column(DateTime, default=_utcnow)
 
 
+class NodeInstallToken(Base):
+    """A short, URL-safe enrollment token for the one-line installer.
+
+    `curl <server>/i/<token> | bash` (or `irm <server>/i/<token>.ps1 | iex`) fetches an
+    installer with a FRESHLY-minted, node-scoped API key baked in — so a machine onboards
+    with no interactive input and nothing to hand-edit. Each fetch mints its own worker key,
+    so the same token can enrol a whole rig farm, each machine independently revocable. The
+    token is a bearer capability: it only enrols NODES for one seller (it cannot log in, spend,
+    or withdraw) and it expires. Bound to a seller; carries an optional pinned price (null =>
+    the node auto-prices from its GPU benchmark)."""
+    __tablename__ = "install_tokens"
+    id = Column(Integer, primary_key=True, index=True)
+    token = Column(String, unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    price = Column(Money, nullable=True)             # pinned USD/hr, or null to auto-price
+    created_at = Column(DateTime, default=_utcnow)
+    expires_at = Column(DateTime, nullable=False)
+
+
+INSTALL_TOKEN_TTL_DAYS = 30   # enrollment tokens are bearer capabilities — bound + expiring
+
+
+def create_install_token(db: Session, user: "User", price=None,
+                         ttl_days: int = INSTALL_TOKEN_TTL_DAYS) -> "NodeInstallToken":
+    """Mint an enrollment token bound to `user`. `price` (optional) pins the listing rate;
+    None lets the node auto-price from its benchmark."""
+    tok = secrets.token_urlsafe(9)                   # ~12 url-safe chars, unguessable
+    row = NodeInstallToken(
+        token=tok, user_id=user.id,
+        price=(Decimal(str(price)) if price is not None else None),
+        expires_at=_utcnow() + timedelta(days=int(ttl_days)))
+    db.add(row); db.commit(); db.refresh(row)
+    return row
+
+
+def resolve_install_token(db: Session, token: str) -> "NodeInstallToken | None":
+    """Return the token row if it exists and has not expired, else None (fail-closed)."""
+    if not token:
+        return None
+    row = db.query(NodeInstallToken).filter(NodeInstallToken.token == token).first()
+    if row is None:
+        return None
+    exp = row.expires_at
+    if exp is not None and getattr(exp, "tzinfo", None) is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if exp is not None and exp < _utcnow():
+        return None
+    return row
+
+
 class WGPeer(Base):
     __tablename__ = "wg_peers"
     id = Column(Integer, primary_key=True, index=True)

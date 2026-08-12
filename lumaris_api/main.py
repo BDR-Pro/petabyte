@@ -77,6 +77,7 @@ from db import (
     try_reserve_unit, release_unit, create_booking, get_booking_by_id,
     revoke_jti, is_jti_revoked, add_wg_peer,
     record_issued_key, list_issued_keys, get_or_create_oauth_user,
+    create_install_token, resolve_install_token,
     idem_begin, idem_finish, idem_abort,
     create_task, claim_next_task, get_task_for_agent, mark_task_running,
     submit_task_result, get_booking_for_buyer,
@@ -1325,6 +1326,45 @@ def _release_pubkey_pem() -> str:
         return ""
 
 
+def _render_install_sh(*, api_url=None, api_key=None, price=None):
+    """The Linux installer, ready to serve. Always substitutes the pinned release pubkey. When
+    api_url+api_key are given (token enrollment), prepend exports so the script needs NO env
+    prefix and NO interactive input. Returns None if the installer isn't bundled."""
+    path = _find_installer("install.sh")
+    if not path:
+        return None
+    with open(path) as f:
+        script = f.read()
+    script = script.replace("__PETABYTE_RELEASE_PUBKEY_PEM__", _release_pubkey_pem())
+    if api_url and api_key:
+        head = ["#!/usr/bin/env bash",
+                "# Petabyte token-bound enrollment installer. Do NOT share this URL — it enrols a worker.",
+                "export PETABYTE_API_URL='%s'" % api_url,
+                "export PETABYTE_API_KEY='%s'" % api_key]
+        if price is not None:
+            head.append("export PRICE_PER_HOUR='%s'" % price)
+        script = "\n".join(head) + "\n" + script
+    return script
+
+
+def _render_install_ps1(*, api_url=None, api_key=None, price=None):
+    """The Windows (WSL2) installer, ready to serve. With api_url+api_key, prepend $env: assigns
+    so `irm … | iex` runs fully non-interactively. Returns None if not bundled."""
+    path = _find_installer("install.ps1")
+    if not path:
+        return None
+    with open(path) as f:
+        script = f.read()
+    if api_url and api_key:
+        head = ["# Petabyte token-bound enrollment installer. Do NOT share this URL — it enrols a worker.",
+                "$env:PETABYTE_API_URL='%s'" % api_url,
+                "$env:PETABYTE_API_KEY='%s'" % api_key]
+        if price is not None:
+            head.append("$env:PRICE_PER_HOUR='%s'" % price)
+        script = "\n".join(head) + "\n" + script
+    return script
+
+
 @app.get("/install.sh")
 def install_script():
     """Serve the Linux node installer so the one-liner needs no extra hosting.
@@ -1333,22 +1373,71 @@ def install_script():
     already trusts this API over TLS for the installer). update.sh then verifies every future
     agent bundle against it; unset -> the placeholder resolves empty and auto-update stays
     fail-closed (refused)."""
-    path = _find_installer("install.sh")
-    if not path:
+    script = _render_install_sh()
+    if script is None:
         raise HTTPException(status_code=404, detail="installer not bundled")
-    with open(path) as f:
-        script = f.read()
-    script = script.replace("__PETABYTE_RELEASE_PUBKEY_PEM__", _release_pubkey_pem())
     return Response(content=script, media_type="text/x-shellscript")
 
 @app.get("/install.ps1")
 def install_script_ps1():
     """Serve the Windows (WSL2) installer for the PowerShell one-liner."""
-    path = _find_installer("install.ps1")
-    if not path:
+    script = _render_install_ps1()
+    if script is None:
         raise HTTPException(status_code=404, detail="installer not bundled")
-    with open(path) as f:
-        return Response(content=f.read(), media_type="text/plain")
+    return Response(content=script, media_type="text/plain")
+
+
+def _base_url(request: Request) -> str:
+    """This server's public base URL (scheme+host), no trailing slash — so a token-bound node
+    registers back to wherever the seller reached us (prod, preview, self-host), not a constant."""
+    return str(request.base_url).rstrip("/")
+
+
+def _mint_node_key_for(db: Session, user) -> str:
+    """Mint a fresh node-scoped API key for a seller (used by token enrollment; each fetch
+    yields its own independently-revocable worker key)."""
+    api_key, jti = gen_secure_api_key(user.username, 90, ["node", "jobs"])
+    record_issued_key(db, user.id, jti, "one-line installer", ["node", "jobs"], 90)
+    return api_key
+
+
+# NOTE: the ".ps1" route MUST be declared before the bare "/i/{token}" route — the bare
+# param matches ".ps1" too (dots are legal in a path segment), so the specific one has to win.
+@app.get("/i/{token}.ps1")
+def install_by_token_ps1(token: str, request: Request, db: Session = Depends(get_db)):
+    """One-line, non-interactive enrollment (Windows): `irm <server>/i/<token>.ps1 | iex`."""
+    row = resolve_install_token(db, token)
+    user = get_user_by_id(db, row.user_id) if row else None
+    if user is None:
+        raise HTTPException(status_code=404, detail="This install link is invalid or has expired.")
+    key = _mint_node_key_for(db, user)
+    price = None if row.price is None else format(row.price, "f")
+    script = _render_install_ps1(api_url=_base_url(request), api_key=key, price=price)
+    if script is None:
+        raise HTTPException(status_code=404, detail="installer not bundled")
+    return Response(content=script, media_type="text/plain")
+
+
+@app.get("/i/{token}")
+def install_by_token(token: str, request: Request, db: Session = Depends(get_db)):
+    """One-line, non-interactive enrollment (Linux/macOS):
+
+        curl -fsSL <server>/i/<token> | bash
+
+    Resolves the enrollment token, mints a fresh node key, and returns install.sh with the key,
+    this server's URL and (optional) pinned price already baked in — the node installs, benchmarks
+    and comes online with nothing to type. Each fetch enrols a distinct worker, so one token can
+    bring up a whole rig. Invalid/expired tokens 404."""
+    row = resolve_install_token(db, token)
+    user = get_user_by_id(db, row.user_id) if row else None
+    if user is None:
+        raise HTTPException(status_code=404, detail="This install link is invalid or has expired.")
+    key = _mint_node_key_for(db, user)
+    price = None if row.price is None else format(row.price, "f")
+    script = _render_install_sh(api_url=_base_url(request), api_key=key, price=price)
+    if script is None:
+        raise HTTPException(status_code=404, detail="installer not bundled")
+    return Response(content=script, media_type="text/x-shellscript")
 
 
 @app.get("/manage.ps1")
@@ -1988,7 +2077,8 @@ def node_quickstart(data: NodeQuickstartModel, request: Request, db: Session = D
         not here. Onboarding is the only thing this makes frictionless.
       * OFAC-screens the address when the sanctions list is configured (the binding, fail-closed
         screen runs again at payout).
-      * mints a node API key (scopes: node, jobs) and returns it ONCE.
+      * returns a one-line, non-interactive installer (curl … | bash / irm … | iex) whose URL
+        carries a short enrollment token — no key to paste, nothing to type.
 
     All nodes started with the same wallet share one balance — like workers under one mining
     address. Bookability for PAID jobs still depends on the live payout/eligibility checks; a
@@ -2021,13 +2111,39 @@ def node_quickstart(data: NodeQuickstartModel, request: Request, db: Session = D
                for pm in list_payout_methods(db, me.id))
     if not have:
         add_payout_method(db, me, "usdc", wallet, label="mining wallet (verify at payout)")
-    api_key, jti = gen_secure_api_key(username, 90, ["node", "jobs"])
-    record_issued_key(db, me.id, jti, "node", ["node", "jobs"], 90)
+    # Wallet onboarding auto-prices from each node's benchmark, so no pinned price on the token.
+    tok = create_install_token(db, me)
+    base = _base_url(request)
     if new_account:
         obs.event(EVENTS.USER_SIGNED_UP, message="wallet-only node onboarding", user_id=me.id, referred=False)
-    return {"status": "ok", "api_key": api_key, "wallet": wallet, "new_account": new_account,
-            "payout_ready": False,
+    return {"status": "ok", "wallet": wallet, "new_account": new_account, "payout_ready": False,
+            "install_token": tok.token,
+            "install": {"linux": "curl -fsSL %s/i/%s | bash" % (base, tok.token),
+                        "windows": "irm %s/i/%s.ps1 | iex" % (base, tok.token)},
             "note": "Onboarding only — withdrawing earnings later requires identity verification (KYC)."}
+
+
+class InstallTokenModel(BaseModel):
+    price: Optional[float] = Field(None, ge=0, le=1000)
+
+
+@app.post("/nodes/install_token", tags=["seller"])
+def make_install_token(data: InstallTokenModel, request: Request,
+                       user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Create a short one-line installer link for the SIGNED-IN seller (the account path's
+    equivalent of /nodes/quickstart). An optional price pins the listing rate; omit it and each
+    node auto-prices from its own GPU benchmark. Returns the same non-interactive one-liners."""
+    me = get_user_by_username(db, _username(user))
+    if me is None:
+        raise HTTPException(status_code=401, detail="Sign in first.")
+    if me.role != "seller":
+        set_role(db, me.username, "seller")
+    price = data.price if (data.price and data.price > 0) else None
+    tok = create_install_token(db, me, price=price)
+    base = _base_url(request)
+    return {"status": "ok", "install_token": tok.token,
+            "install": {"linux": "curl -fsSL %s/i/%s | bash" % (base, tok.token),
+                        "windows": "irm %s/i/%s.ps1 | iex" % (base, tok.token)}}
 
 
 # ------------------- GOOGLE SIGN-IN -------------------
