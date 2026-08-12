@@ -6024,6 +6024,63 @@ def data_market(user=Depends(api_key_user), db: Session = Depends(get_db)):
             "usage": usage}
 
 
+@app.get("/api/v1/data/savings", tags=["data"])
+def data_savings(user=Depends(api_key_user), db: Session = Depends(get_db)):
+    """Cloud-savings index: per GPU, the benchmark-anchored reference price vs the public cloud
+    on-demand rate and the % cheaper. Sorted by benchmark. Metered."""
+    usage = _meter_data_or_402(user, db)
+    import pricing_engine
+    rows = pricing_engine.catalog()
+    savings = [r["savings_vs_cloud_pct"] for r in rows if r.get("savings_vs_cloud_pct") is not None]
+    return {"as_of": datetime.now(timezone.utc).isoformat(),
+            "gpus": rows,
+            "median_savings_vs_cloud_pct": (sorted(savings)[len(savings) // 2] if savings else None),
+            "usage": usage}
+
+
+@app.get("/api/v1/data/availability", tags=["data"])
+def data_availability(user=Depends(api_key_user), db: Session = Depends(get_db)):
+    """Live supply index: how many nodes are online per GPU model and per region right now.
+    Aggregate counts only — no seller identity. Metered."""
+    usage = _meter_data_or_402(user, db)
+    import gpu_benchmark
+    from db import SellerSpec
+    by_model, by_region, total = {}, {}, 0
+    for s in db.query(SellerSpec).all():
+        if not spec_is_live(s):
+            continue
+        total += 1
+        key = gpu_benchmark.normalize_model(s.gpu_model) or (s.gpu_model or "unknown")
+        by_model[key] = by_model.get(key, 0) + 1
+        reg = (s.region or s.country or "unknown")
+        by_region[reg] = by_region.get(reg, 0) + 1
+    return {"as_of": datetime.now(timezone.utc).isoformat(),
+            "live_nodes_total": total,
+            "by_gpu": [{"gpu_model": k, "live_nodes": v}
+                       for k, v in sorted(by_model.items(), key=lambda kv: -kv[1])],
+            "by_region": [{"region": k, "live_nodes": v}
+                          for k, v in sorted(by_region.items(), key=lambda kv: -kv[1])],
+            "usage": usage}
+
+
+@app.get("/api/v1/data/benchmarks", tags=["data"])
+def data_benchmarks(since_id: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=5000),
+                    user=Depends(api_key_user), db: Session = Depends(get_db)):
+    """The GPU-authenticity dataset (the data moat): per-observation benchmark scores, their ratio
+    to the public per-model reference, server-timing, proof-of-work result, and the fraud/verdict
+    LABELS — the (features, label) corpus a fraud/authenticity model trains on. ANONYMIZED: no
+    seller identity and no node id. `since_id` supports incremental pulls. Metered."""
+    usage = _meter_data_or_402(user, db)
+    import training_data as td
+    rows = td.export_authenticity_dataset(db, limit=limit, since_id=since_id)
+    for r in rows:
+        r.pop("spec_id", None)     # anonymize: never sell node identity, only GPU/perf signal
+    return {"count": len(rows), "since_id": since_id,
+            "next_since_id": (rows[0]["sample_id"] if rows else since_id),
+            "stats": td.dataset_stats(db),
+            "rows": rows, "usage": usage}
+
+
 @app.get("/api/v1/data/usage", tags=["data"])
 def data_usage(user=Depends(api_key_user), db: Session = Depends(get_db)):
     """The caller's data-API usage this month — free to check, never billed. Needs a `data` key."""

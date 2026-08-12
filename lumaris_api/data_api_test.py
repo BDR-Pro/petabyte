@@ -105,6 +105,28 @@ _s.close()
 ok("the wallet balance dropped by exactly the fees charged ($5 - $2 = $3)", abs(_bal - 3.0) < 1e-9)
 ok("data-API fees are booked to PLATFORM_REVENUE (real revenue, double-entry)", abs(_rev - 2.0) < 1e-9)
 
+# ---- more monetized datasets (all metered, aggregate/anonymized) ----
+_s = dbm.SessionLocal(); _u = dbm.get_user_by_username(_s, "dataco"); dbm.deposit(_s, _u, 10.0); _s.commit(); _s.close()
+_sv = c.get("/api/v1/data/savings", headers=_kh)
+ok("savings index: per-GPU cheaper-than-cloud %, metered",
+   _sv.status_code == 200 and isinstance(_sv.json().get("gpus"), list)
+   and _sv.json()["usage"]["billed"] is True)
+_av = c.get("/api/v1/data/availability", headers=_kh)
+ok("availability index: live supply by GPU + region (aggregate counts, no identity)",
+   _av.status_code == 200 and "live_nodes_total" in _av.json()
+   and "by_gpu" in _av.json() and "by_region" in _av.json())
+# seed a benchmark sample so the authenticity dataset has a row to serve
+_s = dbm.SessionLocal()
+_s.add(dbm.BenchmarkSample(spec_id=None, seller_id=None, gpu_model="RTX 4090", source="benchmark",
+                           metrics='{"tflops_fp16": 320.0}', verdict="consistent",
+                           pow_verified=True, reputation=100, jobs_completed=5, fraud_count=0))
+_s.commit(); _s.close()
+_bj = c.get("/api/v1/data/benchmarks?limit=10", headers=_kh).json()
+ok("authenticity dataset: labelled feature rows + corpus stats, metered",
+   _bj["count"] >= 1 and "stats" in _bj and any("label_verdict" in r for r in _bj["rows"]))
+ok("the sold dataset is ANONYMIZED: no seller_id and no node/spec_id in any row",
+   all("seller_id" not in r and "spec_id" not in r for r in _bj["rows"]))
+
 for f in ("data_api_test.db", "data_api_test.db-wal", "data_api_test.db-shm"):
     if os.path.exists(f):
         os.remove(f)

@@ -1728,6 +1728,13 @@ _nkey2 = c.post("/create_api_key?scopes=node,jobs&days=30", headers=_dh).json()[
 ok("a node/jobs key is refused from the data API (scope-gated)",
    c.get("/api/v1/data/usage", headers={"X-API-KEY": _nkey2}).status_code == 403)
 ok("/developers documents the metered data API", "/api/v1/data/gpu-prices" in c.get("/developers").text)
+# more monetized datasets: savings index, live-supply availability, anonymized authenticity corpus
+ok("savings + availability datasets are served to a data key",
+   c.get("/api/v1/data/savings", headers=_dkh).status_code == 200
+   and "live_nodes_total" in c.get("/api/v1/data/availability", headers=_dkh).json())
+_bmk = c.get("/api/v1/data/benchmarks", headers=_dkh).json()
+ok("the authenticity dataset is sold anonymized (stats + rows, no seller_id/spec_id)",
+   "stats" in _bmk and all("seller_id" not in r and "spec_id" not in r for r in _bmk.get("rows", [])))
 
 # --- wallet-only onboarding: paste a wallet, get a ONE-LINE installer, no account (like a miner) ---
 ok("the /install page offers a wallet-only start (no login) wired to /nodes/quickstart",

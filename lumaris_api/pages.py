@@ -1120,9 +1120,12 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
       <p class="mono" style="font-size:12.5px;line-height:2.05">
       GET /api/v1/data/gpu-prices <span class="mut">price index</span><br>
       GET /api/v1/data/gpu-prices/history <span class="mut">time-series</span><br>
+      GET /api/v1/data/savings <span class="mut">vs-cloud index</span><br>
+      GET /api/v1/data/availability <span class="mut">live supply</span><br>
       GET /api/v1/data/market <span class="mut">inventory summary</span><br>
+      GET /api/v1/data/benchmarks <span class="mut">authenticity dataset</span><br>
       GET /api/v1/data/usage <span class="mut">your quota (free)</span></p>
-      <p class="mut" style="font-size:12px;margin-top:8px">Needs a <code class="teal">data</code>-scoped key. A free monthly quota, then pay-as-you-go from your wallet balance.</p></div>
+      <p class="mut" style="font-size:12px;margin-top:8px">Needs a <code class="teal">data</code>-scoped key. A free monthly quota, then pay-as-you-go from your wallet balance. Datasets are aggregate/anonymized — no seller identity.</p></div>
   </div>
   <div style="margin-top:18px"><a class="btn btn-amber" href="/docs">Open interactive docs →</a></div>
 </div>""")
