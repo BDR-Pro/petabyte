@@ -218,14 +218,15 @@ class SellerSpec(Base):
     idle_hashrate = Column(Float, nullable=True)
     idle_est_daily_usd = Column(Float, nullable=True)
     idle_reported_at = Column(DateTime, nullable=True)
-    # --- rent SPARE DISK to a web3/BitTorrent storage network (Storj/BTFS/Sia), same "earn a
-    # trickle" model as idle mining but for disk. Runs ALONGSIDE paid GPU jobs (disk != GPU), so it
-    # is not preempted. Each node contributes as a UNIQUE node name (pbdisk-<spec_id>) so earnings
-    # attribute 1:1 to the seller's unified balance — no per-seller storage wallet. Opt-in; the
-    # seller sets the GB cap and can pause/disable/delete at any time. ---
-    disk_fallback = Column(Boolean, default=False)   # opt-in: contribute spare disk
-    disk_provider = Column(String, nullable=True)    # storj | btfs | sia (adapter)
-    disk_alloc_gb = Column(Integer, nullable=True)   # seller's hard cap on contributed GB
+    # --- rent SPARE DISK to a web3/BitTorrent storage network (Storj/BTFS/Sia). NOT an idle/
+    # fallback mode — it is an EXPLICIT, always-on contribution the seller configures with real
+    # arguments (a provider AND a GB cap; neither is defaulted). It runs INDEPENDENTLY of GPU
+    # rentals (disk != GPU), so it earns whether or not a job is running. Each node contributes as a
+    # UNIQUE node name (pbdisk-<spec_id>) so earnings attribute 1:1 to the seller's unified balance
+    # — no per-seller storage wallet. The seller can change the cap, pause, or delete at any time. ---
+    disk_enabled = Column(Boolean, default=False)    # explicit on/off (requires provider + cap to enable)
+    disk_provider = Column(String, nullable=True)    # storj | btfs | sia (adapter) — REQUIRED to enable
+    disk_alloc_gb = Column(Integer, nullable=True)   # seller's hard cap on contributed GB — REQUIRED to enable
     disk_used_gb = Column(Float, nullable=True)      # last reported used GB
     disk_est_daily_usd = Column(Float, nullable=True)
     disk_reported_at = Column(DateTime, nullable=True)
@@ -1945,7 +1946,7 @@ def _ensure_columns():
                   ("tee_attested_at", "TIMESTAMP"),
                   ("benchmark_verdict", "VARCHAR"),
                   ("benchmark_elapsed_s", "FLOAT"),
-                  ("disk_fallback", "BOOLEAN DEFAULT false"),
+                  ("disk_enabled", "BOOLEAN DEFAULT false"),
                   ("disk_provider", "VARCHAR"), ("disk_alloc_gb", "INTEGER"),
                   ("disk_used_gb", "FLOAT"), ("disk_est_daily_usd", "FLOAT"),
                   ("disk_reported_at", "TIMESTAMP")],
@@ -3963,11 +3964,13 @@ def spec_id_from_disk_node(node_id: str):
         return None
 
 
-def set_disk_fallback(db: Session, spec: "SellerSpec", enabled: bool,
-                      provider: str = None, alloc_gb: int = None) -> None:
-    """Opt a node in/out of contributing spare disk, and set its provider + GB cap. Disabling
-    leaves the config so re-enabling is one click; DELETE (delete_disk_fallback) clears it."""
-    spec.disk_fallback = bool(enabled)
+def set_disk_rental(db: Session, spec: "SellerSpec", enabled: bool,
+                    provider: str = None, alloc_gb: int = None) -> None:
+    """Turn a node's disk rental on/off and set its provider + GB cap. Enabling is EXPLICIT and
+    requires real args — the caller (API) rejects enable without a provider AND a cap; this helper
+    just persists what it's given. Disabling leaves the config so re-enabling is one click;
+    delete_disk_rental clears it."""
+    spec.disk_enabled = bool(enabled)
     if provider is not None:
         spec.disk_provider = provider
     if alloc_gb is not None:
@@ -3975,10 +3978,10 @@ def set_disk_fallback(db: Session, spec: "SellerSpec", enabled: bool,
     db.add(spec); db.commit()
 
 
-def delete_disk_fallback(db: Session, spec: "SellerSpec") -> None:
+def delete_disk_rental(db: Session, spec: "SellerSpec") -> None:
     """Cancel + delete: disable and clear the config (the agent then removes the node container
     and wipes its data dir on the next heartbeat)."""
-    spec.disk_fallback = False
+    spec.disk_enabled = False
     spec.disk_provider = None
     spec.disk_alloc_gb = None
     spec.disk_used_gb = None

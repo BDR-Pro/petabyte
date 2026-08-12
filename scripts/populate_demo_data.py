@@ -60,7 +60,7 @@ def enrich_disk_idle(dbmod):
         for i, sp in enumerate(_demo_specs(dbmod, s)):
             if i % 2 == 0:                      # every other node rents spare disk
                 alloc = _DISK_ALLOC[i % len(_DISK_ALLOC)]
-                sp.disk_fallback = True
+                sp.disk_enabled = True
                 sp.disk_provider = _DISK_PROVIDERS[i % len(_DISK_PROVIDERS)]
                 sp.disk_alloc_gb = alloc
                 sp.disk_used_gb = round(alloc * 0.4, 1)

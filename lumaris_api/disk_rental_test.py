@@ -85,22 +85,32 @@ def _balances(uid):
 A = make_seller(1)
 B = make_seller(2)
 
-# ---- opt-in + config + GB cap + provider validation ----
-r = c.post("/nodes/disk_fallback", headers=A["jh"],
+# ---- ENABLING REQUIRES EXPLICIT ARGS (not an idle/fallback toggle) ----
+none_provider = c.post("/nodes/disk", headers=A["jh"],
+                       json={"spec_id": A["spec_id"], "enabled": True, "alloc_gb": 100})
+ok("enabling WITHOUT a provider is refused (422) — disk rental always needs args",
+   none_provider.status_code == 422)
+none_alloc = c.post("/nodes/disk", headers=A["jh"],
+                    json={"spec_id": A["spec_id"], "enabled": True, "provider": "storj"})
+ok("enabling WITHOUT a GB cap is refused (422) — disk rental always needs args",
+   none_alloc.status_code == 422)
+
+# ---- explicit config + GB cap + provider validation ----
+r = c.post("/nodes/disk", headers=A["jh"],
            json={"spec_id": A["spec_id"], "enabled": True, "provider": "storj", "alloc_gb": 5000})
 j = r.json()
-ok("a seller opts a node into disk rental with a provider + GB cap",
+ok("a seller enables disk rental with an explicit provider + GB cap",
    r.status_code == 200 and j["disk"]["enabled"] is True and j["disk"]["provider"] == "storj")
 ok("the GB cap is clamped to the safety ceiling (5000 -> MAX_DISK_ALLOC_GB=1000)",
    j["disk"]["alloc_gb"] == 1000)
 ok("each node gets a UNIQUE contribution name pbdisk-<spec_id> (the attribution key)",
    j["disk"]["node_name"] == f"pbdisk-{A['spec_id']}")
-bad = c.post("/nodes/disk_fallback", headers=A["jh"],
+bad = c.post("/nodes/disk", headers=A["jh"],
              json={"spec_id": A["spec_id"], "enabled": True, "provider": "dropbox", "alloc_gb": 10})
 ok("an unsupported provider is rejected (422)", bad.status_code == 422)
 
 # two different nodes -> two different attribution names (no collision)
-rb = c.post("/nodes/disk_fallback", headers=B["jh"],
+rb = c.post("/nodes/disk", headers=B["jh"],
             json={"spec_id": B["spec_id"], "enabled": True, "provider": "btfs", "alloc_gb": 200}).json()
 ok("a second node contributes under its OWN distinct name",
    rb["disk"]["node_name"] == f"pbdisk-{B['spec_id']}"
@@ -118,7 +128,7 @@ rep = c.post("/nodes/disk_report", headers=A["kh"],
 ok("the agent reports usage + an estimated trickle", rep.status_code == 200)
 st = c.get(f"/nodes/{A['spec_id']}/disk", headers=A["jh"]).json()
 ok("status shows the config, usage, node name, and credited-to-date",
-   st["disk_fallback"] is True and st["used_gb"] == 12.5
+   st["enabled"] is True and st["used_gb"] == 12.5
    and st["node_name"] == f"pbdisk-{A['spec_id']}" and st["credited_total_usd"] == 0.0)
 
 # ---- providers catalog ----
@@ -151,14 +161,14 @@ ok("reconcile is idempotent per (node, period) — no double credit",
 
 # ---- ownership: a foreign seller can't touch another's node ----
 ok("a foreign seller can't toggle another's node (404)",
-   c.post("/nodes/disk_fallback", headers=B["jh"],
+   c.post("/nodes/disk", headers=B["jh"],
           json={"spec_id": A["spec_id"], "enabled": False}).status_code == 404)
 ok("a foreign agent key can't report for another's node (404)",
    c.post("/nodes/disk_report", headers=B["kh"],
           json={"spec_id": A["spec_id"], "provider": "storj"}).status_code == 404)
 
 # ---- limit change, then DELETE (cancel + wipe signal) ----
-lim = c.post("/nodes/disk_fallback", headers=A["jh"],
+lim = c.post("/nodes/disk", headers=A["jh"],
              json={"spec_id": A["spec_id"], "enabled": True, "provider": "storj", "alloc_gb": 50}).json()
 ok("the seller can LOWER the cap at any time", lim["disk"]["alloc_gb"] == 50)
 dele = c.delete(f"/nodes/{A['spec_id']}/disk", headers=A["jh"]).json()

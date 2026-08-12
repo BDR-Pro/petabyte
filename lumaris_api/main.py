@@ -99,7 +99,7 @@ from db import (
     note_heartbeat, note_job_completed, note_job_failed, note_fraud,
     compute_reputation, recent_rep_events, trust_level_for,
     set_idle_fallback, record_idle_report, idle_credited_total,
-    set_disk_fallback, delete_disk_fallback, record_disk_report, disk_credited_total,
+    set_disk_rental, delete_disk_rental, record_disk_report, disk_credited_total,
     disk_node_name, DISK_PROVIDERS,
     add_payout_method, list_payout_methods, get_payout_method,
     request_payout, set_payout_status, list_payouts,
@@ -913,11 +913,13 @@ class IdleReportModel(BaseModel):
     est_daily_usd: float = 0.0
 
 
-class DiskFallbackModel(BaseModel):
+class DiskRentalModel(BaseModel):
     spec_id: int
     enabled: bool
+    # provider + alloc_gb are REQUIRED to enable (validated in the handler) — disk rental is an
+    # explicit configured contribution, never a defaulted "fallback".
     provider: Optional[str] = Field(None, max_length=16)   # storj | btfs | sia
-    alloc_gb: Optional[int] = Field(None, ge=0, le=1_000_000)  # seller's GB cap
+    alloc_gb: Optional[int] = Field(None, ge=1, le=1_000_000)  # seller's GB cap (>=1)
 
 
 class DiskReportModel(BaseModel):
@@ -3565,7 +3567,7 @@ def seller_dashboard(user: dict = Depends(get_current_user), db: Session = Depen
             current_price=float(sp.price_per_hour or 0),
         )
         nodes.append({
-            "id": sp.public_id, "gpu_model": sp.gpu_model,
+            "id": sp.public_id, "spec_id": sp.id, "gpu_model": sp.gpu_model,
             "online": live, "attested": bool(sp.attested),
             "price_per_hour": D(sp.price_per_hour),
             "units_total": sp.total_units, "units_busy": busy,
@@ -4250,40 +4252,50 @@ def idle_status(spec_id: int, user: dict = Depends(get_current_user),
 
 
 # ------------------- Spare-disk rental (rent unused disk to a web3/BitTorrent network) -------------------
-# The disk analogue of idle mining: a seller pledges spare disk to a decentralized storage network
-# (Storj / BTFS / Sia) and earns a background trickle. Each node contributes under a UNIQUE node
-# name (pbdisk-<spec_id>) so a settled payout attributes 1:1 to the seller's unified balance — no
-# per-seller storage wallet, exactly like NiceHash's `pb-<spec_id>` worker id. Opt-in; the seller
-# sets the GB cap and can limit / pause / disable / delete at any time. Runs ALONGSIDE paid GPU jobs
-# (disk != GPU), so it never competes with rentals.
+# A seller rents spare disk to a decentralized storage network (Storj / BTFS / Sia). This is NOT an
+# idle/fallback mode — it is an EXPLICIT contribution the seller turns on with real arguments (a
+# provider AND a GB cap, both required). It runs INDEPENDENTLY of GPU rentals (disk != GPU), so it
+# earns whether or not a job is running. Each node contributes under a UNIQUE node name
+# (pbdisk-<spec_id>) so a settled payout attributes 1:1 to the seller's unified balance — no
+# per-seller storage wallet (the attribution model NiceHash's `pb-<spec_id>` worker id also uses).
+# The seller sets the GB cap and can change it, pause, or delete at any time.
 
 def _disk_cfg(spec) -> dict:
     """The config the agent needs to start/limit/stop its storage node (sent on the heartbeat)."""
-    return {"enabled": bool(spec.disk_fallback),
+    return {"enabled": bool(spec.disk_enabled),
             "provider": spec.disk_provider,
             "alloc_gb": spec.disk_alloc_gb,
             "node_name": disk_node_name(spec)}
 
 
-@app.post("/nodes/disk_fallback", tags=["seller"])
-def toggle_disk_fallback(data: DiskFallbackModel, user: dict = Depends(get_current_user),
-                         db: Session = Depends(get_db)):
-    """Opt a node in/out of renting SPARE DISK to a storage network, and set its provider + GB cap.
-    Off by default. Independent of GPU rentals — disk earns even while a paid job runs. The seller
-    owns the cap and can change or disable it here; the node's earnings land in the unified balance
-    (attributed by its node name pbdisk-<id>). Petabyte never holds a per-seller storage wallet."""
+@app.post("/nodes/disk", tags=["seller"])
+def configure_disk_rental(data: DiskRentalModel, user: dict = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    """Configure a node's SPARE-DISK rental to a storage network. Enabling ALWAYS requires explicit
+    args — a `provider` AND an `alloc_gb` (GB cap); this is a configured contribution, never a
+    defaulted fallback. Independent of GPU rentals (disk earns even while a paid job runs). Earnings
+    land in the unified balance, attributed by the node name pbdisk-<id>; Petabyte never holds a
+    per-seller storage wallet. Disable by sending enabled=false (config kept for one-click re-enable)."""
     owner = _require_seller(db, user)
     spec = _get_spec(db, data.spec_id)
     if not spec or spec.user_id != owner.id:
         raise HTTPException(status_code=404, detail="Spec not found")
-    provider = (data.provider or spec.disk_provider or "storj").lower()
-    if provider not in DISK_PROVIDERS:
-        raise HTTPException(status_code=422,
-                            detail=f"provider must be one of {sorted(DISK_PROVIDERS)}")
-    alloc = data.alloc_gb
-    if alloc is not None:
-        alloc = max(0, min(int(alloc), MAX_DISK_ALLOC_GB))
-    set_disk_fallback(db, spec, data.enabled, provider=provider, alloc_gb=alloc)
+    if data.enabled:
+        # EXPLICIT args required to enable — no defaulting of provider or cap.
+        provider = (data.provider or "").lower()
+        if provider not in DISK_PROVIDERS:
+            raise HTTPException(status_code=422, detail={
+                "code": "DISK_PROVIDER_REQUIRED",
+                "message": f"enabling disk rental requires a provider ({sorted(DISK_PROVIDERS)})."})
+        if data.alloc_gb is None or int(data.alloc_gb) < 1:
+            raise HTTPException(status_code=422, detail={
+                "code": "DISK_ALLOC_REQUIRED",
+                "message": "enabling disk rental requires alloc_gb (the GB cap to pledge, >= 1)."})
+        alloc = min(int(data.alloc_gb), MAX_DISK_ALLOC_GB)
+        set_disk_rental(db, spec, True, provider=provider, alloc_gb=alloc)
+    else:
+        # Pause: keep the stored provider/cap so re-enabling is one click.
+        set_disk_rental(db, spec, False)
     return {"status": "ok", "spec_id": spec.id, "disk": _disk_cfg(spec)}
 
 
@@ -4297,7 +4309,7 @@ def delete_disk_node(spec_id: int, user: dict = Depends(get_current_user),
     spec = _get_spec(db, spec_id)
     if not spec or spec.user_id != owner.id:
         raise HTTPException(status_code=404, detail="Spec not found")
-    delete_disk_fallback(db, spec)
+    delete_disk_rental(db, spec)
     return {"status": "deleted", "spec_id": spec.id, "disk": _disk_cfg(spec)}
 
 
@@ -4320,7 +4332,7 @@ def disk_status(spec_id: int, user: dict = Depends(get_current_user),
     spec = _get_spec(db, spec_id)
     if not spec or not me or spec.user_id != me.id:
         raise HTTPException(status_code=404, detail="Spec not found")
-    return {"spec_id": spec.id, "disk_fallback": bool(spec.disk_fallback),
+    return {"spec_id": spec.id, "enabled": bool(spec.disk_enabled),
             "provider": spec.disk_provider, "alloc_gb": spec.disk_alloc_gb,
             "used_gb": spec.disk_used_gb, "est_daily_usd": spec.disk_est_daily_usd,
             "reported_at": str(spec.disk_reported_at) if spec.disk_reported_at else None,

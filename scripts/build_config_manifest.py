@@ -117,8 +117,8 @@ AGENT_VARS = {
     "NICEHASH_TAKE_RATE": {"required": False, "default": "0.10", "scope": ["platform"], "format": "float",
                            "description": "Platform commission on idle-mining revenue (idle_reconcile tool)."},
     # spare-disk rental — agent side (platform-side vars live in template.env; see docs/DISK_RENTAL.md)
-    "DISK_FALLBACK": {"required": False, "default": "false", "scope": ["gpu"], "format": "bool",
-                      "description": "Operator opt-in: let this machine rent spare disk to a storage network."},
+    "DISK_RENTAL_ENABLED": {"required": False, "default": "false", "scope": ["gpu"], "format": "bool",
+                            "description": "Operator opt-in: allow this machine to rent spare disk to a storage network."},
     "DISK_PAYOUT_WALLET": {"required": False, "default": None, "scope": ["gpu"],
                            "description": "Petabyte's platform storage wallet set on every disk node "
                                           "(earnings pool centrally, credited per node — no per-seller wallet)."},

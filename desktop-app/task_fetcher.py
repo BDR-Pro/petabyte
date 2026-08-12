@@ -58,7 +58,10 @@ def heartbeat_loop():
             r = httpx.post(f"{API_URL}/heartbeat", json={"spec_id": int(SPEC_ID)},
                            headers=HEADERS, timeout=10)
             if r.status_code == 200:
-                _platform_idle["enabled"] = bool(r.json().get("idle_fallback"))
+                _body = r.json()
+                _platform_idle["enabled"] = bool(_body.get("idle_fallback"))
+                # Spare-disk rental runs ALONGSIDE paid jobs (disk != GPU) — driven from the heartbeat.
+                _apply_disk_cfg(_body.get("disk"))
                 logging.debug("heartbeat ok")
             else:
                 logging.warning(f"heartbeat {r.status_code}: {r.text[:200]}")
@@ -235,6 +238,11 @@ def _egress_flags(task):
     """Template egress policy. Default closed; 'limited'/'open' rely on the host egress
     firewall (install.sh) to block cloud-metadata + LAN. See docs/egress.md."""
     policy = (task.get("egress") or "none").lower()
+    if policy == "cluster":
+        # A distributed rank reaches the OTHER ranks over the WireGuard mesh (and must be reachable
+        # on the rendezvous/master port), so it shares the host network. Trade-off + hardening
+        # roadmap documented in lumaris_agent/task_fetcher and docs/DISTRIBUTED_PROVIDER.md.
+        return ["--network", "host"]
     if policy in ("limited", "open"):
         return []
     return ["--network", "none"]
@@ -522,6 +530,152 @@ def stop_idle_miner():
         logging.info("idle miner stopped (paid work / disabled)")
 
 
+def _run_distributed(task):
+    """Run ONE rank of a distributed cluster: register this rank, resolve the master, execute
+    (built-in all-reduce self-test OR the buyer container under torchrun), report a signed result.
+    Mirror of lumaris_agent/task_fetcher._run_distributed. See docs/DISTRIBUTED_PROVIDER.md."""
+    import distributed_run as _dist
+    tid = task["task_id"]
+    dist = task.get("distributed") or {}
+    rank = int(dist.get("rank", 0)); world = int(dist.get("world_size", 1))
+    backend = dist.get("backend", "nccl"); job_id = dist.get("job_id")
+    _set_ui(status="running", task=f"Distributed rank {rank}/{world} #{tid}")
+    host = _dist.local_vpn_addr()
+    port = int(os.getenv("DIST_RENDEZVOUS_PORT", str(_dist.DEFAULT_RENDEZVOUS_PORT)))
+    try:
+        reg = httpx.post(f"{API_URL}{dist.get('register_url', '/jobs/rendezvous')}",
+                         headers=HEADERS, timeout=15,
+                         json={"task_id": tid, "host": host, "port": port, "slots": 1}).json()
+        report_progress(tid, 15, f"rank {rank}/{world} registered at {host}:{port}")
+        rdzv_url = dist.get("rendezvous_url") or f"/jobs/rendezvous/{job_id}"
+
+        def _fetch():
+            return httpx.get(f"{API_URL}{rdzv_url}", headers=HEADERS, timeout=15,
+                             params={"task_id": tid}).json()
+
+        master = _dist.resolve_master(
+            dist, my_host=host, my_port=port, current=reg, fetch=_fetch, sleep=time.sleep,
+            timeout_s=int(os.getenv("DIST_RENDEZVOUS_TIMEOUT", "300")))
+        maddr, mport = master["master_addr"], int(master["master_port"])
+        report_progress(tid, 30, f"cluster formed; master={maddr}:{mport} backend={backend}")
+
+        if _dist.is_selftest(task):
+            out = _dist.run_allreduce_rank(
+                rank, world, maddr, mport, dim=int(os.getenv("DIST_SELFTEST_DIM", "8")),
+                seed=int(job_id or 0), bind_host=("0.0.0.0" if rank == 0 else None),
+                timeout_s=int(os.getenv("DIST_SELFTEST_TIMEOUT", "180")))
+            ch = crypto.sha256_hex(out["result"])
+            report_progress(tid, 95, f"all-reduce ok across {out['contributors']} ranks")
+            _post("/jobs/result", _signed_result(
+                tid, status="completed",
+                result=f"allreduce rank {rank}/{world}: sum={out['result']}", content_hash=ch))
+            _set_ui(status="idle", task=None, ok=True)
+            return
+
+        import shutil, subprocess
+        if not shutil.which("docker"):
+            report_log(tid, "docker not installed; cannot run distributed rank")
+            _post("/jobs/result", _signed_result(tid, status="failed"))
+            _set_ui(status="idle", task=None, fail=True)
+            return
+        argv = _dist.build_torchrun_cmd(
+            image=task.get("image"), command=task.get("command"), rank=rank, world_size=world,
+            master_addr=maddr, master_port=mport, backend=backend, gpu=bool(task.get("gpu")),
+            env=task.get("env") or {}, isolation_flags=_isolation_flags(task),
+            egress_flags=_egress_flags(task))
+        report_progress(tid, 45, f"launching torchrun rank {rank}/{world}")
+        subprocess.check_call(argv)
+        report_progress(tid, 100, f"rank {rank}/{world} finished")
+        _post("/jobs/result", _signed_result(
+            tid, status="completed", result=f"distributed rank {rank}/{world} complete"))
+        _set_ui(status="idle", task=None, ok=True)
+    except Exception as e:                              # noqa: BLE001
+        report_log(tid, f"distributed rank {rank}/{world} failed: {e}")
+        _post("/jobs/result", _signed_result(tid, status="failed"))
+        _set_ui(status="idle", task=None, fail=True)
+
+
+# ---- Spare-disk rental: rent unused disk to a web3/BitTorrent storage network (explicit, always-on) ----
+# NOT an idle/fallback mode — an EXPLICIT contribution (provider + GB cap required) that runs
+# independently of GPU work. Operator allows it with DISK_RENTAL_ENABLED=true; the seller configures
+# it via the API (delivered on the heartbeat). Mirror of lumaris_agent; see docs/DISK_RENTAL.md.
+_disk_running = {"on": False, "node": None, "alloc": 0, "provider": None}
+
+
+def _disk_rental_enabled() -> bool:
+    return os.getenv("DISK_RENTAL_ENABLED", "").lower() == "true"
+
+
+def start_disk_node(provider, node_name, alloc_gb):
+    import shutil, subprocess
+    import disk_node as _dn
+    if not shutil.which("docker") or not _dn.provider_supported(provider) or int(alloc_gb) < 1:
+        return
+    if (_disk_running["on"] and _disk_running["node"] == node_name
+            and _disk_running["alloc"] == int(alloc_gb)
+            and _disk_running["provider"] == provider):
+        return
+    data_dir = _dn.data_dir_for(node_name)
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        subprocess.run(["docker", "rm", "-f", _dn.container_name(node_name)], capture_output=True)
+        subprocess.check_call(_dn.build_disk_cmd(
+            provider=provider, node_name=node_name, alloc_gb=int(alloc_gb),
+            data_dir=data_dir, wallet=os.getenv("DISK_PAYOUT_WALLET", "")))
+        _disk_running.update({"on": True, "node": node_name, "alloc": int(alloc_gb),
+                              "provider": provider})
+        logging.info(f"disk rental: {alloc_gb} GB to {provider} as {node_name}")
+        _report_disk(provider, node_name, int(alloc_gb))
+    except Exception as e:                              # noqa: BLE001
+        logging.error(f"disk node start failed: {e}")
+
+
+def stop_disk_node(node_name):
+    if not node_name:
+        return
+    import subprocess
+    import disk_node as _dn
+    try:
+        subprocess.run(["docker", "rm", "-f", _dn.container_name(node_name)], capture_output=True)
+    finally:
+        if _disk_running["node"] == node_name:
+            _disk_running.update({"on": False})
+
+
+def remove_disk_node(node_name):
+    if not node_name:
+        return
+    import shutil
+    import disk_node as _dn
+    stop_disk_node(node_name)
+    try:
+        shutil.rmtree(_dn.data_dir_for(node_name), ignore_errors=True)
+    except Exception as e:                              # noqa: BLE001
+        logging.error(f"disk node remove failed: {e}")
+
+
+def _report_disk(provider, node_name, alloc_gb):
+    import disk_node as _dn
+    used = _dn.data_dir_bytes_gb(_dn.data_dir_for(node_name))
+    ref = float(os.getenv("DISK_REFERENCE_USD_PER_TB_MONTH", "1.5"))
+    _post("/nodes/disk_report", {"spec_id": int(SPEC_ID), "provider": provider,
+                                 "used_gb": used, "est_daily_usd": _dn.est_daily_usd(alloc_gb, ref)})
+
+
+def _apply_disk_cfg(cfg):
+    if not isinstance(cfg, dict) or not _disk_rental_enabled():
+        return
+    node = cfg.get("node_name")
+    if cfg.get("enabled"):
+        provider = cfg.get("provider"); alloc = int(cfg.get("alloc_gb") or 0)
+        if provider and alloc >= 1:
+            start_disk_node(provider, node, alloc)
+    elif cfg.get("provider"):
+        stop_disk_node(node)      # pause, keep data
+    else:
+        remove_disk_node(node)    # deleted -> wipe
+
+
 def job_loop():
     while True:
         try:
@@ -547,6 +701,8 @@ def job_loop():
                     _run_transcode(task)
                 elif tt == "stitch":
                     _run_stitch(task)
+                elif tt == "distributed":
+                    _run_distributed(task)
                 else:
                     _run_vm(task)
                 continue  # immediately poll again after finishing

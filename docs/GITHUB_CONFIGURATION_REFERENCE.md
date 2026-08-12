@@ -47,10 +47,10 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `DEFAULT_LANDING_VIDEO_ID` | no | platform | `UUSWYaxboDA` | `UUSWYaxboDA` | api/main.py | — | — |
 | `DEPLOY_CONFIG_FROM_GITHUB` | no | deployment | `false` | `false` | GitHub Actions deploy | — | Rollout gate. When 'true' the deploy generates the server env from GitHub config and pushes it; until then deploys stay code-only. Flip to true after entering all Secrets. |
 | `DISK_DATA_DIR` | no | gpu | `/var/lib/petabyte/disk` | `/var/lib/petabyte/disk` | agent/disk_node.py | — | Host dir where a storage node keeps its data (per-node subdir). |
-| `DISK_FALLBACK` | no | gpu | `false` | `false` | agent/task_fetcher.py | format: bool | Operator opt-in: let this machine rent spare disk to a storage network. |
 | `DISK_PAYOUT_WALLET` | no | gpu | *(empty)* | `…` | agent/task_fetcher.py | — | Petabyte's platform storage wallet set on every disk node (earnings pool centrally, credited per node — no per-seller wallet). |
 | `DISK_PROVIDER` | no | platform | `storj` | `storj` | api/storage_providers.py | format: string | Default storage-network adapter for disk-rental reconciliation (storj\|btfs\|sia). |
 | `DISK_REFERENCE_USD_PER_TB_MONTH` | no | platform | `1.5` | `1.5` | agent/task_fetcher.py, api/main.py | format: float | Net $/TB/month reference for the pre-commit disk-rental earnings estimate. |
+| `DISK_RENTAL_ENABLED` | no | gpu | `false` | `false` | agent/task_fetcher.py | format: bool | Operator opt-in: allow this machine to rent spare disk to a storage network. |
 | `DIST_RENDEZVOUS_PORT` | no | gpu | `29500` | `29500` | agent/distributed_run.py, agent/task_fetcher.py | format: int | Port this rank advertises/binds for cluster rendezvous (torchrun master port). |
 | `DIST_RENDEZVOUS_TIMEOUT` | no | gpu | `300` | `300` | agent/task_fetcher.py | format: int | Seconds a joining rank waits for the master to appear before failing (gang). |
 | `DIST_SELFTEST_DIM` | no | gpu | `8` | `8` | agent/task_fetcher.py | format: int | Vector length for the built-in cluster all-reduce self-test. |

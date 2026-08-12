@@ -2757,6 +2757,12 @@ SELLER_EARNINGS_HTML = _page("Petabyte — seller earnings",
     </div>
 
     <div class="card" style="margin-top:16px">
+      <div class="lbl">Rent your spare disk <span class="badge">extra earnings</span></div>
+      <p class="mini" style="margin:6px 0 12px">Rent unused disk to a web3 / BitTorrent storage network (Storj, BTFS, Sia). It's a <b>separate, always-on</b> earner — it runs even while a paid GPU job is on the box, and it's <b>not</b> tied to your GPU being idle. Pick a provider and a GB cap; earnings land in your Petabyte balance (minus a 10% fee). You can change the cap, pause, or delete at any time.</p>
+      <div id="disk_box"><div class="mut mono" style="padding:8px 0">loading…</div></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
       <div class="lbl">Estimated earnings</div>
       <p class="mini" style="margin:6px 0 10px">What you take home after Petabyte's 10% fee. The <b>net rate</b> is exact; daily/monthly are an <b>estimate</b> — actual earnings depend on demand.</p>
       <div id="earn_forecast"><div class="mut mono" style="padding:8px 0">loading…</div></div>
@@ -2862,6 +2868,70 @@ async function scNodes(){
   var bl=b.blockers||[];var wb=document.getElementById('nodes_blockers');
   wb.innerHTML=bl.length?('<div class="lbl" style="margin-top:6px">To start earning</div>'+bl.map(function(x){
     return '<p class="mini" style="color:var(--warn);margin-top:6px">• '+(x.issue||'')+' <span class="mut">'+(x.fix||'')+'</span></p>';}).join('')):'';
+  diskRender(ns);
+}
+
+// ---- Spare-disk rental: an explicit, always-on earner per node (provider + GB cap required) ----
+var DISK_PROVIDERS=[];
+async function diskProviders(){
+  if(DISK_PROVIDERS.length) return DISK_PROVIDERS;
+  var r=await api('/disk/providers');
+  DISK_PROVIDERS=(r.ok&&r.body&&r.body.providers)||[];
+  return DISK_PROVIDERS;
+}
+async function diskRender(ns){
+  var box=document.getElementById('disk_box');if(!box)return;
+  ns=(ns||[]).filter(function(n){return n.spec_id;});
+  if(!ns.length){box.innerHTML='<p class="mut" style="font-size:13px">List a GPU first — its spare disk can then be rented here.</p>';return;}
+  var provs=await diskProviders();
+  var opts=provs.map(function(p){return '<option value="'+p.id+'">'+esc(p.name)+' (~$'+Number(p.est_usd_per_tb_month||0).toFixed(2)+'/TB/mo)</option>';}).join('');
+  box.innerHTML=ns.map(function(n){var i=n.spec_id;return ''+
+    '<div class="panel" style="padding:12px;margin-bottom:10px">'+
+      '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">'+
+        '<b class="mono">'+esc(n.gpu_model||'GPU')+'</b>'+
+        '<span class="mono mut" style="font-size:11px" id="disk_stat_'+i+'">…</span>'+
+      '</div>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">'+
+        '<select id="disk_prov_'+i+'" style="padding:8px">'+opts+'</select>'+
+        '<input id="disk_gb_'+i+'" type="number" min="1" placeholder="GB cap" style="width:120px;padding:8px"/>'+
+        '<button class="btn btn-teal" data-act="diskSave" data-a1="'+i+'">Enable / update</button>'+
+        '<button class="btn btn-ghost" data-act="diskPause" data-a1="'+i+'">Pause</button>'+
+        '<button class="btn btn-ghost" data-act="diskDelete" data-a1="'+i+'">Delete</button>'+
+      '</div>'+
+    '</div>';}).join('');
+  ns.forEach(function(n){diskStatus(n.spec_id);});
+}
+async function diskStatus(i){
+  var el=document.getElementById('disk_stat_'+i);if(!el)return;
+  var r=await api('/nodes/'+i+'/disk');if(!r.ok){el.textContent='';return;}
+  var d=r.body;
+  if(d.enabled){
+    var pv=document.getElementById('disk_prov_'+i);if(pv&&d.provider)pv.value=d.provider;
+    var gb=document.getElementById('disk_gb_'+i);if(gb&&d.alloc_gb)gb.value=d.alloc_gb;
+    el.innerHTML='<span class="teal">renting</span> '+esc(d.provider||'')+' · '+(d.alloc_gb||0)+' GB cap · '+
+      Number(d.used_gb||0).toFixed(1)+' GB used · ~$'+Number(d.est_daily_usd||0).toFixed(3)+'/day · earned $'+Number(d.credited_total_usd||0).toFixed(2);
+  } else {
+    el.textContent='off · '+(n_diskNode(d)||'not renting');
+  }
+}
+function n_diskNode(d){return d&&d.node_name?('node '+d.node_name):'';}
+async function diskSave(i){
+  var prov=(document.getElementById('disk_prov_'+i)||{}).value;
+  var gb=Number((document.getElementById('disk_gb_'+i)||{}).value||0);
+  if(!prov){alert('Pick a storage provider.');return;}
+  if(!(gb>=1)){alert('Enter a GB cap (how much disk to rent).');return;}
+  var r=await api('/nodes/disk',{method:'POST',body:JSON.stringify({spec_id:Number(i),enabled:true,provider:prov,alloc_gb:gb})});
+  if(!r.ok){var m=(r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not enable disk rental.';alert(m);return;}
+  diskStatus(i);
+}
+async function diskPause(i){
+  var r=await api('/nodes/disk',{method:'POST',body:JSON.stringify({spec_id:Number(i),enabled:false})});
+  if(r.ok)diskStatus(i);
+}
+async function diskDelete(i){
+  if(!confirm('Delete this disk contribution? The node stops and its data is wiped.'))return;
+  var r=await api('/nodes/'+i+'/disk',{method:'DELETE'});
+  if(r.ok){var gb=document.getElementById('disk_gb_'+i);if(gb)gb.value='';diskStatus(i);}
 }
 scLoad();scNodes();
 </script>""")

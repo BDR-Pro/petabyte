@@ -239,8 +239,8 @@ A seller's GPU machine gets its OWN config (it never receives any platform secre
 AGENT_TELEMETRY_ENABLED=true;
 AGENT_VPN_ADDR=;
 DISK_DATA_DIR=/var/lib/petabyte/disk;
-DISK_FALLBACK=false;
 DISK_PAYOUT_WALLET=;
+DISK_RENTAL_ENABLED=false;
 DIST_RENDEZVOUS_PORT=29500;
 DIST_RENDEZVOUS_TIMEOUT=300;
 DIST_SELFTEST_DIM=8;

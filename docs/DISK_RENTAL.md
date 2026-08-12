@@ -1,17 +1,21 @@
 # DISK_RENTAL.md — rent a node's spare disk for extra money (web3 / BitTorrent)
 
-A GPU node usually has a lot of **idle disk**. This lets a seller pledge that spare disk to an
-existing **decentralized storage network** (Storj, BitTorrent File System / BTFS, or Sia) and earn
-a background trickle — the exact same shape as the idle **NiceHash mining** fallback, but for disk,
-and it runs **alongside** paid GPU rentals (disk isn't the GPU, so it's never preempted).
+A GPU node usually has a lot of spare disk. This lets a seller rent that disk to an existing
+**decentralized storage network** (Storj, BitTorrent File System / BTFS, or Sia) for extra money.
 
-## The model — one account, one node name per machine (the NiceHash pattern)
+**It is NOT an idle/fallback mode.** Disk rental is an **explicit** contribution the seller turns
+on with real arguments — a **provider** *and* a **GB cap**, both required (neither is defaulted, and
+the API refuses to enable without them). It runs **independently** of GPU rentals (disk isn't the
+GPU), so it earns **whether or not a job is running** — it is never gated on the node being idle.
+
+## The model — one account, one node name per machine
 
 Petabyte runs **one account per storage network** and points every node at **Petabyte's platform
 wallet**. Each node contributes under a **unique node name — `pbdisk-<spec_id>`** — so a settled
 payout from the network maps **1:1 back to one seller** and lands in their **unified Petabyte
-balance**. There is **no per-seller storage wallet** and no separate cash-out — identical to how
-idle mining uses the worker id `pb-<spec_id>`.
+balance**. There is **no per-seller storage wallet** and no separate cash-out. (This per-node
+attribution is the same trick NiceHash's `pb-<spec_id>` worker id uses — but disk rental itself is
+always-on when configured, not an idle fallback.)
 
 ```
 seller node (spare disk)
@@ -24,14 +28,14 @@ network pays Petabyte  ──(per node name)──▶  disk_reconcile  ──▶
 
 | Action | API | Effect |
 |---|---|---|
-| **Enable** + pick provider + set GB cap | `POST /nodes/disk_fallback {enabled:true, provider, alloc_gb}` | node starts contributing up to the cap |
+| **Enable** + pick provider + set GB cap | `POST /nodes/disk {enabled:true, provider, alloc_gb}` (both required) | node starts contributing up to the cap |
 | **Limit** (change the cap) | same call with a new `alloc_gb` | cap re-applied; clamped to `MAX_DISK_ALLOC_GB` |
-| **Pause / deactivate** | `POST /nodes/disk_fallback {enabled:false}` | node stops earning; **data kept** (re-enable later) |
+| **Pause / deactivate** | `POST /nodes/disk {enabled:false}` | node stops earning; **data kept** (re-enable later) |
 | **Delete / cancel** | `DELETE /nodes/{spec_id}/disk` | config cleared; agent **removes the container and wipes** the data dir |
 | **Status** | `GET /nodes/{spec_id}/disk` | config, usage, node name, credited-to-date |
 | **Providers** | `GET /disk/providers` | adapters + `est_usd_per_tb_month` + take rate |
 
-Off by default on both sides: the **machine operator** must set `DISK_FALLBACK=true` on the agent
+Off by default on both sides: the **machine operator** must set `DISK_RENTAL_ENABLED=true` on the agent
 *and* the **seller** must enable the node via the API. Either one off ⇒ nothing runs.
 
 ## How it runs on the node
@@ -65,7 +69,7 @@ platform_revenue      CREDIT  gross × STORAGE_TAKE_RATE           # Petabyte's 
 
 | Var | Scope | Default | Meaning |
 |---|---|---|---|
-| `DISK_FALLBACK` | agent | `false` | operator opt-in on the machine |
+| `DISK_RENTAL_ENABLED` | agent | `false` | operator allows disk rental on the machine |
 | `DISK_PAYOUT_WALLET` | agent | – | Petabyte's platform storage wallet set on every node |
 | `DISK_DATA_DIR` | agent | `/var/lib/petabyte/disk` | host dir for node data (per-node subdir) |
 | `DISK_PROVIDER` | platform | `storj` | default adapter for reconciliation |

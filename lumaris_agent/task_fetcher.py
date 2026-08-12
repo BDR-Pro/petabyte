@@ -792,18 +792,19 @@ def stop_idle_miner():
             _con.line("idle", "idle-mining stopped (paid work takes the GPU)")
 
 
-# ---- Spare-disk rental: earn a trickle by pledging unused disk to a storage network ----
-# Same "earn while otherwise idle" idea as the NiceHash miner, but for DISK — and it runs
-# alongside paid GPU work instead of only when unrented. The operator opts the MACHINE in with
-# DISK_FALLBACK=true; the seller opts the node in + sets the GB cap via the API (delivered on the
-# heartbeat). Each node contributes under its unique name (pbdisk-<spec_id>) -> earnings attribute
-# to the seller's unified balance. The seller can limit / disable / delete at any time.
+# ---- Spare-disk rental: rent unused disk to a web3/BitTorrent storage network ----
+# NOT an idle/fallback mode: it is an EXPLICIT contribution the seller configures (provider + GB
+# cap, both required) and it runs INDEPENDENTLY of GPU work — earning whether or not a job is on
+# the box. The operator allows it on the MACHINE with DISK_RENTAL_ENABLED=true; the seller then
+# configures the node (provider + cap) via the API, delivered on the heartbeat. Each node
+# contributes under its unique name (pbdisk-<spec_id>) -> earnings attribute to the seller's
+# unified balance. The seller can change the cap, disable, or delete at any time.
 _disk_running = {"on": False, "node": None, "alloc": 0, "provider": None}
 
 
-def _disk_opt_in() -> bool:
-    """The MACHINE operator must enable disk rental locally — off by default (fail-closed)."""
-    return os.getenv("DISK_FALLBACK", "").lower() == "true"
+def _disk_rental_enabled() -> bool:
+    """The MACHINE operator must allow disk rental locally — off by default (fail-closed)."""
+    return os.getenv("DISK_RENTAL_ENABLED", "").lower() == "true"
 
 
 def _disk_wallet() -> str:
@@ -877,8 +878,8 @@ def _report_disk(provider, node_name, alloc_gb):
 
 def _apply_disk_cfg(cfg):
     """React to the heartbeat's disk config: start / limit / pause / delete the storage node.
-    The MACHINE must be opted in (DISK_FALLBACK=true); otherwise this is a no-op."""
-    if not isinstance(cfg, dict) or not _disk_opt_in():
+    The MACHINE must allow it (DISK_RENTAL_ENABLED=true); otherwise this is a no-op."""
+    if not isinstance(cfg, dict) or not _disk_rental_enabled():
         return
     node = cfg.get("node_name")
     if cfg.get("enabled"):

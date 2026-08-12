@@ -229,13 +229,6 @@ variables:
     scope:
     - gpu
     description: Host dir where a storage node keeps its data (per-node subdir).
-  DISK_FALLBACK:
-    required: false
-    default: 'false'
-    scope:
-    - gpu
-    description: 'Operator opt-in: let this machine rent spare disk to a storage network.'
-    format: bool
   DISK_PAYOUT_WALLET:
     required: false
     default: null
@@ -257,6 +250,13 @@ variables:
     - platform
     description: Net $/TB/month reference for the pre-commit disk-rental earnings estimate.
     format: float
+  DISK_RENTAL_ENABLED:
+    required: false
+    default: 'false'
+    scope:
+    - gpu
+    description: 'Operator opt-in: allow this machine to rent spare disk to a storage network.'
+    format: bool
   DIST_RENDEZVOUS_PORT:
     required: false
     default: '29500'
