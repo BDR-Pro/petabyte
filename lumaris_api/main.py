@@ -1860,6 +1860,11 @@ but form **one cluster over the VPN** (torchrun/NCCL). The platform:
 
 Track the cluster at `GET /jobs/manifest/{job_id}` (per-rank status + the master address).
 
+**Private network (VPN).** Pass `vpn: true` to `/distributed` (or `/request_vm`) and the buyer gets
+a WireGuard tunnel into the private cluster network: `GET /jobs/{job_id}/vpn_config` (or
+`/vpn_config/{booking_id}`) returns a ready-to-use client config. A fresh keypair is minted per
+download; the server never keeps the client private key.
+
 ## Bring your own scheduler — Petabyte is just another provider
 
 Big-corp, academic and government workloads already run on **Slurm, MPI, Ray, or Kubernetes** and
@@ -6079,6 +6084,7 @@ class DistributedModel(BaseModel):
     region: Optional[str] = Field(None, max_length=64)
     backend: str = Field("nccl", max_length=16)             # nccl (GPU) | gloo (CPU/fallback)
     env: Optional[dict] = None
+    vpn: bool = False                                       # give the buyer a WireGuard tunnel in
 
 
 @app.post("/distributed", tags=["compute"])
@@ -6111,7 +6117,8 @@ def distributed_job(data: DistributedModel, user: dict = Depends(get_current_use
             "message": (f"A distributed job needs {n} GPUs on {n} different machines, but only "
                         f"{len(nodes)} distinct nodes are available right now."),
             "requested": n, "available": len(nodes)})
-    job = create_distributed_job(db, buyer, {"image": data.image, "command": data.command},
+    job = create_distributed_job(db, buyer,
+                                 {"image": data.image, "command": data.command, "vpn": bool(data.vpn)},
                                  world_size=n, backend=data.backend)
     booked, ranks = [], []
     for rank, sel in enumerate(nodes[:n]):
@@ -6140,7 +6147,8 @@ def distributed_job(data: DistributedModel, user: dict = Depends(get_current_use
     est = q(sum((D(r["price_per_hour"]) for r in ranks), D(0)) * D(data.hours))
     return {"status": "ok", "job_id": job.id, "kind": "distributed", "world_size": n,
             "backend": data.backend, "hours": data.hours, "ranks": ranks,
-            "master_rank": 0, "estimated_cost": est,
+            "master_rank": 0, "estimated_cost": est, "vpn": bool(data.vpn),
+            "vpn_config_url": (f"/jobs/{job.id}/vpn_config" if data.vpn else None),
             "manifest_url": f"/jobs/manifest/{job.id}",
             "rendezvous_url": f"/jobs/rendezvous/{job.id}",
             "note": ("Ranks form one cluster over the VPN. Rank 0 registers its address at "
@@ -6287,6 +6295,29 @@ def cluster_spec(job_id: int, user: dict = Depends(get_current_user),
                        if job.master_addr else None),
             "nodes": peers, "hostfile_url": f"/jobs/{job.id}/hostfile",
             "launch": _cluster_launch_cmds(job, peers)}
+
+
+@app.get("/jobs/{job_id}/vpn_config", response_class=PlainTextResponse, tags=["compute"])
+def cluster_vpn_config(job_id: int, user: dict = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    """The buyer's WireGuard CLIENT config for a VPN-enabled distributed cluster — a private,
+    encrypted tunnel into the cluster's network. Owner-only; only when the job was launched with
+    vpn=true. A fresh keypair is minted per download; the private half lives only in this response
+    (the server never keeps it), the public half is registered as a /32 peer."""
+    job = get_multinode_job(db, job_id)
+    me = get_user_by_username(db, _username(user))
+    if not job or job.kind != "distributed" or not me or (job.buyer_id != me.id and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="Distributed job not found")
+    try:
+        want_vpn = bool(json.loads(job.params or "{}").get("vpn"))
+    except Exception:
+        want_vpn = False
+    if not want_vpn:
+        raise HTTPException(status_code=400, detail="This cluster was not launched with VPN")
+    client_priv, client_pub = gen_wg_keypair()
+    peer = add_wg_peer(db, me, client_pub)               # race-safe /32 allocation
+    apply_peer_to_interface(client_pub, peer.address)    # live only when WG_APPLY=true
+    return build_client_wg_config(client_priv, peer.address)
 
 
 @app.post("/solve")

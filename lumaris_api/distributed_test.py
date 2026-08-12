@@ -208,6 +208,23 @@ ok("a single dead rank fails the entire cluster (gang scheduling)",
    dbm.get_multinode_job(_s, r2["job_id"]).status == "failed")
 _s.close()
 
+# ---- buyer chooses VPN: a WireGuard client tunnel into the cluster's private network ----
+vpn_sellers = [make_seller(20 + i, 1.0) for i in range(2)]  # noqa: F841 (fresh capacity)
+rv = c.post("/distributed", headers=BH, json={"image": "pytorch/pytorch:2.3.0",
+            "command": "torchrun train.py", "world_size": 2, "hours": 1, "vpn": True})
+rvj = rv.json()
+ok("a buyer can launch a cluster WITH a private VPN (vpn flag + config url returned)",
+   rv.status_code == 200 and rvj.get("vpn") is True and rvj.get("vpn_config_url"))
+vc = c.get(rvj["vpn_config_url"], headers=BH)
+ok("the buyer downloads a real WireGuard CLIENT config for the cluster",
+   vc.status_code == 200 and "[Interface]" in vc.text and "PrivateKey" in vc.text and "[Peer]" in vc.text)
+# a cluster launched WITHOUT vpn refuses to issue a config
+nov = [make_seller(30 + i, 1.0) for i in range(2)]  # noqa: F841
+rn = c.post("/distributed", headers=BH, json={"image": "x/y:1", "command": "z",
+            "world_size": 2, "hours": 1}).json()
+ok("a non-VPN cluster refuses to hand out a VPN config (400)",
+   c.get(f"/jobs/{rn['job_id']}/vpn_config", headers=BH).status_code == 400)
+
 # ---- the two API surfaces stay separated: /distributed is a compute (not data) endpoint ----
 ok("/distributed is a compute endpoint, documented under the Developer API (/devs), not /data",
    any(p == "/distributed" for p in c.get("/devs/openapi.json").json()["paths"])

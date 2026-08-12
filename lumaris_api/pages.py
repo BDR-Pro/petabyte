@@ -3125,6 +3125,9 @@ CLUSTER_HTML = _page("Petabyte — distributed compute",
         <input id="cl_hours" type="number" min="1" max="168" value="1" oninput="clusterEst()" style="width:130px;padding:9px;margin-top:4px"/>
         <label class="mini" style="display:block;margin-top:12px">Collective backend</label>
         <select id="cl_backend" style="padding:9px;margin-top:4px;width:160px"><option value="nccl">NCCL (GPU)</option><option value="gloo">Gloo (CPU/fallback)</option></select>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:14px;cursor:pointer">
+          <input id="cl_vpn" type="checkbox"/>
+          <span class="mini">Private network (VPN) — get a WireGuard tunnel into your cluster</span></label>
         <label class="mini" style="display:block;margin-top:12px">Container image</label>
         <input id="cl_image" value="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime" style="width:100%;padding:9px;margin-top:4px" class="mono"/>
         <label class="mini" style="display:block;margin-top:12px">Command (each node runs it under torchrun)</label>
@@ -3174,7 +3177,8 @@ async function clusterLaunch(){
  if(typeof authed==='function'&&!authed()){location.href='/login';return;}
  var go=clEl('cl_go');go.disabled=true;clEl('cl_error').style.display='none';
  var body={image:clEl('cl_image').value.trim(),command:clEl('cl_cmd').value.trim(),
-  world_size:Number(clEl('cl_n').value),hours:Number(clEl('cl_hours').value),backend:clEl('cl_backend').value};
+  world_size:Number(clEl('cl_n').value),hours:Number(clEl('cl_hours').value),backend:clEl('cl_backend').value,
+  vpn:!!(clEl('cl_vpn')&&clEl('cl_vpn').checked)};
  var gc=(clEl('cl_gpu')||{}).value;if(gc)body.gpu_class=gc.trim();
  var rg=(clEl('cl_region')||{}).value;if(rg)body.region=rg.trim();
  var r=await api('/distributed',{method:'POST',body:JSON.stringify(body)});
@@ -3202,10 +3206,21 @@ async function clusterShow(j){
   '<div class="mini" style="margin-top:4px">MPI hostfile</div>'+line('hostfile','cl_hostfile')+
   '<div class="mini" style="margin-top:10px">torchrun</div>'+line('torchrun','cl_torchrun')+
   '<div class="mini" style="margin-top:10px">Ray worker</div>'+line('ray','cl_ray')+
+  (j.vpn?('<div class="lbl" style="margin-top:14px">Private network (VPN)</div>'+
+    '<p class="mini" style="margin-top:4px">A private WireGuard tunnel into your cluster.</p>'+
+    '<button class="btn btn-teal" style="margin-top:8px" data-act="clVpnDownload" data-a1="'+j.job_id+'">Download VPN config</button>'):'')+
   '<p class="mini" style="margin-top:12px"><a class="teal" data-act="clOpenManifest" data-a1="'+j.job_id+'" style="cursor:pointer">Live cluster status &rarr;</a> &middot; commands fill in as nodes register their VPN address.</p>';
  clEl('cl_result').style.display='';
 }
 function clOpenManifest(id){location.href='/jobs/manifest/'+id;}
+async function clVpnDownload(id){
+ try{var r=await fetch('/jobs/'+id+'/vpn_config',{headers:{'Authorization':'Bearer '+tok()}});
+  if(!r.ok){alert('VPN config not available for this cluster.');return;}
+  var text=await r.text();var b=new Blob([text],{type:'text/plain'});
+  var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='petabyte-cluster-'+id+'.conf';
+  document.body.appendChild(a);a.click();a.remove();
+ }catch(e){alert('Could not download the VPN config.');}
+}
 document.addEventListener('DOMContentLoaded',clusterAvail);
 </script>""")
 

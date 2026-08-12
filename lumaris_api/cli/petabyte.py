@@ -129,13 +129,24 @@ def cmd_run(a, cfg):
                 _die("no matching GPU available")
             spec_id = specs[0]["spec_id"]   # cheapest (list is price-sorted)
             print(_dim(f"→ selected spec {spec_id} ({specs[0]['gpu_model']} @ ${specs[0]['price_per_hour']}/hr)"))
-        # book
-        r = c.post("/request_vm", json={"spec_id": spec_id, "hours": a.hours})
+        # book (optionally on a private WireGuard VPN — the buyer chooses)
+        want_vpn = bool(getattr(a, "vpn", False))
+        r = c.post("/request_vm", json={"spec_id": spec_id, "hours": a.hours, "vpn": want_vpn})
         if r.status_code != 200:
             _die("booking failed", r)
         bk = r.json()
         print(f"booked #{bk['booking_id']}  escrow ${bk['gross_amount']} "
               f"(fee ${bk['platform_fee']}, seller ${bk['seller_payout']})")
+        if want_vpn and bk.get("vpn_config_url"):
+            cr = c.get(bk["vpn_config_url"])
+            if cr.status_code == 200:
+                path = f"petabyte-{bk['booking_id']}.conf"
+                with open(path, "w") as f:
+                    f.write(cr.text)
+                print(_green(f"✓ VPN config written to {path}") +
+                      _dim(f"  → connect with:  sudo wg-quick up ./{path}"))
+            else:
+                print(_amber("! could not fetch VPN config (booking still active)"))
         # create task
         r = c.post("/create_task", json={"booking_id": bk["booking_id"],
                                          "task_type": "notebook", "code": code})
@@ -156,6 +167,19 @@ def cmd_run(a, cfg):
         print("timed out waiting for result", file=sys.stderr)
 
 
+def cmd_vpn(a, cfg):
+    """Download (or re-download) the WireGuard client config for a VPN-enabled booking."""
+    with _client(cfg) as c:
+        r = c.get(f"/vpn_config/{a.booking_id}")
+        if r.status_code != 200:
+            _die("no VPN config for that booking (was it booked with --vpn?)", r)
+        path = a.out or f"petabyte-{a.booking_id}.conf"
+        with open(path, "w") as f:
+            f.write(r.text)
+        print(_green(f"✓ VPN config written to {path}"))
+        print(_dim(f"  connect:  sudo wg-quick up ./{path}      disconnect:  sudo wg-quick down ./{path}"))
+
+
 def main():
     p = argparse.ArgumentParser(prog="petabyte")
     p.add_argument("--api", help="API base URL (overrides saved config)")
@@ -169,13 +193,17 @@ def main():
     s = sub.add_parser("run")
     s.add_argument("file"); s.add_argument("--spec", type=int); s.add_argument("--gpu")
     s.add_argument("--hours", type=int, default=1); s.add_argument("--timeout", type=int, default=120)
+    s.add_argument("--vpn", action="store_true",
+                   help="rent on a private WireGuard VPN and save the client config")
+    s = sub.add_parser("vpn", help="download the WireGuard config for a VPN booking")
+    s.add_argument("booking_id", type=int); s.add_argument("-o", "--out")
 
     a = p.parse_args()
     cfg = _cfg()
     if a.api:
         cfg["api_url"] = a.api
     {"register": cmd_register, "login": cmd_login, "deposit": cmd_deposit,
-     "wallet": cmd_wallet, "specs": cmd_specs, "run": cmd_run}[a.cmd](a, cfg)
+     "wallet": cmd_wallet, "specs": cmd_specs, "run": cmd_run, "vpn": cmd_vpn}[a.cmd](a, cfg)
 
 
 if __name__ == "__main__":

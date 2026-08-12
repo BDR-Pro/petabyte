@@ -61,6 +61,18 @@ variables:
     - 'true'
     - 'false'
     format: bool
+  AGENT_VPN_ENABLED:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: ''
+  AGENT_WG_DIR:
+    required: false
+    default: /etc/wireguard
+    scope:
+    - platform
+    description: ''
   ALLOWED_ORIGINS:
     required: false
     default: null

@@ -1826,6 +1826,14 @@ ok("the app nav links buyers to the Distributed launcher", ">Distributed<" in _c
 _av = c.get("/distributed/availability").json()
 ok("availability tells the app the max cluster size it can form right now (distinct machines)",
    set(_av) >= {"available_nodes", "max_cluster", "max_nodes_cap"} and _av["available_nodes"] >= 2)
+# buyer chooses VPN: the app has the toggle, and a VPN cluster hands back a WireGuard config
+ok("the /cluster page offers a Private network (VPN) toggle", 'id="cl_vpn"' in _clp.text)
+_dist_seller(20); _dist_seller(21)   # fresh capacity for a VPN cluster
+_vj = c.post("/distributed", headers=_dbh, json={"image": "pytorch/pytorch:2.3.0",
+             "command": "torchrun t.py", "world_size": 2, "hours": 1, "vpn": True}).json()
+ok("a VPN cluster returns a vpn_config_url and a real WireGuard client config",
+   _vj.get("vpn") is True and _vj.get("vpn_config_url")
+   and "[Interface]" in c.get(_vj["vpn_config_url"], headers=_dbh).text)
 
 # --- split API portals: /data (buy data) and /devs (build compute), Scalar-rendered, DISJOINT ---
 _dp = c.get("/data"); _vp = c.get("/devs")
