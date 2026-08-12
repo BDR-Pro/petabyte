@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from pages import (
     TRUST_HTML, STATUS_HTML, METRICS_HTML, BUY_HTML, SELLER_EARNINGS_HTML, TEMPLATES_HTML,
     DEMO_HTML, CONTACT_HTML, PRICING_HTML, SECURITY_HTML, PRIVACY_HTML, TERMS_HTML, AUP_HTML,
-    REFUNDS_HTML, GPU_DETAIL_HTML, GAMERS_HTML, ARTISTS_HTML,
+    REFUNDS_HTML, GPU_DETAIL_HTML, GAMERS_HTML, ARTISTS_HTML, CLUSTER_HTML,
 )
 
 router = APIRouter(tags=["web"])
@@ -62,6 +62,15 @@ def buy_page(public_id: str):
     capture -> receipt) without touching an internal endpoint by hand. The spec id is
     read client-side from the path."""
     return HTMLResponse(BUY_HTML)
+
+
+@router.get("/cluster", response_class=HTMLResponse)
+@router.get("/distributed", response_class=HTMLResponse)
+def cluster_page():
+    """Buyer-facing distributed-compute launcher: form a cluster of N GPUs across different
+    machines (one job, wired over the VPN), or export it to your own scheduler (Slurm/MPI/Ray).
+    NOTE: the POST /distributed API endpoint is unaffected — this GET only serves the page."""
+    return HTMLResponse(CLUSTER_HTML)
 
 
 @router.get("/seller/payouts", response_class=HTMLResponse)

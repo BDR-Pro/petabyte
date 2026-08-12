@@ -282,7 +282,7 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
 </button>
 <div class="collapse navbar-collapse" id="pbnav">
 <div class="navlinks">
-  <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
+  <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/cluster" data-ar="الحوسبة الموزعة">Distributed</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
   <a href="/metrics" data-ar="المقاييس">Metrics</a><a href="/install" data-ar="لمالكي كروت الرسومات">For GPU owners</a><a href="/security" data-ar="الأمان">Security</a><a href="/developers" data-ar="المطورون">Developers</a>
 </div>
 <div class="navcta">
@@ -308,7 +308,7 @@ _FOOT = """<footer>
     <p class="mut" style="font-size:12px;margin-top:10px;max-width:30ch">A verified marketplace for community GPU power. Operated from Riyadh by Petabyte, Inc.</p>
   </div>
   <div class="fcol"><div class="fh">Product</div>
-    <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/pricing" data-ar="الأسعار">Pricing</a><a href="/app">Console</a>
+    <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/cluster" data-ar="الحوسبة الموزعة">Distributed</a><a href="/pricing" data-ar="الأسعار">Pricing</a><a href="/app">Console</a>
   </div>
   <div class="fcol"><div class="fh">Use cases</div>
     <a href="/artists">Rendering &amp; art</a><a href="/gamers">Game servers</a><a href="/developers">AI &amp; inference</a>
@@ -3102,6 +3102,111 @@ async function buyCancel(){
 }
 
 loadBuy();
+</script>""")
+
+
+CLUSTER_HTML = _page("Petabyte — distributed compute",
+    desc="Run one job across many GPUs on different machines, wired into a single cluster over the VPN — or bring your own scheduler (Slurm/MPI/Ray) and use Petabyte as another provider.",
+    path="/cluster", body="""
+<div class="wrap" style="padding:34px 24px 44px;max-width:1000px">
+  <div class="eyebrow"><span class="dot"></span> distributed compute</div>
+  <h1 style="font-size:clamp(26px,3.6vw,38px);margin:14px 0 6px">Run one job across <span class="grad-teal">many GPUs</span></h1>
+  <p class="mut" style="max-width:66ch">Split a single job across GPUs on <b>different machines</b>, wired into one cluster over the VPN (torchrun/NCCL). Gang-scheduled — one rank per machine — and escrowed all-or-nothing: a cluster that can't fully form is refused and refunded.</p>
+  <div id="pbtestmode" style="margin-top:12px"></div>
+  <p class="mut" id="cl_signedout" style="display:none;margin-top:10px">Please <a class="teal" href="/login">sign in</a> to launch a cluster.</p>
+  <div id="cl_avail" class="mono mut" style="margin-top:12px;font-size:13px">Checking available machines…</div>
+  <div class="cols" style="gap:18px;align-items:flex-start;margin-top:16px">
+    <div style="flex:1.2 1 360px;min-width:300px">
+      <div class="card">
+        <div class="lbl">Your cluster</div>
+        <label class="mini" style="display:block;margin-top:10px">GPUs — one per machine</label>
+        <input id="cl_n" type="number" min="2" value="4" oninput="clusterEst()" style="width:130px;padding:9px;margin-top:4px"/>
+        <label class="mini" style="display:block;margin-top:12px">Max runtime (hours)</label>
+        <input id="cl_hours" type="number" min="1" max="168" value="1" oninput="clusterEst()" style="width:130px;padding:9px;margin-top:4px"/>
+        <label class="mini" style="display:block;margin-top:12px">Collective backend</label>
+        <select id="cl_backend" style="padding:9px;margin-top:4px;width:160px"><option value="nccl">NCCL (GPU)</option><option value="gloo">Gloo (CPU/fallback)</option></select>
+        <label class="mini" style="display:block;margin-top:12px">Container image</label>
+        <input id="cl_image" value="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime" style="width:100%;padding:9px;margin-top:4px" class="mono"/>
+        <label class="mini" style="display:block;margin-top:12px">Command (each node runs it under torchrun)</label>
+        <input id="cl_cmd" value="torchrun train.py --epochs 3" style="width:100%;padding:9px;margin-top:4px" class="mono"/>
+        <details style="margin-top:12px"><summary class="mini" style="cursor:pointer">Advanced — GPU class / region</summary>
+          <input id="cl_gpu" placeholder="gpu_class · e.g. RTX 4090" style="width:100%;padding:9px;margin-top:8px" class="mono"/>
+          <input id="cl_region" placeholder="region · e.g. us-east" style="width:100%;padding:9px;margin-top:8px" class="mono"/>
+        </details>
+        <div id="cl_est" class="mut" style="font-size:13px;margin-top:14px">Estimated cost shown once machines are available.</div>
+        <button class="btn btn-amber" id="cl_go" data-act="clusterLaunch" style="width:100%;margin-top:12px">Form the cluster →</button>
+        <p class="mini" style="margin-top:10px">You prepay all N GPUs into escrow up-front. If the full cluster can't be reserved, you're charged nothing.</p>
+      </div>
+    </div>
+    <div style="flex:1 1 340px;min-width:300px">
+      <div class="card" id="cl_result" style="display:none"><div class="lbl">Your cluster</div><div id="cl_result_body" style="margin-top:8px"></div></div>
+      <div class="card" id="cl_error" style="display:none;border-color:rgba(255,120,120,.3)"><div class="lbl" style="color:var(--warn)">Heads up</div><div id="cl_error_body" class="mut" style="font-size:13px;margin-top:6px"></div></div>
+      <div class="card" style="margin-top:16px">
+        <div class="lbl">Already on Slurm / MPI / Ray?</div>
+        <p class="mut" style="font-size:13px;margin:6px 0 8px">Don't change your stack — Petabyte is another provider. Every rank registers its VPN address, then the cluster exports as the artifacts your launcher already reads:</p>
+        <p class="mono" style="font-size:12px;line-height:1.9">
+        GET /jobs/{id}/hostfile <span class="mut">MPI / torchrun</span><br>
+        GET /jobs/{id}/cluster <span class="mut">nodes + launch cmds</span></p>
+        <p class="mini" style="margin-top:6px">Full recipes on the <a class="teal" href="/devs">Developer API</a>.</p>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+var AVAIL={available_nodes:0,max_cluster:0,est_price_per_hour:null};
+function clEl(id){return document.getElementById(id);}
+async function clusterAvail(){
+ if(typeof authed==='function'&&!authed()){var so=clEl('cl_signedout');if(so)so.style.display='';}
+ try{var r=await fetch('/distributed/availability');if(r.ok)AVAIL=await r.json();}catch(e){}
+ var a=clEl('cl_avail');
+ if(a){a.textContent=AVAIL.available_nodes+' machines available now — you can form a cluster of up to '+AVAIL.max_cluster+' GPUs (cap '+AVAIL.max_nodes_cap+').';}
+ var n=clEl('cl_n');
+ if(n){n.max=Math.max(2,AVAIL.max_cluster||2);if(Number(n.value)>Number(n.max))n.value=n.max;}
+ clusterEst();
+}
+function clusterEst(){
+ var e=clEl('cl_est');if(!e)return;
+ var n=Number((clEl('cl_n')||{}).value||0),h=Number((clEl('cl_hours')||{}).value||0),p=AVAIL.est_price_per_hour;
+ if(p&&n>=2&&h>=1){e.innerHTML='&#8776; $'+(n*p*h).toFixed(2)+' &nbsp;<span class="mut">('+n+' GPUs &times; $'+Number(p).toFixed(2)+'/hr &times; '+h+'h, escrowed up-front)</span>';}
+ else{e.textContent='Estimated cost shown once machines are available.';}
+}
+async function clusterLaunch(){
+ if(typeof authed==='function'&&!authed()){location.href='/login';return;}
+ var go=clEl('cl_go');go.disabled=true;clEl('cl_error').style.display='none';
+ var body={image:clEl('cl_image').value.trim(),command:clEl('cl_cmd').value.trim(),
+  world_size:Number(clEl('cl_n').value),hours:Number(clEl('cl_hours').value),backend:clEl('cl_backend').value};
+ var gc=(clEl('cl_gpu')||{}).value;if(gc)body.gpu_class=gc.trim();
+ var rg=(clEl('cl_region')||{}).value;if(rg)body.region=rg.trim();
+ var r=await api('/distributed',{method:'POST',body:JSON.stringify(body)});
+ go.disabled=false;
+ if(!r.ok){
+  var m=(r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not form the cluster.';
+  clEl('cl_error').style.display='';clEl('cl_error_body').textContent=m;return;
+ }
+ await clusterShow(r.body);
+}
+async function clusterShow(j){
+ var host=location.origin;
+ var cl=await api('/jobs/'+j.job_id+'/cluster');var L=(cl.ok&&cl.body&&cl.body.launch)||{};
+ window._PBCMDS['cl_hostfile']='curl -H "Authorization: Bearer $PB_TOKEN" '+host+'/jobs/'+j.job_id+'/hostfile > hostfile';
+ window._PBCMDS['cl_mpirun']=L.mpirun||'';
+ window._PBCMDS['cl_torchrun']=L.torchrun||'';
+ window._PBCMDS['cl_ray']=L.ray_worker||'';
+ var rows=(j.ranks||[]).map(function(rk){return '<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12.5px" class="mono"><span>rank '+rk.rank+(rk.is_master?' (master)':'')+'</span><span class="mut">node '+rk.spec_id+'</span></div>';}).join('');
+ function line(lbl,name){return '<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><code class="mono" style="flex:1;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(window._PBCMDS[name]||'—')+'</code><button class="copybtn" data-act="pbCopy" data-a1="'+name+'">copy</button></div>';}
+ clEl('cl_result_body').innerHTML=
+  '<div style="font-family:var(--disp);font-size:16px;margin-bottom:6px">Cluster forming: '+j.world_size+' GPUs across '+j.world_size+' machines</div>'+
+  '<p class="mut" style="font-size:12.5px;margin-bottom:8px">Escrowed &#8776; $'+Number(j.estimated_cost).toFixed(2)+' for '+j.hours+'h &middot; backend '+esc(j.backend)+' &middot; wired over the VPN.</p>'+
+  rows+
+  '<div class="lbl" style="margin-top:14px">Drive it from your own scheduler</div>'+
+  '<div class="mini" style="margin-top:4px">MPI hostfile</div>'+line('hostfile','cl_hostfile')+
+  '<div class="mini" style="margin-top:10px">torchrun</div>'+line('torchrun','cl_torchrun')+
+  '<div class="mini" style="margin-top:10px">Ray worker</div>'+line('ray','cl_ray')+
+  '<p class="mini" style="margin-top:12px"><a class="teal" data-act="clOpenManifest" data-a1="'+j.job_id+'" style="cursor:pointer">Live cluster status &rarr;</a> &middot; commands fill in as nodes register their VPN address.</p>';
+ clEl('cl_result').style.display='';
+}
+function clOpenManifest(id){location.href='/jobs/manifest/'+id;}
+document.addEventListener('DOMContentLoaded',clusterAvail);
 </script>""")
 
 

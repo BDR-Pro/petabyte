@@ -6147,6 +6147,33 @@ def distributed_job(data: DistributedModel, user: dict = Depends(get_current_use
                      "/jobs/rendezvous; the others poll /jobs/rendezvous/{job_id} to join.")}
 
 
+@app.get("/distributed/availability", tags=["compute"])
+def distributed_availability(gpu_class: Optional[str] = Query(None, max_length=64),
+                             region: Optional[str] = Query(None, max_length=64),
+                             db: Session = Depends(get_db)):
+    """How big a cluster can form right now: the count of DISTINCT bookable machines (one rank per
+    provider) and a representative per-node price, so the app can show the max cluster size and an
+    estimated cost before a buyer commits. Aggregate only — no seller identity."""
+    import router as _router
+    intent = {}
+    if gpu_class:
+        intent["gpu_class"] = gpu_class
+    if region:
+        intent["region"] = region
+    owners = {}
+    for cnd in _router.gather_candidates(db, intent):
+        oid = cnd["owner_id"]                       # one rank per provider = one machine
+        p = float(cnd["price"])
+        if oid not in owners or p < owners[oid]:
+            owners[oid] = p
+    prices = sorted(owners.values())
+    est = (prices[len(prices) // 2] if prices else None)   # median per-node $/hr
+    return {"available_nodes": len(owners),
+            "max_cluster": min(len(owners), MAX_DISTRIBUTED_NODES),
+            "max_nodes_cap": MAX_DISTRIBUTED_NODES,
+            "est_price_per_hour": est}
+
+
 class RendezvousModel(BaseModel):
     task_id: int
     host: str = Field(min_length=1, max_length=255)     # this rank's VPN-reachable address

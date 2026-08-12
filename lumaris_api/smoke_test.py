@@ -1818,6 +1818,14 @@ ok("the cluster exports as an MPI/torchrun hostfile (Petabyte = another node poo
 _cl = c.get(f"/jobs/{_djj['job_id']}/cluster", headers=_dbh).json()
 ok("the cluster spec hands back launch commands for mpirun / torchrun / ray / srun",
    {"mpirun", "torchrun", "ray_worker", "slurm_srun"} <= set(_cl["launch"]))
+# a buyer launches distributed FROM THE APP: /cluster page + availability endpoint
+_clp = c.get("/cluster")
+ok("the /cluster page is a buyer-facing distributed launcher (posts /distributed, shows availability)",
+   _clp.status_code == 200 and "clusterLaunch" in _clp.text and "/distributed/availability" in _clp.text)
+ok("the app nav links buyers to the Distributed launcher", ">Distributed<" in _clp.text)
+_av = c.get("/distributed/availability").json()
+ok("availability tells the app the max cluster size it can form right now (distinct machines)",
+   set(_av) >= {"available_nodes", "max_cluster", "max_nodes_cap"} and _av["available_nodes"] >= 2)
 
 # --- split API portals: /data (buy data) and /devs (build compute), Scalar-rendered, DISJOINT ---
 _dp = c.get("/data"); _vp = c.get("/devs")
