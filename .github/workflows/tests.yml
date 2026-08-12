@@ -72,6 +72,9 @@ jobs:
       - name: agent sandbox (buyer job can't harm the seller host)
         working-directory: lumaris_agent
         run: python sandbox_test.py
+      - name: agent pricing (node auto-prices from its GPU benchmark; no invented flat rate)
+        working-directory: lumaris_agent
+        run: python provision_test.py
       - name: release signer <-> updater round-trip
         run: python scripts/sign_release_test.py
       - name: account (reset + cal webhook + demo notify)

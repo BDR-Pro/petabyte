@@ -833,12 +833,12 @@ INSTALL_HTML = _page("Petabyte — become a seller",
 <div class="wrap" id="ikgen" style="padding:6px 22px 0;display:none">
   <div class="card" style="border-color:rgba(79,214,201,.3);background:linear-gradient(180deg,rgba(79,214,201,.05),transparent)">
     <div class="lbl" data-ar="الخطوة ١ · حدّد سعرك (اختياري)">Step 1 · set your price <span class="mut">(optional)</span></div>
-    <p class="mut" style="margin-bottom:12px" data-ar="اكتب اسم كرت رسوماتك ونقترح سعراً عادلاً بالساعة من الأجهزة الحيّة والمرجع السحابي. غيّره كما تشاء — أو تجاوزه واستخدم الافتراضي.">Type your GPU and we suggest a fair hourly price from live nodes and the cloud reference. Change it if you like — or skip and use the default.</p>
+    <p class="mut" style="margin-bottom:12px" data-ar="اكتب اسم كرت رسوماتك لرؤية سعر عادل بالساعة، مبني على مرجع الأداء والأجهزة الحيّة. أو اترك الخانة فارغة وسيسعّر كل جهاز نفسه تلقائياً من مقياس أداء كرت رسوماته حين يتصل — لا حاجة لتخمين رقم.">Type your GPU to see a fair hourly price — built from the performance benchmark and live nodes. Or leave it blank: each node auto-prices from its own GPU's benchmark when it comes online, so you never have to guess a number.</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <input id="pgpu" placeholder="e.g. RTX 4090" size="14" onkeydown="if(event.key==='Enter')sugPrice()"/>
       <button class="btn btn-teal" data-act="sugPrice" data-ar="اقترح">Suggest</button>
       <span class="mut">$</span>
-      <input id="pprice" value="1.50" size="4" inputmode="decimal" style="text-align:right"/>
+      <input id="pprice" placeholder="auto" size="4" inputmode="decimal" style="text-align:right"/>
       <span class="mut">/hr</span>
       <span id="psug" class="mono mut" style="font-size:12.5px"></span>
     </div>
@@ -850,7 +850,7 @@ INSTALL_HTML = _page("Petabyte — become a seller",
 <!-- generated result: real key + this server's address + your price, already filled in -->
 <div class="wrap" id="ikout" style="padding:12px 22px 6px;display:none">
   <div class="mini" style="margin:6px 0 10px" data-ar="الخطوة ٢ · شغّل هذا على جهازك">Step 2 · run this on your GPU machine</div>
-  <p class="mut" style="max-width:64ch;margin-bottom:12px" data-ar="يحتوي هذا الأمر على مفتاحك وعنوان هذا الخادم وسعرك — كلها جاهزة. شغّله مرة واحدة: يسجّل الجهاز نفسه، يثبت عتاده، ويتصل. مفتاحك يُعرض هنا فقط.">This command already has your key, this server's address, and your price filled in. Run it once — the node registers, attests its GPU, and comes online. <b class="teal">Your key is shown only here</b>, so copy it now.</p>
+  <p class="mut" style="max-width:64ch;margin-bottom:12px" data-ar="يحتوي هذا الأمر على مفتاحك وعنوان هذا الخادم — جاهزين. شغّله مرة واحدة: يسجّل الجهاز نفسه، يثبت عتاده، ويتصل. إن لم تحدد سعراً، يسعّر الجهاز نفسه من مقياس أداء كرت رسوماته. مفتاحك يُعرض هنا فقط.">This command already has your key and this server's address filled in. Run it once — the node registers, attests its GPU, and comes online. If you didn't set a price, the node prices itself from its GPU's benchmark. <b class="teal">Your key is shown only here</b>, so copy it now.</p>
   <div class="cols c2">
     <div class="card"><div class="lbl" data-ar="لينكس · أوبونتو/دبيان">Linux · Ubuntu/Debian</div>
       <pre id="cmdlinux" style="white-space:pre-wrap;word-break:break-all"></pre>
@@ -888,15 +888,17 @@ async function genInstaller(a1, btn){
   if(btn&&btn.disabled)return;
   var lbl=btn?btn.textContent:'';
   if(btn){btn.disabled=true;btn.textContent='Creating…';}
-  var pn=parseFloat((document.getElementById('pprice').value||'').trim()); if(!(pn>0))pn=1.5;
-  var price=pn.toFixed(2);
+  // Explicit price wins; a blank field means "let the node auto-price from its GPU's
+  // benchmark" — so we OMIT the var rather than baking in an invented default.
+  var pt=(document.getElementById('pprice').value||'').trim(), pn=parseFloat(pt);
+  var pset=(pt!==''&&pn>0), price=pset?pn.toFixed(2):'';
   await api('/change_role',{method:'POST',body:JSON.stringify({role:'seller'})});   // idempotent
   var r=await api('/create_api_key?days=90&label=node&scopes=node,jobs',{method:'POST'});
   if(btn){btn.disabled=false;btn.textContent=lbl;}
   if(!(r.ok&&r.body&&r.body.api_key)){alert('Could not create a node key — please make sure you are signed in.');return;}
   var key=r.body.api_key, origin=location.origin, NL=String.fromCharCode(10);
-  var lin='PETABYTE_API_URL='+origin+' PETABYTE_API_KEY='+key+' PRICE_PER_HOUR='+price+' bash <(curl -fsSL '+origin+'/install.sh)';
-  var win='$env:PETABYTE_API_URL="'+origin+'"'+NL+'$env:PETABYTE_API_KEY="'+key+'"'+NL+'$env:PRICE_PER_HOUR="'+price+'"'+NL+'irm '+origin+'/install.ps1 | iex';
+  var lin='PETABYTE_API_URL='+origin+' PETABYTE_API_KEY='+key+' '+(pset?('PRICE_PER_HOUR='+price+' '):'')+'bash <(curl -fsSL '+origin+'/install.sh)';
+  var win='$env:PETABYTE_API_URL="'+origin+'"'+NL+'$env:PETABYTE_API_KEY="'+key+'"'+NL+(pset?('$env:PRICE_PER_HOUR="'+price+'"'+NL):'')+'irm '+origin+'/install.ps1 | iex';
   window._PBCMDS['seller_linux']=lin; window._PBCMDS['seller_win']=win;
   document.getElementById('cmdlinux').innerHTML=_esch(lin);
   document.getElementById('cmdwin').innerHTML=_esch(win);

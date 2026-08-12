@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Petabyte one-line node installer (Ubuntu/Debian).
-#   PETABYTE_API_URL=https://petabyte.market \
-#   PETABYTE_API_KEY=pk_your_node_key PRICE_PER_HOUR=1.5 \
-#   bash <(curl -fsSL https://petabyte.market/install.sh)
-# Create the API key on the /install page (that button also makes you a seller).
+#   PETABYTE_API_URL=https://petabyte.market PETABYTE_API_KEY=pk_your_node_key \
+#     bash <(curl -fsSL https://petabyte.market/install.sh)
+# The /install page generates this exact command with your key already filled in.
+# PRICE_PER_HOUR is optional: leave it unset and the node auto-prices from its GPU's
+# benchmark; set it (e.g. PRICE_PER_HOUR=1.5) to pin your own rate.
 set -euo pipefail
 : "${PETABYTE_API_URL:?set PETABYTE_API_URL}"
 : "${PETABYTE_API_KEY:?set PETABYTE_API_KEY (create one on the /install page)}"
@@ -126,7 +127,7 @@ python3 -m venv .venv
 echo "==> registering + attesting this node"
 PETABYTE_AGENT_KEY="$KEYF" AGENT_ENV="$ENVF" \
   PETABYTE_API_URL="$PETABYTE_API_URL" PETABYTE_API_KEY="$PETABYTE_API_KEY" \
-  PRICE_PER_HOUR="${PRICE_PER_HOUR:-1.0}" UNITS="${UNITS:-1}" GPU_MODEL="${GPU_MODEL:-}" \
+  PRICE_PER_HOUR="${PRICE_PER_HOUR:-}" UNITS="${UNITS:-1}" GPU_MODEL="${GPU_MODEL:-}" \
   .venv/bin/python provision.py
 
 echo "==> starting service"

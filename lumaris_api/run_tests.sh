@@ -78,6 +78,8 @@ run_suite "grafana provisioning (provider<->mount, folder, live-verify guards)" 
                    python observability/grafana/verify_provisioning_test.py"
 run_suite "agent sandbox (buyer job can't harm the seller host)" \
           bash -c "cd ../lumaris_agent && python sandbox_test.py"
+run_suite "agent pricing (node auto-prices from its GPU benchmark; no invented flat rate)" \
+          bash -c "cd ../lumaris_agent && python provision_test.py"
 run_suite "tunnel (nat + failover)" bash -c "cd ../lumaris_gateway && python tunnel_test.py"
 rm -f smoke.db* adv.db* stripe_test.db* payout_test.db* seller_payable_metric_test.db* \
       reservation_reclaim_test.db* backup_test.db* security.db* ../lumaris_gateway/tunnel.db*
