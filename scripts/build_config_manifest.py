@@ -220,6 +220,11 @@ CURATED = {
                     "prod_notes": "Must be 'production' in prod; never leave stubs enabled."},
     "BASE_DOMAIN": {"aka": "APP_DOMAIN", "format": "hostname",
                     "description": "Public application domain."},
+    "VM_DNS_ZONE": {"format": "hostname", "required": False,
+                    "description": "Per-VM subdomain zone for the hostname-routed VM address "
+                                   "(root@<id>.<zone>). Defaults to BASE_DOMAIN; set to e.g. "
+                                   "vm.petabyte.market to put every VM under one wildcard record. "
+                                   "See docs/dynamic_dns.md."},
     "PUBLIC_BASE_URL": {"aka": "APP_URL", "format": "url_or_empty",
                         "description": "Public base URL for building share/reset links."},
     "CONNECT_RETURN_URL": {"format": "url_or_empty",

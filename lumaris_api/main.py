@@ -159,6 +159,10 @@ MAILCHIMP_AUDIENCE_ID = os.getenv("MAILCHIMP_AUDIENCE_ID", "").strip()
 # Fallback video shown until an admin sets one in the panel (your Short's ID).
 DEFAULT_LANDING_VIDEO_ID = os.getenv("DEFAULT_LANDING_VIDEO_ID", "UUSWYaxboDA").strip()
 BASE_DOMAIN = os.getenv("BASE_DOMAIN", "petabyte.market")          # for stable VM URLs
+# Per-VM subdomain zone for the hostname-routed SSH/HTTP form (root@<id>.<zone>). Defaults to
+# BASE_DOMAIN (so <id>.petabyte.market, unchanged); set to e.g. "vm.petabyte.market" to put every
+# VM under one wildcard record. See docs/dynamic_dns.md for the DNS setup.
+VM_DNS_ZONE = os.getenv("VM_DNS_ZONE", BASE_DOMAIN)
 
 # The passwords attackers try first. A full HIBP k-anonymity check is the right next
 # step (it needs an outbound call); this blocks the ones that get guessed in seconds.
@@ -7000,9 +7004,18 @@ def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
 
 
 def _vm_url(vm):
-    """The stable, node-independent address for a VM. Failover keeps this constant."""
+    """The stable, node-independent address for a VM. Failover keeps this constant — it is derived
+    ONLY from the opaque vm id, never from the node's IP, so a backup on a different machine is
+    reachable at the same address with NO DNS change (see docs/dynamic_dns.md). Two routing forms:
+      * ssh          — USERNAME-routed `vm-<id>@<base>` (one A record + sshpiper); the default.
+      * ssh_hostname — HOSTNAME-routed `root@<id>.<VM_DNS_ZONE>` (wildcard `*.<VM_DNS_ZONE>`); the
+                       per-VM-subdomain UX. VM_DNS_ZONE defaults to BASE_DOMAIN; set it to
+                       e.g. `vm.petabyte.market` to namespace VM subdomains under one wildcard."""
+    host = f"{vm.id}.{VM_DNS_ZONE}"
     return {"ssh": f"ssh vm-{vm.id}@{BASE_DOMAIN}",
-            "http": f"https://{vm.id}.{BASE_DOMAIN}" if vm.app_port else None,
+            "ssh_hostname": f"ssh root@{host}",
+            "hostname": host,
+            "http": f"https://{host}" if vm.app_port else None,
             "id": vm.id}
 
 

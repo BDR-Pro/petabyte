@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (201)
+## Variables (non-sensitive) (202)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -205,6 +205,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `TRUSTED_PROXIES` | no | platform | `127.0.0.1,::1` | `127.0.0.1,::1` | api/main.py | — | Reverse-proxy IPs trusted for X-Forwarded-For — never widen to spoofable. |
 | `UNITS` | no | gpu | `1` | `1` | agent/provision.py | format: int | Identical rentable units on this node. |
 | `USDC_CHAIN` | no | platform | `MATIC` | `MATIC` | api/payout_providers.py | — | — |
+| `VM_DNS_ZONE` | no | platform | *(empty)* | `petabyte.market` | api/main.py | format: hostname | Per-VM subdomain zone for the hostname-routed VM address (root@<id>.<zone>). Defaults to BASE_DOMAIN; set to e.g. vm.petabyte.market to put every VM under one wildcard record. See docs/dynamic_dns.md. |
 | `VRAM_GB` | no | gpu | *(empty)* | `60` | agent/provision.py | format: int | Manual VRAM override (GB). |
 | `WALLET_MAX_TOPUP_MINOR` | no | platform | `500000` | `500000` | api/wallet_funding.py | format: int | — |
 | `WALLET_MIN_TOPUP_MINOR` | no | platform | `500` | `500` | api/wallet_funding.py | format: int | — |

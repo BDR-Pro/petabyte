@@ -98,6 +98,9 @@ jobs:
       - name: tunnel (NAT traversal + failover)
         working-directory: lumaris_gateway
         run: python tunnel_test.py
+      - name: vm dns / stable address (survives failover, no new IP, no placement leak)
+        working-directory: lumaris_api
+        run: python vm_dns_test.py
 
   postgres:
     name: postgres (the one that counts)

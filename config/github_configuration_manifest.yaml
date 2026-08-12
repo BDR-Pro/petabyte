@@ -1413,6 +1413,14 @@ variables:
     scope:
     - platform
     description: ''
+  VM_DNS_ZONE:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: Per-VM subdomain zone for the hostname-routed VM address (root@<id>.<zone>). Defaults
+      to BASE_DOMAIN; set to e.g. vm.petabyte.market to put every VM under one wildcard record. See docs/dynamic_dns.md.
+    format: hostname
   VRAM_GB:
     required: false
     default: null

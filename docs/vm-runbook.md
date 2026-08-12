@@ -61,6 +61,10 @@ understand the shape and to keep the control plane honest in CI, not to serve tr
 DNS: `gateway.petabyte.market` -> gateway IP. For web templates, wildcard
 `*.petabyte.market` -> gateway IP.
 
+> **DNS records + why no dynamic-DNS updater is needed** (stable `root@<id>.vm.petabyte.market`
+> that survives a node dying) → see [`dynamic_dns.md`](dynamic_dns.md). This runbook is the gateway
+> **software** (frp + sshpiper); that doc is the **DNS + client** setup around it.
+
 ---
 
 ## 1. Install frp (gateway + node)
