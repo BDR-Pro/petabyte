@@ -12,6 +12,7 @@ from typing import Optional
 from datetime import datetime, timezone, timedelta
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
+import copy
 import json
 import logging
 from decimal import Decimal
@@ -1720,6 +1721,158 @@ def api_reference():
 <script id="api-reference" data-url="/openapi.json" data-configuration='{"theme":"deepSpace"}'></script>
 <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
 </body></html>""")
+
+
+# ------------------- SPLIT API PORTALS: /data (buy data) vs /devs (build compute) -------------------
+# Two products, two Scalar reference portals, each backed by a TAG-FILTERED OpenAPI spec so the two
+# never overlap: an endpoint documented under /data can never appear under /devs, and vice-versa.
+# The `data` tag is the buy-data product; the compute/build tags are the developer product. The
+# filter also EXCLUDES the data tag from /devs explicitly, so even a future double-tagged endpoint
+# stays out of the developer portal (data wins). This mirrors the key model: data keys carry the
+# `data` scope; compute/agent keys carry `node`/`jobs` — a key for one product is refused by the other.
+_DATA_PORTAL_TAGS = {"data"}
+_DEV_PORTAL_TAGS = {"compute", "marketplace", "seller", "wallet", "account"}
+_OPENAPI_METHODS = {"get", "post", "put", "patch", "delete", "options", "head", "trace"}
+
+
+def _portal_openapi(*, include: set, exclude: set, title: str, description: str,
+                    exclude_path_prefixes: tuple = ()) -> dict:
+    """A copy of the app's OpenAPI schema keeping only operations whose tags intersect `include`
+    and DON'T intersect `exclude` — so /data and /devs render disjoint, product-scoped references.
+    `exclude_path_prefixes` drops whole paths (e.g. operator-only /admin/) regardless of tag."""
+    spec = copy.deepcopy(app.openapi())
+    spec["info"] = {**spec.get("info", {}), "title": title, "description": description}
+    kept_paths = {}
+    for path, ops in (spec.get("paths") or {}).items():
+        if any(path.startswith(p) for p in exclude_path_prefixes):
+            continue
+        kept_ops, keep = {}, {}
+        for method, op in ops.items():
+            if method.lower() not in _OPENAPI_METHODS:
+                keep[method] = op                     # path-level shared keys (parameters, summary)
+                continue
+            tags = set((op or {}).get("tags") or [])
+            if tags & exclude:
+                continue
+            if include and not (tags & include):
+                continue
+            kept_ops[method] = op
+        if kept_ops:
+            kept_paths[path] = {**keep, **kept_ops}
+    spec["paths"] = kept_paths
+    shown = (include - exclude) if include else set()
+    if shown:
+        spec["tags"] = [t for t in spec.get("tags", []) if t.get("name") in shown]
+    return spec
+
+
+def _scalar_portal(spec_url: str, title: str) -> HTMLResponse:
+    """A standalone Scalar API-reference page bound to one filtered spec (CDN bundle; the CSP
+    already allows cdn.jsdelivr.net scripts and same-origin spec fetch)."""
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
+<title>{title}</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/static/petabyte-logo.png"></head><body style="margin:0">
+<script id="api-reference" data-url="{spec_url}" data-configuration='{{"theme":"deepSpace"}}'></script>
+<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</body></html>""")
+
+
+def _data_portal_description() -> str:
+    free = DATA_API_FREE_CALLS_MONTH
+    per_call = f"{DATA_API_PRICE_PER_1K / 1000.0:.4f}".rstrip("0").rstrip(".")
+    sandbox = DATA_API_SANDBOX_KEY or "(sandbox key disabled)"
+    return f"""# Petabyte Data API
+
+Programmatic access to Petabyte's live GPU-marketplace data: a benchmark-anchored **price index**,
+**price history**, **cloud-savings**, **live supply**, buyer-side **demand**, **workload mix**,
+**templates bought**, and the GPU-**authenticity** dataset. REST + JSON, one key.
+
+> This is the **buy-data** product. To rent GPUs and run workloads, see the **[Developer API](/devs)**.
+> The two are separate: an endpoint here is never part of the Developer API, and the keys don't cross over.
+
+## Buying data — pay as you go
+
+No subscription, no seat licence. You pay per call, only past a free monthly trial.
+
+1. **Try it free, no signup.** `GET /api/v1/data/sample` returns example payloads (keyless), so you can
+   see every response shape first. Or hit the **real** endpoints free & unmetered with the published
+   **sandbox key**: `X-API-KEY: {sandbox}`.
+2. **Get a key.** Sign in and mint a **`data`-scoped** key on the [keys page](/keys).
+3. **Fund your wallet.** Fees are debited from your wallet balance ([add funds](/wallet)).
+4. **Call it.** Every response carries a `usage` receipt — whether the call was billed and how much.
+
+## Pricing
+
+* Each account gets a free monthly trial of **{free} call-units**.
+* Beyond the trial, a call costs **${per_call} × the endpoint's price weight**, debited from your wallet.
+* **Weights** — commodity datasets (`gpu-prices`, `market`, `savings`, `availability`) = 1; history &
+  `workloads` cost more; `demand`, `templates`, `benchmarks` are premium. Premium data, premium price.
+* A call your balance can't cover is refused with **`402`** — never silently given away.
+* `GET /api/v1/data/usage` is always free and reports your month's calls and spend.
+
+## Authentication & scope
+
+Send your key in the **`X-API-KEY`** header. Data keys carry the **`data` scope** — a different scope
+from the compute/agent keys (`node`, `jobs`) used by the [Developer API](/devs). This API is gated to
+the `data` scope, so a `node`/`jobs` key is **refused here (403)**. And the two references share **no
+endpoint** — nothing in the Data API is part of the Developer API. One product, one scope.
+
+## Honesty
+
+Every dataset is **aggregate and anonymized** — no seller, buyer, node or spec identity is ever
+returned. Sandbox and demo activity is excluded, so you get real demand, not inflated numbers. When
+there is nothing to report, you get an **empty** result — never fabricated data."""
+
+
+def _dev_portal_description() -> str:
+    return """# Petabyte Developer API
+
+Build on the compute exchange: browse verified GPUs, **rent by the hour with escrow**, deploy
+workloads and templates, run jobs, manage your wallet and payouts, and drive the seller agent.
+
+> This is the **build-compute** product. To buy market data, see the **[Data API](/data)**.
+> The two are separate: no data endpoint appears here, and the keys don't cross over.
+
+## Keys & scopes
+
+Mint a scoped key on the [keys page](/keys) and send it as **`X-API-KEY`**. Compute/agent keys carry
+the **`node`** and **`jobs`** scopes — a different scope from the **`data`** key used by the
+[Data API](/data), which is gated to `data` keys (a `node`/`jobs` key is refused there, 403). The two
+products are documented separately and share **no endpoint**. Pick the product, pick the scope.
+
+## Money model
+
+Rentals are **prepaid into escrow** before any work runs, and released to the seller as the work
+completes (or refunded to you if a node drops). Fund your wallet, book compute, and every state
+transition is visible on your transaction."""
+
+
+@app.get("/data/openapi.json", include_in_schema=False)
+def data_portal_openapi():
+    """OpenAPI for the buy-data product only (the `data` tag)."""
+    return _portal_openapi(include=_DATA_PORTAL_TAGS, exclude=set(),
+                           title="Petabyte Data API", description=_data_portal_description())
+
+
+@app.get("/devs/openapi.json", include_in_schema=False)
+def devs_portal_openapi():
+    """OpenAPI for the build-compute product only — the developer tags, with the data product
+    explicitly EXCLUDED so the two portals never share an endpoint."""
+    return _portal_openapi(include=_DEV_PORTAL_TAGS, exclude=_DATA_PORTAL_TAGS | {"admin"},
+                           title="Petabyte Developer API", description=_dev_portal_description(),
+                           exclude_path_prefixes=("/admin/", "/internal/"))
+
+
+@app.get("/data", include_in_schema=False)
+def data_portal():
+    """Scalar reference for the buy-data API — how to buy data, priced and metered."""
+    return _scalar_portal("/data/openapi.json", "Petabyte Data API")
+
+
+@app.get("/devs", include_in_schema=False)
+def devs_portal():
+    """Scalar reference for the build-compute developer API (rent GPUs, run jobs)."""
+    return _scalar_portal("/devs/openapi.json", "Petabyte Developer API")
 
 
 @app.exception_handler(BookingsPaused)

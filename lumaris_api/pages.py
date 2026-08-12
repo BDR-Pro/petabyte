@@ -1087,13 +1087,33 @@ function roiRecalc(){
 
 
 DEVELOPERS_HTML = _page("Petabyte — developers",
-    desc="Launch GPU workloads from the API in one call. Keys, scopes, templates and a full reference.", path="/developers", body="""
+    desc="Two APIs: rent GPUs and run jobs (Developer API), or buy live GPU-market data (Data API). Interactive Scalar references, scoped keys, try-free sandbox.", path="/developers", body="""
 <div class="wrap" style="padding:48px 22px 10px">
   <div class="eyebrow"><span class="dot"></span> API reference</div>
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px">Build on the <span class="grad-teal">exchange</span></h1>
-  <p class="mut">REST + JSON. Full interactive schema at <a class="teal" href="/docs">/docs</a> · keys on the <a class="teal" href="/keys">keys page</a>.</p>
+  <p class="mut">Two products, two references. REST + JSON · keys on the <a class="teal" href="/keys">keys page</a>.</p>
 </div>
-<div class="wrap" style="padding:12px 22px 30px">
+<div class="wrap" style="padding:12px 22px 8px">
+  <div class="cols c2">
+    <div class="card" style="border-color:rgba(255,183,77,.32);background:linear-gradient(180deg,rgba(255,183,77,.06),transparent)">
+      <div class="lbl am">Developer API <span class="mut">· build compute</span></div>
+      <p class="mut" style="font-size:13.5px;margin:6px 0 12px">Rent verified GPUs by the hour with escrow, deploy workloads and templates, run jobs, manage wallet &amp; payouts. Scoped keys carry <code class="teal">node</code> / <code class="teal">jobs</code>.</p>
+      <a class="btn btn-amber arrow-fwd" href="/devs">Open the Developer API reference </a>
+    </div>
+    <div class="card" style="border-color:rgba(79,214,201,.32);background:linear-gradient(180deg,rgba(79,214,201,.06),transparent)">
+      <div class="lbl">Data API <span class="mut">· buy market data</span></div>
+      <p class="mut" style="font-size:13.5px;margin:6px 0 12px">Live GPU price index, history, savings, supply, demand, workloads, templates and the authenticity dataset. Metered, pay-as-you-go. Scoped key carries <code class="teal">data</code>.</p>
+      <a class="btn btn-teal arrow-fwd" href="/data">Open the Data API reference </a>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px;border-color:rgba(255,255,255,.10)">
+    <p class="mut" style="font-size:12.5px;margin:0"><b>Two products, two references — they share no endpoint.</b> Nothing in the Data API appears in the Developer API, and vice-versa. The Data API is gated to <code class="teal">data</code>-scoped keys — a <code class="teal">node</code>/<code class="teal">jobs</code> key is refused there (403). Full combined schema at <a class="teal" href="/docs">/docs</a>.</p>
+  </div>
+</div>
+<div class="wrap" style="padding:20px 22px 6px">
+  <div class="eyebrow"><span class="dot"></span> quick reference</div>
+</div>
+<div class="wrap" style="padding:8px 22px 30px">
   <div class="cols c2">
     <div class="card"><div class="lbl">Accounts</div>
       <p class="mono" style="font-size:12.5px;line-height:2.05">
@@ -1140,7 +1160,11 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
       <div class="codeline" style="margin:6px 0 8px"><code>curl -s https://petabyte.market/api/v1/data/gpu-prices -H "X-API-KEY: {{SANDBOX_KEY}}"</code></div>
       <p class="mut" style="font-size:12px;margin-top:8px">The sandbox key <code class="teal">{{SANDBOX_KEY}}</code> is read-only, never billed, and safe to publish. When you're ready for production, mint a <code class="teal">data</code>-scoped key and top up your wallet.</p></div>
   </div>
-  <div style="margin-top:18px"><a class="btn btn-amber" href="/docs">Open interactive docs →</a></div>
+  <div style="margin-top:18px;display:flex;gap:12px;flex-wrap:wrap">
+    <a class="btn btn-amber" href="/devs">Developer API reference →</a>
+    <a class="btn btn-teal" href="/data">Data API reference →</a>
+    <a class="btn" href="/docs" style="border:1px solid rgba(255,255,255,.18)">Full schema (/docs) →</a>
+  </div>
 </div>""")
 
 

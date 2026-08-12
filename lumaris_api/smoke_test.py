@@ -1763,6 +1763,28 @@ _dev = c.get("/developers").text
 ok("/developers publishes the sandbox key + keyless sample so devs can try before paying",
    main.DATA_API_SANDBOX_KEY in _dev and "/api/v1/data/sample" in _dev)
 
+# --- split API portals: /data (buy data) and /devs (build compute), Scalar-rendered, DISJOINT ---
+_dp = c.get("/data"); _vp = c.get("/devs")
+ok("/data renders a Scalar API reference for the buy-data product",
+   _dp.status_code == 200 and "scalar" in _dp.text.lower() and "/data/openapi.json" in _dp.text)
+ok("/devs renders a Scalar API reference for the build-compute product",
+   _vp.status_code == 200 and "scalar" in _vp.text.lower() and "/devs/openapi.json" in _vp.text)
+_dspec = c.get("/data/openapi.json").json(); _vspec = c.get("/devs/openapi.json").json()
+_dpaths = set(_dspec.get("paths", {})); _vpaths = set(_vspec.get("paths", {}))
+ok("the /data spec contains ONLY the data endpoints (buy-data product)",
+   len(_dpaths) > 0 and all(p.startswith("/api/v1/data") for p in _dpaths))
+ok("the /devs spec contains developer endpoints and NO data endpoints",
+   len(_vpaths) > 0 and not any(p.startswith("/api/v1/data") for p in _vpaths))
+ok("an endpoint in /data can NOT appear in /devs — the two specs are strictly disjoint",
+   len(_dpaths & _vpaths) == 0)
+ok("the /devs spec excludes operator-only /admin endpoints",
+   not any(p.startswith("/admin") for p in _vpaths))
+ok("the /data reference carries the buy-data docs (pricing, sandbox, scope) rendered by Scalar",
+   "Buying data" in (_dspec.get("info", {}).get("description") or "")
+   and main.DATA_API_SANDBOX_KEY in (_dspec.get("info", {}).get("description") or ""))
+ok("/developers links to BOTH product references (/data and /devs)",
+   'href="/data"' in _dev and 'href="/devs"' in _dev)
+
 # --- wallet-only onboarding: paste a wallet, get a ONE-LINE installer, no account (like a miner) ---
 ok("the /install page offers a wallet-only start (no login) wired to /nodes/quickstart",
    "walletStart" in _inst and "/nodes/quickstart" in _inst and 'id="qwallet"' in _inst)
