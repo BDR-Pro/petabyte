@@ -253,6 +253,44 @@ select{appearance:none;-webkit-appearance:none;background-image:linear-gradient(
 .sumrow.total{border-top:1px solid var(--line2);border-bottom:0;margin-top:6px;padding-top:13px}
 .sumrow.total .k{color:var(--ink);font-family:var(--disp);font-weight:600;font-size:14.5px}
 .sumrow.total .v{color:var(--amber);font-family:var(--disp);font-weight:700;font-size:18px}
+/* ---------- launch compute: numbered sections + selectable cards (AWS-style) ---------- */
+.lsec{margin-bottom:16px}
+.lsec-h{display:flex;align-items:center;gap:12px;margin-bottom:2px}
+.lsec-h h2{font-size:18px}
+.lsec-sub{color:var(--mut);font-size:13px;margin:2px 0 0 34px}
+.lsec.locked{opacity:.5;pointer-events:none;filter:saturate(.5)}
+.picks{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:11px;margin-top:14px}
+.pick{position:relative;text-align:start;display:flex;flex-direction:column;gap:7px;padding:14px;border:1px solid var(--line2);border-radius:14px;
+ background:var(--panel2);cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .12s;color:inherit;width:100%;font:inherit;
+ min-width:0;overflow:hidden;white-space:normal}
+.pick>*{min-width:0;max-width:100%}
+.pick:hover{border-color:var(--teal);transform:translateY(-2px)}
+.pick:focus-visible{outline:none;border-color:var(--teal);box-shadow:0 0 0 4px rgba(53,224,208,.18)}
+.pick[aria-checked="true"]{border-color:var(--teal);background:rgba(53,224,208,.07);box-shadow:0 0 0 1px var(--teal) inset}
+.pick .pk-top{display:flex;align-items:center;gap:10px}
+.pick .pk-ic{width:34px;height:34px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--teal);
+ background:rgba(53,224,208,.08);border:1px solid rgba(53,224,208,.25);border-radius:10px}
+.pick .pk-ic svg{width:20px;height:20px}
+.pick .pk-top{min-width:0}
+.pick .pk-name{font-family:var(--disp);font-weight:600;font-size:14.5px;text-transform:capitalize;line-height:1.2;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pick .pk-desc{font-size:12px;color:var(--mut);line-height:1.45;white-space:normal;overflow-wrap:anywhere}
+.pick .pk-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
+.pick .pk-check{position:absolute;top:11px;inset-inline-end:12px;color:var(--teal);opacity:0;font-weight:700}
+.pick[aria-checked="true"] .pk-check{opacity:1}
+/* selectable machine rows */
+.mpick{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:13px 15px;border:1px solid var(--line);border-radius:13px;
+ background:var(--panel2);cursor:pointer;transition:border-color .15s,background-color .15s;width:100%;text-align:start;color:inherit;font:inherit;margin-top:9px}
+.mpick:hover{border-color:var(--line2)}
+.mpick:focus-visible{outline:none;border-color:var(--teal);box-shadow:0 0 0 4px rgba(53,224,208,.16)}
+.mpick[aria-checked="true"]{border-color:var(--teal);background:rgba(53,224,208,.06)}
+.mpick .mp-gpu{font-family:var(--disp);font-weight:600;font-size:14.5px;flex:1 1 150px;min-width:130px}
+.mpick .mp-col{font-family:var(--mono);font-size:12px;color:var(--mut);flex:0 0 auto}
+.mpick .mp-price{font-family:var(--disp);font-weight:700;color:var(--amber);font-size:15px;margin-inline-start:auto}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:999px;overflow:hidden;background:var(--panel2)}
+.seg button{background:transparent;border:0;border-radius:0;color:var(--mut);font-family:var(--mono);font-size:11px;letter-spacing:.04em;padding:7px 13px;text-transform:uppercase}
+.seg button[aria-pressed="true"]{background:rgba(53,224,208,.12);color:var(--teal)}
+.compat{display:flex;align-items:center;gap:7px;font-size:12.5px;padding:3px 0}
+.compat .ic{width:16px;height:16px;flex:none}
 /* ---------- sonar launch cards (signature) ---------- */
 .lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
 .lcard{position:relative;display:flex;flex-direction:column;padding:17px 17px 15px;border:1px solid var(--line);border-radius:var(--r);
@@ -355,7 +393,7 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
 </button>
 <div class="collapse navbar-collapse" id="pbnav">
 <div class="navlinks">
-  <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
+  <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/launch" data-ar="التشغيل">Launch</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
   <a href="/metrics" data-ar="المقاييس">Metrics</a><a href="/install" data-ar="لمالكي كروت الرسومات">For GPU owners</a><a href="/security" data-ar="الأمان">Security</a><a href="/developers" data-ar="المطورون">Developers</a>
 </div>
 <div class="navcta">
@@ -467,6 +505,7 @@ function pbEmpty(cols,title,sub,ctaHref,ctaText){
   (ctaHref?('<a class="btn btn-teal" href="'+ctaHref+'">'+ctaText+'</a>'):'')+'</div></td></tr>';}
 // ---- Command palette (Cmd/Ctrl+K). Power users never touch a nav bar. ----
 var PB_CMDS=[
+ {t:"Launch compute",        h:"/launch",      k:"launch run workload template gpu ec2 configure new instance"},
  {t:"Browse GPUs",           h:"/marketplace", k:"gpu hardware rent inventory"},
  {t:"Templates",             h:"/catalog",     k:"launch jupyter pytorch ollama blender run"},
  {t:"Your account",          h:"/account",     k:"dashboard wallet vms nodes"},
@@ -842,8 +881,8 @@ MARKETPLACE_HTML = _page("Petabyte — marketplace",
     </div>
   </div>
   <div class="panel" style="overflow:auto">
-    <table class="tbl"><thead><tr><th data-ar="الكرت">GPU</th><th data-ar="الذاكرة">VRAM</th><th>$/hr</th><th data-ar="مقابل السحابة">vs cloud</th><th data-ar="الثقة">trust</th><th data-ar="المنطقة">region</th><th data-ar="السمعة">rep</th><th data-ar="متاح">free</th></tr></thead>
-    <tbody id="mrows"><tr><td colspan="8" style="padding:24px;text-align:center" class="mut mono">loading…</td></tr></tbody></table>
+    <table class="tbl"><thead><tr><th data-ar="الكرت">GPU</th><th data-ar="الذاكرة">VRAM</th><th>$/hr</th><th data-ar="مقابل السحابة">vs cloud</th><th data-ar="الثقة">trust</th><th data-ar="المنطقة">region</th><th data-ar="السمعة">rep</th><th data-ar="متاح">free</th><th></th></tr></thead>
+    <tbody id="mrows"><tr><td colspan="9" style="padding:24px;text-align:center" class="mut mono">loading…</td></tr></tbody></table>
   </div>
   <div style="margin-top:18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
     <a class="btn btn-amber" href="/app" data-ar="سجّل الدخول للحجز ←">Sign in to book →</a>
@@ -858,7 +897,7 @@ function v(id){return (document.getElementById(id).value||'').trim();}
 function clearf(){['fgpu','fprice','fvram','fregion'].forEach(function(i){document.getElementById(i).value='';});document.getElementById('fconf').checked=false;load();}
 async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await r.json();
  document.getElementById('mnote').textContent=b.count?b.count+' GPUs match · "vs cloud" compares each GPU to the on-demand cloud rate for the SAME class':'No GPUs match these filters.';
- var tb=document.getElementById('mrows');if(!b.count){tb.innerHTML=pbEmpty(8,'No GPUs match','Widen your filters, or be the first to list one.','/install','List your GPU');return;}
+ var tb=document.getElementById('mrows');if(!b.count){tb.innerHTML=pbEmpty(9,'No GPUs match','Widen your filters, or be the first to list one.','/install','List your GPU');return;}
  tb.innerHTML=b.specs.map(function(s){var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
   var t=[];if(s.trust)t.push('<span class="badge '+(s.trust.rank>=2?'ok':'')+'" title="'+s.trust.evidence+'">'+s.trust.label+'</span>');
   if(s.confidential)t.push('<span class="badge cc" title="Confidential-computing pilot — vendor TEE verification not yet connected">CC pilot</span>');
@@ -873,7 +912,8 @@ async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await 
    '<td data-l="trust">'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
    '<td data-l="Region" class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
    '<td data-l="rep" class="mono" style="color:'+rc+'">'+rep+'</td>'+
-   '<td data-l="free" class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');
+   '<td data-l="free" class="mono" style="color:var(--teal)">'+s.available_units+'</td>'+
+   '<td data-l="" class="tbl-action"><a class="btn btn-teal" style="padding:6px 13px;font-size:12px" href="/launch?spec='+s.id+'">Launch →</a></td></tr>';}).join('');
  updateSavingsBanner(b.specs);}
 // Lead with the headline the buyer cares about: how much cheaper than the hyperscalers.
 function updateSavingsBanner(specs){
@@ -2724,6 +2764,14 @@ function renderShell(s){
     '</div>'+
    '</div>'+
   '</div>';
+ // Prefill from the /launch guided launcher (custom-code path hands off here). No secrets are
+ // carried — only the code text and hours the buyer already typed on /launch.
+ try{
+   var pc=sessionStorage.getItem('pb_launch_code');
+   if(pc!=null){var ce=el('buy_code');if(ce)ce.value=pc;sessionStorage.removeItem('pb_launch_code');
+     var ph=sessionStorage.getItem('pb_launch_hours');if(ph){var he=el('buy_hours');if(he)he.value=ph;}sessionStorage.removeItem('pb_launch_hours');
+     var note=el('buy_note');if(note)note.textContent='Loaded from the launcher — review and press Rent & run. '+note.textContent;}
+ }catch(e){}
  renderCost();
 }
 
@@ -2866,6 +2914,447 @@ async function buyCancel(){
 }
 
 loadBuy();
+</script>""")
+
+
+LAUNCH_HTML = _page("Petabyte — launch compute",
+    desc="Launch a GPU workload the way you would an EC2 instance: choose a curated template or your own code, pick a verified host, see the exact price, and launch.",
+    path="/launch", body="""
+<div class="wrap" id="lcroot" style="padding:26px 24px 60px;max-width:1180px">
+  <div class="eyebrow"><span class="dot"></span> launch compute</div>
+  <h1 style="font-size:clamp(28px,4.2vw,40px);margin:12px 0 6px">Launch a workload</h1>
+  <p class="mut" style="max-width:66ch">Choose what to run, pick a verified host, see exactly what it costs, and launch. Every price and placement is computed on our servers — the browser only previews them.</p>
+  <p class="mut" id="lc_signedout" style="display:none;margin-top:12px">You are browsing as a guest. <a class="teal" href="/login">Sign in</a> to launch — you can still explore templates and hosts below.</p>
+
+  <div id="mytpls" class="lsec" style="display:none;margin-top:20px">
+    <div class="lsec-h"><span class="stepchip" style="background:rgba(255,190,66,.12);border-color:rgba(255,190,66,.35);color:var(--amber)">★</span><h2 style="font-size:16px">Your launch templates</h2></div>
+    <div class="lsec-sub" style="margin-inline-start:34px">Saved configurations you can relaunch. Stored in this browser only — no secrets.</div>
+    <div id="mytplgrid" class="picks" style="margin-top:12px"></div>
+  </div>
+
+  <div class="cols" style="gap:20px;align-items:flex-start;margin-top:22px">
+    <div style="flex:1.55 1 460px;min-width:320px">
+
+      <div class="lsec" id="sec1">
+        <div class="card">
+          <div class="lsec-h"><span class="stepchip">1</span><h2>What do you want to run?</h2></div>
+          <div class="lsec-sub">Curated, audited app templates — or your own code in a locked-down sandbox. <span class="mut">(Custom container images are on the roadmap; today Petabyte runs curated templates only.)</span></div>
+          <input id="tsearch" aria-label="Search templates" placeholder="Search templates…" style="width:100%;margin-top:14px"/>
+          <div id="tcats" class="seg" style="margin-top:12px;flex-wrap:wrap"></div>
+          <div id="tgrid" class="picks" aria-label="Workload templates" role="radiogroup"></div>
+          <div id="tdetail" style="margin-top:14px"></div>
+        </div>
+      </div>
+
+      <div class="lsec locked" id="sec2" aria-disabled="true">
+        <div class="card">
+          <div class="lsec-h"><span class="stepchip">2</span><h2>Choose compute</h2></div>
+          <div class="lsec-sub">Verified hosts. Hosts are anonymous — you pick by hardware, reputation and price.</div>
+          <div id="computebody" style="margin-top:12px"></div>
+        </div>
+      </div>
+
+      <div class="lsec locked" id="sec3" aria-disabled="true">
+        <div class="card">
+          <div class="lsec-h"><span class="stepchip">3</span><h2>Configure</h2></div>
+          <div id="configbody" style="margin-top:12px"></div>
+        </div>
+      </div>
+
+      <div class="lsec locked" id="sec4" aria-disabled="true">
+        <div class="card">
+          <div class="lsec-h"><span class="stepchip">4</span><h2>Review &amp; launch</h2></div>
+          <div id="reviewbody" style="margin-top:12px"></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="flex:1 1 300px;min-width:280px;position:sticky;top:88px">
+      <div class="card">
+        <div class="lbl">Your configuration</div>
+        <div id="costbody" style="margin-top:6px"><p class="mut" style="font-size:13px">Pick a workload to see pricing.</p></div>
+        <div id="reviewactions" style="margin-top:16px;display:none">
+          <button id="reviewbtn" class="btn btn-amber" style="width:100%;justify-content:center">Review &amp; Launch →</button>
+          <button id="savetplbtn" class="btn btn-ghost" style="width:100%;justify-content:center;margin-top:8px">Save as template</button>
+        </div>
+        <p class="mini" style="margin-top:10px">Estimated. The final charge is metered to the second on our servers and can never exceed the authorized maximum — the rest is refunded.</p>
+      </div>
+      <div id="launchstatus" class="card" style="display:none;margin-top:14px"></div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');}
+ function mUSD(x){return '$'+Number(x||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+ function el(id){return document.getElementById(id);}
+ var CATS=[['all','All'],['notebook','Notebooks'],['ai','AI / LLM'],['art','Image / Art'],['render','Render / Video'],['game','Game servers']];
+ // Frontend guidance only — the server (/route, /estimate, /launch) is authoritative on placement.
+ var REC_VRAM={vllm:24,'tensorrt-llm':24,ollama:16,comfyui:12,'sd-webui':12,jupyter:16,pytorch:16,blender:8,ffmpeg:8};
+ var DEF_MODEL={ollama:'llama3',vllm:'Qwen/Qwen2.5-1.5B-Instruct'};
+ var DEFAULT_CODE=\"""" + DEFAULT_WORKLOAD + """\";
+ var S={type:null,template:null,model:'',hours:1,spec:null,region:'',maxPrice:'',minVram:0,confidential:false,sort:'price',code:DEFAULT_CODE,place:'auto'};
+ var TPL=[],SPECS=[],WALLET=null,EST=null,LAUNCHING=false;
+
+ function saveDraft(){try{var d={type:S.type,template:S.template,model:S.model,hours:S.hours,region:S.region,maxPrice:S.maxPrice,minVram:S.minVram,confidential:S.confidential,sort:S.sort,place:S.place,spec:S.spec?S.spec.id:null};sessionStorage.setItem('pb_launch_draft',JSON.stringify(d));}catch(e){}}
+ // ---------- section locking ----------
+ function unlock(n){for(var i=2;i<=4;i++){var s=el('sec'+i);if(!s)continue;var on=i<=n;s.classList.toggle('locked',!on);s.setAttribute('aria-disabled',on?'false':'true');}}
+
+ // ---------- 1. templates ----------
+ function catChips(){var c=el('tcats');c.innerHTML=CATS.map(function(k){return '<button type="button" data-lc="cat" data-v="'+k[0]+'" aria-pressed="'+(S._cat===k[0]||(!S._cat&&k[0]==='all'))+'">'+k[1]+'</button>';}).join('');}
+ function tCards(){
+  var q=(el('tsearch').value||'').toLowerCase().trim(),cat=S._cat||'all';
+  var list=TPL.filter(function(t){
+    if(cat!=='all'&&t.kind!==cat)return false;
+    if(q&&(t.name+' '+(t.desc||'')).toLowerCase().indexOf(q)<0)return false;
+    return true;});
+  var cards=list.map(function(t){
+    var rec=REC_VRAM[t.name];
+    return '<button type="button" class="pick" role="radio" aria-checked="'+(S.type==='app'&&S.template===t.name)+'" data-lc="pickTpl" data-type="app" data-v="'+esc(t.name)+'">'+
+      '<span class="pk-check">✓</span>'+
+      '<span class="pk-top"><span class="pk-ic">'+pbIcon(t.name)+'</span><span class="pk-name">'+esc(t.name)+'</span></span>'+
+      '<span class="pk-desc">'+esc(t.desc||'')+'</span>'+
+      '<span class="pk-meta">'+(t.gpu?'<span class="badge ok">GPU</span>':'<span class="badge">CPU</span>')+
+        (rec?'<span class="badge">'+rec+'GB+ VRAM</span>':'')+
+        (t.port?'<span class="badge">:'+t.port+'</span>':'<span class="badge">batch</span>')+'</span>'+
+    '</button>';}).join('');
+  // the always-available "custom code" workload (notebook pipeline)
+  var custom='<button type="button" class="pick" role="radio" aria-checked="'+(S.type==='code')+'" data-lc="pickTpl" data-type="code" data-v="__code__">'+
+      '<span class="pk-check">✓</span>'+
+      '<span class="pk-top"><span class="pk-ic">'+pbIcon('pytorch')+'</span><span class="pk-name">Custom code</span></span>'+
+      '<span class="pk-desc">Run your own Python in a locked, network-isolated sandbox on a host you choose.</span>'+
+      '<span class="pk-meta"><span class="badge ok">GPU</span><span class="badge">notebook</span></span>'+
+    '</button>';
+  var showCustom=(cat==='all'||cat==='notebook')&&(!q||'custom code python notebook'.indexOf(q)>=0);
+  el('tgrid').innerHTML=cards+(showCustom?custom:'')||'<p class="mut" style="font-size:13px;grid-column:1/-1">No templates match. <a class="teal" href="#" data-lc="clearsearch">Clear search</a></p>';
+ }
+ function tDetail(){
+  var d=el('tdetail');
+  if(S.type==='code'){
+    d.innerHTML='<div class="panel" style="padding:14px 16px"><div class="lbl" style="margin-bottom:8px">Custom code · notebook</div>'+
+      '<p class="mini">Your Python runs inside a hardened container: no network, read-only filesystem, dropped capabilities, fixed CPU/RAM. Choose the host in the next step, then edit the code in Configure.</p></div>';return;}
+  if(S.type!=='app'){d.innerHTML='';return;}
+  var t=TPL.filter(function(x){return x.name===S.template;})[0];if(!t){d.innerHTML='';return;}
+  var rec=REC_VRAM[t.name];
+  var rows=''+
+    row('Environment','Curated Docker image, audited by Petabyte')+
+    row('Category',({ai:'AI / LLM',art:'Image / Art',render:'Render / Video',game:'Game server',notebook:'Notebook'})[t.kind]||t.kind)+
+    (rec?row('Recommended VRAM',rec+' GB or more'):'')+
+    row('Access',t.port?('In-container service on port '+t.port+' (reached over your private tunnel)'):'Batch job (no exposed port)')+
+    row('Network egress',(t.egress==='none'?'None (fully isolated)':(t.egress==='open'?'Open':'Limited')))+
+    row('Publisher','Petabyte')+
+    row('Status','<span class="badge st ok">Curated · verified</span>');
+  var modelField=DEF_MODEL[t.name]!==undefined?
+    '<label class="mini" for="lc_model" style="display:block;margin-top:12px">Model</label>'+
+    '<input id="lc_model" value="'+esc(S.model||DEF_MODEL[t.name])+'" placeholder="'+esc(DEF_MODEL[t.name])+'" style="width:100%;max-width:360px;margin-top:4px"/>'+
+    '<p class="mini" style="margin-top:5px">The model this server will pull and serve. This is the one runtime parameter this template accepts.</p>':'';
+  d.innerHTML='<div class="panel" style="padding:16px"><div class="lbl" style="margin-bottom:8px">'+esc(t.name)+' — details</div>'+rows+modelField+'</div>';
+  var mi=el('lc_model');if(mi)mi.addEventListener('input',function(){S.model=mi.value;saveDraft();});
+ }
+ function row(k,v){return '<div class="sumrow"><span class="k">'+k+'</span><span class="v" style="max-width:60%">'+v+'</span></div>';}
+
+ function pickTpl(type,v){
+  if(type==='code'){S.type='code';S.template=null;}
+  else{S.type='app';S.template=v;if(DEF_MODEL[v]!==undefined&&!S.model)S.model=DEF_MODEL[v];S.place='auto';}
+  // reset a machine choice that no longer applies
+  if(type==='app')S.spec=S.spec;  // keep any preview
+  tCards();tDetail();renderCompute();renderConfig();unlock(3);saveDraft();refreshCost();
+  el('sec2').scrollIntoView({behavior:'smooth',block:'nearest'});
+ }
+
+ // ---------- 2. compute ----------
+ function renderCompute(){
+  var b=el('computebody');
+  var appMode=(S.type==='app');
+  var head=appMode?
+    '<div class="seg" role="radiogroup" aria-label="Placement" style="margin-bottom:6px">'+
+      '<button type="button" data-lc="place" data-v="auto" aria-pressed="'+(S.place==='auto')+'">Auto-place (recommended)</button>'+
+      '<button type="button" data-lc="place" data-v="pick" aria-pressed="'+(S.place==='pick')+'">Browse hosts</button>'+
+    '</div>':'';
+  var note=appMode&&S.place==='auto'?
+    '<p class="mini" style="margin:6px 0 4px">Petabyte places this on the cheapest verified host that meets the template requirements and your limits below. You are charged that host&#39;s rate.</p>':
+    (appMode?'<p class="mini" style="margin:6px 0 4px">Previewing matching hosts. Managed templates are still placed server-side for reliability; your price reflects the selected class.</p>':
+             '<p class="mini" style="margin:6px 0 4px">Pick the exact host your code runs on.</p>');
+  var filters=
+    '<div class="filterbar" style="margin:10px 0 4px">'+
+      '<label class="field" style="flex:0 0 auto"><span>Sort</span>'+
+        '<span class="seg"><button type="button" data-lc="sort" data-v="price" aria-pressed="'+(S.sort==='price')+'">Cheapest</button>'+
+        '<button type="button" data-lc="sort" data-v="rep" aria-pressed="'+(S.sort==='rep')+'">Best rep</button>'+
+        '<button type="button" data-lc="sort" data-v="vram" aria-pressed="'+(S.sort==='vram')+'">Most VRAM</button></span></label>'+
+      '<label class="field"><span>Min VRAM (GB)</span><input id="f_vram" type="number" min="0" value="'+(S.minVram||'')+'" placeholder="any" style="width:100px"/></label>'+
+      '<label class="field"><span>Max $/hr</span><input id="f_price" type="number" min="0" step="0.01" value="'+(S.maxPrice||'')+'" placeholder="any" style="width:100px"/></label>'+
+      '<label class="field"><span>Region</span><input id="f_region" value="'+esc(S.region||'')+'" placeholder="any" style="width:120px"/></label>'+
+    '</div>';
+  var showList=(!appMode)||(S.place==='pick');
+  b.innerHTML=head+note+((appMode&&S.place==='auto')?
+      '<div id="autopreview" style="margin-top:8px"></div>':
+      filters+'<div id="mlist" aria-label="Available hosts"></div>');
+  if(appMode&&S.place==='auto'){renderAutoPreview();}
+  else{
+    var vf=el('f_vram'),pf=el('f_price'),rf=el('f_region');
+    if(vf)vf.addEventListener('input',function(){S.minVram=vf.value;saveDraft();renderMachineList();});
+    if(pf)pf.addEventListener('input',function(){S.maxPrice=pf.value;saveDraft();renderMachineList();});
+    if(rf)rf.addEventListener('input',function(){S.region=rf.value;saveDraft();renderMachineList();});
+    renderMachineList();
+  }
+ }
+ function specQuery(){
+  var p=[];p.push('sort='+encodeURIComponent(S.sort||'price'));
+  if(S.minVram)p.push('min_vram='+encodeURIComponent(S.minVram));
+  if(S.maxPrice)p.push('max_price='+encodeURIComponent(S.maxPrice));
+  if(S.region)p.push('region='+encodeURIComponent(S.region));
+  return '/marketplace/specs?'+p.join('&');
+ }
+ function compatFor(s){
+  var rec=(S.type==='app'&&REC_VRAM[S.template])||0;
+  if(!rec)return {ok:true,html:''};
+  var ok=(s.vram_gb||0)>=rec;
+  return {ok:ok,html:'<span class="compat" style="color:'+(ok?'var(--pos)':'var(--warn)')+'">'+(ok?'✓':'⚠')+' '+(ok?'meets':'below')+' '+rec+'GB rec.</span>'};
+ }
+ function machineRow(s){
+  var trust=s.trust?('<span class="badge '+(s.trust.rank>=2?'ok':'')+'" title="'+esc(s.trust.evidence||'')+'">'+esc(s.trust.label)+'</span>'):'';
+  var rep=s.reputation_score!=null?('<span class="mp-col">rep '+s.reputation_score+'</span>'):'';
+  var c=compatFor(s);
+  return '<button type="button" class="mpick" role="radio" aria-checked="'+(S.spec&&S.spec.id===s.id)+'" data-lc="pickMachine" data-v="'+esc(s.id)+'">'+
+    '<span class="mp-gpu">'+(s.gpu_count>1?s.gpu_count+'× ':'')+esc(s.gpu_model||'CPU')+' '+trust+'</span>'+
+    '<span class="mp-col">'+(s.vram_gb?s.vram_gb+'GB':'—')+' VRAM</span>'+
+    '<span class="mp-col">'+(s.cpu?s.cpu+' vCPU':'')+(s.ram_gb?' · '+s.ram_gb+'GB':'')+'</span>'+
+    '<span class="mp-col">'+esc(s.region||'—')+'</span>'+rep+
+    (c.html?'<span class="mp-col">'+c.html+'</span>':'')+
+    '<span class="mp-price">'+mUSD(s.price_per_hour)+'<span class="mut" style="font-size:11px">/hr</span></span>'+
+  '</button>';
+ }
+ async function renderMachineList(){
+  var box=el('mlist');if(!box)return;
+  box.innerHTML='<div class="mut mono" style="padding:14px 0;font-size:13px">Finding hosts…</div>';
+  try{
+   var r=await fetch(specQuery());var b=await r.json();SPECS=b.specs||[];
+   if(!SPECS.length){box.innerHTML='<div class="empty" style="padding:26px 12px"><div class="et">No hosts match</div><div class="es">Relax the filters, or check back — availability updates live.</div></div>';return;}
+   box.innerHTML=SPECS.map(machineRow).join('');
+  }catch(e){box.innerHTML='<p class="mut" style="font-size:13px">Could not load hosts. <a class="teal" href="#" data-lc="reloadmachines">Retry</a></p>';}
+ }
+ async function renderAutoPreview(){
+  var box=el('autopreview');if(!box)return;
+  box.innerHTML='<div class="mut mono" style="font-size:13px">Checking matching hosts…</div>';
+  try{
+   var p=[];p.push('sort=price');if(S.type==='app'&&REC_VRAM[S.template])p.push('min_vram='+REC_VRAM[S.template]);
+   var r=await fetch('/marketplace/specs?'+p.join('&'));var b=await r.json();var ss=b.specs||[];
+   if(!ss.length){box.innerHTML='<p class="mini" style="color:var(--warn)">⚠ No verified host currently meets this template&#39;s requirements. Try "Browse hosts" or check back shortly.</p>';return;}
+   var cheapest=ss[0];
+   box.innerHTML='<div class="panel" style="padding:12px 14px"><div class="compat" style="color:var(--pos)">✓ '+ss.length+' verified host'+(ss.length>1?'s':'')+' match — cheapest from '+mUSD(cheapest.price_per_hour)+'/hr ('+esc(cheapest.gpu_model||'CPU')+', '+(cheapest.vram_gb||0)+'GB).</div>'+
+     '<p class="mini" style="margin-top:6px">Your final host and price are locked in server-side at launch.</p></div>';
+  }catch(e){box.innerHTML='';}
+ }
+ function pickMachine(id){
+  var s=SPECS.filter(function(x){return x.id===id;})[0];if(!s)return;S.spec=s;
+  document.querySelectorAll('#mlist .mpick').forEach(function(n){n.setAttribute('aria-checked', n.getAttribute('data-v')===id?'true':'false');});
+  renderConfig();unlock(3);saveDraft();refreshCost();
+ }
+
+ // ---------- 3. configure ----------
+ function renderConfig(){
+  var b=el('configbody');
+  var hrs='<label class="mini" for="lc_hours" style="display:block">Max runtime (hours)</label>'+
+    '<input id="lc_hours" type="number" min="1" max="24" value="'+(S.hours||1)+'" style="width:120px;margin-top:4px"/>'+
+    '<p class="mini" style="margin-top:5px">Sizes the pre-authorization hold (a small buffer is added). You pay only for the time actually used; the rest is released.</p>';
+  var code=S.type==='code'?
+    '<label class="mini" for="lc_code" style="display:block;margin-top:14px">Code to run</label>'+
+    '<textarea id="lc_code" rows="9" class="mono" style="width:100%;margin-top:4px;font-size:12.5px">'+esc(S.code||DEFAULT_CODE)+'</textarea>':'';
+  var adv=(S.type==='app')?
+    '<details style="margin-top:14px"><summary style="cursor:pointer;font-family:var(--disp);font-weight:600;font-size:13.5px">Advanced placement</summary>'+
+      '<div style="margin-top:10px">'+
+      '<label class="mini" for="lc_maxp" style="display:block">Max price ($/hr)</label><input id="lc_maxp" type="number" min="0" step="0.01" value="'+(S.maxPrice||'')+'" placeholder="no limit" style="width:140px;margin-top:4px"/>'+
+      '<label class="mini" for="lc_reg" style="display:block;margin-top:10px">Preferred region</label><input id="lc_reg" value="'+esc(S.region||'')+'" placeholder="any" style="width:180px;margin-top:4px"/>'+
+      '<p class="mini" style="margin-top:8px">Environment variables, custom ports and persistent storage are not configurable on curated templates yet — Petabyte sets them per audited template.</p>'+
+      '</div></details>':
+    '<p class="mini" style="margin-top:12px">This runs your code as-is. Custom container images, environment variables, ports and extra storage are not available on this path yet.</p>';
+  b.innerHTML=hrs+code+adv;
+  var h=el('lc_hours');if(h)h.addEventListener('input',function(){S.hours=Math.max(1,Math.min(24,parseInt(h.value||'1',10)||1));saveDraft();refreshCost();});
+  var cd=el('lc_code');if(cd)cd.addEventListener('input',function(){S.code=cd.value;saveDraft();});
+  var mp=el('lc_maxp');if(mp)mp.addEventListener('input',function(){S.maxPrice=mp.value;saveDraft();});
+  var rg=el('lc_reg');if(rg)rg.addEventListener('input',function(){S.region=rg.value;saveDraft();});
+ }
+
+ // ---------- cost panel (server-authoritative /estimate) ----------
+ function canEstimate(){if(S.type==='code')return !!S.spec;return S.type==='app';}
+ async function refreshCost(){
+  var cb=el('costbody');
+  if(!canEstimate()){cb.innerHTML='<p class="mut" style="font-size:13px">'+(S.type?'Choose a host to price this run.':'Pick a workload to see pricing.')+'</p>';el('reviewactions').style.display='none';return;}
+  cb.innerHTML='<div class="mut mono" style="font-size:13px;padding:6px 0">Pricing…</div>';
+  var body={hours:S.hours};
+  if(S.type==='code')body.spec_id=S.spec.id; else{body.template=S.template;}
+  try{
+   var r=await fetch('/estimate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+   if(!r.ok){cb.innerHTML='<p class="mut" style="font-size:13px">'+(r.status===404?'No matching host is available right now.':'Could not price this yet.')+'</p>';el('reviewactions').style.display='none';return;}
+   EST=await r.json();
+   var mach=(S.type==='code'&&S.spec)?((S.spec.gpu_count>1?S.spec.gpu_count+'× ':'')+esc(S.spec.gpu_model)):(esc(EST.gpu_model||'CPU')+(S.place==='auto'?' (auto)':''));
+   var cloud=EST.cloud_comparison?('<div class="sumrow"><span class="k">A hyperscaler would cost</span><span class="v" style="color:var(--mut)">~'+mUSD(EST.cloud_comparison.reference_total)+'</span></div>'):'';
+   cb.innerHTML=
+    '<div class="sumrow"><span class="k">Workload</span><span class="v">'+(S.type==='code'?'Custom code':esc(S.template))+'</span></div>'+
+    '<div class="sumrow"><span class="k">Machine</span><span class="v">'+mach+'</span></div>'+
+    '<div class="sumrow"><span class="k">Rate</span><span class="v">'+mUSD(EST.price_per_hour)+'/hr</span></div>'+
+    '<div class="sumrow"><span class="k">Max runtime</span><span class="v">'+EST.hours+' h</span></div>'+
+    '<div class="sumrow"><span class="k">Min charge (1h)</span><span class="v">'+mUSD(EST.min_charge)+'</span></div>'+
+    '<div class="sumrow"><span class="k">Platform fee</span><span class="v" style="color:var(--mut)">incl. (from host)</span></div>'+
+    cloud+
+    '<div class="sumrow total"><span class="k">Estimated total</span><span class="v">'+mUSD(EST.total)+'</span></div>';
+   if(WALLET){
+     var short=Number(EST.total)>Number(WALLET.balance);
+     cb.innerHTML+='<div class="sumrow"><span class="k">Wallet balance</span><span class="v" style="color:'+(short?'var(--warn)':'var(--mut)')+'">'+mUSD(WALLET.balance)+'</span></div>'+
+       (short?'<p class="mini" style="color:var(--warn);margin-top:8px">⚠ Estimated total is above your balance. <a class="teal" href="/account">Add funds</a> before launching.</p>':'');
+   }
+   el('reviewactions').style.display=authed()?'':'none';
+   renderReview();unlock(4);
+  }catch(e){cb.innerHTML='<p class="mut" style="font-size:13px">Could not reach pricing.</p>';}
+ }
+
+ // ---------- 4. review ----------
+ function renderReview(){
+  var b=el('reviewbody');if(!EST){b.innerHTML='<p class="mut" style="font-size:13px">Complete the steps above.</p>';return;}
+  var rows=
+    row('Workload',S.type==='code'?'Custom code (notebook)':esc(S.template)+(S.model?(' · model '+esc(S.model)):''))+
+    row('Machine',(S.type==='code'&&S.spec)?((S.spec.gpu_count>1?S.spec.gpu_count+'× ':'')+esc(S.spec.gpu_model)+' · '+(S.spec.vram_gb||0)+'GB · '+esc(S.spec.region||'')):(esc(EST.gpu_model||'CPU')+' · auto-placed · '+esc(EST.region||'')))+
+    row('Runtime',EST.hours+' hour(s) max')+
+    row('Rate',mUSD(EST.price_per_hour)+'/hr')+
+    row('Estimated total',mUSD(EST.total))+
+    (WALLET?row('Wallet',mUSD(WALLET.balance)):'');
+  b.innerHTML='<div class="panel" style="padding:16px">'+rows+'</div>'+
+    '<p class="mini" style="margin-top:10px">Launching authorizes up to a maximum on your card/wallet and starts the workload. You are charged only for what you use.</p>'+
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">'+
+     '<button type="button" class="btn btn-amber" id="launchbtn" data-lc="launch" style="flex:1;min-width:180px;justify-content:center">'+(authed()?'Launch compute →':'Sign in to launch')+'</button>'+
+    '</div>';
+ }
+
+ // ---------- launch ----------
+ async function doLaunch(){
+  if(LAUNCHING)return;
+  if(!authed()){location.href='/login';return;}
+  var btn=el('launchbtn');
+  if(S.type==='code'){
+    // hand off to the polished, tested notebook checkout with our config carried over
+    if(!S.spec){return;}
+    try{sessionStorage.setItem('pb_launch_code',S.code||DEFAULT_CODE);sessionStorage.setItem('pb_launch_hours',String(S.hours||1));}catch(e){}
+    location.href='/buy/'+S.spec.id;return;
+  }
+  LAUNCHING=true;if(btn){btn.disabled=true;btn.textContent='Launching…';}
+  var st=el('launchstatus');st.style.display='';
+  function stage(msg,done){st.innerHTML='<div class="lbl">Launching</div><div id="lc_stage" style="font-family:var(--disp);font-size:15px;margin:8px 0">'+msg+'</div>'+(done||'');}
+  stage('Reserving a verified host…');
+  var body={template:S.template,hours:S.hours||1};
+  if(S.model)body.template_params={model:S.model};
+  if(S.maxPrice)body.max_price_per_hour=Number(S.maxPrice);
+  if(S.region)body.region=S.region;
+  var r=await api('/launch',{method:'POST',body:JSON.stringify(body)});
+  if(r.status===401){LAUNCHING=false;location.href='/login';return;}
+  if(r.status===402){LAUNCHING=false;if(btn){btn.disabled=false;btn.textContent='Launch compute →';}stage('Not enough balance.','<a class="btn btn-teal" href="/account" style="margin-top:6px">Add funds</a>');return;}
+  if(!r.ok){
+    LAUNCHING=false;if(btn){btn.disabled=false;btn.textContent='Launch compute →';}
+    var e=(r.body&&r.body.error)||{};var msg=e.message||(r.status===409?'No matching host is online right now. Try again shortly.':'Something went wrong. Nothing was charged.');
+    stage('Could not launch.','<div class="mut" style="font-size:13px;margin-top:4px">'+esc(msg)+'</div>'+(e.request_id?'<div class="mini" style="margin-top:8px">Reference '+esc(e.request_id)+'</div>':''));
+    return;}
+  var b=r.body;
+  stage('Reserved on '+esc(b.gpu_model||'a host')+' — starting…',
+    '<div class="mini" style="margin-top:8px">Booking #'+esc(b.booking_id)+' · '+mUSD(b.gross_amount)+' / '+b.hours+'h</div>'+
+    (((b.url&&(b.url.ssh||b.url.http)))?'<pre style="margin-top:10px;white-space:pre-wrap;font-size:12px">'+esc((b.url.ssh||'')+(b.url.http?('\\n'+b.url.http):''))+'</pre>':'')+
+    '<div class="mut" id="lc_prep" style="margin-top:8px;font-size:13px">Preparing your workload…</div>');
+  try{sessionStorage.removeItem('pb_launch_draft');}catch(e){}
+  pollVM(b.vm_id,b.port);
+ }
+ function pollVM(vmid,port){
+  var prep=el('lc_prep'),t0=Date.now();
+  var iv=setInterval(async function(){
+   var r=await api('/vm/'+vmid);if(!r.ok)return;var s=r.body.status;
+   if(s==='running'){clearInterval(iv);if(prep)prep.innerHTML='<b class="teal">Running</b> — connect at the address above'+(port?(' (port '+port+')'):'')+'. Manage it under <a class="teal" href="/account">your account</a>.';}
+   else if(s==='failed'){clearInterval(iv);if(prep)prep.textContent='No host could start it — you were refunded.';}
+   else if(s==='migrating'){if(prep)prep.textContent='Host changed — reconnecting (same address)…';}
+   else if(Date.now()-t0>90000){clearInterval(iv);if(prep)prep.innerHTML='Still starting — track it under <a class="teal" href="/account">your account</a>.';}
+   else if(prep){prep.textContent='Preparing your workload… ('+s+')';}
+  },2500);
+ }
+
+ // ---------- launch templates (localStorage; NO secrets) ----------
+ function tplKey(){return 'pb_launch_templates';}
+ function loadTpls(){try{return JSON.parse(localStorage.getItem(tplKey())||'[]');}catch(e){return [];}}
+ function saveTpls(a){try{localStorage.setItem(tplKey(),JSON.stringify(a));}catch(e){}}
+ function renderMyTpls(){
+  var a=loadTpls();var wrap=el('mytpls');if(!a.length){wrap.style.display='none';return;}
+  wrap.style.display='';
+  el('mytplgrid').innerHTML=a.map(function(t,i){
+   return '<div class="pick" style="cursor:default">'+
+     '<span class="pk-top"><span class="pk-ic">'+pbIcon(t.template||'pytorch')+'</span><span class="pk-name">'+esc(t.name)+'</span></span>'+
+     '<span class="pk-desc">'+esc(t.type==='code'?'Custom code':(t.template||''))+' · '+(t.hours||1)+'h'+(t.minVram?(' · '+t.minVram+'GB+'):'')+'</span>'+
+     '<span class="pk-meta" style="margin-top:6px">'+
+       '<button type="button" class="btn btn-amber" style="padding:6px 12px;font-size:12px" data-lc="tplLaunch" data-v="'+i+'">Launch</button>'+
+       '<button type="button" class="btn btn-ghost" style="padding:6px 12px;font-size:12px" data-lc="tplDup" data-v="'+i+'">Duplicate</button>'+
+       '<button type="button" class="btn btn-ghost" style="padding:6px 12px;font-size:12px" data-lc="tplDel" data-v="'+i+'">Delete</button>'+
+     '</span></div>';
+  }).join('');
+ }
+ function saveAsTemplate(){
+  if(!S.type){return;}
+  var name=prompt('Name this launch template:',(S.type==='code'?'Custom code':S.template)+' · '+(S.hours||1)+'h');
+  if(!name)return;
+  var a=loadTpls();
+  a.unshift({name:name,type:S.type,template:S.template,model:S.model||'',hours:S.hours||1,minVram:S.minVram||(REC_VRAM[S.template]||0),maxPrice:S.maxPrice||'',region:S.region||'',code:S.type==='code'?(S.code||''):''});
+  saveTpls(a);renderMyTpls();
+  var sb=el('savetplbtn');if(sb){var o=sb.textContent;sb.textContent='Saved ✓';setTimeout(function(){sb.textContent=o;},1400);}
+ }
+ function applyTpl(t){
+  S.type=t.type;S.template=t.template||null;S.model=t.model||'';S.hours=t.hours||1;S.minVram=t.minVram||0;S.maxPrice=t.maxPrice||'';S.region=t.region||'';
+  if(t.type==='code'){S.code=t.code||DEFAULT_CODE;S.place='pick';}else{S.place='auto';}
+  S._cat='all';S.spec=null;
+  catChips();tCards();tDetail();renderCompute();renderConfig();unlock(t.type==='code'?2:3);saveDraft();refreshCost();
+  el('sec1').scrollIntoView({behavior:'smooth',block:'start'});
+ }
+
+ // ---------- delegated events ----------
+ el('lcroot').addEventListener('click',function(e){
+  var t=e.target.closest('[data-lc]');if(!t)return;
+  var act=t.getAttribute('data-lc'),v=t.getAttribute('data-v');
+  if(act==='pickTpl'){e.preventDefault();pickTpl(t.getAttribute('data-type'),v);}
+  else if(act==='cat'){S._cat=v;catChips();tCards();}
+  else if(act==='place'){e.preventDefault();S.place=v;renderCompute();refreshCost();saveDraft();}
+  else if(act==='sort'){S.sort=v;renderCompute();}
+  else if(act==='pickMachine'){e.preventDefault();pickMachine(v);}
+  else if(act==='launch'){e.preventDefault();doLaunch();}
+  else if(act==='clearsearch'){e.preventDefault();el('tsearch').value='';tCards();}
+  else if(act==='reloadmachines'){e.preventDefault();renderMachineList();}
+  else if(act==='tplLaunch'){e.preventDefault();applyTpl(loadTpls()[+v]);}
+  else if(act==='tplDup'){e.preventDefault();var a=loadTpls();var c=JSON.parse(JSON.stringify(a[+v]));c.name=c.name+' (copy)';a.unshift(c);saveTpls(a);renderMyTpls();}
+  else if(act==='tplDel'){e.preventDefault();var a=loadTpls();a.splice(+v,1);saveTpls(a);renderMyTpls();}
+ });
+ // keyboard: Enter/Space activate a role=radio card
+ el('lcroot').addEventListener('keydown',function(e){
+  if(e.key!=='Enter'&&e.key!==' ')return;
+  var t=e.target.closest('.pick[role="radio"],.mpick[role="radio"]');if(!t)return;
+  e.preventDefault();t.click();
+ });
+ el('tsearch').addEventListener('input',tCards);
+ el('reviewbtn').addEventListener('click',function(){el('sec4').scrollIntoView({behavior:'smooth',block:'start'});renderReview();});
+ el('savetplbtn').addEventListener('click',saveAsTemplate);
+
+ // ---------- boot ----------
+ async function boot(){
+  if(!authed())el('lc_signedout').style.display='';
+  try{var meR=await api('/me');if(meR.ok)WALLET={balance:meR.body.balance,earnings:meR.body.earnings};}catch(e){}
+  try{var r=await fetch('/templates');var b=await r.json();TPL=b.templates||[];}catch(e){TPL=[];}
+  S._cat='all';catChips();tCards();renderMyTpls();
+  // deep links + draft
+  var qs=new URLSearchParams(location.search);
+  var qt=qs.get('template'),qspec=qs.get('spec');
+  var draft=null;try{draft=JSON.parse(sessionStorage.getItem('pb_launch_draft')||'null');}catch(e){}
+  if(qt&&TPL.filter(function(x){return x.name===qt;})[0]){pickTpl('app',qt);}
+  else if(qspec){S.type='code';S.template=null;
+    try{var sr=await fetch('/marketplace/specs/'+encodeURIComponent(qspec));if(sr.ok){var sd=await sr.json();sd.id=qspec;S.spec=sd;}}catch(e){}
+    tCards();tDetail();renderCompute();renderConfig();unlock(3);refreshCost();
+    el('sec2').scrollIntoView({behavior:'smooth',block:'nearest'});}
+  else if(draft&&draft.type){
+    S.type=draft.type;S.template=draft.template;S.model=draft.model||'';S.hours=draft.hours||1;S.region=draft.region||'';S.maxPrice=draft.maxPrice||'';S.minVram=draft.minVram||0;S.sort=draft.sort||'price';S.place=draft.place||'auto';
+    tCards();tDetail();renderCompute();renderConfig();if(draft.type==='app'){unlock(3);refreshCost();}
+  }
+ }
+ boot();
+})();
 </script>""")
 
 

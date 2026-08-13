@@ -111,7 +111,7 @@ from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
                    PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TEMPLATES_HTML,
                    CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML,
-                   SELLER_EARNINGS_HTML, RESET_HTML, BUY_HTML, FUNDING_VIEW_HTML)
+                   SELLER_EARNINGS_HTML, RESET_HTML, BUY_HTML, FUNDING_VIEW_HTML, LAUNCH_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -1335,6 +1335,15 @@ def buy_page(public_id: str):
     capture -> receipt) without touching an internal endpoint by hand. The spec id is
     read client-side from the path."""
     return HTMLResponse(BUY_HTML)
+
+@app.get("/launch", response_class=HTMLResponse)
+def launch_page():
+    """Guided 'Launch Compute' experience (AWS-EC2-style): choose a curated workload
+    template (or custom code), a compatible verified host, review the server-priced cost,
+    and launch. Config is read client-side from ?template=/?spec= query and sessionStorage;
+    every price/placement/charge is recomputed server-side (/estimate, /route, /launch,
+    /payments/*). No fabricated controls — only parameters the backend actually enforces."""
+    return HTMLResponse(LAUNCH_HTML)
 
 @app.get("/seller/payouts", response_class=HTMLResponse)
 def seller_payouts_page():
@@ -2948,6 +2957,7 @@ def estimate_cost(data: EstimateModel, db: Session = Depends(get_db)):
     cost on a comparable public cloud, but only where we can compare like for like."""
     spec = None
     if data.spec_id:
+        from db import get_spec_by_public_id
         spec = get_spec_by_public_id(db, data.spec_id)
     else:
         # same selection the router would make: cheapest eligible live node
