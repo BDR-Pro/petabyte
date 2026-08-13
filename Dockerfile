@@ -14,13 +14,18 @@ WORKDIR /app
 # pg_dump for platform database backups (backup.py / scripts/backup_database.py). Pinned to 16
 # to match modern managed Postgres — pg_dump refuses to dump a server NEWER than the client, so
 # Debian's default (15) would fail against a PG16 server. Installed from the PostgreSQL APT repo.
+# The pgdg suite codename is derived from the base image at build time (VERSION_CODENAME) rather
+# than hardcoded: python:3.12-slim floats across Debian releases (bookworm -> trixie -> ...), and
+# a mismatched pgdg suite pulls a libpq5 whose libldap dependency the base image can't satisfy
+# ("libldap-2.5-0 is not installable"). Tracking the base codename keeps the two in lockstep.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends curl ca-certificates gnupg; \
     install -d /usr/share/postgresql-common/pgdg; \
     curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc; \
-    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+    . /etc/os-release; \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
         > /etc/apt/sources.list.d/pgdg.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends postgresql-client-16; \
