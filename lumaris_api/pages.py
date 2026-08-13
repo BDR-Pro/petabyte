@@ -35,7 +35,7 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 <link rel="icon" type="image/png" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/static/petabyte-mark-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
 <script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 <style>
@@ -48,7 +48,7 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 .navbar{--bs-navbar-padding-y:0;--bs-navbar-padding-x:0}
 /* the nav is dense (6 links + AR + theme + sign-in + 2 buttons); give it room and
    collapse to the hamburger earlier so nothing wraps mid-label */
-@media(min-width:992px) and (max-width:1180px){.navlinks a{padding:7px 8px;font-size:12.5px}.navcta{gap:6px}}
+@media(min-width:992px) and (max-width:1260px){.navlinks a{padding:7px 8px;font-size:12.5px}.navcta{gap:6px}.navcta .btn{padding:8px 13px;font-size:12.5px}nav .wrap{gap:10px}}
 .navbar-toggler{border:1px solid var(--line2);border-radius:999px;padding:7px 11px;color:var(--mut)}
 .navbar-toggler:focus{box-shadow:0 0 0 4px rgba(53,224,208,.15)}
 .navbar-toggler svg{width:18px;height:18px;display:block}
@@ -63,21 +63,21 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
  .navlinks{flex-direction:column;gap:2px;margin-inline-start:0}
  .navlinks a{padding:9px 13px}
  .navcta{margin-inline-start:0;margin-top:8px;flex-wrap:wrap}}
-:root{--abyss:#030711;--depth:#0A1226;--depth2:#0D1832;--line:#16223F;--line2:#243456;
---ink:#F2F6FF;--mut:#9BA9C9;--dim:#5C6C8F;
---teal:#35E0D0;--teal-br:#8FF5E8;--deep:#149A90;--amber:#FFB224;--amber-br:#FFD076;
---pos:#4ADE9C;--warn:#F0A44B;--bad:#F0718A;
---gA:rgba(255,178,36,.05);--gB:rgba(53,224,208,.10);--gV:rgba(124,58,237,.09);
---navbg:rgba(10,18,38,.66);--hair:#101A32;
---panel:var(--depth);--panel2:#081020;
---disp:'Sora',sans-serif;--body:'Figtree',sans-serif;--mono:'JetBrains Mono',monospace;
+:root{--abyss:#070C18;--depth:#0F1828;--depth2:#14223C;--line:#213152;--line2:#2E4066;
+--ink:#EDF2FC;--mut:#9EABC7;--dim:#657493;
+--teal:#3AE0CF;--teal-br:#93F6EA;--deep:#12A093;--amber:#FFBE45;--amber-br:#FFD684;
+--pos:#4FE0A0;--warn:#F2B450;--bad:#F2748C;
+--gA:rgba(255,190,66,.06);--gB:rgba(58,224,207,.11);--gV:rgba(129,90,240,.10);
+--navbg:rgba(13,21,39,.74);--hair:#152037;
+--panel:var(--depth);--panel2:#0B1626;
+--disp:'Sora',system-ui,sans-serif;--body:'Inter',system-ui,sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace;
 --r:18px;--r-sm:12px}
 html[data-theme=light]{
- --abyss:#EEF3F9;--depth:#FFFFFF;--depth2:#F6FAFD;--line:#DCE6F0;--line2:#C0D1E1;
- --ink:#0E1A2E;--mut:#4B5D75;--dim:#7E90A7;
- --teal:#0B9D92;--teal-br:#0FBCAE;--deep:#0A7E76;--amber:#B37410;--amber-br:#D6952A;
+ --abyss:#EEF3FA;--depth:#FFFFFF;--depth2:#F6FAFD;--line:#E1EAF3;--line2:#C8D7E5;
+ --ink:#0F1C30;--mut:#4E6079;--dim:#8091A8;
+ --teal:#0B9C90;--teal-br:#0FBCAE;--deep:#0A7E76;--amber:#AE720F;--amber-br:#D0902A;
  --gA:rgba(255,178,36,.10);--gB:rgba(15,188,174,.12);--gV:rgba(124,58,237,.06);
- --navbg:rgba(255,255,255,.72);--hair:#E7EEF5;--panel:#FFFFFF;--panel2:#F4F8FC}
+ --navbg:rgba(255,255,255,.80);--hair:#EAF0F6;--panel:#FFFFFF;--panel2:#F5F9FC}
 *{box-sizing:border-box;margin:0;padding:0}
 ::selection{background:rgba(53,224,208,.28)}
 body{background:
@@ -99,10 +99,10 @@ h2{font-family:var(--disp);font-weight:700;letter-spacing:-.02em}
 .grad-teal{background:linear-gradient(95deg,var(--teal-br),var(--deep));-webkit-background-clip:text;background-clip:text;color:transparent}
 /* ---------- nav: floating glass pill ---------- */
 nav{z-index:40;padding:14px 0 6px;background:linear-gradient(180deg,var(--abyss) 30%,transparent)}
-nav .wrap{display:flex;align-items:center;gap:22px;height:58px;background:var(--navbg);
- border:1px solid var(--line);border-radius:999px;padding:0 12px 0 20px;
+nav .wrap{display:flex;align-items:center;gap:14px;min-height:58px;background:var(--navbg);
+ border:1px solid var(--line);border-radius:26px;padding:6px 12px 6px 20px;flex-wrap:wrap;row-gap:6px;
  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
- box-shadow:0 12px 40px -18px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.04)}
+ box-shadow:0 12px 40px -18px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.05)}
 .brand{display:flex;align-items:center;gap:10px;font-family:var(--disp);font-weight:700;font-size:18px;letter-spacing:-.02em}
 .brand img{width:26px;height:26px;display:block;filter:drop-shadow(0 0 8px rgba(53,224,208,.5))}
 .brand .p{color:var(--teal)}
@@ -111,6 +111,19 @@ nav .wrap{display:flex;align-items:center;gap:22px;height:58px;background:var(--
 .navlinks a:hover{color:var(--ink);background:rgba(255,255,255,.05)}
 .navlinks a.active{color:var(--teal);background:rgba(53,224,208,.10)}
 .navcta{margin-inline-start:auto;display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.navcta .btn{padding:9px 16px;font-size:13px}
+/* signed-in account chip: a compact identity pill instead of loose inline text */
+#mename{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+ background:rgba(58,224,207,.09);border:1px solid rgba(58,224,207,.24);padding:6px 12px}
+/* the marketing "Book a demo" CTA is redundant once you're signed in — reclaim the room */
+html[data-auth=in] #navdemo{display:none!important}
+/* signed-in carries more controls (account + admin + sign out); compact them so the bar
+   stays a single tidy row instead of wrapping. */
+html[data-auth=in] .navlinks a{padding:6px 8px;font-size:12.5px}
+html[data-auth=in] .navcta{gap:6px}
+html[data-auth=in] .navcta .btn{padding:8px 14px;font-size:12.5px}
+html[data-auth=in] nav .wrap{gap:10px}
+html[data-auth=in] #mename{max-width:112px}
 .signin{font-size:13px;font-weight:500;color:var(--mut);padding:7px 10px;border-radius:999px;transition:color .15s;white-space:nowrap}
 /* auth-state visibility, decided before first paint (no flash of the wrong button) */
 html[data-auth=in] #signinlink{display:none!important}
@@ -136,18 +149,24 @@ button:active,.btn:active{transform:translateY(1px)}
 .lbl{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--teal);display:inline-flex;align-items:center;gap:8px;margin-bottom:10px}
 .lbl::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor}
 .lbl.am{color:var(--amber)}
-.mini{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+/* small helper / caption text — readable body copy, NOT a label. Uppercase micro-labels
+   are .eyebrow / .lbl; .mini is for full sentences of secondary guidance so they read as
+   prose, not terminal output. */
+.mini{font-size:12px;line-height:1.55;color:var(--mut)}
+.mini.cap{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);line-height:1.4}
 .divider{height:1px;background:linear-gradient(90deg,transparent,var(--line2),transparent);margin:2px 0}
 .pill{font-family:var(--mono);font-size:10px;border:1px solid rgba(53,224,208,.35);color:var(--teal);padding:3px 11px;border-radius:999px;background:rgba(53,224,208,.06)}
 /* ---------- surfaces ---------- */
 .panel{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r)}
 .card{position:relative;background:linear-gradient(180deg,var(--depth2),var(--panel2));border:1px solid var(--line);border-radius:var(--r);padding:22px;
+ box-shadow:0 1px 2px rgba(0,0,0,.18),0 10px 30px -24px rgba(0,0,0,.5);
  transition:transform .18s,border-color .18s,box-shadow .18s}
+html[data-theme=light] .card{box-shadow:0 1px 2px rgba(16,32,60,.05),0 12px 30px -22px rgba(16,32,60,.18)}
 .card::before{content:"";position:absolute;inset:0;border-radius:var(--r);padding:1px;
- background:linear-gradient(140deg,rgba(53,224,208,.25),transparent 34%,transparent 70%,rgba(255,178,36,.14));
+ background:linear-gradient(140deg,rgba(58,224,207,.30),transparent 36%,transparent 68%,rgba(255,190,66,.16));
  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;
- opacity:0;transition:opacity .2s;pointer-events:none}
-.card:hover{transform:translateY(-3px);box-shadow:0 20px 50px -26px rgba(53,224,208,.45)}
+ opacity:0;transition:opacity .25s;pointer-events:none}
+.card:hover{transform:translateY(-3px);border-color:var(--line2);box-shadow:0 24px 56px -28px rgba(58,224,207,.40),0 4px 14px -8px rgba(0,0,0,.4)}
 .card:hover::before{opacity:1}
 .cols{display:flex;flex-wrap:wrap;gap:16px}
 .c2>*{flex:1 1 calc(50% - 8px);min-width:250px}
@@ -174,6 +193,12 @@ html[data-theme=light] .codeline{background:#0E1A2E}
 .badge{font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:999px;border:1px solid var(--line2);color:var(--mut)}
 .badge.ok{color:var(--teal);border-color:rgba(53,224,208,.4);background:rgba(53,224,208,.09)}
 .badge.cc{color:var(--amber);border-color:rgba(255,178,36,.4);background:rgba(255,178,36,.09)}
+.badge.warn{color:var(--warn);border-color:rgba(242,180,80,.42);background:rgba(242,180,80,.10)}
+.badge.bad{color:var(--bad);border-color:rgba(242,116,140,.42);background:rgba(242,116,140,.11)}
+/* status badge: a leading dot + the text label, so state never rides on colour alone.
+   .ok=live/healthy · .warn=in-progress/attention · .bad=stopped/failed · plain=neutral/idle */
+.badge.st{display:inline-flex;align-items:center;gap:6px;padding-inline-start:8px}
+.badge.st::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
 /* ---------- test-mode banner (shown on money screens whenever payments are in sandbox/TEST) ---------- */
 .pb-testmode{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;
   margin:0 0 18px;padding:10px 14px;border-radius:var(--r);font-size:13px;line-height:1.4;
@@ -198,6 +223,57 @@ select{appearance:none;-webkit-appearance:none;background-image:linear-gradient(
 .empty .et{font-family:var(--disp);font-weight:600;font-size:15px;color:var(--ink);margin-bottom:4px}
 .empty .es{font-size:12.5px;margin-bottom:16px}
 .stepchip{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:7px;background:rgba(53,224,208,.12);border:1px solid rgba(53,224,208,.35);color:var(--teal);font-family:var(--mono);font-size:11px;font-weight:600;margin-inline-end:8px;flex:none}
+/* ---------- loading skeletons (reusable; respect reduced-motion) ---------- */
+.skel{position:relative;overflow:hidden;background:linear-gradient(180deg,var(--depth2),var(--panel2));border:1px solid var(--line);border-radius:var(--r);padding:22px}
+.skel-b{display:block;background:linear-gradient(90deg,var(--line) 25%,var(--line2) 37%,var(--line) 63%);background-size:400% 100%;border-radius:8px;animation:skel 1.4s ease infinite}
+@keyframes skel{0%{background-position:100% 50%}100%{background-position:0 50%}}
+@media(prefers-reduced-motion:reduce){.skel-b{animation:none}}
+/* ---------- key/value summary rows (cost breakdowns, receipts, specs) ---------- */
+.sumrow{display:flex;justify-content:space-between;gap:16px;padding:8px 0;border-bottom:1px solid var(--hair);font-size:13px}
+.sumrow:last-child{border-bottom:0}
+.sumrow .k{color:var(--mut)}
+.sumrow .v{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:end;color:var(--ink)}
+.sumrow.total{border-top:1px solid var(--line2);border-bottom:0;margin-top:6px;padding-top:13px}
+.sumrow.total .k{color:var(--ink);font-family:var(--disp);font-weight:600;font-size:14.5px}
+.sumrow.total .v{color:var(--amber);font-family:var(--disp);font-weight:700;font-size:18px}
+/* ---------- launch compute: numbered sections + selectable cards (AWS-style) ---------- */
+.lsec{margin-bottom:16px}
+.lsec-h{display:flex;align-items:center;gap:12px;margin-bottom:2px}
+.lsec-h h2{font-size:18px}
+.lsec-sub{color:var(--mut);font-size:13px;margin:2px 0 0 34px}
+.lsec.locked{opacity:.5;pointer-events:none;filter:saturate(.5)}
+.picks{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:11px;margin-top:14px}
+.pick{position:relative;text-align:start;display:flex;flex-direction:column;gap:7px;padding:14px;border:1px solid var(--line2);border-radius:14px;
+ background:var(--panel2);cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .12s;color:inherit;width:100%;font:inherit;
+ min-width:0;overflow:hidden;white-space:normal}
+.pick>*{min-width:0;max-width:100%}
+.pick:hover{border-color:var(--teal);transform:translateY(-2px)}
+.pick:focus-visible{outline:none;border-color:var(--teal);box-shadow:0 0 0 4px rgba(53,224,208,.18)}
+.pick[aria-checked="true"]{border-color:var(--teal);background:rgba(53,224,208,.07);box-shadow:0 0 0 1px var(--teal) inset}
+.pick .pk-top{display:flex;align-items:center;gap:10px}
+.pick .pk-ic{width:34px;height:34px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--teal);
+ background:rgba(53,224,208,.08);border:1px solid rgba(53,224,208,.25);border-radius:10px}
+.pick .pk-ic svg{width:20px;height:20px}
+.pick .pk-top{min-width:0}
+.pick .pk-name{font-family:var(--disp);font-weight:600;font-size:14.5px;text-transform:capitalize;line-height:1.2;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pick .pk-desc{font-size:12px;color:var(--mut);line-height:1.45;white-space:normal;overflow-wrap:anywhere}
+.pick .pk-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
+.pick .pk-check{position:absolute;top:11px;inset-inline-end:12px;color:var(--teal);opacity:0;font-weight:700}
+.pick[aria-checked="true"] .pk-check{opacity:1}
+/* selectable machine rows */
+.mpick{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:13px 15px;border:1px solid var(--line);border-radius:13px;
+ background:var(--panel2);cursor:pointer;transition:border-color .15s,background-color .15s;width:100%;text-align:start;color:inherit;font:inherit;margin-top:9px}
+.mpick:hover{border-color:var(--line2)}
+.mpick:focus-visible{outline:none;border-color:var(--teal);box-shadow:0 0 0 4px rgba(53,224,208,.16)}
+.mpick[aria-checked="true"]{border-color:var(--teal);background:rgba(53,224,208,.06)}
+.mpick .mp-gpu{font-family:var(--disp);font-weight:600;font-size:14.5px;flex:1 1 150px;min-width:130px}
+.mpick .mp-col{font-family:var(--mono);font-size:12px;color:var(--mut);flex:0 0 auto}
+.mpick .mp-price{font-family:var(--disp);font-weight:700;color:var(--amber);font-size:15px;margin-inline-start:auto}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:999px;overflow:hidden;background:var(--panel2)}
+.seg button{background:transparent;border:0;border-radius:0;color:var(--mut);font-family:var(--mono);font-size:11px;letter-spacing:.04em;padding:7px 13px;text-transform:uppercase}
+.seg button[aria-pressed="true"]{background:rgba(53,224,208,.12);color:var(--teal)}
+.compat{display:flex;align-items:center;gap:7px;font-size:12.5px;padding:3px 0}
+.compat .ic{width:16px;height:16px;flex:none}
 /* ---------- sonar launch cards (signature) ---------- */
 .lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
 .lcard{position:relative;display:flex;flex-direction:column;padding:17px 17px 15px;border:1px solid var(--line);border-radius:var(--r);
@@ -241,8 +317,9 @@ html[data-theme=light] .hexbg{opacity:.10}
 /* ---------- Arabic / RTL ----------
    RTL is not "flip everything". Numbers, money, code, curl commands and monospace
    identifiers must stay LTR even inside an Arabic sentence, or a price reads backwards. */
-html[dir="rtl"] body{font-family:'IBM Plex Sans Arabic','Figtree',system-ui,sans-serif}
-html[dir="rtl"] h1,html[dir="rtl"] h2,html[dir="rtl"] h3{font-family:'IBM Plex Sans Arabic','Sora',sans-serif;letter-spacing:0}
+html[dir="rtl"] body{font-family:'Cairo','Inter',system-ui,sans-serif;font-size:15px}
+html[dir="rtl"] h1,html[dir="rtl"] h2,html[dir="rtl"] h3{font-family:'Cairo','Sora',sans-serif;letter-spacing:0;font-weight:700}
+html[dir="rtl"] .eyebrow,html[dir="rtl"] .lbl,html[dir="rtl"] .mini{letter-spacing:.05em}
 html[dir="rtl"] .eyebrow,html[dir="rtl"] .lbl,html[dir="rtl"] .mini{letter-spacing:0}
 /* these carry meaning in one direction only */
 html[dir="rtl"] .mono,html[dir="rtl"] code,html[dir="rtl"] .codeline,
@@ -289,7 +366,7 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
 </button>
 <div class="collapse navbar-collapse" id="pbnav">
 <div class="navlinks">
-  <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/models" data-ar="النماذج">Models</a><a href="/cluster" data-ar="الحوسبة الموزعة">Distributed</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
+  <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/launch" data-ar="التشغيل">Launch</a><a href="/models" data-ar="النماذج">Models</a><a href="/cluster" data-ar="الحوسبة الموزعة">Distributed</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
   <a href="/metrics" data-ar="المقاييس">Metrics</a><a href="/install" data-ar="لمالكي كروت الرسومات">For GPU owners</a><a href="/security" data-ar="الأمان">Security</a><a href="/wiki" data-ar="الويكي">Wiki</a><a href="/developers" data-ar="المطورون">Developers</a>
 </div>
 <div class="navcta">
@@ -413,6 +490,7 @@ function pbEmpty(cols,title,sub,ctaHref,ctaText){
   (ctaHref?('<a class="btn btn-teal" href="'+ctaHref+'">'+ctaText+'</a>'):'')+'</div></td></tr>';}
 // ---- Command palette (Cmd/Ctrl+K). Power users never touch a nav bar. ----
 var PB_CMDS=[
+ {t:"Launch compute",        h:"/launch",      k:"launch run workload template gpu ec2 configure new instance"},
  {t:"Browse GPUs",           h:"/marketplace", k:"gpu hardware rent inventory"},
  {t:"Templates",             h:"/catalog",     k:"launch jupyter pytorch ollama blender run"},
  {t:"Your account",          h:"/account",     k:"dashboard wallet vms nodes"},
@@ -787,8 +865,8 @@ MARKETPLACE_HTML = _page("Petabyte — marketplace",
     </div>
   </div>
   <div class="panel" style="overflow:auto">
-    <table class="tbl"><thead><tr><th data-ar="الكرت">GPU</th><th data-ar="الذاكرة">VRAM</th><th>$/hr</th><th data-ar="مقابل السحابة">vs cloud</th><th data-ar="الثقة">trust</th><th data-ar="المنطقة">region</th><th data-ar="السمعة">rep</th><th data-ar="متاح">free</th></tr></thead>
-    <tbody id="mrows"><tr><td colspan="8" style="padding:24px;text-align:center" class="mut mono">loading…</td></tr></tbody></table>
+    <table class="tbl"><thead><tr><th data-ar="الكرت">GPU</th><th data-ar="الذاكرة">VRAM</th><th>$/hr</th><th data-ar="مقابل السحابة">vs cloud</th><th data-ar="الثقة">trust</th><th data-ar="المنطقة">region</th><th data-ar="السمعة">rep</th><th data-ar="متاح">free</th><th></th></tr></thead>
+    <tbody id="mrows"><tr><td colspan="9" style="padding:24px;text-align:center" class="mut mono">loading…</td></tr></tbody></table>
   </div>
   <div style="margin-top:18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
     <a class="btn btn-amber" href="/console" data-ar="سجّل الدخول للحجز ←">Sign in to book →</a>
@@ -803,7 +881,7 @@ function v(id){return (document.getElementById(id).value||'').trim();}
 function clearf(){['fgpu','fprice','fvram','fregion'].forEach(function(i){document.getElementById(i).value='';});document.getElementById('fconf').checked=false;load();}
 async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await r.json();
  document.getElementById('mnote').textContent=b.count?b.count+' GPUs match · "vs cloud" compares each GPU to the on-demand cloud rate for the SAME class':'No GPUs match these filters.';
- var tb=document.getElementById('mrows');if(!b.count){tb.innerHTML=pbEmpty(8,'No GPUs match','Widen your filters, or be the first to list one.','/install','List your GPU');return;}
+ var tb=document.getElementById('mrows');if(!b.count){tb.innerHTML=pbEmpty(9,'No GPUs match','Widen your filters, or be the first to list one.','/install','List your GPU');return;}
  tb.innerHTML=b.specs.map(function(s){var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
   var t=[];if(s.trust)t.push('<span class="badge '+(s.trust.rank>=2?'ok':'')+'" title="'+s.trust.evidence+'">'+s.trust.label+'</span>');
   if(s.confidential)t.push('<span class="badge cc" title="Confidential-computing pilot — vendor TEE verification not yet connected">CC pilot</span>');
@@ -817,8 +895,9 @@ async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await 
    '<td data-l="vs cloud" class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
    '<td data-l="Trust">'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
    '<td data-l="Region" class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
-   '<td data-l="Reputation" class="mono" style="color:'+rc+'">'+rep+'</td>'+
-   '<td data-l="Free" class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
+   '<td data-l="rep" class="mono" style="color:'+rc+'">'+rep+'</td>'+
+   '<td data-l="free" class="mono" style="color:var(--teal)">'+s.available_units+'</td>'+
+   '<td data-l="" class="tbl-action"><a class="btn btn-teal" style="padding:6px 13px;font-size:12px" href="/launch?spec='+s.id+'">Launch →</a></td></tr>';}).join('');}
 load();setInterval(load,8000);
 </script>""")
 
@@ -2445,7 +2524,7 @@ GPU_DETAIL_HTML = _page("Petabyte — GPU", """
 <div class="wrap" style="padding:34px 24px 10px">
   <a class="mini" href="/marketplace" style="color:var(--mut)">← Back to marketplace</a>
   <div id="gpuwrap" style="margin-top:14px">
-    <div class="mut mono" style="padding:40px 0">Loading GPU…</div>
+    <div class="skel" aria-busy="true" aria-label="Loading GPU"><span class="skel-b" style="height:38px;width:45%"></span><span class="skel-b" style="height:14px;width:30%;margin-top:14px"></span><div class="cols" style="gap:18px;margin-top:20px"><span class="skel-b" style="height:220px;flex:1.6 1 380px"></span><span class="skel-b" style="height:220px;flex:1 1 280px"></span></div></div>
   </div>
 </div>
 <script>
@@ -2457,7 +2536,7 @@ async function loadGpu(){
  if(!r.ok){w.innerHTML='<div class="empty"><div class="et">GPU not found</div><div class="es">It may have gone offline or been delisted.</div><a class="btn btn-teal" href="/marketplace">Browse available GPUs</a></div>';return;}
  var s=await r.json();
  var bookable=s.online&&s.available_units>0&&s.can_accept_paid_jobs;
- var status=bookable?'<span class="badge ok">Available now</span>':(s.online?'<span class="badge">Fully booked</span>':'<span class="badge">Offline</span>');
+ var status=bookable?'<span class="badge st ok">Available now</span>':(s.online?'<span class="badge st warn">Fully booked</span>':'<span class="badge st bad">Offline</span>');
  w.innerHTML=
   '<div class="cols" style="gap:18px;align-items:flex-start">'+
    '<div style="flex:1.6 1 380px;min-width:300px">'+
@@ -2494,7 +2573,7 @@ async function loadGpu(){
     '<div class="card">'+
      '<div style="display:flex;align-items:baseline;gap:8px">'+
       '<span class="mono amber" style="font-size:34px;font-weight:700">$'+Number(s.price_per_hour).toFixed(2)+'</span><span class="mut">/hour</span></div>'+
-     (s.savings_pct?'<div class="mini" style="color:var(--pos);margin-top:4px">'+s.savings_pct+'% below the on-demand cloud rate for this GPU class ($'+Number(s.cloud_reference).toFixed(2)+'/hr)</div>':'<div class="mini" style="margin-top:4px">No comparable public cloud rate for this GPU — we don\'t quote a saving we can\'t back up.</div>')+
+     (s.savings_pct?'<div class="mini" style="color:var(--pos);margin-top:4px">'+s.savings_pct+'% below the on-demand cloud rate for this GPU class ($'+Number(s.cloud_reference).toFixed(2)+'/hr)</div>':'<div class="mini" style="margin-top:4px">No comparable public cloud rate for this GPU — we don\\'t quote a saving we can\\'t back up.</div>')+
      (s.auto_price?'<div class="mini" style="margin-top:6px"><span class="badge cc">auto-priced</span> moves with demand, within the host\\'s limits</div>':'')+
      '<div style="margin-top:16px">'+
       (bookable?'<button class="btn btn-amber" style="width:100%;justify-content:center" data-act="pbBuy" data-a1="'+SPEC_ID+'">Rent &amp; run on this GPU →</button>':'<button class="btn btn-ghost" style="width:100%;justify-content:center" disabled>Not bookable right now</button>')+
@@ -2926,7 +3005,7 @@ async function scNodes(){
   else{
     box.innerHTML=ns.map(function(n){
       var visible=n.online&&n.attested;
-      function chip(ok,on,off){return '<span class="badge '+(ok?'ok':'')+'">'+(ok?on:off)+'</span>';}
+      function chip(ok,on,off){return '<span class="badge st '+(ok?'ok':'warn')+'">'+(ok?on:off)+'</span>';}
       return '<div class="panel" style="padding:12px;margin-bottom:10px">'+
         '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">'+
           '<b class="mono">'+(n.gpu_model||'GPU')+'</b>'+
@@ -2937,7 +3016,7 @@ async function scNodes(){
           '</div>'+
         '</div>'+
         '<div class="mini" style="margin-top:8px">$'+Number(n.price_per_hour).toFixed(2)+'/hr · '+
-          (n.utilization_pct||0)+'% utilized · '+n.jobs_completed+' jobs done'+
+          (n.utilization_pct||0)+'% utilized · '+n.jobs_completed+(n.jobs_completed===1?' job done':' jobs done')+
           (n.success_rate!=null?(' · '+n.success_rate+'% success'):'')+' · earned $'+Number(n.earned_total||0).toFixed(2)+'</div>'+
         (n.suggested_price!=null?('<div class="mini" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">'+
           '<b class="teal">Suggested $'+Number(n.suggested_price).toFixed(2)+'/hr</b>'+
@@ -3037,7 +3116,7 @@ BUY_HTML = _page("Petabyte — rent & run on a GPU",
   <a class="mini" href="/marketplace" style="color:var(--mut)">← Back to marketplace</a>
   <div id="pbtestmode" style="margin-top:14px"></div>
   <p class="mut" id="buy_signedout" style="display:none;margin-top:18px">Please <a class="teal" href="/login">sign in</a> to rent a GPU.</p>
-  <div id="buywrap" style="margin-top:14px"><div class="mut mono" style="padding:40px 0">Loading GPU…</div></div>
+  <div id="buywrap" style="margin-top:14px"><div class="skel" aria-busy="true" aria-label="Loading GPU"><span class="skel-b" style="height:30px;width:40%"></span><span class="skel-b" style="height:14px;width:72%;margin-top:16px"></span><span class="skel-b" style="height:14px;width:55%;margin-top:10px"></span><span class="skel-b" style="height:180px;width:100%;margin-top:18px"></span></div></div>
 </div>
 <script>
 var SPEC_ID=location.pathname.split('/').pop();
@@ -3101,12 +3180,12 @@ function renderShell(s){
     '</div>'+
     '<div class="card" style="margin-top:16px">'+
      '<div class="lbl">Your workload</div>'+
-     '<label class="mini" style="display:block;margin-top:10px">Max runtime (hours)</label>'+
-     '<input id="buy_hours" type="number" min="1" max="24" value="1" style="width:120px;padding:9px;margin-top:4px"/>'+
-     '<label class="mini" style="display:block;margin-top:12px">Code to run on the GPU</label>'+
+     '<label class="mini" for="buy_hours" style="display:block;margin-top:10px">Max runtime (hours)</label>'+
+     '<input id="buy_hours" type="number" min="1" max="24" value="1" oninput="renderCost()" style="width:120px;padding:9px;margin-top:4px"/>'+
+     '<label class="mini" for="buy_code" style="display:block;margin-top:12px">Code to run on the GPU</label>'+
      '<textarea id="buy_code" rows="9" class="mono" style="width:100%;margin-top:4px;padding:10px;font-size:12.5px">'+esc(DEFAULT_CODE)+'</textarea>'+
      '<div id="card-row" style="display:none;margin-top:14px">'+
-       '<label class="mini" style="display:block">Card details</label>'+
+       '<label class="mini" for="card-element" style="display:block">Card details</label>'+
        '<div id="card-element" style="padding:12px;border:1px solid var(--line);border-radius:8px;margin-top:4px"></div>'+
        '<div id="card-errors" class="mini" style="color:var(--warn);margin-top:6px"></div>'+
      '</div>'+
@@ -3115,8 +3194,12 @@ function renderShell(s){
      '<p class="mini" id="buy_note" style="margin-top:10px">'+mode+'</p>'+
     '</div>'+
    '</div>'+
-   '<div style="flex:1 1 320px;min-width:280px">'+
-    '<div class="card" id="buy_progress" style="display:none">'+
+   '<div style="flex:1 1 320px;min-width:280px;position:sticky;top:88px">'+
+    '<div class="card" id="buy_cost">'+
+     '<div class="lbl">Estimated cost</div>'+
+     '<div id="buy_cost_body" style="margin-top:6px"></div>'+
+    '</div>'+
+    '<div class="card" id="buy_progress" style="display:none;margin-top:16px">'+
      '<div class="lbl">Progress</div>'+
      '<div id="buy_msg" style="font-family:var(--disp);font-size:16px;margin:10px 0">Starting…</div>'+
      '<div id="buy_steps" class="mini"></div>'+
@@ -3131,6 +3214,34 @@ function renderShell(s){
     '</div>'+
    '</div>'+
   '</div>';
+ // Prefill from the /launch guided launcher (custom-code path hands off here). No secrets are
+ // carried — only the code text and hours the buyer already typed on /launch.
+ try{
+   var pc=sessionStorage.getItem('pb_launch_code');
+   if(pc!=null){var ce=el('buy_code');if(ce)ce.value=pc;sessionStorage.removeItem('pb_launch_code');
+     var ph=sessionStorage.getItem('pb_launch_hours');if(ph){var he=el('buy_hours');if(he)he.value=ph;}sessionStorage.removeItem('pb_launch_hours');
+     var note=el('buy_note');if(note)note.textContent='Loaded from the launcher — review and press Rent & run. '+note.textContent;}
+ }catch(e){}
+ renderCost();
+}
+
+// Live cost summary — never let the buyer commit without seeing what it costs. Estimate is
+// rate x max-hours; the server re-prices authoritatively at authorize time. The 10% fee is a
+// split OF the rental (captured = fee + seller_net), not an add-on, so it is not in the total.
+function renderCost(){
+ var b=el('buy_cost_body');if(!b||!GPU)return;
+ var hi=el('buy_hours');
+ var hours=Math.max(1,Math.min(24,parseInt((hi&&hi.value)||'1',10)||1));
+ var rate=Number(GPU.price_per_hour)||0;
+ var est=rate*hours;
+ b.innerHTML=
+  '<div class="sumrow"><span class="k">Machine</span><span class="v">'+(GPU.gpu_count>1?GPU.gpu_count+'× ':'')+esc(GPU.gpu_model)+(GPU.vram_gb?' · '+GPU.vram_gb+'GB':'')+'</span></div>'+
+  '<div class="sumrow"><span class="k">Price per hour</span><span class="v">$'+rate.toFixed(2)+'</span></div>'+
+  '<div class="sumrow"><span class="k">Max runtime</span><span class="v">'+hours+' h</span></div>'+
+  '<div class="sumrow"><span class="k">Estimated compute cost</span><span class="v">$'+est.toFixed(2)+'</span></div>'+
+  '<div class="sumrow"><span class="k">Platform fee (10%)</span><span class="v" style="color:var(--mut)">taken from host</span></div>'+
+  '<div class="sumrow total"><span class="k">Estimated total</span><span class="v">$'+est.toFixed(2)+'</span></div>'+
+  '<p class="mini" style="margin-top:10px">The 10% platform fee is taken from the rental — the host keeps 90%, nothing is added on top of your bill. You authorize a small headroom buffer and pay only for the GPU time you actually use; the rest of the hold is released.</p>';
 }
 
 function showError(msg){el('buy_error').style.display='';el('buy_error_body').textContent=msg;}
@@ -3255,6 +3366,464 @@ async function buyCancel(){
 loadBuy();
 </script>""")
 
+
+LAUNCH_HTML = _page("Petabyte — launch compute",
+    desc="Launch a GPU workload the way you would an EC2 instance: choose a curated template or your own code, pick a verified host, see the exact price, and launch.",
+    path="/launch", body="""
+<div class="wrap" id="lcroot" style="padding:26px 24px 60px;max-width:1180px">
+  <div class="eyebrow"><span class="dot"></span> launch compute</div>
+  <h1 style="font-size:clamp(28px,4.2vw,40px);margin:12px 0 6px">Launch a workload</h1>
+  <p class="mut" style="max-width:66ch">Choose what to run, pick a verified host, see exactly what it costs, and launch. Every price and placement is computed on our servers — the browser only previews them.</p>
+  <p class="mut" id="lc_signedout" style="display:none;margin-top:12px">You are browsing as a guest. <a class="teal" href="/login">Sign in</a> to launch — you can still explore templates and hosts below.</p>
+
+  <div id="mytpls" class="lsec" style="display:none;margin-top:20px">
+    <div class="lsec-h"><span class="stepchip" style="background:rgba(255,190,66,.12);border-color:rgba(255,190,66,.35);color:var(--amber)">★</span><h2 style="font-size:16px">Your launch templates</h2></div>
+    <div class="lsec-sub" style="margin-inline-start:34px">Saved configurations you can relaunch. Stored in this browser only — no secrets.</div>
+    <div id="mytplgrid" class="picks" style="margin-top:12px"></div>
+  </div>
+
+  <div class="cols" style="gap:20px;align-items:flex-start;margin-top:22px">
+    <div style="flex:1.55 1 460px;min-width:320px">
+
+      <div class="lsec" id="sec1">
+        <div class="card">
+          <div class="lsec-h"><span class="stepchip">1</span><h2>What do you want to run?</h2></div>
+          <div class="lsec-sub">Curated, audited app templates — or your own code in a locked-down sandbox. <span class="mut">(Custom container images are on the roadmap; today Petabyte runs curated templates only.)</span></div>
+          <input id="tsearch" aria-label="Search templates" placeholder="Search templates…" style="width:100%;margin-top:14px"/>
+          <div id="tcats" class="seg" style="margin-top:12px;flex-wrap:wrap"></div>
+          <div id="tgrid" class="picks" aria-label="Workload templates" role="radiogroup"></div>
+          <div id="tdetail" style="margin-top:14px"></div>
+        </div>
+      </div>
+
+      <div class="lsec locked" id="sec2" aria-disabled="true">
+        <div class="card">
+          <div class="lsec-h"><span class="stepchip">2</span><h2>Choose compute</h2></div>
+          <div class="lsec-sub">Verified hosts. Hosts are anonymous — you pick by hardware, reputation and price.</div>
+          <div id="computebody" style="margin-top:12px"></div>
+        </div>
+      </div>
+
+      <div class="lsec locked" id="sec3" aria-disabled="true">
+        <div class="card">
+          <div class="lsec-h"><span class="stepchip">3</span><h2>Configure</h2></div>
+          <div id="configbody" style="margin-top:12px"></div>
+        </div>
+      </div>
+
+      <div class="lsec locked" id="sec4" aria-disabled="true">
+        <div class="card">
+          <div class="lsec-h"><span class="stepchip">4</span><h2>Review &amp; launch</h2></div>
+          <div id="reviewbody" style="margin-top:12px"></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="flex:1 1 300px;min-width:280px;position:sticky;top:88px">
+      <div class="card">
+        <div class="lbl">Your configuration</div>
+        <div id="costbody" style="margin-top:6px"><p class="mut" style="font-size:13px">Pick a workload to see pricing.</p></div>
+        <div id="reviewactions" style="margin-top:16px;display:none">
+          <button id="reviewbtn" class="btn btn-amber" style="width:100%;justify-content:center">Review &amp; Launch →</button>
+          <button id="savetplbtn" class="btn btn-ghost" style="width:100%;justify-content:center;margin-top:8px">Save as template</button>
+        </div>
+        <p class="mini" style="margin-top:10px">Estimated. The final charge is metered to the second on our servers and can never exceed the authorized maximum — the rest is refunded.</p>
+      </div>
+      <div id="launchstatus" class="card" style="display:none;margin-top:14px"></div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');}
+ function mUSD(x){return '$'+Number(x||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+ function el(id){return document.getElementById(id);}
+ var CATS=[['all','All'],['notebook','Notebooks'],['ai','AI / LLM'],['art','Image / Art'],['render','Render / Video'],['game','Game servers']];
+ // Frontend guidance only — the server (/route, /estimate, /launch) is authoritative on placement.
+ var REC_VRAM={vllm:24,'tensorrt-llm':24,ollama:16,comfyui:12,'sd-webui':12,jupyter:16,pytorch:16,blender:8,ffmpeg:8};
+ var DEF_MODEL={ollama:'llama3',vllm:'Qwen/Qwen2.5-1.5B-Instruct'};
+ var DEFAULT_CODE=\"""" + DEFAULT_WORKLOAD + """\";
+ var S={type:null,template:null,model:'',hours:1,spec:null,region:'',maxPrice:'',minVram:0,confidential:false,sort:'price',code:DEFAULT_CODE,place:'auto'};
+ var TPL=[],SPECS=[],WALLET=null,EST=null,LAUNCHING=false,EST_SEQ=0;
+
+ function saveDraft(){try{var d={type:S.type,template:S.template,model:S.model,hours:S.hours,region:S.region,maxPrice:S.maxPrice,minVram:S.minVram,confidential:S.confidential,sort:S.sort,place:S.place,spec:S.spec?S.spec.id:null};sessionStorage.setItem('pb_launch_draft',JSON.stringify(d));}catch(e){}}
+ // ---------- section locking ----------
+ function unlock(n){for(var i=2;i<=4;i++){var s=el('sec'+i);if(!s)continue;var on=i<=n;s.classList.toggle('locked',!on);s.setAttribute('aria-disabled',on?'false':'true');}}
+
+ // ---------- 1. templates ----------
+ function catChips(){var c=el('tcats');c.innerHTML=CATS.map(function(k){return '<button type="button" data-lc="cat" data-v="'+k[0]+'" aria-pressed="'+(S._cat===k[0]||(!S._cat&&k[0]==='all'))+'">'+k[1]+'</button>';}).join('');}
+ function tCards(){
+  var q=(el('tsearch').value||'').toLowerCase().trim(),cat=S._cat||'all';
+  var list=TPL.filter(function(t){
+    if(cat!=='all'&&t.kind!==cat)return false;
+    if(q&&(t.name+' '+(t.desc||'')).toLowerCase().indexOf(q)<0)return false;
+    return true;});
+  var cards=list.map(function(t){
+    var rec=REC_VRAM[t.name];
+    return '<button type="button" class="pick" role="radio" aria-checked="'+(S.type==='app'&&S.template===t.name)+'" data-lc="pickTpl" data-type="app" data-v="'+esc(t.name)+'">'+
+      '<span class="pk-check">✓</span>'+
+      '<span class="pk-top"><span class="pk-ic">'+pbIcon(t.name)+'</span><span class="pk-name">'+esc(t.name)+'</span></span>'+
+      '<span class="pk-desc">'+esc(t.desc||'')+'</span>'+
+      '<span class="pk-meta">'+(t.gpu?'<span class="badge ok">GPU</span>':'<span class="badge">CPU</span>')+
+        (rec?'<span class="badge">'+rec+'GB+ VRAM</span>':'')+
+        (t.port?'<span class="badge">:'+t.port+'</span>':'<span class="badge">batch</span>')+'</span>'+
+    '</button>';}).join('');
+  // the always-available "custom code" workload (notebook pipeline)
+  var custom='<button type="button" class="pick" role="radio" aria-checked="'+(S.type==='code')+'" data-lc="pickTpl" data-type="code" data-v="__code__">'+
+      '<span class="pk-check">✓</span>'+
+      '<span class="pk-top"><span class="pk-ic">'+pbIcon('pytorch')+'</span><span class="pk-name">Custom code</span></span>'+
+      '<span class="pk-desc">Run your own Python in a locked, network-isolated sandbox on a host you choose.</span>'+
+      '<span class="pk-meta"><span class="badge ok">GPU</span><span class="badge">notebook</span></span>'+
+    '</button>';
+  var showCustom=(cat==='all'||cat==='notebook')&&(!q||'custom code python notebook'.indexOf(q)>=0);
+  el('tgrid').innerHTML=cards+(showCustom?custom:'')||'<p class="mut" style="font-size:13px;grid-column:1/-1">No templates match. <a class="teal" href="#" data-lc="clearsearch">Clear search</a></p>';
+ }
+ function tDetail(){
+  var d=el('tdetail');
+  if(S.type==='code'){
+    d.innerHTML='<div class="panel" style="padding:14px 16px"><div class="lbl" style="margin-bottom:8px">Custom code · notebook</div>'+
+      '<p class="mini">Your Python runs inside a hardened container: no network, read-only filesystem, dropped capabilities, fixed CPU/RAM. Choose the host in the next step, then edit the code in Configure.</p></div>';return;}
+  if(S.type!=='app'){d.innerHTML='';return;}
+  var t=TPL.filter(function(x){return x.name===S.template;})[0];if(!t){d.innerHTML='';return;}
+  var rec=REC_VRAM[t.name];
+  var rows=''+
+    row('Environment','Curated Docker image, audited by Petabyte')+
+    row('Category',({ai:'AI / LLM',art:'Image / Art',render:'Render / Video',game:'Game server',notebook:'Notebook'})[t.kind]||t.kind)+
+    (rec?row('Recommended VRAM',rec+' GB or more'):'')+
+    row('Access',t.port?('In-container service on port '+t.port+' (reached over your private tunnel)'):'Batch job (no exposed port)')+
+    row('Network egress',(t.egress==='none'?'None (fully isolated)':(t.egress==='open'?'Open':'Limited')))+
+    row('Publisher','Petabyte')+
+    row('Status','<span class="badge st ok">Curated · verified</span>');
+  var modelField=DEF_MODEL[t.name]!==undefined?
+    '<label class="mini" for="lc_model" style="display:block;margin-top:12px">Model</label>'+
+    '<input id="lc_model" value="'+esc(S.model||DEF_MODEL[t.name])+'" placeholder="'+esc(DEF_MODEL[t.name])+'" style="width:100%;max-width:360px;margin-top:4px"/>'+
+    '<p class="mini" style="margin-top:5px">The model this server will pull and serve. This is the one runtime parameter this template accepts.</p>':'';
+  d.innerHTML='<div class="panel" style="padding:16px"><div class="lbl" style="margin-bottom:8px">'+esc(t.name)+' — details</div>'+rows+modelField+'</div>';
+  var mi=el('lc_model');if(mi)mi.addEventListener('input',function(){S.model=mi.value;saveDraft();});
+ }
+ function row(k,v){return '<div class="sumrow"><span class="k">'+k+'</span><span class="v" style="max-width:60%">'+v+'</span></div>';}
+
+ function pickTpl(type,v){
+  if(type==='code'){S.type='code';S.template=null;}
+  else{S.type='app';S.template=v;if(DEF_MODEL[v]!==undefined&&!S.model)S.model=DEF_MODEL[v];S.place='auto';}
+  // reset a machine choice that no longer applies
+  if(type==='app')S.spec=S.spec;  // keep any preview
+  tCards();tDetail();renderCompute();renderConfig();unlock(3);saveDraft();refreshCost();
+  el('sec2').scrollIntoView({behavior:'smooth',block:'nearest'});
+ }
+
+ // ---------- 2. compute ----------
+ function renderCompute(){
+  var b=el('computebody');
+  var appMode=(S.type==='app');
+  var head=appMode?
+    '<div class="seg" role="radiogroup" aria-label="Placement" style="margin-bottom:6px">'+
+      '<button type="button" data-lc="place" data-v="auto" aria-pressed="'+(S.place==='auto')+'">Auto-place (recommended)</button>'+
+      '<button type="button" data-lc="place" data-v="pick" aria-pressed="'+(S.place==='pick')+'">Browse hosts</button>'+
+    '</div>':'';
+  var note=appMode&&S.place==='auto'?
+    '<p class="mini" style="margin:6px 0 4px">Petabyte places this on the cheapest verified host that meets the template requirements and your limits below. You are charged that host&#39;s rate.</p>':
+    (appMode?'<p class="mini" style="margin:6px 0 4px">Pick the exact host this template runs on — your estimate and launch both use it. If it goes offline first, launch says so before anything is charged.</p>':
+             '<p class="mini" style="margin:6px 0 4px">Pick the exact host your code runs on.</p>');
+  var filters=
+    '<div class="filterbar" style="margin:10px 0 4px">'+
+      '<label class="field" style="flex:0 0 auto"><span>Sort</span>'+
+        '<span class="seg"><button type="button" data-lc="sort" data-v="price" aria-pressed="'+(S.sort==='price')+'">Cheapest</button>'+
+        '<button type="button" data-lc="sort" data-v="rep" aria-pressed="'+(S.sort==='rep')+'">Best rep</button>'+
+        '<button type="button" data-lc="sort" data-v="vram" aria-pressed="'+(S.sort==='vram')+'">Most VRAM</button></span></label>'+
+      '<label class="field"><span>Min VRAM (GB)</span><input id="f_vram" type="number" min="0" value="'+(S.minVram||'')+'" placeholder="any" style="width:100px"/></label>'+
+      '<label class="field"><span>Max $/hr</span><input id="f_price" type="number" min="0" step="0.01" value="'+(S.maxPrice||'')+'" placeholder="any" style="width:100px"/></label>'+
+      '<label class="field"><span>Region</span><input id="f_region" value="'+esc(S.region||'')+'" placeholder="any" style="width:120px"/></label>'+
+    '</div>';
+  var showList=(!appMode)||(S.place==='pick');
+  b.innerHTML=head+note+((appMode&&S.place==='auto')?
+      '<div id="autopreview" style="margin-top:8px"></div>':
+      filters+'<div id="mlist" aria-label="Available hosts"></div>');
+  if(appMode&&S.place==='auto'){renderAutoPreview();}
+  else{
+    var vf=el('f_vram'),pf=el('f_price'),rf=el('f_region');
+    if(vf)vf.addEventListener('input',function(){S.minVram=vf.value;saveDraft();renderMachineList();});
+    if(pf)pf.addEventListener('input',function(){S.maxPrice=pf.value;saveDraft();renderMachineList();});
+    if(rf)rf.addEventListener('input',function(){S.region=rf.value;saveDraft();renderMachineList();});
+    renderMachineList();
+  }
+ }
+ function specQuery(){
+  var p=[];p.push('sort='+encodeURIComponent(S.sort||'price'));
+  if(S.minVram)p.push('min_vram='+encodeURIComponent(S.minVram));
+  if(S.maxPrice)p.push('max_price='+encodeURIComponent(S.maxPrice));
+  if(S.region)p.push('region='+encodeURIComponent(S.region));
+  return '/marketplace/specs?'+p.join('&');
+ }
+ function compatFor(s){
+  var rec=(S.type==='app'&&REC_VRAM[S.template])||0;
+  if(!rec)return {ok:true,html:''};
+  var ok=(s.vram_gb||0)>=rec;
+  return {ok:ok,html:'<span class="compat" style="color:'+(ok?'var(--pos)':'var(--warn)')+'">'+(ok?'✓':'⚠')+' '+(ok?'meets':'below')+' '+rec+'GB rec.</span>'};
+ }
+ function machineRow(s){
+  var trust=s.trust?('<span class="badge '+(s.trust.rank>=2?'ok':'')+'" title="'+esc(s.trust.evidence||'')+'">'+esc(s.trust.label)+'</span>'):'';
+  var rep=s.reputation_score!=null?('<span class="mp-col">rep '+s.reputation_score+'</span>'):'';
+  var c=compatFor(s);
+  return '<button type="button" class="mpick" role="radio" aria-checked="'+(S.spec&&S.spec.id===s.id)+'" data-lc="pickMachine" data-v="'+esc(s.id)+'">'+
+    '<span class="mp-gpu">'+(s.gpu_count>1?s.gpu_count+'× ':'')+esc(s.gpu_model||'CPU')+' '+trust+'</span>'+
+    '<span class="mp-col">'+(s.vram_gb?s.vram_gb+'GB':'—')+' VRAM</span>'+
+    '<span class="mp-col">'+(s.cpu?s.cpu+' vCPU':'')+(s.ram_gb?' · '+s.ram_gb+'GB':'')+'</span>'+
+    '<span class="mp-col">'+esc(s.region||'—')+'</span>'+rep+
+    (c.html?'<span class="mp-col">'+c.html+'</span>':'')+
+    '<span class="mp-price">'+mUSD(s.price_per_hour)+'<span class="mut" style="font-size:11px">/hr</span></span>'+
+  '</button>';
+ }
+ async function renderMachineList(){
+  var box=el('mlist');if(!box)return;
+  box.innerHTML='<div class="mut mono" style="padding:14px 0;font-size:13px">Finding hosts…</div>';
+  try{
+   var r=await fetch(specQuery());var b=await r.json();SPECS=b.specs||[];
+   if(!SPECS.length){box.innerHTML='<div class="empty" style="padding:26px 12px"><div class="et">No hosts match</div><div class="es">Relax the filters, or check back — availability updates live.</div></div>';return;}
+   box.innerHTML=SPECS.map(machineRow).join('');
+  }catch(e){box.innerHTML='<p class="mut" style="font-size:13px">Could not load hosts. <a class="teal" href="#" data-lc="reloadmachines">Retry</a></p>';}
+ }
+ async function renderAutoPreview(){
+  var box=el('autopreview');if(!box)return;
+  box.innerHTML='<div class="mut mono" style="font-size:13px">Checking matching hosts…</div>';
+  try{
+   var p=[];p.push('sort=price');if(S.type==='app'&&REC_VRAM[S.template])p.push('min_vram='+REC_VRAM[S.template]);
+   var r=await fetch('/marketplace/specs?'+p.join('&'));var b=await r.json();var ss=b.specs||[];
+   if(!ss.length){box.innerHTML='<p class="mini" style="color:var(--warn)">⚠ No verified host currently meets this template&#39;s requirements. Try "Browse hosts" or check back shortly.</p>';return;}
+   var cheapest=ss[0];
+   box.innerHTML='<div class="panel" style="padding:12px 14px"><div class="compat" style="color:var(--pos)">✓ '+ss.length+' verified host'+(ss.length>1?'s':'')+' match — cheapest from '+mUSD(cheapest.price_per_hour)+'/hr ('+esc(cheapest.gpu_model||'CPU')+', '+(cheapest.vram_gb||0)+'GB).</div>'+
+     '<p class="mini" style="margin-top:6px">Your final host and price are locked in server-side at launch.</p></div>';
+  }catch(e){box.innerHTML='';}
+ }
+ function pickMachine(id){
+  var s=SPECS.filter(function(x){return x.id===id;})[0];if(!s)return;S.spec=s;
+  document.querySelectorAll('#mlist .mpick').forEach(function(n){n.setAttribute('aria-checked', n.getAttribute('data-v')===id?'true':'false');});
+  renderConfig();unlock(3);saveDraft();refreshCost();
+ }
+
+ // ---------- 3. configure ----------
+ function renderConfig(){
+  var b=el('configbody');
+  var hrs='<label class="mini" for="lc_hours" style="display:block">Max runtime (hours)</label>'+
+    '<input id="lc_hours" type="number" min="1" max="24" value="'+(S.hours||1)+'" style="width:120px;margin-top:4px"/>'+
+    '<p class="mini" style="margin-top:5px">Sizes the pre-authorization hold (a small buffer is added). You pay only for the time actually used; the rest is released.</p>';
+  var code=S.type==='code'?
+    '<label class="mini" for="lc_code" style="display:block;margin-top:14px">Code to run</label>'+
+    '<textarea id="lc_code" rows="9" class="mono" style="width:100%;margin-top:4px;font-size:12.5px">'+esc(S.code||DEFAULT_CODE)+'</textarea>':'';
+  var adv=(S.type==='app')?
+    '<details style="margin-top:14px"><summary style="cursor:pointer;font-family:var(--disp);font-weight:600;font-size:13.5px">Advanced placement</summary>'+
+      '<div style="margin-top:10px">'+
+      '<label class="mini" for="lc_maxp" style="display:block">Max price ($/hr)</label><input id="lc_maxp" type="number" min="0" step="0.01" value="'+(S.maxPrice||'')+'" placeholder="no limit" style="width:140px;margin-top:4px"/>'+
+      '<label class="mini" for="lc_reg" style="display:block;margin-top:10px">Preferred region</label><input id="lc_reg" value="'+esc(S.region||'')+'" placeholder="any" style="width:180px;margin-top:4px"/>'+
+      '<p class="mini" style="margin-top:8px">Environment variables, custom ports and persistent storage are not configurable on curated templates yet — Petabyte sets them per audited template.</p>'+
+      '</div></details>':
+    '<p class="mini" style="margin-top:12px">This runs your code as-is. Custom container images, environment variables, ports and extra storage are not available on this path yet.</p>';
+  b.innerHTML=hrs+code+adv;
+  var h=el('lc_hours');if(h)h.addEventListener('input',function(){S.hours=Math.max(1,Math.min(24,parseInt(h.value||'1',10)||1));saveDraft();refreshCost();});
+  var cd=el('lc_code');if(cd)cd.addEventListener('input',function(){S.code=cd.value;saveDraft();});
+  var mp=el('lc_maxp');if(mp)mp.addEventListener('input',function(){S.maxPrice=mp.value;saveDraft();});
+  var rg=el('lc_reg');if(rg)rg.addEventListener('input',function(){S.region=rg.value;saveDraft();});
+ }
+
+ // ---------- cost panel (server-authoritative /estimate) ----------
+ // In "Browse hosts" mode the buyer is pinning a specific host, so we can't price (or launch)
+ // until one is actually selected — otherwise a missing pick would silently auto-place. Auto
+ // mode needs no host up front.
+ function canEstimate(){if(S.type==='code')return !!S.spec;if(S.type==='app')return S.place!=='pick'||!!S.spec;return false;}
+ async function refreshCost(){
+  var cb=el('costbody');
+  if(!canEstimate()){cb.innerHTML='<p class="mut" style="font-size:13px">'+(S.type?'Choose a host to price this run.':'Pick a workload to see pricing.')+'</p>';el('reviewactions').style.display='none';return;}
+  cb.innerHTML='<div class="mut mono" style="font-size:13px;padding:6px 0">Pricing…</div>';
+  // Invalidate any in-flight estimate and lock launch until the fresh price lands, so a
+  // slower earlier response can never overwrite a newer one or leave a stale total launchable.
+  EST=null;renderReview();
+  var body={hours:S.hours};
+  if(S.type==='code'){body.spec_id=S.spec.id;}
+  else{body.template=S.template;if(S.place==='pick'&&S.spec)body.spec_id=S.spec.id;}   // honor the chosen host
+  var seq=++EST_SEQ;
+  try{
+   var r=await fetch('/estimate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+   if(seq!==EST_SEQ)return;                    // a newer estimate started; drop this one
+   if(!r.ok){cb.innerHTML='<p class="mut" style="font-size:13px">'+(r.status===404?'No matching host is available right now.':'Could not price this yet.')+'</p>';el('reviewactions').style.display='none';return;}
+   var est=await r.json();
+   if(seq!==EST_SEQ)return;
+   EST=est;
+   var mach=(S.spec&&(S.type==='code'||S.place==='pick'))?((S.spec.gpu_count>1?S.spec.gpu_count+'× ':'')+esc(S.spec.gpu_model)):(esc(EST.gpu_model||'CPU')+' (auto)');
+   var cloud=EST.cloud_comparison?('<div class="sumrow"><span class="k">A hyperscaler would cost</span><span class="v" style="color:var(--mut)">~'+mUSD(EST.cloud_comparison.reference_total)+'</span></div>'):'';
+   cb.innerHTML=
+    '<div class="sumrow"><span class="k">Workload</span><span class="v">'+(S.type==='code'?'Custom code':esc(S.template))+'</span></div>'+
+    '<div class="sumrow"><span class="k">Machine</span><span class="v">'+mach+'</span></div>'+
+    '<div class="sumrow"><span class="k">Rate</span><span class="v">'+mUSD(EST.price_per_hour)+'/hr</span></div>'+
+    '<div class="sumrow"><span class="k">Max runtime</span><span class="v">'+EST.hours+' h</span></div>'+
+    '<div class="sumrow"><span class="k">Min charge (1h)</span><span class="v">'+mUSD(EST.min_charge)+'</span></div>'+
+    '<div class="sumrow"><span class="k">Platform fee</span><span class="v" style="color:var(--mut)">incl. (from host)</span></div>'+
+    cloud+
+    '<div class="sumrow total"><span class="k">Estimated total</span><span class="v">'+mUSD(EST.total)+'</span></div>';
+   if(WALLET){
+     var short=Number(EST.total)>Number(WALLET.balance);
+     cb.innerHTML+='<div class="sumrow"><span class="k">Wallet balance</span><span class="v" style="color:'+(short?'var(--warn)':'var(--mut)')+'">'+mUSD(WALLET.balance)+'</span></div>'+
+       (short?'<p class="mini" style="color:var(--warn);margin-top:8px">⚠ Estimated total is above your balance. <a class="teal" href="/account">Add funds</a> before launching.</p>':'');
+   }
+   el('reviewactions').style.display=authed()?'':'none';
+   renderReview();unlock(4);
+  }catch(e){if(seq!==EST_SEQ)return;cb.innerHTML='<p class="mut" style="font-size:13px">Could not reach pricing.</p>';}
+ }
+
+ // ---------- 4. review ----------
+ function renderReview(){
+  var b=el('reviewbody');if(!EST){b.innerHTML='<p class="mut" style="font-size:13px">Complete the steps above.</p>';return;}
+  var rows=
+    row('Workload',S.type==='code'?'Custom code (notebook)':esc(S.template)+(S.model?(' · model '+esc(S.model)):''))+
+    row('Machine',(S.spec&&(S.type==='code'||S.place==='pick'))?((S.spec.gpu_count>1?S.spec.gpu_count+'× ':'')+esc(S.spec.gpu_model)+' · '+(S.spec.vram_gb||0)+'GB · '+esc(S.spec.region||'')):(esc(EST.gpu_model||'CPU')+' · auto-placed · '+esc(EST.region||'')))+
+    row('Runtime',EST.hours+' hour(s) max')+
+    row('Rate',mUSD(EST.price_per_hour)+'/hr')+
+    row('Estimated total',mUSD(EST.total))+
+    (WALLET?row('Wallet',mUSD(WALLET.balance)):'');
+  b.innerHTML='<div class="panel" style="padding:16px">'+rows+'</div>'+
+    '<p class="mini" style="margin-top:10px">Launching authorizes up to a maximum on your card/wallet and starts the workload. You are charged only for what you use.</p>'+
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">'+
+     '<button type="button" class="btn btn-amber" id="launchbtn" data-lc="launch" style="flex:1;min-width:180px;justify-content:center">'+(authed()?'Launch compute →':'Sign in to launch')+'</button>'+
+    '</div>';
+ }
+
+ // ---------- launch ----------
+ async function doLaunch(){
+  if(LAUNCHING)return;
+  if(!authed()){location.href='/login';return;}
+  var btn=el('launchbtn');
+  if(S.type==='code'){
+    // hand off to the polished, tested notebook checkout with our config carried over
+    if(!S.spec){return;}
+    try{sessionStorage.setItem('pb_launch_code',S.code||DEFAULT_CODE);sessionStorage.setItem('pb_launch_hours',String(S.hours||1));}catch(e){}
+    location.href='/buy/'+S.spec.id;return;
+  }
+  LAUNCHING=true;if(btn){btn.disabled=true;btn.textContent='Launching…';}
+  var st=el('launchstatus');st.style.display='';
+  function stage(msg,done){st.innerHTML='<div class="lbl">Launching</div><div id="lc_stage" style="font-family:var(--disp);font-size:15px;margin:8px 0">'+msg+'</div>'+(done||'');}
+  stage('Reserving a verified host…');
+  var body={template:S.template,hours:S.hours||1};
+  if(S.model)body.template_params={model:S.model};
+  if(S.maxPrice)body.max_price_per_hour=Number(S.maxPrice);
+  if(S.region)body.region=S.region;
+  if(S.place==='pick'&&S.spec)body.spec_id=S.spec.id;   // honor the buyer's explicit host choice
+  var r=await api('/launch',{method:'POST',body:JSON.stringify(body)});
+  if(r.status===401){LAUNCHING=false;location.href='/login';return;}
+  if(r.status===402){LAUNCHING=false;if(btn){btn.disabled=false;btn.textContent='Launch compute →';}stage('Not enough balance.','<a class="btn btn-teal" href="/account" style="margin-top:6px">Add funds</a>');return;}
+  if(!r.ok){
+    LAUNCHING=false;if(btn){btn.disabled=false;btn.textContent='Launch compute →';}
+    var e=(r.body&&r.body.error)||{};var msg=e.message||(r.status===409?'No matching host is online right now. Try again shortly.':'Something went wrong. Nothing was charged.');
+    stage('Could not launch.','<div class="mut" style="font-size:13px;margin-top:4px">'+esc(msg)+'</div>'+(e.request_id?'<div class="mini" style="margin-top:8px">Reference '+esc(e.request_id)+'</div>':''));
+    return;}
+  var b=r.body;
+  stage('Reserved on '+esc(b.gpu_model||'a host')+' — starting…',
+    '<div class="mini" style="margin-top:8px">Booking #'+esc(b.booking_id)+' · '+mUSD(b.gross_amount)+' / '+b.hours+'h</div>'+
+    (((b.url&&(b.url.ssh||b.url.http)))?'<pre style="margin-top:10px;white-space:pre-wrap;font-size:12px">'+esc((b.url.ssh||'')+(b.url.http?('\\n'+b.url.http):''))+'</pre>':'')+
+    '<div class="mut" id="lc_prep" style="margin-top:8px;font-size:13px">Preparing your workload…</div>');
+  try{sessionStorage.removeItem('pb_launch_draft');}catch(e){}
+  pollVM(b.vm_id,b.port);
+ }
+ function pollVM(vmid,port){
+  var prep=el('lc_prep'),t0=Date.now();
+  var iv=setInterval(async function(){
+   var r=await api('/vm/'+vmid);if(!r.ok)return;var s=r.body.status;
+   if(s==='running'){clearInterval(iv);if(prep)prep.innerHTML='<b class="teal">Running</b> — connect at the address above'+(port?(' (port '+port+')'):'')+'. Manage it under <a class="teal" href="/account">your account</a>.';}
+   else if(s==='failed'){clearInterval(iv);if(prep)prep.textContent='No host could start it — you were refunded.';}
+   else if(s==='migrating'){if(prep)prep.textContent='Host changed — reconnecting (same address)…';}
+   else if(Date.now()-t0>90000){clearInterval(iv);if(prep)prep.innerHTML='Still starting — track it under <a class="teal" href="/account">your account</a>.';}
+   else if(prep){prep.textContent='Preparing your workload… ('+s+')';}
+  },2500);
+ }
+
+ // ---------- launch templates (localStorage; NO secrets) ----------
+ function tplKey(){return 'pb_launch_templates';}
+ function loadTpls(){try{return JSON.parse(localStorage.getItem(tplKey())||'[]');}catch(e){return [];}}
+ function saveTpls(a){try{localStorage.setItem(tplKey(),JSON.stringify(a));}catch(e){}}
+ function renderMyTpls(){
+  var a=loadTpls();var wrap=el('mytpls');if(!a.length){wrap.style.display='none';return;}
+  wrap.style.display='';
+  el('mytplgrid').innerHTML=a.map(function(t,i){
+   return '<div class="pick" style="cursor:default">'+
+     '<span class="pk-top"><span class="pk-ic">'+pbIcon(t.template||'pytorch')+'</span><span class="pk-name">'+esc(t.name)+'</span></span>'+
+     '<span class="pk-desc">'+esc(t.type==='code'?'Custom code':(t.template||''))+' · '+(t.hours||1)+'h'+(t.minVram?(' · '+t.minVram+'GB+'):'')+'</span>'+
+     '<span class="pk-meta" style="margin-top:6px">'+
+       '<button type="button" class="btn btn-amber" style="padding:6px 12px;font-size:12px" data-lc="tplLaunch" data-v="'+i+'">Launch</button>'+
+       '<button type="button" class="btn btn-ghost" style="padding:6px 12px;font-size:12px" data-lc="tplDup" data-v="'+i+'">Duplicate</button>'+
+       '<button type="button" class="btn btn-ghost" style="padding:6px 12px;font-size:12px" data-lc="tplDel" data-v="'+i+'">Delete</button>'+
+     '</span></div>';
+  }).join('');
+ }
+ function saveAsTemplate(){
+  if(!S.type){return;}
+  var name=prompt('Name this launch template:',(S.type==='code'?'Custom code':S.template)+' · '+(S.hours||1)+'h');
+  if(!name)return;
+  var a=loadTpls();
+  a.unshift({name:name,type:S.type,template:S.template,model:S.model||'',hours:S.hours||1,minVram:S.minVram||(REC_VRAM[S.template]||0),maxPrice:S.maxPrice||'',region:S.region||'',code:S.type==='code'?(S.code||''):''});
+  saveTpls(a);renderMyTpls();
+  var sb=el('savetplbtn');if(sb){var o=sb.textContent;sb.textContent='Saved ✓';setTimeout(function(){sb.textContent=o;},1400);}
+ }
+ function applyTpl(t){
+  S.type=t.type;S.template=t.template||null;S.model=t.model||'';S.hours=t.hours||1;S.minVram=t.minVram||0;S.maxPrice=t.maxPrice||'';S.region=t.region||'';
+  if(t.type==='code'){S.code=t.code||DEFAULT_CODE;S.place='pick';}else{S.place='auto';}
+  S._cat='all';S.spec=null;
+  catChips();tCards();tDetail();renderCompute();renderConfig();unlock(t.type==='code'?2:3);saveDraft();refreshCost();
+  el('sec1').scrollIntoView({behavior:'smooth',block:'start'});
+ }
+
+ // ---------- delegated events ----------
+ el('lcroot').addEventListener('click',function(e){
+  var t=e.target.closest('[data-lc]');if(!t)return;
+  var act=t.getAttribute('data-lc'),v=t.getAttribute('data-v');
+  if(act==='pickTpl'){e.preventDefault();pickTpl(t.getAttribute('data-type'),v);}
+  else if(act==='cat'){S._cat=v;catChips();tCards();}
+  else if(act==='place'){e.preventDefault();S.place=v;renderCompute();refreshCost();saveDraft();}
+  else if(act==='sort'){S.sort=v;renderCompute();}
+  else if(act==='pickMachine'){e.preventDefault();pickMachine(v);}
+  else if(act==='launch'){e.preventDefault();doLaunch();}
+  else if(act==='clearsearch'){e.preventDefault();el('tsearch').value='';tCards();}
+  else if(act==='reloadmachines'){e.preventDefault();renderMachineList();}
+  else if(act==='tplLaunch'){e.preventDefault();applyTpl(loadTpls()[+v]);}
+  else if(act==='tplDup'){e.preventDefault();var a=loadTpls();var c=JSON.parse(JSON.stringify(a[+v]));c.name=c.name+' (copy)';a.unshift(c);saveTpls(a);renderMyTpls();}
+  else if(act==='tplDel'){e.preventDefault();var a=loadTpls();a.splice(+v,1);saveTpls(a);renderMyTpls();}
+ });
+ // keyboard: Enter/Space activate a role=radio card
+ el('lcroot').addEventListener('keydown',function(e){
+  if(e.key!=='Enter'&&e.key!==' ')return;
+  var t=e.target.closest('.pick[role="radio"],.mpick[role="radio"]');if(!t)return;
+  e.preventDefault();t.click();
+ });
+ el('tsearch').addEventListener('input',tCards);
+ el('reviewbtn').addEventListener('click',function(){el('sec4').scrollIntoView({behavior:'smooth',block:'start'});renderReview();});
+ el('savetplbtn').addEventListener('click',saveAsTemplate);
+
+ // ---------- boot ----------
+ async function boot(){
+  if(!authed())el('lc_signedout').style.display='';
+  try{var meR=await api('/me');if(meR.ok)WALLET={balance:meR.body.balance,earnings:meR.body.earnings};}catch(e){}
+  try{var r=await fetch('/templates');var b=await r.json();TPL=b.templates||[];
+      TPL.forEach(function(t){if(t.min_vram)REC_VRAM[t.name]=t.min_vram;});}catch(e){TPL=[];}   // server is the source of truth
+  S._cat='all';catChips();tCards();renderMyTpls();
+  // deep links + draft
+  var qs=new URLSearchParams(location.search);
+  var qt=qs.get('template'),qspec=qs.get('spec');
+  var draft=null;try{draft=JSON.parse(sessionStorage.getItem('pb_launch_draft')||'null');}catch(e){}
+  if(qt&&TPL.filter(function(x){return x.name===qt;})[0]){pickTpl('app',qt);}
+  else if(qspec){S.type='code';S.template=null;
+    try{var sr=await fetch('/marketplace/specs/'+encodeURIComponent(qspec));if(sr.ok){var sd=await sr.json();sd.id=qspec;S.spec=sd;}}catch(e){}
+    tCards();tDetail();renderCompute();renderConfig();unlock(3);refreshCost();
+    el('sec2').scrollIntoView({behavior:'smooth',block:'nearest'});}
+  else if(draft&&draft.type){
+    S.type=draft.type;S.template=draft.template;S.model=draft.model||'';S.hours=draft.hours||1;S.region=draft.region||'';S.maxPrice=draft.maxPrice||'';S.minVram=draft.minVram||0;S.sort=draft.sort||'price';S.place=draft.place||'auto';
+    // Restore the exact host the buyer had chosen (custom code, or an app "Browse hosts" pick)
+    if(draft.spec){try{var dsr=await fetch('/marketplace/specs/'+encodeURIComponent(draft.spec));if(dsr.ok){var dsd=await dsr.json();dsd.id=draft.spec;S.spec=dsd;}}catch(e){}}
+    tCards();tDetail();renderCompute();renderConfig();
+    if(draft.type==='app'){unlock(3);refreshCost();}
+    else if(S.spec){unlock(3);refreshCost();}   // code draft with its host back → straight to pricing
+    else{unlock(2);}                             // code draft without a host → resume at host choice
+  }
+ }
+ boot();
+})();
+</script>""")
 
 CLUSTER_HTML = _page("Petabyte — distributed compute",
     desc="Run one job across many GPUs on different machines, wired into a single cluster over the VPN — or bring your own scheduler (Slurm/MPI/Ray) and use Petabyte as another provider.",
@@ -3384,7 +3953,6 @@ async function clVpnDownload(id){
 }
 document.addEventListener('DOMContentLoaded',clusterAvail);
 </script>""")
-
 
 CONSOLE_HTML = _page("Petabyte — console",
     desc="Your Petabyte control plane: running compute, jobs, wallet and spend, available GPUs, clusters, API keys, teams and hosting — one operational view.",

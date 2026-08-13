@@ -130,11 +130,11 @@ from auth import create_access_token, verify_token
 from deps import oauth2_scheme, get_current_user, _username, api_key_user  # noqa: F401
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
-                   NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML)
+                   NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML, LAUNCH_HTML)
 from web_routes import router as web_router     # static public pages (extracted router)
 from trust_routes import router as trust_router  # trust/transparency API (extracted router)
 from models_routes import router as models_router  # model hub: discover/pull/manage (extracted router)
-from templates_registry import TEMPLATES, public_catalog
+from templates_registry import TEMPLATES, public_catalog, template_min_vram
 from router import select_plan
 from payout_providers import screen, get_provider
 import notifications
@@ -985,6 +985,7 @@ class QuickLaunchModel(BaseModel):
     hours: int = Field(default=1, gt=0, le=8760)
     max_price_per_hour: Optional[float] = None
     region: Optional[str] = None
+    spec_id: Optional[str] = None               # pin to a host the buyer explicitly chose
     template_params: Optional[dict] = None
 
 
@@ -1447,6 +1448,15 @@ app.include_router(web_router)
 # Model hub: discover / download / manage open models (pages + /api/models/*). Backed by the
 # provider-independent `modelhub` library — the same code the `petabyte model` CLI uses.
 app.include_router(models_router)
+
+@app.get("/launch", response_class=HTMLResponse)
+def launch_page():
+    """Guided 'Launch Compute' experience (AWS-EC2-style): choose a curated workload
+    template (or custom code), a compatible verified host, review the server-priced cost,
+    and launch. Config is read client-side from ?template=/?spec= query and sessionStorage;
+    every price/placement/charge is recomputed server-side (/estimate, /route, /launch,
+    /payments/*)."""
+    return HTMLResponse(LAUNCH_HTML)
 
 def _find_installer(name: str):
     """Locate a bundled installer script across dev + deployed layouts.
@@ -3858,7 +3868,7 @@ def seller_dashboard(user: dict = Depends(get_current_user), db: Session = Depen
         elif median and D(sp.price_per_hour) > median * D("1.25"):
             blockers.append({"node": sp.public_id,
                              "issue": f"Priced {int((D(sp.price_per_hour)/median - 1) * 100)}% "
-                                      f"above the market median (${median}/hr) — buyers pick "
+                                      f"above the market median (${qc(median)}/hr) — buyers pick "
                                       f"the cheapest node that fits.",
                              "fix": f"Try ${qc(median)}/hr, or turn on auto-pricing."})
         elif not me.can_accept_paid_jobs:
@@ -3903,6 +3913,7 @@ def estimate_cost(data: EstimateModel, db: Session = Depends(get_db)):
     cost on a comparable public cloud, but only where we can compare like for like."""
     spec = None
     if data.spec_id:
+        from db import get_spec_by_public_id
         spec = get_spec_by_public_id(db, data.spec_id)
     else:
         # same selection the router would make: cheapest eligible live node
@@ -3913,6 +3924,14 @@ def estimate_cost(data: EstimateModel, db: Session = Depends(get_db)):
             tpl = TEMPLATES.get(data.template)
             if tpl and tpl.get("gpu"):
                 cands = [s for s in cands if s.gpu_model]
+            # Price the host placement will actually use: a template with a VRAM
+            # recommendation is only ever placed on a host that meets it, so a
+            # known-too-small GPU must not set the quoted price. Hosts that never
+            # reported VRAM are left in (we can't prove them too small — same as
+            # before this gate existed) to stay consistent with /launch.
+            mv = template_min_vram(data.template)
+            if mv:
+                cands = [s for s in cands if (not s.vram_gb) or s.vram_gb >= mv]
         spec = min(cands, key=lambda s: D(s.price_per_hour)) if cands else None
 
     if not spec:
@@ -7481,6 +7500,7 @@ def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
 
     from db import SellerSpec
     needs_gpu = TEMPLATES[data.template].get("gpu", False)
+    min_vram = template_min_vram(data.template)
     candidates = []
     for spec in db.query(SellerSpec).filter(SellerSpec.attested == True).all():  # noqa: E712
         if not spec_is_live(spec) or spec.available_units < 1:
@@ -7491,6 +7511,13 @@ def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
         if not owner or not owner.can_accept_paid_jobs or owner.reputation < MIN_REPUTATION:
             continue
         if needs_gpu and not spec.gpu_model:
+            continue
+        # Never place a memory-hungry template (vLLM, TensorRT-LLM, …) on a GPU we KNOW
+        # is too small. This gates both auto-placement and an explicitly pinned host: a
+        # pinned host that fails here is simply absent from candidates, producing a clear
+        # 409 before any funds are reserved. A host that never reported vram_gb is left in
+        # (we can't prove it too small — same as before this gate existed).
+        if min_vram and spec.vram_gb and spec.vram_gb < min_vram:
             continue
         if data.region and ((spec.region or "") != data.region):
             continue
@@ -7505,12 +7532,28 @@ def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
     # Deterministic: cheapest wins, equal prices break on the stable spec id — the
     # same inventory must always produce the same placement (and the same audit row).
     candidates.sort(key=lambda s: (s.price_per_hour, s.id))
-    spec = candidates[0]
+    pinned = None
+    if data.spec_id:
+        # Honor an explicit "Browse hosts" choice: place on exactly that host — but only
+        # if it passed every eligibility check above (live, capacity, not self, reputation,
+        # GPU, region, price, VRAM). Otherwise fail clearly, before any money moves.
+        pinned = next((s for s in candidates
+                       if str(s.public_id) == str(data.spec_id)
+                       or str(s.id) == str(data.spec_id)), None)
+        if pinned is None:
+            raise HTTPException(status_code=409, detail=(
+                "The host you selected is no longer available or can't run this template "
+                "within your limits (capacity, region, price or VRAM). Nothing was "
+                "charged — pick another host or switch to auto-placement."))
+    spec = pinned or candidates[0]
 
     # Human-readable "why this node", plus the audit snapshot of every candidate.
     _total = (spec.jobs_completed or 0) + (spec.jobs_failed or 0)
     _sr = round(100.0 * (spec.jobs_completed or 0) / _total, 1) if _total else None
-    if len(candidates) > 1:
+    if pinned is not None:
+        _vs = (f"is the host you selected (${spec.price_per_hour:.2f}/hr) and it meets "
+               f"the template's requirements and your limits")
+    elif len(candidates) > 1:
         _next = candidates[1]
         _pct = round((1 - spec.price_per_hour / _next.price_per_hour) * 100) \
             if _next.price_per_hour else 0
@@ -7542,7 +7585,8 @@ def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
         db, source="launch", user_id=buyer.id,
         intent={"template": data.template, "hours": data.hours,
                 "region": data.region, "max_price_per_hour": data.max_price_per_hour,
-                "needs_gpu": needs_gpu},
+                "needs_gpu": needs_gpu, "min_vram": min_vram,
+                "pinned_spec_id": (data.spec_id if pinned is not None else None)},
         candidates=_snapshot, selected_spec_ids=[spec.id],
         explanation=routing_explanation, booking_id=booking["booking_id"])
     task = create_task_endpoint(

@@ -33,8 +33,8 @@ c = TestClient(main.app)
 
 PAGES = ["/", "/marketplace", "/pricing", "/install", "/security", "/developers",
          "/account", "/login", "/keys", "/status", "/catalog", "/gamers", "/artists",
-         "/privacy", "/terms", "/acceptable-use", "/demo", "/contact", "/console",
-         "/seller/payouts", "/buy/demo-spec",
+         "/privacy", "/terms", "/acceptable-use", "/demo", "/contact", "/app", "/console",
+         "/seller/payouts", "/buy/demo-spec", "/gpu/demo-spec", "/launch",
          "/models", "/models/installed", "/models/meta-llama/Llama-3.1-8B-Instruct"]   # HTML pages only; the rest are JSON APIs
 
 fail = 0

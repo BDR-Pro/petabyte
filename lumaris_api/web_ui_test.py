@@ -325,6 +325,13 @@ if ctx.get("public_id"):
        "buy_cancel" in body or "cancel" in body.lower())
     ok("buy page labels the runtime + code + card fields",
        all(x in body for x in ("Max runtime", "Code to run", "Card details")))
+    # cost transparency: the buyer must see a full cost summary BEFORE committing —
+    # machine, rate, runtime, compute cost, the platform fee, and an estimated total.
+    ok("buy page shows a pre-commit cost summary (machine/rate/runtime/total)",
+       all(x in body for x in ("Estimated cost", "Price per hour", "Max runtime",
+                               "Estimated compute cost", "Estimated total")))
+    ok("buy page discloses the platform fee in the cost summary (no hidden fees)",
+       "Platform fee" in body and "renderCost" in body)
     # data ground truth: the priced spec the page will fetch
     detail = client.get(f"/marketplace/specs/{ctx['public_id']}").json()
     ok("buy spec detail carries a price the page can show",
