@@ -2994,7 +2994,7 @@ LAUNCH_HTML = _page("Petabyte — launch compute",
  var DEF_MODEL={ollama:'llama3',vllm:'Qwen/Qwen2.5-1.5B-Instruct'};
  var DEFAULT_CODE=\"""" + DEFAULT_WORKLOAD + """\";
  var S={type:null,template:null,model:'',hours:1,spec:null,region:'',maxPrice:'',minVram:0,confidential:false,sort:'price',code:DEFAULT_CODE,place:'auto'};
- var TPL=[],SPECS=[],WALLET=null,EST=null,LAUNCHING=false;
+ var TPL=[],SPECS=[],WALLET=null,EST=null,LAUNCHING=false,EST_SEQ=0;
 
  function saveDraft(){try{var d={type:S.type,template:S.template,model:S.model,hours:S.hours,region:S.region,maxPrice:S.maxPrice,minVram:S.minVram,confidential:S.confidential,sort:S.sort,place:S.place,spec:S.spec?S.spec.id:null};sessionStorage.setItem('pb_launch_draft',JSON.stringify(d));}catch(e){}}
  // ---------- section locking ----------
@@ -3073,7 +3073,7 @@ LAUNCH_HTML = _page("Petabyte — launch compute",
     '</div>':'';
   var note=appMode&&S.place==='auto'?
     '<p class="mini" style="margin:6px 0 4px">Petabyte places this on the cheapest verified host that meets the template requirements and your limits below. You are charged that host&#39;s rate.</p>':
-    (appMode?'<p class="mini" style="margin:6px 0 4px">Previewing matching hosts. Managed templates are still placed server-side for reliability; your price reflects the selected class.</p>':
+    (appMode?'<p class="mini" style="margin:6px 0 4px">Pick the exact host this template runs on — your estimate and launch both use it. If it goes offline first, launch says so before anything is charged.</p>':
              '<p class="mini" style="margin:6px 0 4px">Pick the exact host your code runs on.</p>');
   var filters=
     '<div class="filterbar" style="margin:10px 0 4px">'+
@@ -3181,13 +3181,21 @@ LAUNCH_HTML = _page("Petabyte — launch compute",
   var cb=el('costbody');
   if(!canEstimate()){cb.innerHTML='<p class="mut" style="font-size:13px">'+(S.type?'Choose a host to price this run.':'Pick a workload to see pricing.')+'</p>';el('reviewactions').style.display='none';return;}
   cb.innerHTML='<div class="mut mono" style="font-size:13px;padding:6px 0">Pricing…</div>';
+  // Invalidate any in-flight estimate and lock launch until the fresh price lands, so a
+  // slower earlier response can never overwrite a newer one or leave a stale total launchable.
+  EST=null;renderReview();
   var body={hours:S.hours};
-  if(S.type==='code')body.spec_id=S.spec.id; else{body.template=S.template;}
+  if(S.type==='code'){body.spec_id=S.spec.id;}
+  else{body.template=S.template;if(S.place==='pick'&&S.spec)body.spec_id=S.spec.id;}   // honor the chosen host
+  var seq=++EST_SEQ;
   try{
    var r=await fetch('/estimate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+   if(seq!==EST_SEQ)return;                    // a newer estimate started; drop this one
    if(!r.ok){cb.innerHTML='<p class="mut" style="font-size:13px">'+(r.status===404?'No matching host is available right now.':'Could not price this yet.')+'</p>';el('reviewactions').style.display='none';return;}
-   EST=await r.json();
-   var mach=(S.type==='code'&&S.spec)?((S.spec.gpu_count>1?S.spec.gpu_count+'× ':'')+esc(S.spec.gpu_model)):(esc(EST.gpu_model||'CPU')+(S.place==='auto'?' (auto)':''));
+   var est=await r.json();
+   if(seq!==EST_SEQ)return;
+   EST=est;
+   var mach=(S.spec&&(S.type==='code'||S.place==='pick'))?((S.spec.gpu_count>1?S.spec.gpu_count+'× ':'')+esc(S.spec.gpu_model)):(esc(EST.gpu_model||'CPU')+' (auto)');
    var cloud=EST.cloud_comparison?('<div class="sumrow"><span class="k">A hyperscaler would cost</span><span class="v" style="color:var(--mut)">~'+mUSD(EST.cloud_comparison.reference_total)+'</span></div>'):'';
    cb.innerHTML=
     '<div class="sumrow"><span class="k">Workload</span><span class="v">'+(S.type==='code'?'Custom code':esc(S.template))+'</span></div>'+
@@ -3205,7 +3213,7 @@ LAUNCH_HTML = _page("Petabyte — launch compute",
    }
    el('reviewactions').style.display=authed()?'':'none';
    renderReview();unlock(4);
-  }catch(e){cb.innerHTML='<p class="mut" style="font-size:13px">Could not reach pricing.</p>';}
+  }catch(e){if(seq!==EST_SEQ)return;cb.innerHTML='<p class="mut" style="font-size:13px">Could not reach pricing.</p>';}
  }
 
  // ---------- 4. review ----------
@@ -3213,7 +3221,7 @@ LAUNCH_HTML = _page("Petabyte — launch compute",
   var b=el('reviewbody');if(!EST){b.innerHTML='<p class="mut" style="font-size:13px">Complete the steps above.</p>';return;}
   var rows=
     row('Workload',S.type==='code'?'Custom code (notebook)':esc(S.template)+(S.model?(' · model '+esc(S.model)):''))+
-    row('Machine',(S.type==='code'&&S.spec)?((S.spec.gpu_count>1?S.spec.gpu_count+'× ':'')+esc(S.spec.gpu_model)+' · '+(S.spec.vram_gb||0)+'GB · '+esc(S.spec.region||'')):(esc(EST.gpu_model||'CPU')+' · auto-placed · '+esc(EST.region||'')))+
+    row('Machine',(S.spec&&(S.type==='code'||S.place==='pick'))?((S.spec.gpu_count>1?S.spec.gpu_count+'× ':'')+esc(S.spec.gpu_model)+' · '+(S.spec.vram_gb||0)+'GB · '+esc(S.spec.region||'')):(esc(EST.gpu_model||'CPU')+' · auto-placed · '+esc(EST.region||'')))+
     row('Runtime',EST.hours+' hour(s) max')+
     row('Rate',mUSD(EST.price_per_hour)+'/hr')+
     row('Estimated total',mUSD(EST.total))+
@@ -3244,6 +3252,7 @@ LAUNCH_HTML = _page("Petabyte — launch compute",
   if(S.model)body.template_params={model:S.model};
   if(S.maxPrice)body.max_price_per_hour=Number(S.maxPrice);
   if(S.region)body.region=S.region;
+  if(S.place==='pick'&&S.spec)body.spec_id=S.spec.id;   // honor the buyer's explicit host choice
   var r=await api('/launch',{method:'POST',body:JSON.stringify(body)});
   if(r.status===401){LAUNCHING=false;location.href='/login';return;}
   if(r.status===402){LAUNCHING=false;if(btn){btn.disabled=false;btn.textContent='Launch compute →';}stage('Not enough balance.','<a class="btn btn-teal" href="/account" style="margin-top:6px">Add funds</a>');return;}
@@ -3337,7 +3346,8 @@ LAUNCH_HTML = _page("Petabyte — launch compute",
  async function boot(){
   if(!authed())el('lc_signedout').style.display='';
   try{var meR=await api('/me');if(meR.ok)WALLET={balance:meR.body.balance,earnings:meR.body.earnings};}catch(e){}
-  try{var r=await fetch('/templates');var b=await r.json();TPL=b.templates||[];}catch(e){TPL=[];}
+  try{var r=await fetch('/templates');var b=await r.json();TPL=b.templates||[];
+      TPL.forEach(function(t){if(t.min_vram)REC_VRAM[t.name]=t.min_vram;});}catch(e){TPL=[];}   // server is the source of truth
   S._cat='all';catChips();tCards();renderMyTpls();
   // deep links + draft
   var qs=new URLSearchParams(location.search);
@@ -3350,7 +3360,12 @@ LAUNCH_HTML = _page("Petabyte — launch compute",
     el('sec2').scrollIntoView({behavior:'smooth',block:'nearest'});}
   else if(draft&&draft.type){
     S.type=draft.type;S.template=draft.template;S.model=draft.model||'';S.hours=draft.hours||1;S.region=draft.region||'';S.maxPrice=draft.maxPrice||'';S.minVram=draft.minVram||0;S.sort=draft.sort||'price';S.place=draft.place||'auto';
-    tCards();tDetail();renderCompute();renderConfig();if(draft.type==='app'){unlock(3);refreshCost();}
+    // Restore the exact host the buyer had chosen (custom code, or an app "Browse hosts" pick)
+    if(draft.spec){try{var dsr=await fetch('/marketplace/specs/'+encodeURIComponent(draft.spec));if(dsr.ok){var dsd=await dsr.json();dsd.id=draft.spec;S.spec=dsd;}}catch(e){}}
+    tCards();tDetail();renderCompute();renderConfig();
+    if(draft.type==='app'){unlock(3);refreshCost();}
+    else if(S.spec){unlock(3);refreshCost();}   // code draft with its host back → straight to pricing
+    else{unlock(2);}                             // code draft without a host → resume at host choice
   }
  }
  boot();

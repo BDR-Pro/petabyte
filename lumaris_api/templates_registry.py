@@ -103,9 +103,23 @@ _KIND = {"blender": "render", "ffmpeg": "render", "comfyui": "art", "sd-webui": 
          "minecraft": "game", "valheim": "game", "factorio": "game",
          "jupyter": "notebook", "pytorch": "notebook"}
 
+# Recommended minimum VRAM (GB) to run each GPU template without exhausting GPU
+# memory. Placement — both auto-pick and an explicitly pinned host — filters out
+# hosts below this, so a memory-hungry template (vLLM, TensorRT-LLM) is never booked
+# onto a GPU that would OOM after funds are already reserved. Non-GPU templates are
+# absent (treated as 0). Keep in sync with REC_VRAM in the /launch UI.
+_MIN_VRAM = {"ollama": 16, "vllm": 24, "tensorrt-llm": 24, "comfyui": 12,
+             "ffmpeg": 8, "blender": 8, "jupyter": 16, "pytorch": 16, "sd-webui": 12}
+
+
+def template_min_vram(name):
+    """Recommended minimum VRAM in GB for a template; 0 when unknown or CPU-only."""
+    return int(_MIN_VRAM.get(name, 0) or 0)
+
 
 def public_catalog():
     return [{"name": k, "desc": v["desc"], "port": v["port"], "gpu": v["gpu"],
              "stateful": v.get("stateful", False), "kind": _KIND.get(k, "ai"),
+             "min_vram": _MIN_VRAM.get(k, 0),
              "egress": v.get("egress", "none")}      # default CLOSED
             for k, v in TEMPLATES.items()]
