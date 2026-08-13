@@ -3439,6 +3439,36 @@ def buyer_spend(user: dict = Depends(get_current_user), db: Session = Depends(ge
     }
 
 
+@app.get("/vms", tags=["compute"])
+def list_my_vms(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Every VM the signed-in buyer has launched, with its STABLE address + live status. Powers
+    the console; there was previously no way to list your own VMs (only GET /vm/{id})."""
+    me = get_user_by_username(db, _username(user))
+    vms = []
+    for vm in vm_routes_for_buyer(db, me.id):
+        vms.append({"vm_id": vm.id, "template": vm.template, "status": vm.status,
+                    "url": _vm_url(vm), "port": vm.app_port, "migrations": vm.migrations,
+                    "hourly_rate": D(vm.hourly_rate), "hours_left": _hours_left(vm),
+                    "created_at": vm.created_at.isoformat() if vm.created_at else None})
+    return {"vms": vms}
+
+
+@app.get("/clusters", tags=["compute"])
+def list_my_clusters(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Every distributed cluster the signed-in buyer has launched (status + rendezvous readiness).
+    Powers the console; complements GET /jobs/manifest/{id} (a single cluster)."""
+    from db import MultiNodeJob
+    me = get_user_by_username(db, _username(user))
+    rows = (db.query(MultiNodeJob)
+            .filter(MultiNodeJob.buyer_id == me.id, MultiNodeJob.kind == "distributed")
+            .order_by(MultiNodeJob.id.desc()).limit(50).all())
+    return {"clusters": [
+        {"job_id": j.id, "status": j.status, "world_size": j.total_segments,
+         "backend": j.backend, "rendezvous_ready": bool(j.master_addr),
+         "created_at": j.created_at.isoformat() if j.created_at else None,
+         "manifest_url": f"/jobs/manifest/{j.id}"} for j in rows]}
+
+
 @app.get("/onboarding", tags=["account"])
 def onboarding(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Where am I, and what do I do next?

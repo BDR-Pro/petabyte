@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from pages import (
     TRUST_HTML, STATUS_HTML, METRICS_HTML, BUY_HTML, SELLER_EARNINGS_HTML, TEMPLATES_HTML,
     DEMO_HTML, CONTACT_HTML, PRICING_HTML, SECURITY_HTML, PRIVACY_HTML, TERMS_HTML, AUP_HTML,
-    REFUNDS_HTML, GPU_DETAIL_HTML, GAMERS_HTML, ARTISTS_HTML, CLUSTER_HTML,
+    REFUNDS_HTML, GPU_DETAIL_HTML, GAMERS_HTML, ARTISTS_HTML, CLUSTER_HTML, CONSOLE_HTML,
 )
 
 router = APIRouter(tags=["web"])
@@ -71,6 +71,15 @@ def cluster_page():
     machines (one job, wired over the VPN), or export it to your own scheduler (Slurm/MPI/Ray).
     NOTE: the POST /distributed API endpoint is unaffected — this GET only serves the page."""
     return HTMLResponse(CLUSTER_HTML)
+
+
+@router.get("/console", response_class=HTMLResponse)
+def console_page():
+    """Unified operator console for the signed-in user: everything they launched as a BUYER
+    (VMs with stable addresses, distributed clusters, spend/runway) and a summary of everything
+    they host as a SELLER (nodes, earnings, with a link to the full earnings page). Data comes
+    from /me, /buyer/spend, /vms, /clusters, /seller/dashboard."""
+    return HTMLResponse(CONSOLE_HTML)
 
 
 @router.get("/seller/payouts", response_class=HTMLResponse)

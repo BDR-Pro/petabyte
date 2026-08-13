@@ -287,6 +287,7 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
 </div>
 <div class="navcta">
   <a class="signin" id="adminlink" href="/admin" style="display:none">Admin</a>
+  <a class="signin" id="consolelink" href="/console" style="display:none">Console</a>
   <a class="signin" id="mename" href="/account" style="display:none;color:var(--teal)"></a>
   <button class="themetoggle" onclick="toggleLang()" aria-label="Switch language" title="English / العربية" style="font-family:var(--mono);font-size:11px;font-weight:600" id="langbtn">AR</button>
   <button class="themetoggle" onclick="toggleTheme()" aria-label="Toggle light or dark theme" title="Toggle light / dark">
@@ -381,7 +382,7 @@ function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-the
 function signout(){try{localStorage.removeItem('pb_token');}catch(e){}location.href='/';}
 (function(){var si=document.getElementById('signinlink'),so=document.getElementById('signoutlink');
  if(authed()){if(si)si.style.display='none';if(so)so.style.display='';}else{if(si)si.style.display='';if(so)so.style.display='none';}})();
-(async function(){try{if(authed()){var r=await api('/me');if(r.ok){var m=document.getElementById('mename');if(m){m.textContent='● '+r.body.username;m.style.display='';}
+(async function(){try{if(authed()){var cl=document.getElementById('consolelink');if(cl)cl.style.display='';var r=await api('/me');if(r.ok){var m=document.getElementById('mename');if(m){m.textContent='● '+r.body.username;m.style.display='';}
  if(r.body.is_admin){var a=document.getElementById('adminlink');if(a)a.style.display='';}}}}catch(e){}})();
 window.PBICONS={
  blender:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>',
@@ -3302,6 +3303,84 @@ async function clVpnDownload(id){
  }catch(e){alert('Could not download the VPN config.');}
 }
 document.addEventListener('DOMContentLoaded',clusterAvail);
+</script>""")
+
+
+CONSOLE_HTML = _page("Petabyte — console",
+    desc="Your operator console: everything you launched (VMs, clusters, spend, receipts) and everything you host (nodes, disk rental, earnings) in one place.",
+    path="/console", body="""
+<div class="wrap" style="padding:40px 24px 44px;max-width:1000px">
+  <div id="pbtestmode"></div>
+  <div class="eyebrow"><span class="dot"></span> console</div>
+  <h1 style="font-size:clamp(26px,3.6vw,38px);margin:14px 0 6px">Your <span class="grad-teal">console</span></h1>
+  <p class="mut" id="c_signedout" style="display:none">Please <a class="teal" href="/login">sign in</a> to see your console.</p>
+  <div id="c_main" style="display:none">
+    <div class="stats" id="c_wallet" style="margin-top:16px"></div>
+    <div id="c_buyer"></div>
+    <div id="c_seller" style="display:none"></div>
+  </div>
+</div>
+<script>
+function cD2(x){return '$'+Number(x||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function cBadge(s){var ok=(s==='running'||s==='complete'||s==='online')?' ok':'';return '<span class="badge'+ok+'">'+esc(s||'')+'</span>';}
+async function consoleLoad(){
+  if(typeof authed==='function' && !authed()){document.getElementById('c_signedout').style.display='';return;}
+  document.getElementById('c_main').style.display='';
+  var me=((await api('/me'))||{}).body||{};
+  document.getElementById('c_wallet').innerHTML=
+    '<div class="stat"><div class="n teal">'+cD2(me.balance)+'</div><div class="l">Wallet balance</div></div>'+
+    '<div class="stat"><div class="n">'+cD2(me.earnings)+'</div><div class="l">Earnings</div></div>'+
+    '<div class="stat"><div class="n">'+(me.nodes||0)+'</div><div class="l">Your nodes</div></div>'+
+    '<div class="stat"><div class="n" style="text-transform:capitalize">'+esc(me.role||'buyer')+'</div><div class="l">Role</div></div>';
+  consoleBuyer();
+  if((me.nodes||0)>0) consoleSeller();
+}
+async function consoleBuyer(){
+  var sp=((await api('/buyer/spend'))||{}).body||{};
+  var vms=(((await api('/vms'))||{}).body||{}).vms||[];
+  var cls=(((await api('/clusters'))||{}).body||{}).clusters||[];
+  var spendStrip='<div class="stats">'+
+    '<div class="stat"><div class="n amber">'+cD2(sp.burn_rate_per_hour)+'/hr</div><div class="l">Burn rate</div></div>'+
+    '<div class="stat"><div class="n">'+(sp.active_instances||0)+'</div><div class="l">Active VMs</div></div>'+
+    '<div class="stat"><div class="n">'+cD2(sp.in_escrow)+'</div><div class="l">In escrow</div></div>'+
+    '<div class="stat"><div class="n">'+(sp.hours_of_runway!=null?sp.hours_of_runway+'h':'&#8734;')+'</div><div class="l">Runway</div></div>'+
+   '</div>';
+  var vmRows=vms.length?vms.map(function(v){var u=v.url||{};return '<tr>'+
+      '<td class="mono">'+esc(v.template||'vm')+'</td>'+
+      '<td>'+cBadge(v.status)+'</td>'+
+      '<td class="mono" style="font-size:11px">'+esc(u.hostname||u.id||'')+'</td>'+
+      '<td class="mono">'+(v.migrations?('moved '+v.migrations+'&times;'):'—')+'</td>'+
+      '<td class="mono">'+(v.hours_left!=null?v.hours_left+'h':'—')+'</td>'+
+    '</tr>';}).join(''):'<tr><td colspan=5 class="mut mono" style="padding:14px;text-align:center">No VMs yet. <a class="teal" href="/marketplace">Rent a GPU →</a></td></tr>';
+  var clRows=cls.length?cls.map(function(j){return '<tr>'+
+      '<td class="mono">#'+j.job_id+'</td>'+
+      '<td>'+cBadge(j.status)+'</td>'+
+      '<td class="mono">'+j.world_size+'&times; '+esc(j.backend||'')+'</td>'+
+      '<td>'+(j.rendezvous_ready?'<span class="badge ok">ready</span>':'<span class="badge">forming</span>')+'</td>'+
+    '</tr>';}).join(''):'<tr><td colspan=4 class="mut mono" style="padding:14px;text-align:center">No clusters yet. <a class="teal" href="/cluster">Form one →</a></td></tr>';
+  document.getElementById('c_buyer').innerHTML=
+    '<div class="card" style="margin-top:16px"><div class="lbl">Spending</div>'+spendStrip+
+      '<p class="mini" style="margin-top:8px">Live rentals burn every hour. <a class="teal" href="/wallet">Add funds →</a></p></div>'+
+    '<div class="card" style="margin-top:16px"><div class="lbl">Your VMs <span class="mut" style="font-weight:400">— the address stays the same even if the node fails over</span></div>'+
+      '<div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>Template</th><th>Status</th><th>Address</th><th>Failover</th><th>Left</th></tr></thead><tbody>'+vmRows+'</tbody></table></div></div>'+
+    '<div class="card" style="margin-top:16px"><div class="lbl">Your distributed clusters</div>'+
+      '<div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>Job</th><th>Status</th><th>Size</th><th>Rendezvous</th></tr></thead><tbody>'+clRows+'</tbody></table></div>'+
+      '<p class="mini" style="margin-top:8px"><a class="teal" href="/cluster">Launch a cluster →</a></p></div>';
+}
+async function consoleSeller(){
+  var r=await api('/seller/dashboard');if(!r.ok)return;var ns=(r.body||{}).nodes||[];
+  var online=ns.filter(function(n){return n.online;}).length;
+  var earned=ns.reduce(function(a,n){return a+Number(n.earned_total||0);},0);
+  var sec=document.getElementById('c_seller');sec.style.display='';
+  sec.innerHTML='<div class="card" style="margin-top:16px"><div class="lbl">As a host</div>'+
+    '<div class="stats" style="margin-top:10px">'+
+      '<div class="stat"><div class="n">'+ns.length+'</div><div class="l">Nodes</div></div>'+
+      '<div class="stat"><div class="n teal">'+online+'</div><div class="l">Online</div></div>'+
+      '<div class="stat"><div class="n">'+cD2(earned)+'</div><div class="l">Earned</div></div>'+
+    '</div>'+
+    '<p class="mini" style="margin-top:10px">Manage your nodes, <b>spare-disk rental</b>, and payouts on your <a class="teal" href="/seller/payouts">earnings page →</a></p></div>';
+}
+consoleLoad();
 </script>""")
 
 
