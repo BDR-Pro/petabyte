@@ -2248,14 +2248,24 @@ def _create_all_resilient():
         except (ProgrammingError, IntegrityError, OperationalError) as e:
             if "already exists" not in str(e).lower():
                 raise
-            # Drop the orphaned sequence ONLY when the table itself is genuinely absent, then retry.
-            try:
-                with engine.begin() as conn:
-                    if not _inspect(conn).has_table(table.name):
-                        conn.execute(_text(f'DROP SEQUENCE IF EXISTS "{table.name}_id_seq" CASCADE'))
-                table.create(bind=engine, checkfirst=True)
-            except Exception:  # noqa: BLE001
-                log.warning("schema: could not create table %s (continuing): %s", table.name, e)
+            # Benign "already exists": most often an ORPHANED SERIAL sequence (the sequence is
+            # present but its table is absent, from a create that failed mid-way). Drop the orphan
+            # ONLY when the table is genuinely missing, then retry the create. Any failure in the
+            # drop or the retry now PROPAGATES — we must not swallow it and boot on a half-built
+            # schema.
+            log.warning("schema: healing orphaned sequence for %s and retrying create: %s",
+                        table.name, e)
+            with engine.begin() as conn:
+                if not _inspect(conn).has_table(table.name):
+                    conn.execute(_text(f'DROP SEQUENCE IF EXISTS "{table.name}_id_seq" CASCADE'))
+            table.create(bind=engine, checkfirst=True)
+            # Fail closed: if recovery still did not produce the table, that is terminal. Returning
+            # here would let init_db() "succeed" with the table absent, so later queries error out
+            # and writes are silently discarded — worse than failing loudly at boot.
+            if not _inspect(engine).has_table(table.name):
+                raise RuntimeError(
+                    f"schema: table {table.name!r} is still missing after orphan-sequence "
+                    "recovery; refusing to start with an incomplete schema") from e
 
 
 def _backfill_public_ids():
