@@ -2257,7 +2257,12 @@ def _create_all_resilient():
                         table.name, e)
             with engine.begin() as conn:
                 if not _inspect(conn).has_table(table.name):
-                    conn.execute(_text(f'DROP SEQUENCE IF EXISTS "{table.name}_id_seq" CASCADE'))
+                    # RESTRICT (the default — no CASCADE): a genuinely orphaned SERIAL sequence has
+                    # no dependents, so it drops cleanly. If something else DOES depend on it (e.g.
+                    # another table's column default references this sequence name), RESTRICT refuses
+                    # and the error propagates — we fail closed rather than silently dropping another
+                    # table's default and changing the schema contract.
+                    conn.execute(_text(f'DROP SEQUENCE IF EXISTS "{table.name}_id_seq"'))
             table.create(bind=engine, checkfirst=True)
             # Fail closed: if recovery still did not produce the table, that is terminal. Returning
             # here would let init_db() "succeed" with the table absent, so later queries error out
