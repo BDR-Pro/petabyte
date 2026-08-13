@@ -13,6 +13,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 from decimal import Decimal
@@ -63,6 +64,7 @@ from utils import (
     gen_wg_keypair, build_client_wg_config, apply_peer_to_interface,
     gen_secure_api_key, decode_api_key, verify_attestation, verify_signed_proof,
     seal_secret, open_secret,
+    s3_put_bytes, s3_get_bytes, s3_delete, s3_exists,
 )
 import totp
 from db import (
@@ -96,6 +98,9 @@ from db import (
     set_org_member_role, remove_org_member,
     list_audit_for_actor, list_audit_for_org, verify_audit_chain,
     set_totp_secret, enable_totp, disable_totp, hash_backup_code, consume_backup_code,
+    create_volume, get_volume, list_volumes, volume_blob_shas, volume_blob_exists,
+    register_volume_blob, plan_snapshot, finalize_snapshot, list_snapshots, get_snapshot,
+    restore_manifest, delete_volume,
     org_deposit, try_org_debit, org_refund, org_usage,
     retry_task, set_task_progress, add_task_log, get_task_logs,
     set_benchmark, create_benchmark_task, org_analytics,
@@ -1081,6 +1086,58 @@ class TotpEnableModel(BaseModel):
 class TotpDisableModel(BaseModel):
     password: str
     code: Optional[str] = None
+
+
+# ---- Persistent volumes (content-addressed, incremental snapshots) ----
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+class VolumeCreateModel(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    size_limit_gb: Optional[int] = Field(default=None, ge=1, le=1_000_000)
+
+    @field_validator("name")
+    @classmethod
+    def _safe_name(cls, v: str) -> str:
+        return _clean_label(v, field="volume name", maxlen=80, required=True)
+
+
+class SnapshotFileModel(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+    sha256: str
+    size: int = Field(ge=0, le=5_000_000_000_000)   # per-file logical size (<=5 TB)
+
+    @field_validator("sha256")
+    @classmethod
+    def _hex(cls, v: str) -> str:
+        v = str(v or "").strip().lower()
+        if not _SHA256_RE.match(v):
+            raise ValueError("sha256 must be 64 lowercase hex characters")
+        return v
+
+    @field_validator("path")
+    @classmethod
+    def _path(cls, v: str) -> str:
+        v = str(v or "").strip()
+        if not v or "\x00" in v:
+            raise ValueError("path is required")
+        return v
+
+
+class SnapshotPlanModel(BaseModel):
+    # A snapshot manifest is bounded so a single request can't enumerate an unbounded file set.
+    files: list[SnapshotFileModel] = Field(max_length=200_000)
+
+
+class SnapshotCreateModel(BaseModel):
+    files: list[SnapshotFileModel] = Field(max_length=200_000)
+    label: Optional[str] = Field(default=None, max_length=120)
+    vm_id: Optional[str] = Field(default=None, max_length=120)
+
+    @field_validator("label", "vm_id")
+    @classmethod
+    def _safe(cls, v):
+        return _clean_label(v, field="label", maxlen=120, required=False) if v else v
 
 
 class OrgDepositModel(BaseModel):
@@ -8054,6 +8111,231 @@ def totp_disable_endpoint(data: TotpDisableModel, user: dict = Depends(get_curre
     disable_totp(db, me)
     audit(db, "2fa.disabled", actor=me, resource_type="user", resource_id=me.username)
     return {"status": "ok", "enabled": False}
+
+
+# ============================ PERSISTENT VOLUMES (incremental) ============================
+# Buyer-owned storage that outlives any single VM. Snapshots are CONTENT-ADDRESSED and
+# INCREMENTAL: files are chunked at file granularity by their sha256, identical/unchanged
+# content is stored exactly once, and each new snapshot only uploads the DELTA (the blobs it
+# doesn't already have). Restoring "since" an earlier snapshot returns only the changed files.
+# This is deliberately NOT a full-disk mirror — you pay for unique bytes, not for every copy.
+#
+# Two-phase write (agent/CLI side):
+#   1. POST /volumes/{id}/snapshot/plan  -> which blobs are MISSING (the delta to upload)
+#   2. PUT  /volumes/{id}/blobs/{sha256} -> upload each missing blob's bytes (sha-verified)
+#   3. POST /volumes/{id}/snapshot       -> record the manifest; delta_bytes is what was new
+# Restore (any later VM):
+#   GET /volumes/{id}/snapshots/{sid}/restore[?since=<sid>] -> manifest + per-blob download path
+
+VOLUME_MAX_BLOB_MB = int(os.getenv("VOLUME_MAX_BLOB_MB", "1024"))   # cap for the through-API path
+
+
+def _volume_blob_key(buyer_id: int, volume_id: int, sha256: str) -> str:
+    """Object-storage key for one content blob. Namespaced per buyer+volume so a sha collision
+    across tenants can never cross-read, and so deleting a volume is a clean prefix wipe."""
+    return f"volumes/{buyer_id}/{volume_id}/blobs/{sha256}"
+
+
+def _require_object_storage():
+    if not os.getenv("S3_BUCKET"):
+        raise HTTPException(status_code=503, detail=(
+            "Object storage is not configured on this deployment (set S3_BUCKET). "
+            "Volumes require object storage."))
+
+
+def _owned_volume(db, me, volume_id: int):
+    """Load a volume and enforce ownership. Returns the Volume or raises 404 (we 404 rather than
+    403 on someone else's id so volume ids aren't enumerable across tenants)."""
+    v = get_volume(db, volume_id)
+    if not v or v.buyer_id != me.id:
+        raise HTTPException(status_code=404, detail="Volume not found")
+    return v
+
+
+@app.post("/volumes", tags=["storage"])
+def create_volume_endpoint(data: VolumeCreateModel, request: Request,
+                           user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Create a persistent volume for the signed-in buyer."""
+    me = get_user_by_username(db, _username(user))
+    v = create_volume(db, me, data.name, size_limit_gb=data.size_limit_gb)
+    audit(db, "volume.create", actor=me, resource_type="volume", resource_id=v.id,
+          ip=_client_ip(request), detail={"name": v.name, "size_limit_gb": v.size_limit_gb})
+    return {"status": "ok", "id": v.id, "name": v.name, "size_limit_gb": v.size_limit_gb,
+            "bytes_stored": v.bytes_stored, "snapshots": v.snapshot_count}
+
+
+@app.get("/volumes", tags=["storage"])
+def list_volumes_endpoint(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The signed-in buyer's volumes (newest first) with real deduplicated bytes held."""
+    me = get_user_by_username(db, _username(user))
+    return {"volumes": list_volumes(db, me.id)}
+
+
+@app.get("/volumes/{volume_id}", tags=["storage"])
+def get_volume_endpoint(volume_id: int, user: dict = Depends(get_current_user),
+                        db: Session = Depends(get_db)):
+    """One volume with its snapshots. `logical_bytes` is what the newest snapshot represents;
+    `bytes_stored` is what we actually keep after dedup — the gap is the savings."""
+    me = get_user_by_username(db, _username(user))
+    v = _owned_volume(db, me, volume_id)
+    snaps = list_snapshots(db, volume_id)
+    logical = snaps[0]["total_bytes"] if snaps else 0
+    return {"id": v.id, "name": v.name, "size_limit_gb": v.size_limit_gb,
+            "bytes_stored": v.bytes_stored, "snapshot_count": v.snapshot_count,
+            "logical_bytes": logical,
+            "dedup_saved_bytes": max(0, sum(s["total_bytes"] for s in snaps) - v.bytes_stored),
+            "created_at": v.created_at.isoformat() if v.created_at else None,
+            "snapshots": snaps}
+
+
+@app.delete("/volumes/{volume_id}", tags=["storage"])
+def delete_volume_endpoint(volume_id: int, request: Request,
+                           user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Delete a volume, all its snapshots, and every content blob it held (from object storage)."""
+    me = get_user_by_username(db, _username(user))
+    v = _owned_volume(db, me, volume_id)
+    _require_object_storage()
+    shas = delete_volume(db, v)
+    removed = 0
+    for sha in shas:
+        try:
+            s3_delete(_volume_blob_key(me.id, volume_id, sha))
+            removed += 1
+        except Exception:  # noqa: BLE001 — index row is already gone; a stray object is harmless
+            pass
+    audit(db, "volume.delete", actor=me, resource_type="volume", resource_id=volume_id,
+          ip=_client_ip(request), detail={"blobs_removed": removed})
+    return {"status": "ok", "id": volume_id, "blobs_removed": removed}
+
+
+@app.post("/volumes/{volume_id}/snapshot/plan", tags=["storage"])
+def plan_snapshot_endpoint(volume_id: int, data: SnapshotPlanModel,
+                           user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Given the manifest you WANT to snapshot, return which blobs are missing (the delta to
+    upload) vs. already held (deduped). Only the missing blobs need to be PUT."""
+    me = get_user_by_username(db, _username(user))
+    _owned_volume(db, me, volume_id)
+    files = [f.model_dump() for f in data.files]
+    plan = plan_snapshot(db, volume_id, files)
+    for m in plan["missing"]:
+        m["upload_path"] = f"/volumes/{volume_id}/blobs/{m['sha256']}"
+    return plan
+
+
+@app.put("/volumes/{volume_id}/blobs/{sha256}", tags=["storage"])
+async def put_volume_blob(volume_id: int, sha256: str, request: Request,
+                          user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Upload one content blob's bytes. The server verifies sha256(body) matches the URL — content
+    addressing is enforced server-side, so a client can't mislabel content. Idempotent: an
+    already-stored blob is a no-op (deduped)."""
+    me = get_user_by_username(db, _username(user))
+    v = _owned_volume(db, me, volume_id)
+    _require_object_storage()
+    sha = (sha256 or "").strip().lower()
+    if not _SHA256_RE.match(sha):
+        raise HTTPException(status_code=400, detail="sha256 must be 64 lowercase hex characters")
+    max_bytes = VOLUME_MAX_BLOB_MB * 1024 * 1024
+    clen = request.headers.get("content-length")
+    if clen and clen.isdigit() and int(clen) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"Blob exceeds {VOLUME_MAX_BLOB_MB} MB limit")
+    body = await request.body()
+    if len(body) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"Blob exceeds {VOLUME_MAX_BLOB_MB} MB limit")
+    actual = hashlib.sha256(body).hexdigest()
+    if actual != sha:
+        raise HTTPException(status_code=400, detail={
+            "code": "SHA_MISMATCH", "message": "Body sha256 does not match the URL",
+            "expected": sha, "actual": actual})
+    key = _volume_blob_key(me.id, volume_id, sha)
+    # Already held if it's indexed (from a prior snapshot) OR its bytes are already in storage
+    # (uploaded earlier in this snapshot). Content addressing makes a re-PUT a safe no-op.
+    already = volume_blob_exists(db, volume_id, sha) or s3_exists(key)
+    if not already:
+        if v.size_limit_gb:
+            limit = int(v.size_limit_gb) * 1024 * 1024 * 1024
+            if int(v.bytes_stored or 0) + len(body) > limit:
+                raise HTTPException(status_code=413, detail="Volume size limit reached")
+        s3_put_bytes(key, body)
+    return {"status": "ok", "sha256": sha, "size": len(body), "deduped": already}
+
+
+@app.get("/volumes/{volume_id}/blobs/{sha256}", tags=["storage"])
+def get_volume_blob(volume_id: int, sha256: str, user: dict = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """Download one content blob's bytes (to reconstruct a file during restore)."""
+    me = get_user_by_username(db, _username(user))
+    _owned_volume(db, me, volume_id)
+    _require_object_storage()
+    sha = (sha256 or "").strip().lower()
+    if not _SHA256_RE.match(sha):
+        raise HTTPException(status_code=400, detail="bad sha256")
+    if not volume_blob_exists(db, volume_id, sha):
+        raise HTTPException(status_code=404, detail="Blob not found in this volume")
+    try:
+        data = s3_get_bytes(_volume_blob_key(me.id, volume_id, sha))
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=404, detail="Blob object is missing from storage")
+    return Response(content=data, media_type="application/octet-stream")
+
+
+@app.post("/volumes/{volume_id}/snapshot", tags=["storage"])
+def create_snapshot_endpoint(volume_id: int, data: SnapshotCreateModel, request: Request,
+                             user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Record a snapshot from a manifest. Every referenced blob must already be in object storage
+    (uploaded now, or held from a previous snapshot). `delta_bytes` is the NEW unique bytes this
+    snapshot added — that's all you're billed for."""
+    me = get_user_by_username(db, _username(user))
+    v = _owned_volume(db, me, volume_id)
+    _require_object_storage()
+    files = [f.model_dump() for f in data.files]
+    # Enforce the size cap on the delta this snapshot would commit (new unique bytes only).
+    plan = plan_snapshot(db, volume_id, files)
+    if v.size_limit_gb:
+        limit = int(v.size_limit_gb) * 1024 * 1024 * 1024
+        if int(v.bytes_stored or 0) + int(plan["missing_bytes"]) > limit:
+            raise HTTPException(status_code=413, detail="Volume size limit reached")
+    # present_shas = blobs physically in object storage for this volume (indexed OR just-uploaded).
+    present = set(volume_blob_shas(db, volume_id))
+    for m in plan["missing"]:
+        try:
+            s3_get_bytes(_volume_blob_key(me.id, volume_id, m["sha256"]))
+            present.add(m["sha256"])
+        except Exception:  # noqa: BLE001 — a referenced blob was never uploaded
+            pass
+    try:
+        snap = finalize_snapshot(db, v, files, present, label=data.label, vm_id=data.vm_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"code": "BLOB_MISSING", "message": str(e)})
+    audit(db, "volume.snapshot", actor=me, resource_type="volume", resource_id=volume_id,
+          ip=_client_ip(request),
+          detail={"seq": snap.seq, "delta_bytes": snap.delta_bytes, "files": len(files)})
+    return {"status": "ok", "id": snap.id, "seq": snap.seq, "label": snap.label,
+            "files": len(files), "total_bytes": snap.total_bytes, "delta_bytes": snap.delta_bytes,
+            "reused_blobs": plan["reused_blobs"], "bytes_stored": v.bytes_stored}
+
+
+@app.get("/volumes/{volume_id}/snapshots/{snapshot_id}/restore", tags=["storage"])
+def restore_snapshot_endpoint(volume_id: int, snapshot_id: int,
+                              since: Optional[int] = Query(None),
+                              user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The manifest to reconstruct a snapshot, each file annotated with its blob download path.
+    With `since=<earlier snapshot id>`, return ONLY the files whose content changed since then —
+    the delta the client still needs (it already has the rest locally). 'Once a user needs it,
+    send the delta.'"""
+    me = get_user_by_username(db, _username(user))
+    _owned_volume(db, me, volume_id)
+    snap = get_snapshot(db, volume_id, snapshot_id)
+    if not snap:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    base = None
+    if since is not None:
+        base = get_snapshot(db, volume_id, since)
+        if not base:
+            raise HTTPException(status_code=404, detail="`since` snapshot not found")
+    res = restore_manifest(db, volume_id, snap, since=base)
+    for f in res["files"]:
+        f["download_path"] = f"/volumes/{volume_id}/blobs/{f['sha256']}"
+    return res
 
 
 @app.post("/keys/{jti}/revoke")

@@ -438,6 +438,19 @@ def s3_get_bytes(key: str) -> bytes:
     return _s3_client().get_object(Bucket=bucket, Key=key)["Body"].read()
 
 
+def s3_exists(key: str) -> bool:
+    """True if an object exists at s3://<S3_BUCKET>/<key>, without downloading it. S3_STUB checks
+    the local file; real S3 uses a HEAD."""
+    bucket = _require_bucket()
+    if _s3_stub():
+        return os.path.exists(os.path.join(_s3_stub_root(bucket), key))
+    try:
+        _s3_client().head_object(Bucket=bucket, Key=key)
+        return True
+    except Exception:  # noqa: BLE001 — 404/NoSuchKey -> not present
+        return False
+
+
 def s3_list_keys(prefix: str) -> list:
     """List object keys under a prefix. S3_STUB walks the local directory."""
     bucket = _require_bucket()

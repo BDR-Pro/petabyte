@@ -3494,6 +3494,7 @@ html[dir="rtl"] #c_code,html[dir="rtl"] .c_console{direction:ltr;text-align:left
       <a id="cnav-jobs" data-act="cGo" data-a1="jobs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h10"/></svg> Jobs</a>
       <a href="/catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v6H4zM4 15h10v4H4z"/></svg> Templates</a>
       <a id="cnav-clusters" data-act="cGo" data-a1="clusters"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7.5 7.5 11 16M16.5 7.5 13 16"/></svg> Clusters</a>
+      <a id="cnav-storage" data-act="cGo" data-a1="storage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg> Storage</a>
       <div class="cnav-grp">Account</div>
       <a id="cnav-billing" data-act="cGo" data-a1="billing"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/></svg> Wallet &amp; billing</a>
       <a id="cnav-access" data-act="cGo" data-a1="access"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="12" r="3.5"/><path d="M11 12h9M17 12v4"/></svg> API keys</a>
@@ -3569,6 +3570,18 @@ print(6 * 7)</textarea>
           </section>
         </section>
 
+        <section id="tab-storage" class="cpanel" style="display:none">
+          <p class="mut" style="font-size:13.5px;max-width:74ch">Persistent volumes outlive any single VM — keep datasets, checkpoints and model weights between runs. Snapshots are <b class="teal">incremental</b>: only the content that actually changed is uploaded, identical files are stored once, and a restore ships just the delta. You pay for unique bytes, not for a full-disk mirror.</p>
+          <div class="cmetrics" id="c_stor_metrics" style="margin-top:14px"></div>
+          <section class="csec" style="margin-top:14px;max-width:520px"><div class="csec-h"><h2>Create a volume</h2></div><div class="csec-b">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><input id="c_volname" placeholder="volume name (e.g. checkpoints)" style="flex:1;min-width:160px"/><input id="c_volsize" type="number" min="1" placeholder="size cap GB (optional)" style="width:170px" title="optional hard cap on unique bytes held"/><button class="cbtn pri" data-act="cVolCreate">Create</button></div>
+            <p class="mini" id="c_volmsg" style="margin-top:8px;text-transform:none;letter-spacing:0"></p>
+          </div></section>
+          <div class="panel" style="overflow:auto;margin-top:14px"><table class="tbl"><thead><tr><th>Volume</th><th>Stored (deduped)</th><th>Snapshots</th><th>Saved by dedup</th><th>Created</th><th></th></tr></thead><tbody id="c_volumes"><tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+          <div id="c_vol_detail" style="display:none;margin-top:16px"></div>
+          <p class="mini" style="margin:12px 2px;text-transform:none;letter-spacing:0">Snapshots are taken from a VM with the agent or CLI — <code>petabyte volume snapshot &lt;name&gt;</code> uploads only the delta. See the <a class="teal" href="/developers">developer docs</a>.</p>
+        </section>
+
         <section id="tab-billing" class="cpanel" style="display:none">
           <div class="cmetrics" id="c_bill_wallet" style="margin-bottom:16px"></div>
           <div style="display:flex;gap:16px;flex-wrap:wrap">
@@ -3632,7 +3645,7 @@ print(6 * 7)</textarea>
   </div>
 </div>
 <script>
-var CTABS=['overview','compute','jobs','clusters','billing','teams','access','seller'];
+var CTABS=['overview','compute','jobs','clusters','storage','billing','teams','access','seller'];
 var CLOADED={};
 function cD2(x){return '$'+Number(x||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
 function cInt(x){return Number(x||0).toLocaleString();}
@@ -3650,6 +3663,7 @@ var PAGEMETA={
  compute:{t:'Compute',s:'Run a job on the cheapest matching GPU, or manage running VMs.',a:[['Marketplace','href','/marketplace']]},
  jobs:{t:'Jobs',s:'Your reservations and their status.',a:[['Run a job','pri','compute']]},
  clusters:{t:'Clusters',s:'Multi-GPU distributed jobs across many machines.',a:[['Form a cluster','href','/cluster']]},
+ storage:{t:'Storage',s:'Persistent volumes with incremental, deduplicated snapshots.',a:[]},
  billing:{t:'Wallet & billing',s:'Balance, funding, payouts, receipts and referrals.',a:[]},
  access:{t:'API keys',s:'Programmatic access for CI, scripts and tools.',a:[]},
  teams:{t:'Teams',s:'Share a wallet and set budget caps.',a:[]},
@@ -3681,6 +3695,7 @@ function cLoadTab(name){
   else if(name==='compute')cCompute();
   else if(name==='jobs')cJobs();
   else if(name==='clusters')cClusters();
+  else if(name==='storage')cStorage();
   else if(name==='billing')cBilling();
   else if(name==='teams')cTeams();
   else if(name==='access')cAccess();
@@ -3866,6 +3881,61 @@ async function cClusters(){
      '<td data-l="Size" class="mono">'+j.world_size+'&times; '+esc(j.backend||'')+'</td>'+
      '<td data-l="Rendezvous">'+(j.rendezvous_ready?'<span class="badge ok">ready</span>':'<span class="badge">forming</span>')+'</td></tr>';
     }).join(''):'<tr><td colspan=4 class="mut mono" style="text-align:center;padding:16px">No clusters yet. <a class="teal" href="/cluster">Form one →</a></td></tr>';
+}
+
+function cBytes(n){n=Number(n||0);if(n<1024)return n+' B';var u=['KB','MB','GB','TB','PB'],i=-1;do{n/=1024;i++;}while(n>=1024&&i<u.length-1);return n.toFixed(n<10?1:0)+' '+u[i];}
+async function cStorage(){
+  var vs=(((await api('/volumes'))||{}).body||{}).volumes||[];
+  var totStored=vs.reduce(function(a,v){return a+Number(v.bytes_stored||0);},0);
+  var totSnaps=vs.reduce(function(a,v){return a+Number(v.snapshots||0);},0);
+  var mel=document.getElementById('c_stor_metrics');
+  if(mel)mel.innerHTML=cMetric('Volumes',cInt(vs.length),'persistent')+cMetric('Stored',cBytes(totStored),'after dedup','pos')+cMetric('Snapshots',cInt(totSnaps),'point-in-time');
+  var el=document.getElementById('c_volumes');if(!el)return;
+  el.innerHTML=vs.length?vs.map(function(v){
+    return '<tr><td data-l="Volume" class="mono">'+esc(v.name)+(v.size_limit_gb?' <span class="mut" style="font-size:11px">cap '+v.size_limit_gb+' GB</span>':'')+'</td>'+
+     '<td data-l="Stored" class="mono">'+cBytes(v.bytes_stored)+'</td>'+
+     '<td data-l="Snapshots" class="mono">'+cInt(v.snapshots)+'</td>'+
+     '<td data-l="Saved" class="mono teal">'+(v.dedup_saved_bytes?cBytes(v.dedup_saved_bytes):'—')+'</td>'+
+     '<td data-l="Created" class="mono" style="font-size:11px">'+esc(String(v.created_at||'').slice(0,10))+'</td>'+
+     '<td data-l=""><button class="cbtn sm" data-act="cVolOpen" data-a1="'+v.id+'">Open</button> <button class="cbtn sm" data-act="cVolDelete" data-a1="'+v.id+'" data-a2="'+esc(v.name)+'">Delete</button></td></tr>';
+    }).join(''):'<tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">No volumes yet. Create one to keep datasets and checkpoints between runs.</td></tr>';
+}
+async function cVolCreate(){
+  var name=((document.getElementById('c_volname')||{}).value||'').trim();
+  var cap=((document.getElementById('c_volsize')||{}).value||'').trim();
+  var msg=document.getElementById('c_volmsg');
+  if(!name){if(msg)msg.textContent='Enter a volume name.';return;}
+  var body={name:name};if(cap)body.size_limit_gb=Number(cap);
+  var r=await api('/volumes',{method:'POST',body:JSON.stringify(body)});
+  if(r.ok){document.getElementById('c_volname').value='';document.getElementById('c_volsize').value='';if(msg)msg.textContent='Created "'+name+'".';cStorage();}
+  else{if(msg)msg.textContent=(r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not create volume.';}
+}
+async function cVolOpen(id){
+  var box=document.getElementById('c_vol_detail');if(!box)return;
+  var r=await api('/volumes/'+id);
+  if(!r.ok){box.style.display='';box.innerHTML='<div class="csec"><div class="csec-b"><p class="mut" style="padding:12px 0">Could not load this volume.</p></div></div>';return;}
+  var v=r.body||{};var snaps=v.snapshots||[];
+  var rows=snaps.length?snaps.map(function(s){
+    return '<tr><td data-l="#" class="mono">'+s.seq+'</td>'+
+     '<td data-l="Label" class="mono">'+esc(s.label||'—')+'</td>'+
+     '<td data-l="Files" class="mono">'+cInt(s.files)+'</td>'+
+     '<td data-l="Delta uploaded" class="mono teal">'+cBytes(s.delta_bytes)+'</td>'+
+     '<td data-l="Logical size" class="mono">'+cBytes(s.total_bytes)+'</td>'+
+     '<td data-l="When" class="mono" style="font-size:11px">'+cTs(s.created_at)+'</td></tr>';
+    }).join(''):'<tr><td colspan=6 class="mut mono" style="text-align:center;padding:14px">No snapshots yet — take one from a VM with <span class="mono">petabyte volume snapshot '+esc(v.name)+'</span>.</td></tr>';
+  box.style.display='';
+  box.innerHTML='<div class="csec"><div class="csec-h"><h2>Snapshots — '+esc(v.name)+'</h2>'+
+    '<span class="mini" style="text-transform:none;letter-spacing:0;color:var(--mut)">'+cBytes(v.bytes_stored)+' stored · '+cBytes(v.dedup_saved_bytes)+' saved by dedup</span></div>'+
+    '<div class="panel" style="overflow:auto;margin:12px 15px"><table class="tbl"><thead><tr><th>#</th><th>Label</th><th>Files</th><th>Delta uploaded</th><th>Logical size</th><th>When</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    '<p class="mini" style="margin:2px 15px 14px;text-transform:none;letter-spacing:0">Each snapshot only uploads content that changed since the last one. Restore ships just the delta.</p></div>';
+  try{box.scrollIntoView({behavior:'smooth',block:'nearest'});}catch(e){}
+}
+async function cVolDelete(id,name){
+  if(!confirm('Delete volume "'+name+'"? This removes every snapshot and all stored content. This cannot be undone.'))return;
+  var r=await api('/volumes/'+id,{method:'DELETE'});
+  if(!r.ok){alert((r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not delete volume.');return;}
+  var box=document.getElementById('c_vol_detail');if(box)box.style.display='none';
+  cStorage();
 }
 
 async function cBilling(){

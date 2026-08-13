@@ -1483,6 +1483,12 @@ variables:
     description: Per-VM subdomain zone for the hostname-routed VM address (root@<id>.<zone>). Defaults
       to BASE_DOMAIN; set to e.g. vm.petabyte.market to put every VM under one wildcard record. See docs/dynamic_dns.md.
     format: hostname
+  VOLUME_MAX_BLOB_MB:
+    required: false
+    default: '1024'
+    scope:
+    - platform
+    description: ''
   VRAM_GB:
     required: false
     default: null

@@ -893,6 +893,51 @@ class AuditEvent(Base):
     created_at = Column(DateTime, default=_utcnow, index=True)
 
 
+class Volume(Base):
+    """A buyer-owned persistent volume that outlives any single VM. It stores content-addressed,
+    DEDUPLICATED snapshots in object storage: identical/unchanged files across snapshots are stored
+    once, so each new snapshot only uploads the DELTA (changed content) — never a full-disk mirror.
+    `bytes_stored` is the sum of unique blob sizes actually held (the real cost)."""
+    __tablename__ = "volumes"
+    id = Column(Integer, primary_key=True, index=True)
+    buyer_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    org_id = Column(Integer, ForeignKey("orgs.id"), index=True, nullable=True)
+    name = Column(String, nullable=False)
+    size_limit_gb = Column(Integer, nullable=True)          # optional hard cap on unique bytes held
+    bytes_stored = Column(Integer, default=0, nullable=False)   # sum of unique (deduped) blob sizes
+    snapshot_count = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class VolumeBlob(Base):
+    """Index of the unique content blobs held for a volume (one row per distinct sha256). This is
+    what makes snapshots incremental: a blob already present is never re-uploaded or re-billed. The
+    bytes live in object storage at volumes/<buyer>/<volume>/blobs/<sha256>."""
+    __tablename__ = "volume_blobs"
+    id = Column(Integer, primary_key=True, index=True)
+    volume_id = Column(Integer, ForeignKey("volumes.id"), index=True, nullable=False)
+    sha256 = Column(String, index=True, nullable=False)
+    size = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=_utcnow)
+    __table_args__ = (UniqueConstraint("volume_id", "sha256", name="uq_volume_blob"),)
+
+
+class VolumeSnapshot(Base):
+    """One point-in-time snapshot: a manifest of the important files (path -> content sha256), plus
+    how many NEW bytes it added (delta_bytes) vs. how big it is logically (total_bytes). Restoring a
+    snapshot 'since' an earlier one returns only the files whose content changed — the delta."""
+    __tablename__ = "volume_snapshots"
+    id = Column(Integer, primary_key=True, index=True)
+    volume_id = Column(Integer, ForeignKey("volumes.id"), index=True, nullable=False)
+    seq = Column(Integer, nullable=False)
+    label = Column(String, nullable=True)
+    vm_id = Column(String, nullable=True)                   # provenance: the VM that produced it
+    manifest = Column(Text, nullable=False)                 # JSON [{path, sha256, size, mode?}]
+    total_bytes = Column(Integer, default=0, nullable=False)  # logical size (sum of file sizes)
+    delta_bytes = Column(Integer, default=0, nullable=False)  # NEW unique bytes this snapshot added
+    created_at = Column(DateTime, default=_utcnow)
+
+
 def _audit_content(actor_username, actor_type, action, resource_type, resource_id,
                    org_id, detail, ts) -> str:
     """Deterministic serialization of the fields the tamper-evidence hash commits to. Order-stable
@@ -3472,6 +3517,143 @@ def remove_org_member(db: Session, org_id: int, username: str) -> str:
         return "last_admin"
     db.delete(m); db.commit()
     return "ok"
+
+
+# ------------------ Persistent volumes (content-addressed, incremental snapshots) ------------------
+
+def create_volume(db: Session, buyer: "User", name: str, size_limit_gb=None, org_id=None):
+    v = Volume(buyer_id=buyer.id, org_id=org_id, name=name,
+               size_limit_gb=(int(size_limit_gb) if size_limit_gb else None))
+    db.add(v); db.commit(); db.refresh(v)
+    return v
+
+
+def get_volume(db: Session, volume_id: int):
+    return db.query(Volume).filter(Volume.id == volume_id).first()
+
+
+def list_volumes(db: Session, buyer_id: int):
+    from sqlalchemy import func
+    rows = (db.query(Volume).filter(Volume.buyer_id == buyer_id)
+            .order_by(Volume.id.desc()).all())
+    out = []
+    for v in rows:
+        # dedup savings = sum of the LOGICAL size of every snapshot minus what we actually hold.
+        logical = int(db.query(func.coalesce(func.sum(VolumeSnapshot.total_bytes), 0))
+                      .filter(VolumeSnapshot.volume_id == v.id).scalar() or 0)
+        out.append({"id": v.id, "name": v.name, "org_id": v.org_id,
+                    "size_limit_gb": v.size_limit_gb, "bytes_stored": v.bytes_stored,
+                    "snapshots": v.snapshot_count,
+                    "dedup_saved_bytes": max(0, logical - int(v.bytes_stored or 0)),
+                    "created_at": v.created_at.isoformat() if v.created_at else None})
+    return out
+
+
+def volume_blob_shas(db: Session, volume_id: int) -> set:
+    return {r.sha256 for r in db.query(VolumeBlob.sha256).filter(VolumeBlob.volume_id == volume_id)}
+
+
+def volume_blob_exists(db: Session, volume_id: int, sha256: str) -> bool:
+    return db.query(VolumeBlob.id).filter(
+        VolumeBlob.volume_id == volume_id, VolumeBlob.sha256 == sha256).first() is not None
+
+
+def register_volume_blob(db: Session, volume_id: int, sha256: str, size: int) -> bool:
+    """Add a blob to the index if new. Returns True iff newly added (i.e. it counts toward the
+    delta / the volume's real stored bytes); False if it was already present (deduplicated)."""
+    if volume_blob_exists(db, volume_id, sha256):
+        return False
+    db.add(VolumeBlob(volume_id=volume_id, sha256=sha256, size=int(size)))
+    v = db.query(Volume).filter(Volume.id == volume_id).first()
+    if v:
+        v.bytes_stored = int(v.bytes_stored or 0) + int(size)
+        db.add(v)
+    db.commit()
+    return True
+
+
+def plan_snapshot(db: Session, volume_id: int, files: list) -> dict:
+    """Given the manifest a client WANTS to snapshot, return which content blobs are MISSING (the
+    delta to upload) vs. already held (deduped). Files are [{path, sha256, size, ...}]. This is the
+    'only send the delta' step — unchanged content is never uploaded again."""
+    have = volume_blob_shas(db, volume_id)
+    seen, missing, missing_bytes, reused = set(), [], 0, 0
+    for f in files:
+        sha = f["sha256"]
+        if sha in seen:
+            continue
+        seen.add(sha)
+        if sha in have:
+            reused += 1
+        else:
+            missing.append({"sha256": sha, "size": int(f.get("size", 0))})
+            missing_bytes += int(f.get("size", 0))
+    return {"missing": missing, "missing_bytes": missing_bytes,
+            "reused_blobs": reused, "unique_blobs": len(seen),
+            "total_bytes": sum(int(f.get("size", 0)) for f in files)}
+
+
+def finalize_snapshot(db: Session, volume: "Volume", files: list, present_shas: set,
+                      label=None, vm_id=None) -> "VolumeSnapshot":
+    """Record a snapshot. `present_shas` is the set of sha256 the caller has VERIFIED exist in object
+    storage (uploaded now or already held). Any referenced blob not yet indexed is registered here,
+    and its bytes count as this snapshot's delta. Raises if a referenced blob isn't present."""
+    delta = 0
+    for f in files:
+        sha, size = f["sha256"], int(f.get("size", 0))
+        if volume_blob_exists(db, volume.id, sha):
+            continue
+        if sha not in present_shas:
+            raise ValueError(f"blob {sha[:12]} was never uploaded")
+        if register_volume_blob(db, volume.id, sha, size):
+            delta += size
+    seq = int(volume.snapshot_count or 0) + 1
+    snap = VolumeSnapshot(
+        volume_id=volume.id, seq=seq, label=label, vm_id=vm_id,
+        manifest=json.dumps(files, separators=(",", ":")),
+        total_bytes=sum(int(f.get("size", 0)) for f in files), delta_bytes=delta)
+    db.add(snap)
+    volume.snapshot_count = seq
+    db.add(volume); db.commit(); db.refresh(snap)
+    return snap
+
+
+def list_snapshots(db: Session, volume_id: int):
+    rows = (db.query(VolumeSnapshot).filter(VolumeSnapshot.volume_id == volume_id)
+            .order_by(VolumeSnapshot.seq.desc()).all())
+    return [{"id": s.id, "seq": s.seq, "label": s.label, "vm_id": s.vm_id,
+             "total_bytes": s.total_bytes, "delta_bytes": s.delta_bytes,
+             "files": len(json.loads(s.manifest or "[]")),
+             "created_at": s.created_at.isoformat() if s.created_at else None} for s in rows]
+
+
+def get_snapshot(db: Session, volume_id: int, snapshot_id: int):
+    return (db.query(VolumeSnapshot)
+            .filter(VolumeSnapshot.volume_id == volume_id, VolumeSnapshot.id == snapshot_id).first())
+
+
+def restore_manifest(db: Session, volume_id: int, snap: "VolumeSnapshot", since=None) -> dict:
+    """The files to reconstruct a snapshot. With `since` (an earlier snapshot), return ONLY the files
+    whose content changed since then — the delta the client still needs (it already has the rest)."""
+    files = json.loads(snap.manifest or "[]")
+    full_size = sum(int(f.get("size", 0)) for f in files)
+    out = files
+    if since is not None:
+        base = {f["path"]: f["sha256"] for f in json.loads(since.manifest or "[]")}
+        out = [f for f in files if base.get(f["path"]) != f["sha256"]]
+    return {"files": out, "full_size": full_size,
+            "delta_size": sum(int(f.get("size", 0)) for f in out),
+            "is_delta": since is not None, "file_count": len(files), "delta_count": len(out)}
+
+
+def delete_volume(db: Session, volume: "Volume") -> list:
+    """Delete the volume + its snapshots + blob index. Returns the list of blob sha256 that were
+    held, so the caller can remove them from object storage."""
+    shas = [r.sha256 for r in db.query(VolumeBlob.sha256).filter(VolumeBlob.volume_id == volume.id)]
+    db.query(VolumeSnapshot).filter(VolumeSnapshot.volume_id == volume.id).delete()
+    db.query(VolumeBlob).filter(VolumeBlob.volume_id == volume.id).delete()
+    db.delete(volume); db.commit()
+    return shas
 
 
 def org_deposit(db: Session, org: "Organization", amount: float) -> float:

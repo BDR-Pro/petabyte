@@ -261,6 +261,9 @@ jobs:
       - name: two-factor auth (RFC 4226 known-answer TOTP + window/skew + provisioning URI)
         working-directory: lumaris_api
         run: python totp_test.py
+      - name: persistent volumes (content-addressed incremental snapshots; only the delta uploaded)
+        working-directory: lumaris_api
+        run: python volumes_test.py
       - name: agent WireGuard (keys/config/peers + fail-closed bring-up)
         working-directory: lumaris_agent
         run: python wireguard_test.py
