@@ -21,25 +21,60 @@ class ScreeningUnavailable(Exception):
     screen isn't configured."""
 
 
-def screen(method_kind: str, destination: str) -> bool:
-    """Sanctions/AML screen the destination.
+def screen(method_kind: str, destination: str, country: str = None) -> bool:
+    """Sanctions/AML screen a payout destination. Returns True to allow, False to BLOCK; raises
+    ScreeningUnavailable when it cannot screen (so we fail CLOSED — never send unscreened funds).
 
-    In stub mode (PAYOUT_STUB=true, the shipped default) this passes so the sandbox
-    ledger works without a compliance vendor. In LIVE mode it must call a real screen
-    (Chainalysis/TRM). Until one is wired, live mode FAILS CLOSED rather than silently
-    approving every destination — approving unscreened real payouts is a compliance
-    and money-laundering risk, not a convenience."""
+    In stub mode (PAYOUT_STUB=true, the shipped default) this passes so the sandbox ledger works
+    without a compliance vendor. In LIVE mode, SANCTIONS_SCREEN_PROVIDER selects the screen:
+
+      * ``ofac`` — the free, public baseline (no vendor account). Blocks a comprehensively
+        embargoed destination country (when known) and, for USDC, a wallet on OFAC's SDN
+        digital-currency list. Bank / gift-card destinations need NAME screening (a vendor),
+        so under ``ofac`` they fail closed rather than pretend to be screened.
+      * a vendor name (``chainalysis`` / ``trm`` / ...) — not implemented here; fails closed
+        until wired.
+      * unset — fails closed.
+    """
     if os.getenv("PAYOUT_STUB", "").lower() == "true":
         return True
     provider = os.getenv("SANCTIONS_SCREEN_PROVIDER", "").strip().lower()
     if not provider:
         raise ScreeningUnavailable(
             "Live payouts require SANCTIONS_SCREEN_PROVIDER to be configured "
-            "(e.g. chainalysis/trm). Refusing to send unscreened funds.")
-    # e.g. return chainalysis.screen(destination) / trm.screen(destination)
+            "(e.g. 'ofac' for the free public baseline, or chainalysis/trm). "
+            "Refusing to send unscreened funds.")
+
+    if provider == "ofac":
+        import sanctions
+        # Jurisdiction embargo applies to ANY rail when the destination country is known.
+        if country and sanctions.is_sanctioned_country(country):
+            return False
+        if method_kind == "usdc":
+            if not sanctions.ofac_addresses_available():
+                raise ScreeningUnavailable(
+                    "OFAC crypto screening needs OFAC_SDN_ADDRESSES_FILE "
+                    "(run scripts/refresh_ofac_addresses.py). Refusing to send unscreened USDC.")
+            return not sanctions.is_sanctioned_address(destination)
+        # bank / gift_card: OFAC's ADDRESS list can't screen an account number or email — that
+        # requires NAME-based KYC/vendor screening. Fail closed rather than pretend.
+        raise ScreeningUnavailable(
+            f"OFAC address screening does not cover '{method_kind}' destinations; wire a "
+            "name-screening vendor (Persona/Sumsub + Chainalysis/TRM) for bank/gift-card payouts.")
+
+    # A vendor is named but not implemented here — fail closed.
     raise ScreeningUnavailable(
         f"Screening provider '{provider}' is named but not implemented; "
         "refusing to send unscreened funds.")
+
+
+class RailDisabled(Exception):
+    """A payout rail is administratively disabled — fail CLOSED (never send) rather than move
+    money the operator hasn't explicitly turned on."""
+
+
+def _flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() == "true"
 
 
 class PayoutProvider:
@@ -77,6 +112,12 @@ class TremendousProvider(PayoutProvider):     # gift_card
 
 class CircleUSDCProvider(PayoutProvider):     # usdc
     def send(self, payout: dict) -> dict:
+        # USDC is IRREVERSIBLE. Require an explicit second switch ON TOP of PAYOUT_STUB=false, so a
+        # misconfig or an accidental live payout can never move real crypto. Fails CLOSED.
+        if not _flag("CIRCLE_PAYOUTS_ENABLED"):
+            raise RailDisabled(
+                "USDC payouts are disabled — set CIRCLE_PAYOUTS_ENABLED=true (plus CIRCLE_API_KEY / "
+                "CIRCLE_WALLET_ID) to enable. No USDC was sent.")
         token = os.environ["CIRCLE_API_KEY"]
         base = os.getenv("CIRCLE_API", "https://api.circle.com/v1")
         import uuid as _u

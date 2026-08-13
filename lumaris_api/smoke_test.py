@@ -255,6 +255,37 @@ ok("booking now released", c.get(f"/bookings/{bkid}", headers=b3h).json()["statu
 ok("seller earned payout (7.2)", round(c.get("/wallet", headers=s3h).json()["earnings"],2)==7.2)
 ok("double-release blocked", c.post(f"/bookings/{bkid}/release", headers=b3h).status_code==409)
 
+# --- VERIFIABLE RECEIPT: the buyer can INDEPENDENTLY re-verify their completed job ---
+_rid=job["task_id"]
+_rc=c.get(f"/jobs/{_rid}/receipt", headers=b3h)
+ok("buyer fetches a verifiable receipt for their completed job", _rc.status_code==200)
+_rcj=_rc.json()
+ok("receipt carries the node's Ed25519 signature + attested pubkey",
+   bool(_rcj["proof"]["signature_b64"]) and bool(_rcj["proof"]["node_pubkey_b64"]))
+ok("the platform RE-VERIFIES the node's signature live (server_reverified)",
+   _rcj["proof"]["server_reverified"]==True)
+ok("receipt shows the GPU trust tier + escrow settlement state",
+   _rcj["gpu"]["trust"]["level"]=="agent_verified" and _rcj["settlement"]["status"]=="released")
+ok("a receipt is buyer-scoped (a different user gets 404, no enumeration)",
+   c.get(f"/jobs/{_rid}/receipt", headers=s3h).status_code==404)
+
+# --- PUBLIC TRUST SUMMARY: honest live counts, nothing fabricated ---
+_ts=c.get("/trust/summary").json()
+ok("trust summary reports honest live counts (>=1 job completed, >=1 receipt)",
+   isinstance(_ts["attested_gpus"],int) and _ts["jobs_completed"]>=1 and _ts["verifiable_receipts"]>=1)
+ok("trust summary reports the double-entry ledger is not broken", _ts["ledger_balanced"] is not False)
+ok("trust summary publishes the honest ladder and never claims TEE from the stub",
+   any(t["level"]=="benchmark_verified" for t in _ts["trust_ladder"]) and "not_claimed" in _ts)
+_sec=c.get("/.well-known/security.txt")
+ok("RFC 9116 security.txt is served with a contact + policy (coordinated disclosure)",
+   _sec.status_code==200 and "Contact:" in _sec.text and "Policy:" in _sec.text)
+_ref=c.get("/refunds")
+ok("refunds & disputes policy is published (escrow protection + dispute SLA)",
+   _ref.status_code==200 and "escrow" in _ref.text.lower() and "dispute" in _ref.text.lower())
+_prv=c.get("/privacy")
+ok("privacy page states the workload data lifecycle (encrypt / not read / not retained)",
+   _prv.status_code==200 and "Data lifecycle" in _prv.text)
+
 # REFUND ON REAP: new booking, node dies, settle refunds buyer
 c.post("/heartbeat", headers={"X-API-KEY":s3key}, json={"spec_id":sid3})
 bkid2=c.post("/request_vm", headers=b3h, json={"spec_id":sid3,"hours":2}).json()["booking_id"]
@@ -361,6 +392,100 @@ ok("org created (creator is admin)", c.get(f"/orgs/{org_id}", headers=adminh).js
 ok("non-member blocked from org", c.get(f"/orgs/{org_id}", headers=outsiderh).status_code==403)
 ok("admin adds member", c.post(f"/orgs/{org_id}/members", headers=adminh, json={"username":"orgmember","role":"member"}).status_code==200)
 ok("member cannot add members", c.post(f"/orgs/{org_id}/members", headers=memberh, json={"username":"outsider","role":"member"}).status_code==403)
+# console Teams panel: GET /orgs lists the caller's memberships (no public org directory)
+_myorgs=c.get("/orgs", headers=adminh).json().get("orgs", [])
+ok("GET /orgs lists the caller's teams for the console Teams panel",
+   any(o["org_id"]==org_id and o["your_role"]=="admin" for o in _myorgs))
+ok("a non-member does not see that org in their team list",
+   all(o["org_id"]!=org_id for o in c.get("/orgs", headers=outsiderh).json().get("orgs", [])))
+
+# ---- IAM: team member role management + removal (console Teams tab) ----
+def _role_of(uname):
+    ms=c.get(f"/orgs/{org_id}", headers=adminh).json().get("members", [])
+    return next((m["role"] for m in ms if m["username"]==uname), None)
+ok("admin promotes a member's role (member -> billing)",
+   c.put(f"/orgs/{org_id}/members/orgmember", headers=adminh, json={"role":"billing"}).status_code==200
+   and _role_of("orgmember")=="billing")
+ok("a non-admin cannot change roles",
+   c.put(f"/orgs/{org_id}/members/orgmember", headers=memberh, json={"role":"admin"}).status_code==403)
+ok("changing the role of a non-member is 404",
+   c.put(f"/orgs/{org_id}/members/outsider", headers=adminh, json={"role":"member"}).status_code==404)
+ok("the sole admin cannot be demoted (org must keep an admin)",
+   c.put(f"/orgs/{org_id}/members/orgadmin", headers=adminh, json={"role":"member"}).status_code==409)
+ok("the sole admin cannot be removed",
+   c.delete(f"/orgs/{org_id}/members/orgadmin", headers=adminh).status_code==409)
+c.put(f"/orgs/{org_id}/members/orgmember", headers=adminh, json={"role":"member"})  # restore
+ok("orgmember restored to member for downstream tests", _role_of("orgmember")=="member")
+# add + remove a throwaway member (leaves state as it was)
+ok("admin adds then removes a member",
+   c.post(f"/orgs/{org_id}/members", headers=adminh, json={"username":"outsider","role":"member"}).status_code==200
+   and c.delete(f"/orgs/{org_id}/members/outsider", headers=adminh).status_code==200
+   and _role_of("outsider") is None)
+ok("a non-admin cannot remove members",
+   c.delete(f"/orgs/{org_id}/members/orgmember", headers=memberh).status_code==403)
+
+# ---- Tenant-facing audit log (immutable, hash-chained) ----
+_oaud=c.get(f"/orgs/{org_id}/audit", headers=adminh)
+ok("org audit is admin-only (non-admin blocked)",
+   c.get(f"/orgs/{org_id}/audit", headers=memberh).status_code==403 and _oaud.status_code==200)
+_oaudb=_oaud.json()
+_oactions={e["action"] for e in _oaudb["events"]}
+ok("org audit records member changes (add / role / create)",
+   {"team.create","team.member.add","team.member.role"} <= _oactions)
+ok("the audit chain verifies (tamper-evident) — intact over the recorded events",
+   _oaudb["integrity"]["intact"] is True and _oaudb["integrity"]["checked"] >= 1)
+_aaud=c.get("/account/audit", headers=adminh).json()
+ok("personal audit trail lists the caller's own actions",
+   any(e["action"]=="team.create" for e in _aaud["events"]) and _aaud["integrity"]["intact"] is True)
+ok("personal audit requires auth", c.get("/account/audit").status_code==401)
+# tamper-evidence: editing a stored row breaks the chain (deletion/edit is detectable)
+import db as _auditdb
+_asess=_auditdb.SessionLocal()
+try:
+    _arow=(_asess.query(_auditdb.AuditEvent)
+           .filter(_auditdb.AuditEvent.action=="team.member.add").first())
+    _arow.detail='{"role":"admin"}'; _asess.add(_arow); _asess.commit()
+    ok("editing an audit row is detected by verify_audit_chain (immutability is enforced by evidence)",
+       _auditdb.verify_audit_chain(_asess)["intact"] is False)
+finally:
+    _asess.close()
+
+# ---- Two-factor auth (TOTP / authenticator app) ----
+import totp as _totp
+c.post("/register_user", json={"username": "tfauser", "password": "hunter2-correct-horse"})
+_tfh = {"Authorization": f"Bearer {login('tfauser')}"}
+_setup = c.post("/account/2fa/setup", headers=_tfh).json()
+ok("2fa setup returns a secret + an otpauth URI",
+   len(_setup.get("secret", "")) >= 16 and _setup.get("otpauth_uri", "").startswith("otpauth://totp/"))
+ok("enabling 2fa rejects a wrong code",
+   c.post("/account/2fa/enable", headers=_tfh,
+          json={"code": "000000", "password": "hunter2-correct-horse"}).status_code == 400)
+_en = c.post("/account/2fa/enable", headers=_tfh,
+             json={"code": _totp.totp(_setup["secret"]), "password": "hunter2-correct-horse"}).json()
+ok("2fa enables with a valid code and returns 10 single-use backup codes",
+   _en.get("enabled") is True and len(_en.get("backup_codes", [])) == 10)
+_bk = _en["backup_codes"][0]
+
+
+def _login_otp(otp=None):
+    d = {"username": "tfauser", "password": "hunter2-correct-horse"}
+    if otp is not None:
+        d["otp"] = otp
+    return c.post("/login", data=d)
+
+
+ok("password alone no longer logs in once 2fa is on (TOTP_REQUIRED)",
+   _login_otp().status_code == 401 and _login_otp().json().get("error", {}).get("code") == "TOTP_REQUIRED")
+ok("login with a wrong code is refused", _login_otp("000000").status_code == 401)
+ok("login with a valid TOTP code succeeds", _login_otp(_totp.totp(_setup["secret"])).status_code == 200)
+ok("a backup recovery code logs in", _login_otp(_bk).status_code == 200)
+ok("a backup code is single-use (reuse refused)", _login_otp(_bk).status_code == 401)
+ok("password alone cannot disable 2fa (a current code is required)",
+   c.post("/account/2fa/disable", headers=_tfh, json={"password": "hunter2-correct-horse"}).status_code == 400)
+ok("2fa disables with password + a current code",
+   c.post("/account/2fa/disable", headers=_tfh,
+          json={"password": "hunter2-correct-horse", "code": _totp.totp(_setup["secret"])}).status_code == 200)
+ok("after disabling, password-only login works again", _login_otp().status_code == 200)
 
 # org wallet + budget cap
 c.post("/orgs/{}/deposit".format(org_id), headers=adminh, json={"amount":100.0,"budget_cap":15.0})
@@ -443,7 +568,16 @@ sk5=Ed25519PrivateKey.generate(); pb5=base64.b64encode(sk5.public_key().public_b
 at5={"cpu":16,"nonce":"q","ts":int(time.time())}
 c.post("/prove", headers=s5h, json={"spec_id":sid5,"attestation":at5,"signature":sign_proof(sk5,at5),"pubkey":pb5})
 key5=c.post("/create_api_key", headers=s5h).json()["api_key"]
-c.post("/heartbeat", headers={"X-API-KEY":key5}, json={"spec_id":sid5})
+_hb=c.post("/heartbeat", headers={"X-API-KEY":key5}, json={"spec_id":sid5})
+
+# --- SELLER EARNINGS FORECAST: the agent + web can show expected profit ---
+ok("heartbeat returns a live earnings forecast for the agent to display",
+   (_hb.json().get("earnings") or {}).get("net_per_hour")==round(2.0*(1-0.10),4))
+_ef=c.get(f"/nodes/{sid5}/earnings_forecast", headers=s5h)
+ok("earnings forecast endpoint: definitive net/hr + utilization estimates",
+   _ef.status_code==200 and _ef.json()["net_per_hour"]>0 and len(_ef.json()["estimates"])>=3)
+ok("earnings forecast is owner-scoped (a non-owner gets 404)",
+   c.get(f"/nodes/{sid5}/earnings_forecast", headers=b5h).status_code==404)
 
 # --- TRUST LADDER: levels awarded only on evidence actually held ---
 _t5=[s for s in c.get("/specs", headers=b5h).json()["specs"] if s["spec_id"]==sid5][0]
@@ -465,19 +599,112 @@ ok("template job carries image/port/model", tjob["task_type"]=="template" and "v
 c.post("/benchmark", headers=s5h, json={"spec_id":sid5})
 bjob=c.get("/jobs/next", headers={"X-API-KEY":key5}).json()
 ok("benchmark job dispatched", bjob["task_type"]=="benchmark")
-bph={"task_id":bjob["task_id"],"output_hash":"bench","ts":int(time.time())}
-ok("signed benchmark result accepted", c.post("/jobs/benchmark_result", headers={"X-API-KEY":key5}, json={"spec_id":sid5,"tokens_sec":2350.5,"meta":{"model":"llama3-8b","sd_images_sec":4.2},"proof":bph,"signature":sign_proof(sk5,bph)}).status_code==200)
+ok("benchmark job carries a FRESH server proof-of-work challenge (seed)", bjob.get("bench_seed") and bjob.get("bench_size"))
+# The agent measures FP16 matmul TFLOPS and puts it INSIDE the SIGNED proof; the server
+# checks it against the CLAIMED model's public band. 720 TFLOPS is in the H100 band.
+# It must ALSO answer the server's fresh seeded proof-of-work challenge.
+_pow=dbmod.compute_test_hash(int(bjob["bench_size"]), int(bjob["bench_seed"]))
+bph={"task_id":bjob["task_id"],"output_hash":"bench","ts":int(time.time()),"tflops_fp16":720,"challenge_hash":_pow}
+_br=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key5}, json={"spec_id":sid5,"tokens_sec":2350.5,"meta":{"model":"llama3-8b","sd_images_sec":4.2},"proof":bph,"signature":sign_proof(sk5,bph)})
+ok("signed benchmark result accepted", _br.status_code==200)
+ok("benchmark consistent with the claimed H100 -> verdict 'consistent'", _br.json().get("benchmark_verdict")=="consistent")
+ok("the platform SERVER-TIMED the benchmark (bound to the dispatched task)", _br.json().get("server_timed")==True)
+ok("the node ANSWERED the fresh server proof-of-work challenge (pow_verified)", _br.json().get("pow_verified")==True)
+ok("re-submitting the same signed benchmark is rejected as a replay (409)",
+   c.post("/jobs/benchmark_result", headers={"X-API-KEY":key5}, json={"spec_id":sid5,"tokens_sec":2350.5,"meta":{},"proof":bph,"signature":sign_proof(sk5,bph)}).status_code==409)
 ok("/specs surfaces tokens/sec", any(s["spec_id"]==sid5 and s["benchmark_tokens_sec"]==2350.5 for s in c.get("/specs", headers=b5h).json()["specs"]))
 # --- TRUST LADDER: a signed benchmark upgrades the level; TEE is never claimed ---
 _t5b=[s for s in c.get("/specs", headers=b5h).json()["specs"] if s["spec_id"]==sid5][0]
 ok("signed benchmark upgrades trust to benchmark_verified",
    _t5b["trust"]["level"]=="benchmark_verified" and _t5b["trust"]["rank"]==2)
+ok("consistent benchmark surfaces as 'Benchmark-consistent' with public-reference evidence",
+   _t5b["trust"]["label"]=="Benchmark-consistent" and "MATCHES public reference" in _t5b["trust"]["evidence"])
 _pub5=[s for s in c.get("/marketplace/specs").json()["specs"] if s["gpu_model"]=="H100" and s.get("trust",{}).get("level")=="benchmark_verified"]
 ok("marketplace surfaces the trust level publicly", len(_pub5)>=1)
 _det5=c.get(f"/marketplace/specs/{_pub5[0]['id']}").json() if _pub5 else {}
 ok("detail page never claims vendor hardware attestation (stub is not TEE)",
    _det5.get("verification",{}).get("hardware_attested")==False and
    _det5.get("verification",{}).get("agent_attested")==True)
+
+# --- BENCHMARK AUTHENTICITY: an over-claiming listing is caught + frozen ---
+# A dedicated node (never reused elsewhere) LISTS an H100 but its measured FP16 matmul
+# is T4-class -> the silicon can't be an H100 -> fraud freeze. Proves the gamer-style
+# "compare the score to the card's public numbers" check is wired to the freeze path.
+c.post("/register_user", json={"username":"seller6","password":"hunter2-correct-horse"})
+s6h={"Authorization":f"Bearer {login('seller6')}"}
+c.post("/change_role", headers=s6h, json={"role":"seller"})
+sid6=c.post("/register_specs", headers=s6h, json={"cpu":16,"ram":64,"duration":48,"price_per_hour":2.0,"provider":"seller6","gpu_model":"H100","units":1}).json()["spec_id"]
+sk6=Ed25519PrivateKey.generate(); pb6=base64.b64encode(sk6.public_key().public_bytes_raw()).decode()
+at6={"cpu":16,"nonce":"z","ts":int(time.time())}
+c.post("/prove", headers=s6h, json={"spec_id":sid6,"attestation":at6,"signature":sign_proof(sk6,at6),"pubkey":pb6})
+key6=c.post("/create_api_key", headers=s6h).json()["api_key"]
+c.post("/heartbeat", headers={"X-API-KEY":key6}, json={"spec_id":sid6})
+c.post("/benchmark", headers=s6h, json={"spec_id":sid6})
+bjob6=c.get("/jobs/next", headers={"X-API-KEY":key6}).json()
+bph6={"task_id":bjob6["task_id"],"output_hash":"bench","ts":int(time.time()),"tflops_fp16":45}
+_ov=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key6}, json={"spec_id":sid6,"tokens_sec":90.0,"meta":{},"proof":bph6,"signature":sign_proof(sk6,bph6)})
+ok("H100 listing measuring T4-class TFLOPS -> verdict 'implausibly_low'",
+   _ov.status_code==200 and _ov.json().get("benchmark_verdict")=="implausibly_low")
+_t6=[s for s in c.get("/specs", headers=s6h).json()["specs"] if s["spec_id"]==sid6][0]
+ok("an over-claiming benchmark does NOT upgrade trust (flagged, not benchmark_verified)",
+   _t6["trust"]["level"]=="agent_verified" and "flagged" in _t6["trust"]["label"].lower())
+
+# --- BENCHMARK AUTHENTICITY: a fabricated proof-of-work answer is caught + frozen ---
+# A dedicated node claims a benchmark but returns a WRONG answer to the server's fresh seeded
+# challenge — proving the number wasn't produced by real, current computation -> fraud freeze.
+c.post("/register_user", json={"username":"seller8","password":"hunter2-correct-horse"})
+s8h={"Authorization":f"Bearer {login('seller8')}"}
+c.post("/change_role", headers=s8h, json={"role":"seller"})
+sid8=c.post("/register_specs", headers=s8h, json={"cpu":16,"ram":64,"duration":48,"price_per_hour":1.0,"provider":"seller8","gpu_model":"H100","units":1}).json()["spec_id"]
+sk8=Ed25519PrivateKey.generate(); pb8=base64.b64encode(sk8.public_key().public_bytes_raw()).decode()
+at8={"cpu":16,"nonce":"w","ts":int(time.time())}
+c.post("/prove", headers=s8h, json={"spec_id":sid8,"attestation":at8,"signature":sign_proof(sk8,at8),"pubkey":pb8})
+key8=c.post("/create_api_key", headers=s8h).json()["api_key"]
+c.post("/heartbeat", headers={"X-API-KEY":key8}, json={"spec_id":sid8})
+c.post("/benchmark", headers=s8h, json={"spec_id":sid8})
+bjob8=c.get("/jobs/next", headers={"X-API-KEY":key8}).json()
+bph8={"task_id":bjob8["task_id"],"output_hash":"bench","ts":int(time.time()),"tflops_fp16":700,"challenge_hash":"deadbeef"*8}
+_pw=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key8}, json={"spec_id":sid8,"tokens_sec":100.0,"meta":{},"proof":bph8,"signature":sign_proof(sk8,bph8)})
+ok("a fabricated proof-of-work answer is REJECTED (409 proof-of-work failed)",
+   _pw.status_code==409 and "proof-of-work" in _pw.json().get("detail","").lower())
+
+# --- BENCHMARK AUTHENTICITY: a 3D render benchmark (Blender Open Data) works too ---
+# A dedicated RTX 4090 node reports a Blender Open Data score. A score matching the public
+# 4090 median earns 'Benchmark-consistent' — proving the check spans more than FP16. A
+# render benchmark is ADVISORY: a too-low score FLAGS the listing but never freezes payouts.
+c.post("/register_user", json={"username":"seller7","password":"hunter2-correct-horse"})
+s7h={"Authorization":f"Bearer {login('seller7')}"}
+c.post("/change_role", headers=s7h, json={"role":"seller"})
+sid7=c.post("/register_specs", headers=s7h, json={"cpu":16,"ram":64,"duration":48,"price_per_hour":1.0,"provider":"seller7","gpu_model":"RTX 4090","units":1}).json()["spec_id"]
+sk7=Ed25519PrivateKey.generate(); pb7=base64.b64encode(sk7.public_key().public_bytes_raw()).decode()
+at7={"cpu":16,"nonce":"y","ts":int(time.time())}
+c.post("/prove", headers=s7h, json={"spec_id":sid7,"attestation":at7,"signature":sign_proof(sk7,at7),"pubkey":pb7})
+key7=c.post("/create_api_key", headers=s7h).json()["api_key"]
+c.post("/heartbeat", headers={"X-API-KEY":key7}, json={"spec_id":sid7})
+c.post("/benchmark", headers=s7h, json={"spec_id":sid7})
+bjob7=c.get("/jobs/next", headers={"X-API-KEY":key7}).json()
+bph7={"task_id":bjob7["task_id"],"output_hash":"bench","ts":int(time.time()),"blender_optix":12000}
+_bl=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key7}, json={"spec_id":sid7,"tokens_sec":0.0,"meta":{},"proof":bph7,"signature":sign_proof(sk7,bph7)})
+ok("a Blender Open Data score consistent with the claimed RTX 4090 -> verdict 'consistent'",
+   _bl.status_code==200 and _bl.json().get("benchmark_verdict")=="consistent")
+_t7=[s for s in c.get("/specs", headers=s7h).json()["specs"] if s["spec_id"]==sid7][0]
+ok("a 3D render benchmark ALSO earns 'Benchmark-consistent' trust (no tok/s needed)",
+   _t7["trust"]["label"]=="Benchmark-consistent")
+c.post("/benchmark", headers=s7h, json={"spec_id":sid7})
+bjob7b=c.get("/jobs/next", headers={"X-API-KEY":key7}).json()
+bph7b={"task_id":bjob7b["task_id"],"output_hash":"bench","ts":int(time.time()),"blender_optix":1500}
+_bl2=c.post("/jobs/benchmark_result", headers={"X-API-KEY":key7}, json={"spec_id":sid7,"tokens_sec":0.0,"meta":{},"proof":bph7b,"signature":sign_proof(sk7,bph7b)})
+ok("a 4090 rendering like a weak card is FLAGGED via the advisory Blender metric (no freeze)",
+   _bl2.json().get("benchmark_verdict")=="implausibly_low")
+_t7b=[s for s in c.get("/specs", headers=s7h).json()["specs"] if s["spec_id"]==sid7][0]
+ok("the advisory flag downgrades trust to agent_verified (flagged), not benchmark_verified",
+   _t7b["trust"]["level"]=="agent_verified" and "flagged" in _t7b["trust"]["label"].lower())
+
+# --- BENCHMARK AUTHENTICITY: NiceHash mining hashrate vs public data (memory-bandwidth proxy) ---
+# The 4090's idle-mining hashrate (~120 MH/s Ethash) is checked against the public per-GPU number.
+_idle=c.post("/nodes/idle_report", headers={"X-API-KEY":key7}, json={"spec_id":sid7,"algo":"daggerhashimoto","hashrate":120.0,"est_daily_usd":1.5})
+ok("idle-mining hashrate is checked vs public data (RTX 4090 @120 MH/s -> consistent)",
+   _idle.status_code==200 and _idle.json().get("hashrate_verdict")=="consistent")
 
 # --- #5 QUEUE PRIORITY ---
 lowb=book5(); highb=book5()
@@ -827,7 +1054,16 @@ ok("freshly-added destination CANNOT receive money yet (cooling-off)",
 _agedb=_DBS()
 _m=_agedb.query(_PM).filter(_PM.id==mid).first()
 _m.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
+# age this seller's completed bookings past the earnings clearing/dispute hold, as time would —
+# otherwise the just-completed $9 job is still clearing and correctly can't be withdrawn yet.
+from db import Booking as _BK
+for _b in _agedb.query(_BK).filter(_BK.status=="released").all():
+    _b.released_at = datetime.now(timezone.utc) - timedelta(hours=72)
 _agedb.add(_m); _agedb.commit(); _agedb.close()
+
+# earnings from a fresh job are HELD until they clear the dispute/re-verify window
+ok("earnings are held during the clearing window, then become withdrawable once cleared",
+   c.get("/wallet", headers=psh).json()["withdrawable"]==9.0)
 
 # manual withdraw $5 -> earnings 4, payout requested -> worker sends -> confirmed
 w=c.post("/wallet/withdraw", headers=psh, json={"method_id":mid,"amount":5.0})
@@ -882,8 +1118,9 @@ keymap={sidTC1:(keyTC1,skTC1), sidTC2:(keyTC2,skTC2)}
 up=c.post("/uploads/url", headers=tcb, json={"filename":"movie.mp4"}).json()
 ok("buyer gets a pre-signed upload URL", "op=put" in up["upload_url"] and up["ref"].startswith("s3://") and up["key"].startswith("inputs/") and up["key"].endswith("movie.mp4"))
 
-# ffmpeg in the catalog
-ok("ffmpeg template listed", any(t["name"]=="ffmpeg" for t in c.get("/templates").json()["templates"]))
+# ffmpeg transcoding is a DEDICATED job path (/transcode), not a do-nothing one-click template.
+ok("transcode capability is exposed via /transcode (not a placeholder template)",
+   not any(t["name"]=="ffmpeg" for t in c.get("/templates").json()["templates"]))
 
 # fan-out transcode across 2 nodes, 100s split into [0,49]/[50,99]
 r=c.post("/transcode", headers=tcb, json={"input_ref":up["ref"],"codec":"h265","container":"mp4","nodes":2,"duration_seconds":100,"gpu_class":"TCGPU","hours":1}).json()
@@ -927,8 +1164,14 @@ rkeymap={sidR1:(keyR1,skR1), sidR2:(keyR2,skR2)}
 for seg in rj["tasks"]:
     key,sk=rkeymap[seg["spec_id"]]
     c.get("/jobs/next", headers={"X-API-KEY":key})
-    ph={"task_id":seg["task_id"],"output_hash":"f","ts":int(time.time())}
+    ph={"task_id":seg["task_id"],"output_hash":"f","content_hash":"e"*64,"ts":int(time.time())}
     c.post("/jobs/result", headers={"X-API-KEY":key}, json={"task_id":seg["task_id"],"status":"completed","result":f"s3://pb/render/{rj['job_id']}/seg.tar","proof":ph,"signature":sign_proof(sk,ph)})
+# the seller-signed content_hash (sha256 of the real output bytes) is persisted for quorum re-exec
+from db import SessionLocal as _CHS, Task as _CHT
+_chs=_CHS(); _cht=_chs.query(_CHT).filter(_CHT.id==rj["tasks"][0]["task_id"]).first()
+ok("server persists the seller-signed output content_hash (result binds to real bytes, #65)",
+   _cht is not None and _cht.result_content_hash=="e"*64)
+_chs.close()
 rman=c.get(f"/jobs/manifest/{rj['job_id']}", headers=rndh).json()
 ok("render assembles via manifest (stitch created)", rman["status"]=="assembling" and rman["stitch_task_id"] is not None)
 
@@ -974,7 +1217,7 @@ ok("idle credited_total + worker_id exposed", round(_idle["credited_total_usd"],
 # ==== WEBSITE PAGES + GOOGLE OAUTH + KEYS UI + PUBLIC SPECS ====
 os.environ["GOOGLE_OAUTH_STUB"]="true"
 import importlib, main as _m; importlib.reload(_m)  # not needed; env read at call time
-for path in ["/","/app","/investors","/developers","/install","/keys","/marketplace","/admin","/gamers","/artists"]:
+for path in ["/","/console","/investors","/developers","/install","/keys","/marketplace","/admin","/gamers","/artists"]:
     r=c.get(path); ok(f"page {path} serves", r.status_code==200 and "Petabyte" in r.text)
 ok("gamers page has one-click launch grid", "renderLaunch(" in c.get("/gamers").text and "launchgrid" in c.get("/gamers").text)
 ok("artists page has one-click launch grid", "renderLaunch(" in c.get("/artists").text and "launchgrid" in c.get("/artists").text)
@@ -1219,8 +1462,8 @@ ok("kill switch: bookings work again after resume",
 from templates_registry import TEMPLATES as _TPL
 ok("every template declares an egress policy",
    all("egress" in v for v in _TPL.values()))
-ok("batch templates get NO network at all (blender/ffmpeg)",
-   _TPL["blender"]["egress"]=="none" and _TPL["ffmpeg"]["egress"]=="none")
+ok("batch templates get NO network at all (blender render node)",
+   _TPL["blender"]["egress"]=="none")
 ok("no template is 'open' (nothing gets unrestricted use of a host's connection)",
    not any(v["egress"]=="open" for v in _TPL.values()))
 _cat={t["name"]: t for t in c.get("/templates").json()["templates"]}
@@ -1301,7 +1544,8 @@ ok("a seller with no hardware is told to install the agent",
 # --- new templates for the highest-intent GPU renter: the researcher ---
 _tpl = {t["name"]: t for t in c.get("/templates").json()["templates"]}
 ok("jupyter notebook template exists (the researcher's front door)", "jupyter" in _tpl)
-ok("pytorch base template exists", "pytorch" in _tpl)
+ok("no do-nothing placeholder templates are advertised (pytorch base / tensorrt-llm removed)",
+   "pytorch" not in _tpl and "tensorrt-llm" not in _tpl)
 ok("jupyter is stateful (people leave notebooks running -> snapshot them)",
    _tpl["jupyter"]["stateful"] is True)
 
@@ -1338,6 +1582,13 @@ ok("tables collapse to cards under 720px (a host checks their phone)",
    "@media(max-width:720px)" in _css and ".tbl td::before" in _css)
 ok("table cells carry their header label for the mobile card view",
    all('data-l=' in c.get(p).text for p in ["/marketplace", "/pricing", "/account"]))
+# TEST-MODE honesty: sandbox reports test_mode, and every money screen carries the banner slot
+# + the shared banner renderer, so no one mistakes a demo charge for a real one.
+ok("payments/config reports test_mode in sandbox", c.get("/payments/config").json().get("test_mode") is True)
+ok("every money screen carries the test-mode banner slot",
+   all('id="pbtestmode"' in c.get(p).text for p in ["/account", "/seller/payouts", "/buy/demo-spec"]))
+ok("the shared shell renders the test-mode banner (pbTestBanner + .pb-testmode)",
+   "pbTestBanner" in c.get("/account").text and ".pb-testmode" in c.get("/account").text)
 
 # --- COMMAND PALETTE (item 18) ---
 ok("Cmd/Ctrl+K opens a command palette", "pbPalette" in _css and "metaKey" in _css)
@@ -1435,8 +1686,8 @@ ok("the 'Deep Ocean Compute' brand is fully removed from the site",
    "deep ocean" not in _all_pages.lower())
 ok("no role-specific legacy addresses remain", "legal@petabyte.market" not in _all_pages and "hello@petabyte.market" not in _all_pages)
 
-# --- /app console: same nav + readable editor in both themes (screenshot bugs) ---
-_app = c.get("/app").text
+# --- /console: same nav + readable editor in both themes (screenshot bugs) ---
+_app = c.get("/console").text
 ok("the console nav carries the same site links as every other page",
    "/marketplace" in _app and "/catalog" in _app and "/security" in _app
    and "/pricing" in _app)
@@ -1444,6 +1695,12 @@ ok("the code editor is theme-aware, not hardcoded dark (was black-on-black in li
    "var(--editor-bg)" in _app and "var(--editor-ink)" in _app)
 ok("a light-mode editor background is actually defined",
    "--editor-bg:#F5F9FC" in _app)
+ok("the console unifies both sides of the marketplace in one tabbed surface",
+   all(t in _app for t in ['data-a1="compute"', 'data-a1="billing"', 'data-a1="teams"',
+       'data-a1="access"', 'data-a1="seller"']))
+ok("the old standalone /app dashboard now redirects into the console",
+   c.get("/app", follow_redirects=False).status_code in (301, 302, 307, 308)
+   and "/console" in c.get("/app", follow_redirects=False).headers.get("location", ""))
 
 # --- one email everywhere ---
 _home = c.get("/")
@@ -1477,7 +1734,312 @@ for _p,_label in [("/install","install"),("/marketplace","marketplace"),("/prici
                   ("/security","security"),("/contact","contact"),("/catalog","catalog")]:
     ok("Arabic copy present on "+_label, "data-ar=" in c.get(_p).text)
 ok("the code editor / console stay LTR under RTL (money and code must not flip)",
-   'dir="rtl"' in c.get("/app").text and "direction:ltr" in c.get("/app").text)
+   'dir="rtl"' in c.get("/console").text and "direction:ltr" in c.get("/console").text)
+
+# --- seller onboarding is one click: key + this-server URL + price pre-filled, nothing to hand-edit ---
+_inst = c.get("/install").text
+ok("seller onboarding generates the whole installer in one click (change_role + key in one handler)",
+   "genInstaller" in _inst)
+ok("the generated command is copy-buttoned via the delegated pbCopy handler (no manual key paste)",
+   'data-act="pbCopy"' in _inst and 'data-a1="seller_linux"' in _inst and 'data-a1="seller_win"' in _inst)
+ok("no stale placeholder key survives — the seller never hand-substitutes pk_your_node_key anymore",
+   "pk_your_node_key" not in _inst)
+ok("price is optional and benchmark-anchored — the page auto-prices, it does not bake in a made-up rate",
+   "/pricing/suggest" in _inst and 'placeholder="auto"' in _inst)
+
+# --- GPU ROI / breakeven calculator ("buy a GPU and rent it, N hours/day") + affiliate buy links ---
+_roi = c.get("/pricing/roi?hours=8&kwh=0.12").json()
+ok("/pricing/roi returns per-GPU breakeven + 1-yr ROI from the benchmark price, fee and electricity",
+   _roi.get("count", 0) > 0 and all(
+       k in _roi["gpus"][0] for k in ("gpu_model", "net_per_month", "breakeven_days", "roi_year_pct",
+                                      "buy_urls", "gpu_tdp_w", "hardware_cost_usd", "hours_per_day")))
+ok("ROI is driven by an adjustable hours/day, and is HONEST that rented hours aren't guaranteed",
+   _roi["assumptions"]["hours_per_day"] == 8.0
+   and "not guaranteed" in _roi["assumptions"]["hours_note"].lower())
+ok("ROI rows are sorted soonest-payback-first (breakeven ascending)",
+   [g["breakeven_days"] for g in _roi["gpus"] if g["breakeven_days"] is not None]
+   == sorted(g["breakeven_days"] for g in _roi["gpus"] if g["breakeven_days"] is not None))
+# whole-PC mode: cost and power include the rest of the build, so payback lengthens
+_full = c.get("/pricing/roi?hours=8&kwh=0.12&full_build=true").json()
+def _bymodel(resp, m): return next(g for g in resp["gpus"] if g["gpu_model"] == m)
+_g0 = _roi["gpus"][0]["gpu_model"]
+ok("full_build=true adds the rest-of-PC cost + watts, so hardware cost and power both rise",
+   _bymodel(_full, _g0)["hardware_cost_usd"] > _bymodel(_roi, _g0)["hardware_cost_usd"]
+   and _bymodel(_full, _g0)["watts_total"] > _bymodel(_roi, _g0)["gpu_tdp_w"]
+   and _full["assumptions"]["full_build"] is True)
+ok("more rented hours/day shortens payback (12h beats 4h)",
+   _bymodel(c.get("/pricing/roi?hours=12").json(), _g0)["breakeven_days"]
+   < _bymodel(c.get("/pricing/roi?hours=4").json(), _g0)["breakeven_days"])
+ok("affiliate is DISCLOSED (FTC), spans multiple retailers, and is off by default until configured",
+   "commission" in _roi.get("affiliate", {}).get("disclosure", "").lower()
+   and _roi["affiliate"]["enabled"] is False
+   and {b["retailer"] for b in _roi["gpus"][0]["buy_urls"]} >= {"Amazon", "Newegg"}
+   and all(b["affiliate"] is False for b in _roi["gpus"][0]["buy_urls"]))
+_roip = c.get("/roi").text
+ok("the /roi page renders the calculator (hours/day + whole-PC toggle wired to /pricing/roi)",
+   "roiRecalc" in _roip and "/pricing/roi" in _roip and 'id="hours"' in _roip and "roiScope" in _roip)
+ok("/install links sellers to the ROI calculator (buy-decision funnel)",
+   'href="/roi"' in _inst)
+
+# --- more revenue sources: partner links, referral surfacing, instant-payout fee ---
+_pt = c.get("/partners").json()
+ok("/partners lists gear across categories (storage, cash-out, parts, power), affiliate off by default",
+   len(_pt.get("partners", [])) >= 4
+   and {"Cloud storage", "Cash out USDC"} <= {p["category"] for p in _pt["partners"]}
+   and _pt["affiliate"]["enabled"] is False
+   and all(p["affiliate"] is False for p in _pt["partners"]))
+ok("the /roi page surfaces the partner gear section", "/partners" in _roip and 'id="gearlist"' in _roip)
+# referral: surfaced on the account page, and its API works for a signed-in user
+c.post("/register_user", json={"username": "refuser1", "password": "hunter2-correct-horse"})
+_rtok = c.post("/login", data={"username": "refuser1", "password": "hunter2-correct-horse"}).json()["access_token"]
+_rh = {"Authorization": "Bearer " + _rtok}
+_rf = c.get("/referral", headers=_rh).json()
+ok("the referral API returns a share link + reward for a signed-in user (both-sides growth loop)",
+   bool(_rf.get("code")) and "?ref=" in _rf.get("link", "") and _rf.get("reward_usd", 0) > 0)
+ok("the account page surfaces the invite-and-earn card (share link + copy)",
+   "loadReferral" in c.get("/account").text and 'id="reflink"' in c.get("/account").text)
+# instant-payout fee: the quote shows free-scheduled vs a disclosed fee, BEFORE committing
+_pq = c.get("/wallet/payout_quote?amount=100", headers=_rh).json()
+ok("payout quote is honest: scheduled is free, instant costs a disclosed fee shown before commit",
+   _pq["scheduled"]["fee_usd"] == 0.0 and _pq["instant"]["fee_usd"] > 0
+   and _pq["instant"]["net_usd"] == round(100 - _pq["instant"]["fee_usd"], 2))
+ok("the account withdraw UI offers the instant (fee) option alongside free scheduled payout",
+   'id="instant"' in c.get("/account").text)
+# anti-fraud payout holds: /wallet surfaces withdrawable-now vs still-clearing + instant eligibility
+_wl = c.get("/wallet", headers=_rh).json()
+ok("/wallet separates withdrawable-now from earnings still in the clearing/dispute hold",
+   all(k in _wl for k in ("earnings", "withdrawable", "clearing", "instant_eligible", "hold_hours"))
+   and _wl["hold_hours"] >= 1)
+ok("a brand-new account is NOT instant-payout eligible (fast cash-out locked until matured)",
+   _wl["instant_eligible"] is False)
+
+# --- paid data API: metered, needs a data-scoped key; /developers documents it ---
+ok("the data API requires an API key (no anonymous access)",
+   c.get("/api/v1/data/gpu-prices").status_code in (401, 422))
+c.post("/register_user", json={"username": "dataapiuser", "password": "hunter2-correct-horse"})
+_dtok = c.post("/login", data={"username": "dataapiuser", "password": "hunter2-correct-horse"}).json()["access_token"]
+_dh = {"Authorization": "Bearer " + _dtok}
+_dkey = c.post("/create_api_key?scopes=data&days=30", headers=_dh).json()["api_key"]
+_dkh = {"X-API-KEY": _dkey}
+_gp = c.get("/api/v1/data/gpu-prices", headers=_dkh)
+ok("a data-scoped key can read the metered price index, with a usage receipt attached",
+   _gp.status_code == 200 and "gpus" in _gp.json() and "usage" in _gp.json())
+_nkey2 = c.post("/create_api_key?scopes=node,jobs&days=30", headers=_dh).json()["api_key"]
+ok("a node/jobs key is refused from the data API (scope-gated)",
+   c.get("/api/v1/data/usage", headers={"X-API-KEY": _nkey2}).status_code == 403)
+ok("/developers documents the metered data API", "/api/v1/data/gpu-prices" in c.get("/developers").text)
+# more monetized datasets: savings index, live-supply availability, anonymized authenticity corpus
+ok("savings + availability datasets are served to a data key",
+   c.get("/api/v1/data/savings", headers=_dkh).status_code == 200
+   and "live_nodes_total" in c.get("/api/v1/data/availability", headers=_dkh).json())
+_bmk = c.get("/api/v1/data/benchmarks", headers=_dkh).json()
+ok("the authenticity dataset is sold anonymized (stats + rows, no seller_id/spec_id)",
+   "stats" in _bmk and all("seller_id" not in r and "spec_id" not in r for r in _bmk.get("rows", [])))
+# buyer-side demand datasets: real-only aggregates, no buyer identity
+_dmd = c.get("/api/v1/data/demand", headers=_dkh).json()
+ok("buyer-side demand index served (totals + per-GPU GMV/realized price, no buyer identity)",
+   "totals" in _dmd and "by_gpu" in _dmd
+   and all("buyer_id" not in r for r in _dmd["by_gpu"]))
+ok("buyer-side workload-mix index served (jobs by type + template)",
+   set(c.get("/api/v1/data/workloads", headers=_dkh).json()) >= {"by_type", "by_template", "total_jobs"})
+_tpl = c.get("/api/v1/data/templates", headers=_dkh).json()
+ok("templates-bought index served (per template: jobs, buyers count, GMV, models; no identity)",
+   "templates" in _tpl and "jobs_total" in _tpl
+   and all("buyer_id" not in r and "buyers" not in r for r in _tpl["templates"]))
+ok("data-API monetization is measured + admin-only (revenue scoreboard gated)",
+   c.get("/admin/data/revenue", headers=_rh).status_code == 403)
+# try-before-you-buy: a keyless dummy-data sample + a free/unmetered published sandbox key
+_smp = c.get("/api/v1/data/sample")
+ok("keyless /api/v1/data/sample returns labelled example payloads for every dataset (no key, no charge)",
+   _smp.status_code == 200 and _smp.json().get("sandbox") is True
+   and set(_smp.json().get("endpoints", {})) >=
+   {"gpu-prices", "market", "savings", "availability", "benchmarks", "demand", "workloads", "templates"})
+_sbk = {"X-API-KEY": main.DATA_API_SANDBOX_KEY}
+_sbr = c.get("/api/v1/data/gpu-prices", headers=_sbk)
+ok("the published sandbox key reads the REAL endpoints free & unmetered (never billed)",
+   _sbr.status_code == 200 and _sbr.json()["usage"].get("sandbox") is True
+   and _sbr.json()["usage"]["billed"] is False)
+_dev = c.get("/developers").text
+ok("/developers publishes the sandbox key + keyless sample so devs can try before paying",
+   main.DATA_API_SANDBOX_KEY in _dev and "/api/v1/data/sample" in _dev)
+
+# --- distributed compute: one job across N GPUs on DIFFERENT machines, wired over the VPN ---
+def _dist_seller(idx):
+    s = dbmod.SessionLocal()
+    u = dbmod.create_user(s, f"dcs{idx}", "pw-correct-horse-1"); dbmod.set_role(s, u.username, "seller")
+    u.can_accept_paid_jobs = True
+    sp = dbmod.save_specs(s, u, {"cpu": 8, "ram": 32, "duration": 24, "price_per_hour": 1.0,
+                                 "provider": f"dcs{idx}", "gpu_model": "RTX 4090",
+                                 "gpu_count": 1, "vram_gb": 24, "units": 1})
+    sp.attested = True; sp.attest_pubkey = "k"; sp.status = "online"; sp.last_seen = dbmod._utcnow()
+    sp.available_units = 1; sp.total_units = 1; sp.jobs_completed = 50; sp.heartbeats = 200
+    s.add_all([u, sp]); s.commit()
+    uid, spid = u.id, sp.id
+    key, jti = main.gen_secure_api_key(u.username, 90, ["node", "jobs"])
+    dbmod.record_issued_key(s, uid, jti, "agent", ["node", "jobs"], 90); s.close()
+    return {"user_id": uid, "spec_id": spid, "kh": {"X-API-KEY": key}}
+
+def _agent_key_for_spec(spec_id):
+    # mint a node/jobs key for whichever spec's owner a rank landed on (robust to router choice)
+    s = dbmod.SessionLocal()
+    sp = dbmod.get_spec_by_id(s, spec_id)
+    u = dbmod.get_user_by_id(s, sp.user_id)
+    key, jti = main.gen_secure_api_key(u.username, 90, ["node", "jobs"])
+    dbmod.record_issued_key(s, u.id, jti, "agent", ["node", "jobs"], 90); s.close()
+    return {"X-API-KEY": key}
+
+_dist_seller(0); _dist_seller(1)   # guarantee >=2 distinct bookable nodes exist
+c.post("/register_user", json={"username": "distbuyer", "password": "pw-correct-horse-1"})
+_dbt = c.post("/login", data={"username": "distbuyer", "password": "pw-correct-horse-1"}).json()["access_token"]
+_dbh = {"Authorization": "Bearer " + _dbt}
+_ds = dbmod.SessionLocal(); dbmod.deposit(_ds, dbmod.get_user_by_username(_ds, "distbuyer"), 50.0); _ds.commit(); _ds.close()
+_dj = c.post("/distributed", headers=_dbh, json={"image": "pytorch/pytorch:2.3.0",
+             "command": "torchrun train.py", "world_size": 2, "hours": 1, "backend": "nccl"})
+_djj = _dj.json()
+ok("POST /distributed forms a 2-GPU cluster across DISTINCT machines (anti-affinity)",
+   _dj.status_code == 200 and _djj["world_size"] == 2
+   and len({rk["spec_id"] for rk in _djj["ranks"]}) == 2)
+ok("a distributed cluster that needs more machines than exist is refused (409, nothing charged)",
+   c.post("/distributed", headers=_dbh, json={"image": "x/y:1", "command": "z",
+          "world_size": 50, "hours": 1}).status_code == 409)
+_rk0 = next(rk for rk in _djj["ranks"] if rk["rank"] == 0)
+_rk1 = next(rk for rk in _djj["ranks"] if rk["rank"] == 1)
+_r0kh = _agent_key_for_spec(_rk0["spec_id"]); _r1kh = _agent_key_for_spec(_rk1["spec_id"])
+_reg = c.post("/jobs/rendezvous", headers=_r0kh, json={"task_id": _rk0["task_id"], "host": "10.9.0.1", "port": 29500})
+c.post("/jobs/rendezvous", headers=_r1kh, json={"task_id": _rk1["task_id"], "host": "10.9.0.2", "port": 29500})
+ok("rank 0 registers the VPN rendezvous address; a joining rank fetches it",
+   _reg.status_code == 200
+   and c.get(f"/jobs/rendezvous/{_djj['job_id']}", headers=_r1kh).json()["master_addr"] == "10.9.0.1")
+ok("the cluster manifest shows kind=distributed with per-rank status",
+   c.get(f"/jobs/manifest/{_djj['job_id']}", headers=_dbh).json()["kind"] == "distributed")
+# "another provider": the cluster exports to the tools an org already runs (MPI/torchrun/Ray/Slurm)
+ok("the cluster exports as an MPI/torchrun hostfile (Petabyte = another node pool, not infra change)",
+   "10.9.0.1 slots=" in c.get(f"/jobs/{_djj['job_id']}/hostfile", headers=_dbh).text)
+_cl = c.get(f"/jobs/{_djj['job_id']}/cluster", headers=_dbh).json()
+ok("the cluster spec hands back launch commands for mpirun / torchrun / ray / srun",
+   {"mpirun", "torchrun", "ray_worker", "slurm_srun"} <= set(_cl["launch"]))
+# a buyer launches distributed FROM THE APP: /cluster page + availability endpoint
+_clp = c.get("/cluster")
+ok("the /cluster page is a buyer-facing distributed launcher (posts /distributed, shows availability)",
+   _clp.status_code == 200 and "clusterLaunch" in _clp.text and "/distributed/availability" in _clp.text)
+ok("the app nav links buyers to the Distributed launcher", ">Distributed<" in _clp.text)
+_av = c.get("/distributed/availability").json()
+ok("availability tells the app the max cluster size it can form right now (distinct machines)",
+   set(_av) >= {"available_nodes", "max_cluster", "max_nodes_cap"} and _av["available_nodes"] >= 2)
+# buyer chooses VPN: the app has the toggle, and a VPN cluster hands back a WireGuard config
+ok("the /cluster page offers a Private network (VPN) toggle", 'id="cl_vpn"' in _clp.text)
+_dist_seller(20); _dist_seller(21)   # fresh capacity for a VPN cluster
+_vj = c.post("/distributed", headers=_dbh, json={"image": "pytorch/pytorch:2.3.0",
+             "command": "torchrun t.py", "world_size": 2, "hours": 1, "vpn": True}).json()
+ok("a VPN cluster returns a vpn_config_url and a real WireGuard client config",
+   _vj.get("vpn") is True and _vj.get("vpn_config_url")
+   and "[Interface]" in c.get(_vj["vpn_config_url"], headers=_dbh).text)
+
+# --- split API portals: /data (buy data) and /devs (build compute), Scalar-rendered, DISJOINT ---
+_dp = c.get("/data"); _vp = c.get("/devs")
+ok("/data renders a Scalar API reference for the buy-data product",
+   _dp.status_code == 200 and "scalar" in _dp.text.lower() and "/data/openapi.json" in _dp.text)
+ok("/devs renders a Scalar API reference for the build-compute product",
+   _vp.status_code == 200 and "scalar" in _vp.text.lower() and "/devs/openapi.json" in _vp.text)
+_dspec = c.get("/data/openapi.json").json(); _vspec = c.get("/devs/openapi.json").json()
+_dpaths = set(_dspec.get("paths", {})); _vpaths = set(_vspec.get("paths", {}))
+ok("the /data spec contains ONLY the data endpoints (buy-data product)",
+   len(_dpaths) > 0 and all(p.startswith("/api/v1/data") for p in _dpaths))
+ok("the /devs spec contains developer endpoints and NO data endpoints",
+   len(_vpaths) > 0 and not any(p.startswith("/api/v1/data") for p in _vpaths))
+ok("an endpoint in /data can NOT appear in /devs — the two specs are strictly disjoint",
+   len(_dpaths & _vpaths) == 0)
+ok("the /devs spec excludes operator-only /admin endpoints",
+   not any(p.startswith("/admin") for p in _vpaths))
+ok("the /data reference carries the buy-data docs (pricing, sandbox, scope) rendered by Scalar",
+   "Buying data" in (_dspec.get("info", {}).get("description") or "")
+   and main.DATA_API_SANDBOX_KEY in (_dspec.get("info", {}).get("description") or ""))
+ok("/developers links to BOTH product references (/data and /devs)",
+   'href="/data"' in _dev and 'href="/devs"' in _dev)
+
+# --- wallet-only onboarding: paste a wallet, get a ONE-LINE installer, no account (like a miner) ---
+ok("the /install page offers a wallet-only start (no login) wired to /nodes/quickstart",
+   "walletStart" in _inst and "/nodes/quickstart" in _inst and 'id="qwallet"' in _inst)
+_qw = "0xABCDEF0123456789abcdef0123456789ABCDEF01"
+_qr = c.post("/nodes/quickstart", json={"wallet": _qw})
+_qj = _qr.json()
+ok("POST /nodes/quickstart returns a token-bound ONE-LINE installer from just a wallet — no signup",
+   _qr.status_code == 200 and _qj.get("new_account") is True and bool(_qj.get("install_token"))
+   and "| bash" in _qj.get("install", {}).get("linux", "")
+   and "/i/" in _qj.get("install", {}).get("linux", "")
+   and _qj.get("install", {}).get("windows", "").endswith("| iex")
+   and ".ps1" in _qj.get("install", {}).get("windows", ""))
+ok("quickstart is explicit that it is NOT payout-ready (KYC still required at withdrawal)",
+   _qj.get("payout_ready") is False and "KYC" in _qj.get("note", ""))
+ok("the one-liner URL is host-relative to this server (built from the request, not a hardcoded host)",
+   "://testserver/i/" in _qj.get("install", {}).get("linux", "") and "petabyte.market" not in _qj.get("install", {}).get("linux", ""))
+# the one-liner works: fetching /i/<token> serves a runnable installer with a FRESH key baked in
+_qtok = _qj["install_token"]
+_qsh = c.get("/i/" + _qtok)
+ok("GET /i/<token> serves a non-interactive Linux installer with a minted key + this server baked in",
+   _qsh.status_code == 200 and "PETABYTE_API_KEY='" in _qsh.text
+   and "PETABYTE_API_URL='" in _qsh.text and "petabyte-agent" in _qsh.text)
+_qps = c.get("/i/" + _qtok + ".ps1")
+ok("GET /i/<token>.ps1 serves the Windows one-liner installer (env baked in)",
+   _qps.status_code == 200 and "$env:PETABYTE_API_KEY='" in _qps.text)
+ok("an unknown/expired install token 404s (fail-closed, no key handed out)",
+   c.get("/i/definitely-not-a-real-token").status_code == 404)
+# wallet flow auto-prices -> the token pins NO price, so no `export PRICE_PER_HOUR` is injected
+# (the base script still *references* the var to read it; we assert no pinned value was baked in)
+ok("the wallet one-liner pins no price (each node auto-prices from its GPU benchmark)",
+   "export PRICE_PER_HOUR=" not in _qsh.text)
+# the wallet becomes an UNVERIFIED usdc payout destination — captured, but it can move no money
+import db as _dbq
+_qs = _dbq.SessionLocal()
+try:
+    _qu = _dbq.get_user_by_username(_qs, "wallet_" + _qw.lower()[2:])
+    _qm = _dbq.list_payout_methods(_qs, _qu.id) if _qu else []
+    ok("the wallet is stored as a seller's USDC destination, UNVERIFIED (no money can move yet)",
+       _qu is not None and _qu.role == "seller"
+       and any(m.kind == "usdc" and (m.destination or "").lower() == _qw.lower() and not m.verified
+               for m in _qm))
+    import payout_readiness as _pr
+    ok("a wallet-only seller is NOT live-payout-ready (fail-closed until real verification)",
+       _pr.is_seller_payout_ready(_qs, _qu.id) is False)
+finally:
+    _qs.close()
+# same wallet again -> reuse the identity (workers share one balance, like a mining address)
+_qr2 = c.post("/nodes/quickstart", json={"wallet": _qw.lower()})
+ok("re-onboarding the same wallet reuses the identity (idempotent, one balance per wallet)",
+   _qr2.status_code == 200 and _qr2.json().get("new_account") is False and bool(_qr2.json().get("install_token")))
+# account path: a signed-in seller gets the same one-liner, and CAN pin a price
+c.post("/register_user", json={"username": "onel_seller", "password": "hunter2-correct-horse"})
+_oltok = c.post("/login", data={"username": "onel_seller", "password": "hunter2-correct-horse"}).json()["access_token"]
+_olh = {"Authorization": "Bearer " + _oltok}
+ok("POST /nodes/install_token requires sign-in (no anonymous minting on this path)",
+   c.post("/nodes/install_token", json={}).status_code in (401, 403))
+_olr = c.post("/nodes/install_token", json={"price": 2.5}, headers=_olh)
+ok("a signed-in seller gets the same token one-liner (account path), with a pinned price",
+   _olr.status_code == 200 and "| bash" in _olr.json().get("install", {}).get("linux", ""))
+ok("the pinned price is baked into the served installer (PRICE_PER_HOUR set)",
+   "PRICE_PER_HOUR='2.5" in c.get("/i/" + _olr.json()["install_token"]).text)
+# a malformed address is refused with a helpful 422 (not a 500, not a silent stub)
+ok("a non-address is refused (422), never silently accepted",
+   c.post("/nodes/quickstart", json={"wallet": "definitely-not-a-wallet"}).status_code == 422)
+# OFAC: when the sanctions list is configured, a listed address is refused (fail-closed screen)
+import tempfile as _tf, os as _os2, sanctions as _sanc
+_bad = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+_sfd, _spath = _tf.mkstemp(suffix=".txt")
+with _os2.fdopen(_sfd, "w") as _sf:
+    _sf.write(_bad + "\n")
+_prev_ofac = _os2.environ.get("OFAC_SDN_ADDRESSES_FILE")
+_os2.environ["OFAC_SDN_ADDRESSES_FILE"] = _spath
+_sanc.reset_cache()
+try:
+    ok("an OFAC-sanctioned wallet is refused at onboarding when the list is configured (403)",
+       c.post("/nodes/quickstart", json={"wallet": _bad}).status_code == 403)
+finally:
+    if _prev_ofac is None:
+        _os2.environ.pop("OFAC_SDN_ADDRESSES_FILE", None)
+    else:
+        _os2.environ["OFAC_SDN_ADDRESSES_FILE"] = _prev_ofac
+    _sanc.reset_cache()
+    _os2.remove(_spath)
 
 # --- env drift guard: every var the code reads must be documented in template.env
 #     AND generated by deploy.sh, or it silently never reaches production ---
@@ -1549,6 +2111,10 @@ ok("newsletter response no longer shows the 'wired up yet' placeholder",
    "wired up" not in _nl.text.lower())
 ok("bad email to newsletter is rejected",
    c.post("/newsletter/subscribe", json={"email":"nope"}).status_code == 422)
+# a signup recorded while the provider is unconfigured is NOT stranded — it stays pending for
+# reconciliation (self-heals once Mailgun is configured).
+ok("unsynced signup is tracked for reconciliation (never silently stranded)",
+   dbmod.count_unsynced_newsletter(dbmod.SessionLocal()) >= 1)
 _lv=c.get("/landing/video").json()
 ok("landing video endpoint returns a default id", bool(_lv.get("video_id")))
 
@@ -1667,6 +2233,24 @@ ok("deploy builds the agent bundle the API serves",
 ok("install.sh served by API", c.get("/install.sh").status_code==200 and "petabyte-agent" in c.get("/install.sh").text)
 ok("install.ps1 served by API", c.get("/install.ps1").status_code==200)
 ok("installers are key-based (no creds)", "PETABYTE_API_KEY" in c.get("/install.sh").text and "PETABYTE_PASS" not in c.get("/install.sh").text)
+# REGRESSION GUARD: the SERVED installer must be the current, secure one — it installs the
+# container egress firewall (protects the seller's home network) and can fetch the agent bundle
+# without cloning (private-repo safe). A stale committed copy served ahead of it was a real bug.
+_ish=c.get("/install.sh").text
+ok("served install.sh installs the container egress firewall (seller-network protection)",
+   "DOCKER-USER" in _ish and "169.254" in _ish)
+ok("served install.sh can fetch the agent bundle (no GitHub clone required / private-repo safe)",
+   "/agent.tar.gz" in _ish)
+# WSL/Linux SIGNED auto-update: the API serves the bundle signature and pins the release pubkey
+# into the installer so update.sh applies ONLY signed bundles (fail-closed when unset).
+ok("agent.tar.gz.sig route exists (404 until a signed bundle is deployed)",
+   c.get("/agent.tar.gz.sig").status_code==404)
+os.environ["PETABYTE_RELEASE_PUBKEY"]=base64.b64encode(_VENDOR_SK.public_key().public_bytes_raw()).decode()
+ok("installer pins the release pubkey when configured (enables signed auto-update)",
+   "-----BEGIN PUBLIC KEY-----" in c.get("/install.sh").text and "__PETABYTE_RELEASE_PUBKEY_PEM__" not in c.get("/install.sh").text)
+del os.environ["PETABYTE_RELEASE_PUBKEY"]
+ok("installer embeds NO key when unset (auto-update fail-closed, never TLS-only for root code)",
+   "-----BEGIN PUBLIC KEY-----" not in c.get("/install.sh").text)
 _lg=c.get("/static/petabyte-logo.png"); ok("brand logo served", _lg.status_code==200 and _lg.headers.get("content-type")=="image/png")
 _bm=c.get("/static/petabyte-bimi.svg"); ok("BIMI mark served (svg tiny-ps)", _bm.status_code==200 and _bm.headers.get("content-type")=="image/svg+xml" and b"baseProfile=\"tiny-ps\"" in _bm.content)
 ok("favicon served", c.get("/favicon.ico").status_code==200)
@@ -1684,13 +2268,23 @@ ok("public listing id is an opaque handle, not an enumerable int",
    all(isinstance(_s.get("id"), str) and not str(_s.get("id")).isdigit() for _s in _pm["specs"]))
 ok("public /marketplace/specs leaks no identifiers",
    all(set(s).issubset(_allowed) and not (set(s) & _forbidden) for s in _pm["specs"]))
+# SQL filter/sort/pagination: count is the TOTAL matches; specs is a bounded page.
+if _pm["count"] > 1:
+    _pg1=c.get("/marketplace/specs?limit=1&offset=0").json()
+    _pg2=c.get("/marketplace/specs?limit=1&offset=1").json()
+    ok("marketplace paginates in SQL (limit caps the page, count stays the total)",
+       len(_pg1["specs"])==1 and _pg1["count"]==_pm["count"])
+    ok("marketplace offset returns a different node (page 2 != page 1)",
+       _pg1["specs"][0]["id"] != _pg2["specs"][0]["id"])
+ok("price sort is ascending (SQL ORDER BY)",
+   all(_pm["specs"][i]["price_per_hour"] <= _pm["specs"][i+1]["price_per_hour"] for i in range(len(_pm["specs"])-1)))
 
 # Google OAuth stub flow: login -> redirect -> callback -> JWT -> works on /wallet
 lg=c.get("/auth/google/login", follow_redirects=False)
 ok("google login redirects", lg.status_code in (302,307) and "callback" in lg.headers.get("location",""))
 cb=c.get("/auth/google/callback?code=stub&email=gtest@example.com", follow_redirects=False)
 loc=cb.headers.get("location","")
-ok("google callback issues JWT redirect to /app", cb.status_code in (302,307) and "/app#t=" in loc)
+ok("google callback issues JWT redirect to /console", cb.status_code in (302,307) and "/console#t=" in loc)
 gjwt=loc.split("t=")[1]
 gw=c.get("/wallet", headers={"Authorization":f"Bearer {gjwt}"})
 ok("google-issued JWT authenticates", gw.status_code==200)
@@ -1709,10 +2303,50 @@ ok("admin overview requires auth", c.get("/admin/overview").status_code==401)
 ok("admin overview blocks non-admin", c.get("/admin/overview", headers=NAH).status_code==403)
 _ao=c.get("/admin/overview", headers=GAH)
 ok("admin overview ok for admin", _ao.status_code==200 and {"users","specs","jobs","payouts_pending"} <= set(_ao.json()))
+# --- admin operational snapshot (Live operations tiles + platform-health invariants) ---
+ok("admin ops requires auth", c.get("/admin/ops").status_code==401)
+ok("admin ops blocks non-admin", c.get("/admin/ops", headers=NAH).status_code==403)
+_aops=c.get("/admin/ops", headers=GAH)
+ok("admin ops returns the operational snapshot for admins",
+   _aops.status_code==200 and {"marketplace","vms","clusters","disk","teams","in_escrow","health"} <= set(_aops.json()))
+_aopsb=_aops.json()
+ok("admin ops surfaces the ledger-balance health invariant",
+   "ledger_balanced" in _aopsb["health"] and "payout_backlog" in _aopsb["health"]
+   and isinstance(_aopsb["marketplace"].get("utilization_pct"), (int, float)))
 ok("admin whoami true for admin", c.get("/admin/whoami", headers=GAH).json().get("admin")==True)
 ok("admin whoami 403 for non-admin", c.get("/admin/whoami", headers=NAH).status_code==403)
+# --- DATA MOAT: the GPU-authenticity training dataset is collected + admin-exportable ---
+ok("authenticity dataset is admin-gated (403 for non-admin)", c.get("/admin/dataset/authenticity", headers=NAH).status_code==403)
+_ds=c.get("/admin/dataset/authenticity", headers=GAH)
+ok("authenticity dataset exports feature rows collected from real benchmarks + idle reports",
+   _ds.status_code==200 and _ds.json()["stats"]["samples"]>=2 and isinstance(_ds.json()["rows"], list))
+ok("dataset rows carry a supervised label + a ratio-to-public-reference feature",
+   any("label_fraud" in r and any(k.startswith("ratio_") for k in r) for r in _ds.json()["rows"]))
+ok("dataset exports as JSONL for training pipelines",
+   c.get("/admin/dataset/authenticity?format=jsonl", headers=GAH).headers.get("content-type","").startswith("application/x-ndjson"))
 ok("admin users list flags admin", any(u["username"]=="gtest@example.com" and u["is_admin"] for u in c.get("/admin/users", headers=GAH).json()["users"]))
 ok("admin specs list", c.get("/admin/specs", headers=GAH).status_code==200)
+# newsletter reconciliation (deferred-signup delivery) is admin-gated + reports pending count
+ok("newsletter reconcile is admin-gated", c.post("/admin/newsletter/reconcile", headers=NAH).status_code==403)
+_nrec=c.post("/admin/newsletter/reconcile", headers=GAH).json()
+ok("newsletter reconcile reports pending count (no-op when Mailgun unconfigured)",
+   "pending" in _nrec and _nrec.get("skipped") is True)
+# --- DISASTER RECOVERY: platform database backup to S3 (S3_STUB in tests) ---
+ok("backups admin list is admin-gated (403 for non-admin)", c.get("/admin/backups", headers=NAH).status_code==403)
+ok("backups run is admin-gated (403 for non-admin)", c.post("/admin/backups/run", headers=NAH).status_code==403)
+_bkr=c.post("/admin/backups/run", headers=GAH)
+# 200 = dumped+uploaded; 503 = dump tool unavailable (e.g. pg_dump missing on the PG run) — either
+# way the attempt must be RECORDED so 'no recent backup' alerting works.
+ok("backup run either succeeds or fails loudly (no silent no-op)", _bkr.status_code in (200,503))
+_bkl=c.get("/admin/backups", headers=GAH).json()
+ok("backups list returns a status summary + rows", "status" in _bkl and isinstance(_bkl.get("backups"),list) and len(_bkl["backups"])>=1)
+if _bkr.status_code==200:
+    _bid=_bkr.json()["backup_id"]
+    ok("successful backup is recorded as ok with a sha256", any(b["id"]==_bid and b["status"]=="ok" and b["sha256"] for b in _bkl["backups"]))
+    ok("stored backup verifies (sha256 + decompresses)", c.post(f"/admin/backups/{_bid}/verify", headers=GAH).json()["ok"] is True)
+    ok("backup status reports a fresh last-backup age", _bkl["status"]["last_backup_age_seconds"] is not None)
+else:
+    ok("a failed backup attempt is recorded (status=failed) for alerting", any(b["status"]=="failed" for b in _bkl["backups"]))
 ok("admin can set the landing video from a full Shorts URL",
    c.post("/admin/landing/video", headers=GAH,
           json={"video":"https://youtube.com/shorts/UUSWYaxboDA?si=x"}).json().get("video_id")=="UUSWYaxboDA")
@@ -1731,13 +2365,14 @@ ok("landing page adapts the aspect ratio to orientation",
    "landingvideoratio" in c.get("/").text and "56.25%" in c.get("/").text)
 ok("admin panel exposes the orientation selector",
    "vid_orient" in c.get("/admin").text)
-_appjs=c.get("/app").text
-ok("the dashboard loads the referral card only after auth (not at parse time)",
-   _appjs.count("loadReferral()") >= 2 and "if(TOKEN){wallet();specs();loadReferral()" in _appjs)
-# guard the exact bug that shipped: loadReferral must be its OWN top-level function, not
-# nested inside login(). If login() closes right before it, the nesting is gone.
-ok("loadReferral is a top-level function (login() closes before it)",
-   "conReset('signed in — ready to run.','sys');}\n\nasync function loadReferral" in _appjs)
+_appjs=c.get("/console").text
+ok("the console only fetches user data after auth (consoleLoad guards on authed())",
+   "async function consoleLoad" in _appjs and "!authed()" in _appjs and "consoleLoad();" in _appjs)
+# guard the exact bug that shipped: the referral card must be its OWN top-level function,
+# lazily loaded when the billing tab opens — never at parse time.
+ok("the referral card is a top-level function loaded lazily (not at parse time)",
+   "async function cReferral" in _appjs and "cReferral();" in _appjs
+   and "async function cBilling" in _appjs)
 c.post("/admin/landing/video", headers=GAH, json={"video":"UUSWYaxboDA"})
 ok("the landing then serves the admin-set video",
    c.get("/landing/video").json().get("video_id")=="UUSWYaxboDA")
@@ -1813,7 +2448,10 @@ _vbh={"Authorization":"Bearer "+c.post("/login", data={"username":"vmbuyerX","pa
 c.post("/deposit", headers=_vbh, json={"amount":200})
 _lv=c.post("/launch", headers=_vbh, json={"template":"comfyui","hours":2}).json()
 _vmid=_lv["vm_id"]; _url0=_lv["url"]["ssh"]
-ok("launch returns a stable vm URL", _url0==f"ssh vm-{_vmid}@petabyte.market")
+# Canonical address is the per-VM subdomain (id is the HOST -> the SSH username is free for any
+# login user: root@, app@, ...). The username-routing form is a labelled zero-config fallback.
+ok("launch returns a stable vm URL (subdomain: user is free)", _url0==f"ssh root@{_vmid}.petabyte.market")
+ok("username-routing fallback is offered too", _lv["url"]["ssh_username_fallback"]==f"ssh vm-{_vmid}@petabyte.market")
 ok("VM lands on cheapest node A", dbmod.get_vm_route(dbmod.SessionLocal(),_vmid).current_spec_id==_asp)
 ok("hosting node registers tunnel -> running", c.post("/vm/register_tunnel", headers=_ah, json={"vm_id":_vmid,"tunnel_port":7001}).json().get("vm_status")=="running")
 ok("non-hosting seller can't register tunnel", c.post("/vm/register_tunnel", headers=_bh, json={"vm_id":_vmid,"tunnel_port":9}).status_code==403)
@@ -1823,7 +2461,7 @@ _saf.last_seen=_dt.now(_tz.utc)-_td(seconds=999); _dbf.add(_saf); _dbf.commit()
 _rp,_mig=dbmod.reap_and_failover(_dbf); _dbf.close()
 _vmf=dbmod.get_vm_route(dbmod.SessionLocal(),_vmid)
 ok("failover migrates VM off dead node A -> B", _mig==1 and _vmf.current_spec_id==_bsp)
-ok("stable URL unchanged across failover", f"ssh vm-{_vmid}@petabyte.market"==_url0 and _vmf.migrations==1)
+ok("stable URL unchanged across failover", f"ssh root@{_vmid}.petabyte.market"==_url0 and _vmf.migrations==1)
 ok("node B re-registers -> running again", c.post("/vm/register_tunnel", headers=_bh, json={"vm_id":_vmid,"tunnel_port":7050}).json().get("vm_status")=="running")
 ok("buyer can stop the VM", c.post(f"/vm/{_vmid}/stop", headers=_vbh).status_code==200)
 
@@ -1848,6 +2486,23 @@ _asid=c.post("/register_specs", headers=_auth, json={"cpu":8,"ram":32,"gpu_model
 _aat={"cpu":8,"ram":32,"gpu_model":"A100","nonce":"autoseller","ts":int(time.time())}
 c.post("/prove", headers=_auth, json={"spec_id":_asid,"attestation":_aat,"signature":sign_proof(_VENDOR_SK,_aat),"pubkey":base64.b64encode(_VENDOR_SK.public_key().public_bytes_raw()).decode()})
 _ak=c.post("/create_api_key", headers=_auth).json()["api_key"]; c.post("/heartbeat", headers={"X-API-KEY":_ak}, json={"spec_id":_asid})
+# explainable price recommendation: benchmark-anchored, inside the seller's band, shows its factors
+_prec=c.get(f"/nodes/{_asid}/price/recommendation", headers=_auth).json()
+ok("price recommendation is benchmark-anchored for A100", _prec["anchor_source"]=="performance" and _prec["perf_reference"]>0)
+ok("price recommendation still reports the cloud reference for A100", _prec["cloud_reference"]==4.10)
+ok("price recommendation stays inside the seller's band", 0.5<=_prec["recommended_price"]<=2.0)
+ok("price recommendation shows its factors + a plain explanation",
+   isinstance(_prec.get("factors"),list) and len(_prec["factors"])>=1 and bool(_prec.get("explanation")))
+ok("price recommendation is owner-only", c.get(f"/nodes/{_asid}/price/recommendation", headers=_mh).status_code==404)
+# GPU price catalog: benchmark-ordered, a slower GPU is never priced above a faster one
+_cat=c.get("/pricing/catalog").json()
+ok("pricing catalog lists GPU models sorted by benchmark", _cat["count"]>=20 and _cat["sorted_by"].startswith("benchmark"))
+_cprices=[r["reference_price_per_hour"] for r in _cat["catalog"]]
+ok("catalog reference price never decreases as benchmark rises (2060 < 4080 < 4090)",
+   all(_cprices[i]<=_cprices[i+1] for i in range(len(_cprices)-1)))
+_p2060=c.get("/pricing/suggest?gpu_model=RTX%202060").json()["suggested_price"]
+_p4080=c.get("/pricing/suggest?gpu_model=RTX%204080").json()["suggested_price"]
+ok("suggested price honours benchmark order (2060 cheaper than 4080)", _p2060 < _p4080)
 dbmod.reprice_specs(dbmod.SessionLocal())
 _asp=dbmod.get_spec_by_id(dbmod.SessionLocal(),_asid)
 ok("auto-price clamps within [min,max], below cloud", 0.5<=_asp.price_per_hour<=2.0)
@@ -1869,5 +2524,29 @@ _ob=c.post("/request_vm", headers=_oeh, json={"spec_id":_msp,"hours":1,"org_id":
 ok("org booking extends from org wallet", dbmod.extend_booking(dbmod.SessionLocal(), _ob["booking_id"], 2)==True)
 _obk=dbmod.SessionLocal().query(dbmod.Booking).filter(dbmod.Booking.id==_ob["booking_id"]).first()
 ok("org extend grew escrow to 3h", _obk.hours==3)
+
+# --- model cache-locality signal (scheduler prefers a node that already holds the model) ---
+_ml = c.post("/nodes/models", headers={"X-API-KEY": seller_key},
+             json={"spec_id": spec_id, "models": ["Qwen/Qwen3-8B", "meta-llama/Llama-3.1-8B", "../evil"]})
+ok("agent reports cached models (bad ids rejected, valid kept)",
+   _ml.status_code == 200 and _ml.json()["cached_models"] == 2)
+_mv = c.get(f"/nodes/{spec_id}/models", headers=sh).json()
+ok("owner sees the node's cached model list", "Qwen/Qwen3-8B" in _mv["models"] and "../evil" not in _mv["models"])
+_mlj = c.post("/nodes/models", headers=sh, json={"spec_id": spec_id, "models": ["Qwen/Qwen3-8B"]})
+ok("owner can also report via bearer token (petabyte node sync-models path)", _mlj.status_code == 200)
+ok("reporting cached models needs auth (no key/token -> 401)",
+   c.post("/nodes/models", json={"spec_id": spec_id, "models": []}).status_code == 401)
+ok("a foreign user cannot read another node's cached models",
+   c.get(f"/nodes/{spec_id}/models", headers=bh).status_code == 404)
+# availability counts ONLINE nodes; refresh liveness so this doesn't depend on how long the
+# (long) smoke run has taken to reach here.
+c.post("/heartbeat", headers={"X-API-KEY": seller_key}, json={"spec_id": spec_id})
+_av = c.get("/api/models/availability", params={"id": "Qwen/Qwen3-8B"}).json()
+ok("availability reports how many online nodes hold the model", _av["nodes_cached"] >= 1)
+ok("availability is zero for a model no node holds",
+   c.get("/api/models/availability", params={"id": "nobody/x"}).json()["nodes_cached"] == 0)
+_ranked = dbmod.rank_specs_for_model(dbmod.SessionLocal().query(dbmod.SellerSpec).all(), "Qwen/Qwen3-8B")
+ok("scheduler ranking puts a cache-holding node first",
+   _ranked and dbmod.node_has_model_cached(_ranked[0], "Qwen/Qwen3-8B"))
 
 print("\nALL CHECKS PASSED")

@@ -50,6 +50,11 @@ jobs:
           python observability/grafana/validate_dashboards.py
           python observability/grafana/build_dashboards.py
           git diff --exit-code observability/grafana/dashboards
+      - name: provisioning config — provider path == compose mount, folder, uids
+        # Fail BEFORE deploying if the provider path drifts from the compose bind mount,
+        # the dashboards path gets nested under the named volume (masking risk), the folder
+        # isn't Petabyte, or the committed JSON set is malformed / missing a canonical uid.
+        run: python observability/grafana/verify_provisioning.py
       - name: compose + configs — YAML validity
         run: |
           python - <<'PY'
@@ -180,48 +185,94 @@ jobs:
             docker compose up -d --remove-orphans
             # Bind-mounted config changes need a nudge to take effect:
             #  - Prometheus reloads rules/config on SIGHUP (no downtime).
-            #  - Loki/Tempo/OTel/Grafana pick up their mounted configs + datasource provisioning
-            #    on restart (Grafana dashboards also hot-reload via the file provider).
+            #  - Loki/Tempo/OTel pick up their mounted configs on restart.
             docker compose kill -s HUP prometheus 2>/dev/null || true
-            docker compose restart loki tempo otel-collector grafana
+            docker compose restart loki tempo otel-collector
+            # Grafana: FORCE-RECREATE (not restart). A plain `docker compose restart` reuses
+            # the existing container and does NOT apply mount/volume changes — so a change to
+            # the dashboards bind mount would never take effect. Recreating guarantees the
+            # container comes up with the current mounts and re-runs file provisioning.
+            docker compose up -d --force-recreate grafana
             echo "compose applied"'
 
-      - name: Health check (Grafana) + rollback compose on failure
+      - name: Verify dashboards provisioned (health + datasources + UIDs) or rollback
+        # SUCCESS requires ALL of: Grafana HTTP healthy AND datasources provisioned AND every
+        # expected dashboard UID present in the Petabyte folder. A healthy /api/health alone is
+        # NOT sufficient — that is exactly how the folder was silently empty before. On failure,
+        # dump NON-SECRET diagnostics, roll back to the last good config, RE-VERIFY the rollback,
+        # and fail the job.
         run: |
           set -euo pipefail
           $SSH "$OBS_USER@$OBS_HOST" '
-            set +e
+            set -uo pipefail
             cd '"$REMOTE_DIR"'
-            for i in $(seq 1 24); do
-              if curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
-                echo "grafana healthy"; exit 0
-              fi
+            # creds for the local API come from the VM .env; never printed. Default user=admin.
+            set -a; . ./.env 2>/dev/null || true; set +a
+            export GF_SECURITY_ADMIN_USER="${GF_SECURITY_ADMIN_USER:-admin}"
+
+            for i in $(seq 1 30); do
+              curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && break
               sleep 5
             done
-            echo "::error::Grafana health check failed after deploy — restoring the last FULL backup"
+
+            verify() { GRAFANA_URL=http://127.0.0.1:3000 python3 grafana/verify_provisioning.py \
+                         --grafana-url http://127.0.0.1:3000 --skip-static-config; }
+
+            if verify; then
+              echo "VERIFIED: all expected dashboards present in the Petabyte folder"
+              exit 0
+            fi
+
+            echo "::group::provisioning diagnostics (non-secret)"
+            echo "--- docker compose ps ---";           docker compose ps || true
+            echo "--- dashboard files on host ---";      ls -la grafana/dashboards | tail -n +1 || true
+            echo "--- dashboard files inside container ---"
+            docker compose exec -T grafana sh -c "ls -la /etc/grafana/dashboards 2>&1; echo; ls -la /etc/grafana/provisioning/dashboards 2>&1" || true
+            echo "--- grafana mounts (prove the bind mount is present, not masked) ---"
+            docker inspect -f "{{range .Mounts}}{{.Type}} {{.Source}} -> {{.Destination}} ro={{if .RW}}false{{else}}true{{end}}{{println}}{{end}}" "$(docker compose ps -q grafana)" || true
+            echo "--- grafana provisioning log lines ---"
+            docker compose logs --tail=400 grafana 2>&1 | grep -iE "provision|dashboard|folder|datasource|duplicate|uid|permission|invalid|error" | tail -n 60 || true
+            echo "::endgroup::"
+
+            echo "::error::Dashboard provisioning verification FAILED — restoring the last good config"
             last=$(ls -1dt backups/*/ 2>/dev/null | head -1)
             if [ -n "$last" ]; then
-              # Restore every backed-up path (not just docker-compose.yml): the bind-mounted
-              # grafana/prometheus/loki/tempo/otel/compose configs were overwritten by rsync, so
-              # a compose-only rollback would leave the broken config active.
               for p in docker-compose.yml grafana prometheus loki tempo otel-collector compose; do
                 if [ -e "$last/$p" ]; then rm -rf "./$p"; cp -a "$last/$p" "./$p"; fi
               done
               docker compose up -d --remove-orphans
               docker compose kill -s HUP prometheus 2>/dev/null || true
-              docker compose restart loki tempo otel-collector grafana 2>/dev/null || true
+              docker compose restart loki tempo otel-collector 2>/dev/null || true
+              docker compose up -d --force-recreate grafana 2>/dev/null || true
+              for i in $(seq 1 24); do
+                curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && break; sleep 5
+              done
+              if verify; then
+                echo "::warning::Rolled back to the previous config and it verifies clean."
+              else
+                echo "::error::ROLLBACK ALSO FAILS verification — the previous config is not known-good either. Manual intervention needed."
+              fi
+            else
+              echo "::error::No backup found to roll back to."
             fi
-            docker compose logs --tail=60 grafana || true
             exit 1'
 
-      - name: Deploy summary (no secrets)
+      - name: Deploy summary (no secrets, evidence-based)
         if: always()
         run: |
           {
             echo "## Observability deploy"
             echo ""
             echo "Synced \`observability/\` -> \`$REMOTE_DIR\` and reloaded the stack."
-            echo "Grafana: https://data.petabyte.market  ·  dashboards auto-provisioned from files."
+            if [ "${{ job.status }}" = "success" ]; then
+              echo "**Grafana dashboards VERIFIED present** in the \`Petabyte\` folder via the "
+              echo "Grafana API (every expected UID from committed JSON). · https://data.petabyte.market"
+            else
+              echo "**Deploy FAILED provisioning verification** — Grafana may be alive but the "
+              echo "\`Petabyte\` dashboards are not confirmed present. See the verify step's "
+              echo "diagnostics group above (host/container files, mounts, provisioning logs, "
+              echo "expected vs observed UIDs). A config rollback was attempted."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cleanup

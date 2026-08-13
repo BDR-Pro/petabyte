@@ -231,8 +231,10 @@ def _psettled(direction=None, account=None):
 _dr = _psettled(dbmod.DEBIT, dbmod.acct_seller_payable(sid2))
 ok("settled batch posts a seller_payable DEBIT == batch total (split-brain fixed)",
    len(_dr) == 1 and int(_dr[0].amount) == 1000)
-routing._post_batch_payout_ledger(s, batch)   # re-post
-ok("batch payout ledger leg is idempotent (no duplicate on re-post)", len(_psettled()) == 2)
+_readded = routing._add_batch_payout_ledger(s, batch)   # attempt a re-post (same batch key)
+s.commit()
+ok("batch payout ledger leg is idempotent (re-post adds nothing)",
+   _readded is False and len(_psettled()) == 2)
 _bal_ok, _ = dbmod.ledger_is_balanced(s)
 ok("ledger balances after the batch-payout leg", _bal_ok)
 # a re-run does not create a second batch or double-pay (no available obligations left)
@@ -615,6 +617,94 @@ s.close()
 
 # restore the real loader
 cap.load_dataset = _orig_load
+
+# ---------------- instant payout fee (a revenue line; scheduled stays free) ----------------
+from db import LedgerTx, LedgerEntry, PLATFORM_REVENUE   # noqa: E402
+s = dbmod.SessionLocal()
+_u = dbmod.create_user(s, "instpayee", "pw-abcdefghij")
+dbmod.credit_earnings(s, _u.id, 100.0)
+_m = dbmod.add_payout_method(s, _u, "usdc", "0xfeed", label="w")
+_m.verified = True; s.add(_m); s.commit()
+
+ok("instant fee floors at the flat minimum for small amounts ($10 -> $0.50)",
+   abs(float(dbmod.instant_payout_fee(10)) - 0.50) < 1e-9)
+ok("instant fee scales by pct on larger amounts ($1000 -> $15.00 at 1.5%)",
+   abs(float(dbmod.instant_payout_fee(1000)) - 15.0) < 1e-9)
+
+# scheduled (free) payout: no fee, full amount sent
+_pf = dbmod.request_payout(s, _u, _m, 20.0)
+ok("scheduled payout charges NO fee and sends the full amount",
+   float(_pf.fee_usd or 0) == 0.0 and float(_pf.amount_usd) == 20.0)
+
+# instant payout: fee deducted, net = amount - fee, fee booked to PLATFORM_REVENUE
+_fee = float(dbmod.instant_payout_fee(40))
+_pi = dbmod.request_payout(s, _u, _m, 40.0, fee=_fee)
+ok("instant payout: net sent = amount - fee, fee recorded on the payout",
+   abs(float(_pi.amount_usd) - (40.0 - _fee)) < 1e-6 and abs(float(_pi.fee_usd) - _fee) < 1e-6)
+ok("earnings drop by the GROSS (20 + 40 = 60), not the net — the fee comes out of the withdrawal",
+   abs(float(dbmod.get_user_by_id(s, _u.id).earnings) - 40.0) < 1e-6)
+_tx = (s.query(LedgerTx).filter(LedgerTx.reference_type == "payout",
+                                LedgerTx.reference_id == str(_pi.id)).first())
+_rev = sum(float(e.amount) for e in s.query(LedgerEntry).filter(LedgerEntry.tx_id == _tx.id).all()
+           if e.account == PLATFORM_REVENUE and e.direction == "credit")
+ok("the instant fee is booked to PLATFORM_REVENUE as a balanced ledger leg (real revenue)",
+   abs(_rev - _fee) < 1e-6)
+
+# a FAILED instant payout refunds the GROSS (net + fee) — seller is fully made whole
+dbmod.set_payout_status(s, _pi, "failed")
+ok("a FAILED instant payout refunds the GROSS (net + fee), not just the net",
+   abs(float(dbmod.get_user_by_id(s, _u.id).earnings) - (40.0 + 40.0)) < 1e-6)
+
+# guard: an amount at/under the fee is refused for instant (fee must be smaller than amount)
+ok("instant is refused when the fee would meet/exceed the amount (no zero/negative payout)",
+   dbmod.request_payout(s, _u, _m, 0.40, fee=float(dbmod.instant_payout_fee(0.40))) is None)
+s.close()
+
+# ---------------- anti-fraud payout holds (clearing window + instant maturity) ----------------
+import datetime as _dt2  # noqa: E402
+s = dbmod.SessionLocal()
+_hu = dbmod.create_user(s, "holdseller", "pw-abcdefghij")
+dbmod.credit_earnings(s, _hu.id, 100.0)
+_buyer = dbmod.create_user(s, "holdbuyer", "pw-abcdefghij")
+
+
+def _spec_for(uid):
+    sp = dbmod.SellerSpec(user_id=uid, cpu=4, ram=16, price_per_hour=dbmod.q(1),
+                          duration=24, gpu_model="RTX 4090")
+    s.add(sp); s.commit(); return sp.id
+
+
+def _released_booking(seller_id, buyer_id, spec_id, payout, released_at):
+    b = dbmod.Booking(buyer_id=buyer_id, seller_id=seller_id, spec_id=spec_id, hours=1,
+                      price_per_hour=dbmod.q(payout), gross_amount=dbmod.q(payout),
+                      platform_fee=dbmod.q(0), seller_payout=dbmod.q(payout),
+                      status="released", released_at=released_at)
+    s.add(b); s.commit(); return b
+
+
+_now = dbmod._utcnow().replace(tzinfo=None)
+_hspec = _spec_for(_hu.id)
+# a booking released JUST NOW -> its payout is still in the clearing window (held)
+_released_booking(_hu.id, _buyer.id, _hspec, 30.0, _now)
+ok("earnings from a just-completed job are HELD (not withdrawable during the clearing window)",
+   float(dbmod.withdrawable_earnings(s, _hu)) == 70.0)          # 100 earnings - 30 held
+# a booking released well before the window -> already cleared, not held
+_released_booking(_hu.id, _buyer.id, _hspec, 20.0, _now - _dt2.timedelta(hours=dbmod.EARNINGS_HOLD_HOURS + 1))
+ok("earnings that have passed the hold window ARE withdrawable (old completion adds no hold)",
+   float(dbmod.withdrawable_earnings(s, _hu)) == 70.0)          # still 70 — only the recent one holds
+
+# instant-payout maturity: a fresh seller must earn rep + N cleared jobs before fast cash-out
+_newbie = dbmod.create_user(s, "newbieseller", "pw-abcdefghij")
+_nspec = _spec_for(_newbie.id)
+ok("a brand-new seller is NOT instant-eligible (fast cash-out locked)",
+   dbmod.is_payout_matured(s, _newbie) is False)
+for _i in range(dbmod.PAYOUT_MATURITY_MIN_JOBS):
+    _released_booking(_newbie.id, _buyer.id, _nspec, 1.0,
+                      _now - _dt2.timedelta(hours=dbmod.EARNINGS_HOLD_HOURS + 5))
+_newbie.reputation = dbmod.MIN_REPUTATION; s.add(_newbie); s.commit()
+ok("instant unlocks once the seller has cleared N jobs in good standing",
+   dbmod.is_payout_matured(s, _newbie) is True)
+s.close()
 
 print(f"\n=== payout: {PASSES} passed, {FAILS} failed ===")
 for f in ("payout_test.db", "payout_test.db-wal", "payout_test.db-shm"):

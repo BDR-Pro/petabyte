@@ -1208,21 +1208,24 @@ def refund(db, tx: ComputeTransaction, *, amount: int = None, actor: str = "admi
     else:
         seller_share_settled = False
         import db as _dbm
-        obl = db.query(_dbm.PayoutObligation).filter(
-            _dbm.PayoutObligation.compute_tx_id == tx.id).first()
-        obl_state = getattr(obl, "state", None)
-        if obl is not None and obl_state in ("accrued", "available") and amount >= tx.captured_amount:
-            # Seller NOT yet paid: the money is still with the platform (the ledger already
-            # debited seller_payable). Reverse the whole obligation so the refunded share is
-            # never paid out. (A partial refund of an unpaid obligation is escalated below.)
-            obl.state = "reversed"; db.add(obl); db.commit()
-            seller_share_settled = True
-        else:
+        # Reverse the unpaid obligation only when the refund is CUMULATIVELY full
+        # (tx.refunded_amount — updated at L1164 — not just this single call, so two partial
+        # refunds that together equal the capture still trigger it). Claim it with a guarded
+        # atomic UPDATE (mirrors the transfer-path claim ~L816) so a concurrent batch settlement
+        # can't pay it between the check and the write.
+        if tx.refunded_amount >= tx.captured_amount:
+            claim = db.execute(_dbm.update(_dbm.PayoutObligation)
+                       .where(_dbm.PayoutObligation.compute_tx_id == tx.id,
+                              _dbm.PayoutObligation.state.in_(["accrued", "available"]))
+                       .values(state="reversed"))
+            db.commit()
+            seller_share_settled = (claim.rowcount == 1)
+        if not seller_share_settled:
             # Seller ALREADY paid via the batch path (paid/batched/transferring), a partial
-            # refund of an unpaid obligation, or no obligation on record: there is no reversible
-            # transfer. The ledger debit turns seller_payable into a recoverable NEGATIVE balance
-            # (it nets against the seller's FUTURE earnings), but it needs explicit recovery —
-            # flag it for review, NEVER silently reconcile.
+            # (not-yet-cumulatively-full) refund of an unpaid obligation, or no reversible
+            # obligation: there is no reversible transfer. The ledger debit turns seller_payable
+            # into a recoverable NEGATIVE balance (it nets against the seller's FUTURE earnings),
+            # but it needs explicit recovery — flag it for review, NEVER silently reconcile.
             logger.warning("refund clawback PENDING for tx %s: seller share %s minor was paid via "
                            "the batch path (no reversible transfer). seller_payable now carries a "
                            "recoverable debt; operator/auto-net recovery required.",

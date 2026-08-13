@@ -193,11 +193,19 @@ class Ui:
 
     # ---- write helpers ---------------------------------------------------
     def _write(self, s=""):
+        stream = self.stream
+        if stream is None:
+            # A windowed (pyinstaller --windowed) build has no console: sys.stdout /
+            # sys.stderr are None. Presentation is best-effort — never crash on output.
+            return self
         try:
-            self.stream.write(s + "\n")
+            stream.write(s + "\n")
         except UnicodeEncodeError:
             # last-ditch: the stream lied about its encoding — degrade to ASCII.
-            self.stream.write(strip_ansi(s).encode("ascii", "replace").decode() + "\n")
+            stream.write(strip_ansi(s).encode("ascii", "replace").decode() + "\n")
+        except (OSError, ValueError):
+            # closed or broken stream — output is best-effort, never fatal.
+            pass
         return self
 
     def line(self, s=""):
@@ -257,7 +265,9 @@ class Ui:
         cols = len(headers)
         srows = [[("" if v is None else str(v)) for v in r] for r in rows]
         if max_col:
-            srows = [[truncate_mid(v, max_col[i]) if (max_col and i < len(max_col) and max_col[i])
+            ell = "…" if self.unicode else "..."
+            srows = [[truncate_mid(v, max_col[i], ellipsis=ell)
+                      if (max_col and i < len(max_col) and max_col[i])
                       else v for i, v in enumerate(r)] for r in srows]
         widths = [visible_len(str(headers[i])) for i in range(cols)]
         for r in srows:
@@ -339,18 +349,20 @@ def _looks_numeric(v: str) -> bool:
         return False
 
 
-def truncate_mid(value, width: int) -> str:
+def truncate_mid(value, width: int, ellipsis: str = "…") -> str:
     """Middle-truncate a long value so both ends stay legible: abcd…wxyz.
 
     Long IDs/hashes should never be shown in full in a narrow column, but the head
-    and tail are what humans use to recognise them, so keep both."""
+    and tail are what humans use to recognise them, so keep both. The *ellipsis*
+    marker is configurable so callers can pass an ASCII "..." when the stream can't
+    encode Unicode; the retained width is computed from its length."""
     s = str(value)
     if width <= 0 or len(s) <= width:
         return s
-    if width <= 3:
+    ell = ellipsis
+    if width <= len(ell):
         return s[:width]
-    ell = "…"
-    keep = width - 1
+    keep = width - len(ell)
     head = (keep + 1) // 2
     tail = keep - head
     return s[:head] + ell + (s[-tail:] if tail else "")
@@ -362,6 +374,9 @@ def emit_json(obj, stream=None) -> None:
     This is the contract other programs parse. It must never contain ANSI codes and
     must never change shape for cosmetic reasons."""
     stream = stream if stream is not None else sys.stdout
+    if stream is None:
+        # A windowed (pyinstaller --windowed) build has no stdout to write to.
+        return
     stream.write(json.dumps(obj, default=str) + "\n")
 
 

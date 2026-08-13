@@ -71,6 +71,15 @@ def qc(x) -> Decimal:
 PLATFORM_TAKE_RATE = D(os.getenv("PLATFORM_TAKE_RATE", "0.10"))
 HEARTBEAT_TIMEOUT_S = int(os.getenv("HEARTBEAT_TIMEOUT_S", "60"))
 MIN_REPUTATION = int(os.getenv("MIN_REPUTATION", "50"))
+# Instant payout fee: scheduled/batch payouts are FREE; an on-demand instant cash-out costs a
+# small fee (a real revenue line). Percentage with a flat floor. Never exceeds the amount.
+INSTANT_PAYOUT_FEE_PCT = D(os.getenv("INSTANT_PAYOUT_FEE_PCT", "0.015"))
+INSTANT_PAYOUT_FEE_MIN = D(os.getenv("INSTANT_PAYOUT_FEE_MIN", "0.50"))
+# Anti-fraud payout holds. Earnings from a just-completed job are held for a clearing/dispute +
+# re-verification window before they can be withdrawn. INSTANT payout (fast cash-out) is locked
+# until a seller has matured: minimum reputation AND at least this many completed (released) jobs.
+EARNINGS_HOLD_HOURS = int(os.getenv("EARNINGS_HOLD_HOURS", "24"))
+PAYOUT_MATURITY_MIN_JOBS = int(os.getenv("PAYOUT_MATURITY_MIN_JOBS", "3"))
 
 
 def _utcnow() -> datetime:
@@ -143,6 +152,10 @@ class User(Base):
     email_token = Column(String, nullable=True)         # hashed verification token
     email_token_exp = Column(DateTime, nullable=True)   # short-lived
     notify_email = Column(Boolean, default=True)
+    # --- two-factor auth (TOTP / authenticator app) ---
+    totp_secret = Column(String, nullable=True)          # base32 secret, ENCRYPTED at rest (utils.seal_secret)
+    totp_enabled = Column(Boolean, default=False, nullable=False)  # True only after a code is confirmed
+    totp_backup_codes = Column(Text, nullable=True)      # JSON list of bcrypt-hashed single-use recovery codes
     tests_passed = Column(Integer, default=0, nullable=False)
     tests_failed = Column(Integer, default=0, nullable=False)
     can_accept_paid_jobs = Column(Boolean, default=True, nullable=False)
@@ -190,6 +203,13 @@ class SellerSpec(Base):
     benchmark_tokens_sec = Column(Float, nullable=True)  # last LLM tokens/sec benchmark
     benchmark_meta = Column(Text, nullable=True)         # JSON: other metrics
     benchmark_at = Column(DateTime, nullable=True)
+    # verdict of comparing a reported benchmark against the CLAIMED gpu_model's public
+    # reference band (gpu_benchmark.classify): consistent | implausibly_low |
+    # suspiciously_high | unknown_model | None. Feeds the honest trust ladder.
+    benchmark_verdict = Column(String, nullable=True)
+    # server-observed wall-clock (seconds) from dispatching the benchmark task to receiving
+    # the signed result — the platform TIMED it, so the number isn't purely self-reported.
+    benchmark_elapsed_s = Column(Float, nullable=True)
     jobs_completed = Column(Integer, default=0)
     jobs_failed = Column(Integer, default=0)
     fraud_count = Column(Integer, default=0)
@@ -202,6 +222,23 @@ class SellerSpec(Base):
     idle_hashrate = Column(Float, nullable=True)
     idle_est_daily_usd = Column(Float, nullable=True)
     idle_reported_at = Column(DateTime, nullable=True)
+    # --- rent SPARE DISK to a web3/BitTorrent storage network (Storj/BTFS/Sia). NOT an idle/
+    # fallback mode — it is an EXPLICIT, always-on contribution the seller configures with real
+    # arguments (a provider AND a GB cap; neither is defaulted). It runs INDEPENDENTLY of GPU
+    # rentals (disk != GPU), so it earns whether or not a job is running. Each node contributes as a
+    # UNIQUE node name (pbdisk-<spec_id>) so earnings attribute 1:1 to the seller's unified balance
+    # — no per-seller storage wallet. The seller can change the cap, pause, or delete at any time. ---
+    disk_enabled = Column(Boolean, default=False)    # explicit on/off (requires provider + cap to enable)
+    disk_provider = Column(String, nullable=True)    # storj | btfs | sia (adapter) — REQUIRED to enable
+    disk_alloc_gb = Column(Integer, nullable=True)   # seller's hard cap on contributed GB — REQUIRED to enable
+    disk_used_gb = Column(Float, nullable=True)      # last reported used GB
+    disk_est_daily_usd = Column(Float, nullable=True)
+    disk_reported_at = Column(DateTime, nullable=True)
+    # model cache-locality: which model ids this node already holds locally (JSON list). The
+    # scheduler favours a node that already has the requested model, so a 20-100 GB weight file
+    # isn't re-downloaded when an equally-good node already has it.
+    cached_models = Column(Text, nullable=True)
+    cached_models_at = Column(DateTime, nullable=True)
     # capacity
     total_units = Column(Integer, default=1, nullable=False)
     available_units = Column(Integer, default=1, nullable=False)
@@ -215,6 +252,7 @@ class SellerSpec(Base):
     tee_vendor = Column(String, nullable=True)         # e.g. nvidia-h100-cc, amd-sev-snp
     tee_measurement = Column(String, nullable=True)    # attested enclave measurement
     tee_report = Column(Text, nullable=True)           # raw report (for buyer re-verify)
+    tee_attested_at = Column(DateTime, nullable=True)  # when confidential was last attested (freshness)
     is_demo = Column(Boolean, default=False, nullable=False, index=True)  # seeded demo node
 
 
@@ -226,20 +264,51 @@ def trust_level_for(spec: "SellerSpec") -> dict:
       agent_verified      the node's agent signed a hardware report with its
                           Ed25519 device key (/prove) — proves a keyholder on the
                           node claims this hardware, NOT that the silicon is real.
-      benchmark_verified  agent_verified + a signed benchmark result exists, so
-                          throughput was measured, not declared.
+      benchmark_verified  agent_verified + a benchmark number the node's agent REPORTED and
+                          SIGNED — so it is attributable (non-repudiable), but it is
+                          self-reported, NOT independently measured by the platform.
 
     'hardware_attested' (real vendor TEE chain: NVIDIA NRAS / AMD SEV-SNP / Intel
     TDX) is deliberately NOT awardable today: the current verifier is a structural
     stub (stub.md #3). spec.confidential therefore surfaces separately as
-    'cc_pilot' evidence and must never be marketed as hardware attestation."""
+    'cc_pilot' evidence and must never be marketed as hardware attestation.
+
+    Honesty rule: the benchmark tier's label/evidence must never claim the throughput was
+    'measured' or 'verified' by the platform — the agent's benchmark harness reports the number
+    (today from BENCH_TOKENS_SEC) and signs it; the platform only records that signed claim."""
     if not spec.attested:
         return {"level": "self_reported", "rank": 0, "label": "Self-reported",
                 "evidence": "Listing details supplied by the seller; no proof held."}
-    if spec.benchmark_tokens_sec:
-        return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-verified",
-                "evidence": "Agent-signed hardware report + a signed benchmark "
-                            f"({round(spec.benchmark_tokens_sec)} tok/s) on record."}
+    verdict = getattr(spec, "benchmark_verdict", None)
+    # A benchmark is present if the node reported a throughput OR any benchmark score was
+    # graded against public reference data (a pure render/video benchmark carries no tok/s).
+    tok = f"{round(spec.benchmark_tokens_sec)} tok/s" if spec.benchmark_tokens_sec else "a signed benchmark"
+    if spec.benchmark_tokens_sec or verdict is not None:
+        # A benchmark that did NOT match the claimed model's public reference data is NOT
+        # corroborating evidence — it is a red flag. Don't let it upgrade the tier.
+        if verdict in ("implausibly_low", "suspiciously_high"):
+            return {"level": "agent_verified", "rank": 1,
+                    "label": "Agent-verified (benchmark flagged)",
+                    "evidence": "Hardware report signed by the node's Ed25519 device key. "
+                                "A submitted benchmark did NOT match the claimed GPU model's "
+                                f"public reference data ({verdict}) and was rejected as "
+                                "corroborating evidence — the listing may be mislabeled."}
+        if verdict == "consistent":
+            timed = (f" The platform dispatched and TIMED the benchmark "
+                     f"({round(spec.benchmark_elapsed_s, 1)}s observed), and the result is bound "
+                     f"to that dispatch (no replay)." if getattr(spec, "benchmark_elapsed_s", None)
+                     else "")
+            return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-consistent",
+                    "evidence": f"Agent-signed hardware report + {tok} that MATCHES public "
+                                "reference data for the claimed GPU model (FP16 TFLOPS / Blender "
+                                "Open Data / Cinebench / PugetBench)." + timed +
+                                " Node-reported (not run in a platform enclave), but consistent "
+                                "with the advertised card."}
+        if spec.benchmark_tokens_sec:
+            return {"level": "benchmark_verified", "rank": 2, "label": "Benchmark-reported",
+                    "evidence": "Agent-signed hardware report + a node-REPORTED, signed benchmark "
+                                f"({round(spec.benchmark_tokens_sec)} tok/s) — self-reported and "
+                                "attributable, not independently measured by the platform."}
     return {"level": "agent_verified", "rank": 1, "label": "Agent-verified",
             "evidence": "Hardware report signed by the node's Ed25519 device key."}
 
@@ -298,6 +367,12 @@ class Task(Base):
     interrupted_at = Column(DateTime, nullable=True)       # set when its node died
     enc_key = Column(Text, nullable=True)                  # sealed per-task backup data key
     result = Column(Text, nullable=True)
+    result_content_hash = Column(String, nullable=True)   # signed sha256 of the output bytes (#65)
+    # Retained so a buyer can INDEPENDENTLY verify the result offline against the node's
+    # attested Ed25519 pubkey (the verifiable-receipt surface): the exact signed payload and
+    # its signature. Null on older jobs / test workloads.
+    result_signature = Column(String, nullable=True)
+    result_proof = Column(Text, nullable=True)            # JSON: the exact bytes the node signed
     created_at = Column(DateTime, default=_utcnow)
     assigned_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -396,6 +471,36 @@ class QuorumCheck(Base):
     finalized_at = Column(DateTime, nullable=True)
 
 
+class BenchmarkSample(Base):
+    """Append-only log of every benchmark / hashrate observation — the labelled training corpus
+    for the GPU-authenticity model (the data moat). GPU + performance signals only; NO PII.
+
+    Each row pairs the raw signals (scores by metric, server-timing, proof-of-work result) with
+    the spec's context at that moment (reputation, job history, attestation) and, over time, the
+    fraud outcome — exactly the (features, label) shape a fraud/authenticity classifier trains on.
+    Growing this dataset with every real benchmark is a compounding, proprietary advantage."""
+    __tablename__ = "benchmark_samples"
+    id = Column(Integer, primary_key=True, index=True)
+    spec_id = Column(Integer, ForeignKey("specs.id"), index=True, nullable=True)
+    seller_id = Column(Integer, index=True, nullable=True)
+    gpu_model = Column(String, nullable=True)
+    source = Column(String, nullable=True)         # 'benchmark' | 'idle_mining'
+    metrics = Column(Text, nullable=True)          # JSON {metric_name: score}
+    verdict = Column(String, nullable=True)        # consistent | implausibly_low | ...
+    pow_verified = Column(Boolean, nullable=True)  # fresh server proof-of-work answered?
+    elapsed_s = Column(Float, nullable=True)       # server-observed wall-clock
+    tokens_sec = Column(Float, nullable=True)
+    # spec-context features (snapshot at sample time)
+    reputation = Column(Integer, nullable=True)
+    jobs_completed = Column(Integer, nullable=True)
+    jobs_failed = Column(Integer, nullable=True)
+    fraud_count = Column(Integer, nullable=True)
+    attested = Column(Boolean, nullable=True)
+    confidential = Column(Boolean, nullable=True)
+    region_verified = Column(Boolean, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+
+
 class Organization(Base):
     """Enterprise/lab account with a shared wallet and optional budget cap."""
     __tablename__ = "orgs"
@@ -435,7 +540,8 @@ class Payout(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
     method_id = Column(Integer, ForeignKey("payout_methods.id"), nullable=False)
-    amount_usd = Column(Money, nullable=False)
+    amount_usd = Column(Money, nullable=False)       # NET sent to the rail (amount minus any fee)
+    fee_usd = Column(Money, nullable=True, default=Decimal(0))  # instant-payout fee kept by platform
     kind = Column(String, nullable=False)
     status = Column(String, default="requested", nullable=False)
     provider_ref = Column(String, nullable=True)     # provider txn id / tx hash
@@ -499,7 +605,10 @@ class LedgerEntry(Base):
     # databases (create_all); existing DBs pick them up on a schema rebuild/migration.
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_ledger_amount_pos"),
-        CheckConstraint("direction in ('debit','credit')", name="ck_ledger_direction"),
+        # `x IN (...)` is NULL (not FALSE) when x is NULL, so a NULL direction would slip past a
+        # bare IN check. Require it explicitly — a ledger leg with no debit/credit is invalid.
+        CheckConstraint("direction is not null and direction in ('debit','credit')",
+                        name="ck_ledger_direction"),
     )
 
 
@@ -515,6 +624,7 @@ PLATFORM_REVENUE   = "platform_revenue"
 EXTERNAL_PAYMENTS  = "external:payments"    # the card processor
 EXTERNAL_PAYOUTS   = "external:payouts"     # the bank / USDC rail
 EXTERNAL_MINING    = "external:mining"      # NiceHash
+EXTERNAL_STORAGE   = "external:storage"     # decentralized storage network (Storj/BTFS/Sia)
 EXTERNAL_PROMO     = "external:promo"       # referral / promotional credit (marketing spend)
 
 
@@ -697,6 +807,24 @@ def record_newsletter_signup(db: Session, email: str, source: str = "homepage") 
         return "active"
 
 
+def unsynced_newsletter_subscribers(db: Session, limit: int = 200) -> list:
+    """Subscribed addresses NOT yet reflected into the mailing list (Mailgun down/unconfigured
+    at signup, or a transient failure). A reconciliation job drains these so a signup that
+    returned 'you're subscribed' actually receives the newsletter. Oldest first (FIFO)."""
+    return (db.query(NewsletterSubscriber)
+            .filter(NewsletterSubscriber.status == "subscribed",
+                    NewsletterSubscriber.mailgun_synced == False)   # noqa: E712
+            .order_by(NewsletterSubscriber.created_at.asc())
+            .limit(max(1, int(limit))).all())
+
+
+def count_unsynced_newsletter(db: Session) -> int:
+    from sqlalchemy import func as _func
+    return int(db.query(_func.count(NewsletterSubscriber.id))
+               .filter(NewsletterSubscriber.status == "subscribed",
+                       NewsletterSubscriber.mailgun_synced == False).scalar() or 0)  # noqa: E712
+
+
 def mark_newsletter_synced(db: Session, email: str, synced: bool = True) -> None:
     """Record whether the address has been reflected into the Mailgun mailing list, so a
     reconciliation job can later re-sync rows that Mailgun rejected/timed out on."""
@@ -760,24 +888,167 @@ class AuditEvent(Base):
     ip_address = Column(String, nullable=True)
     request_id = Column(String, nullable=True)
     detail = Column(Text, nullable=True)                         # JSON, never secrets
+    org_id = Column(Integer, ForeignKey("orgs.id"), index=True, nullable=True)  # team scope, if any
+    # Tamper-evidence: each row commits to its own canonical fields (content_hash) and links to the
+    # previous row (chain_hash = sha256(prev.chain_hash + content_hash)). A silent edit or a deletion
+    # is then detectable by verify_audit_chain(). Nullable so pre-existing rows (written before the
+    # chain landed) don't block startup — verify() treats a null-hash row as the chain's genesis.
+    content_hash = Column(String, nullable=True)
+    chain_hash = Column(String, nullable=True)
     created_at = Column(DateTime, default=_utcnow, index=True)
 
 
+class Volume(Base):
+    """A buyer-owned persistent volume that outlives any single VM. It stores content-addressed,
+    DEDUPLICATED snapshots in object storage: identical/unchanged files across snapshots are stored
+    once, so each new snapshot only uploads the DELTA (changed content) — never a full-disk mirror.
+    `bytes_stored` is the sum of unique blob sizes actually held (the real cost)."""
+    __tablename__ = "volumes"
+    id = Column(Integer, primary_key=True, index=True)
+    buyer_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    org_id = Column(Integer, ForeignKey("orgs.id"), index=True, nullable=True)
+    name = Column(String, nullable=False)
+    size_limit_gb = Column(Integer, nullable=True)          # optional hard cap on unique bytes held
+    bytes_stored = Column(Integer, default=0, nullable=False)   # sum of unique (deduped) blob sizes
+    snapshot_count = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class VolumeBlob(Base):
+    """Index of the unique content blobs held for a volume (one row per distinct sha256). This is
+    what makes snapshots incremental: a blob already present is never re-uploaded or re-billed. The
+    bytes live in object storage at volumes/<buyer>/<volume>/blobs/<sha256>."""
+    __tablename__ = "volume_blobs"
+    id = Column(Integer, primary_key=True, index=True)
+    volume_id = Column(Integer, ForeignKey("volumes.id"), index=True, nullable=False)
+    sha256 = Column(String, index=True, nullable=False)
+    size = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=_utcnow)
+    __table_args__ = (UniqueConstraint("volume_id", "sha256", name="uq_volume_blob"),)
+
+
+class VolumeSnapshot(Base):
+    """One point-in-time snapshot: a manifest of the important files (path -> content sha256), plus
+    how many NEW bytes it added (delta_bytes) vs. how big it is logically (total_bytes). Restoring a
+    snapshot 'since' an earlier one returns only the files whose content changed — the delta."""
+    __tablename__ = "volume_snapshots"
+    id = Column(Integer, primary_key=True, index=True)
+    volume_id = Column(Integer, ForeignKey("volumes.id"), index=True, nullable=False)
+    seq = Column(Integer, nullable=False)
+    label = Column(String, nullable=True)
+    vm_id = Column(String, nullable=True)                   # provenance: the VM that produced it
+    manifest = Column(Text, nullable=False)                 # JSON [{path, sha256, size, mode?}]
+    total_bytes = Column(Integer, default=0, nullable=False)  # logical size (sum of file sizes)
+    delta_bytes = Column(Integer, default=0, nullable=False)  # NEW unique bytes this snapshot added
+    created_at = Column(DateTime, default=_utcnow)
+
+
+def _audit_content(actor_username, actor_type, action, resource_type, resource_id,
+                   org_id, detail, ts) -> str:
+    """Deterministic serialization of the fields the tamper-evidence hash commits to. Order-stable
+    so the same row hashes identically on write and on verify. The timestamp is normalized to a
+    NAIVE-UTC isoformat because an aware datetime on write round-trips to a naive one on read (the
+    DB DateTime column drops tzinfo) — normalizing both sides keeps the hash stable."""
+    tsx = None
+    if ts is not None:
+        tsx = (ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts).isoformat()
+    return json.dumps({"actor": actor_username, "actor_type": actor_type, "action": action,
+                       "resource_type": resource_type, "resource_id": resource_id,
+                       "org_id": org_id, "detail": detail, "ts": tsx},
+                      sort_keys=True, separators=(",", ":"))
+
+
 def audit(db: Session, action: str, actor=None, actor_type="user", resource_type=None,
-          resource_id=None, ip=None, request_id=None, detail=None, commit=True):
-    """Write an audit event. Never log secrets, tokens, or full payout destinations."""
+          resource_id=None, ip=None, request_id=None, detail=None, org_id=None, commit=True):
+    """Write a tamper-evident audit event. Never log secrets, tokens, or full payout destinations.
+
+    `actor` may be a User (its id + username are captured) or a plain username string. `org_id`
+    scopes the event to a team so an org admin can read its own trail. Each row is hash-chained to
+    the previous one (content_hash of its own fields + chain_hash = sha256(prev.chain_hash +
+    content_hash)), so a later edit or deletion is detectable by verify_audit_chain(). Chaining is
+    best-effort — a failure to read the previous hash never blocks the action being audited."""
+    actor_username = getattr(actor, "username", None)
+    if actor_username is None and isinstance(actor, str):
+        actor_username = actor
+    det = json.dumps(detail) if isinstance(detail, dict) else detail
+    rid = str(resource_id) if resource_id is not None else None
+    ts = _utcnow()
     ev = AuditEvent(
         actor_user_id=getattr(actor, "id", None),
-        actor_username=getattr(actor, "username", None),
+        actor_username=actor_username,
         actor_type=actor_type, action=action,
-        resource_type=resource_type,
-        resource_id=str(resource_id) if resource_id is not None else None,
-        ip_address=ip, request_id=request_id,
-        detail=json.dumps(detail) if isinstance(detail, dict) else detail)
+        resource_type=resource_type, resource_id=rid,
+        ip_address=ip, request_id=request_id, detail=det, org_id=org_id, created_at=ts)
+    try:
+        prev = db.query(AuditEvent).order_by(AuditEvent.id.desc()).first()
+        prev_chain = (prev.chain_hash if prev and prev.chain_hash else "")
+        content = _audit_content(actor_username, actor_type, action, resource_type, rid,
+                                 org_id, det, ts)
+        ev.content_hash = hashlib.sha256(content.encode()).hexdigest()
+        ev.chain_hash = hashlib.sha256((prev_chain + ev.content_hash).encode()).hexdigest()
+    except Exception:  # noqa: BLE001 — chaining is best-effort; never block the audited action
+        pass
     db.add(ev)
     if commit:
         db.commit()
     return ev
+
+
+def _audit_row(e: "AuditEvent") -> dict:
+    det = e.detail
+    if det and isinstance(det, str) and det.strip().startswith("{"):
+        try:
+            det = json.loads(det)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"id": e.id, "at": e.created_at.isoformat() if e.created_at else None,
+            "actor": e.actor_username, "actor_type": e.actor_type, "action": e.action,
+            "resource": (f"{e.resource_type}:{e.resource_id}" if e.resource_type else e.resource_id),
+            "org_id": e.org_id, "ip": e.ip_address, "detail": det,
+            "content_hash": e.content_hash}
+
+
+def list_audit_for_actor(db: Session, user_id: int, limit: int = 100):
+    """Audit events performed BY this user — their own "who did what" trail."""
+    rows = (db.query(AuditEvent).filter(AuditEvent.actor_user_id == user_id)
+            .order_by(AuditEvent.id.desc()).limit(limit).all())
+    return [_audit_row(e) for e in rows]
+
+
+def list_audit_for_org(db: Session, org_id: int, limit: int = 200):
+    """Every audit event scoped to a team (member changes, deposits, spend) — for org admins."""
+    rows = (db.query(AuditEvent).filter(AuditEvent.org_id == org_id)
+            .order_by(AuditEvent.id.desc()).limit(limit).all())
+    return [_audit_row(e) for e in rows]
+
+
+def verify_audit_chain(db: Session, limit: int = 10000) -> dict:
+    """Recompute the hash chain over the most recent rows (ascending id) and report the first break
+    — a break means a row was edited or deleted after the fact. Rows written before chaining existed
+    (content_hash NULL) are skipped but still carry the chain forward, mirroring audit()'s logic."""
+    recent = db.query(AuditEvent).order_by(AuditEvent.id.desc()).limit(limit).all()
+    rows = recent[::-1]
+    prev_chain = ""
+    if rows:
+        before = (db.query(AuditEvent).filter(AuditEvent.id < rows[0].id)
+                  .order_by(AuditEvent.id.desc()).first())
+        prev_chain = (before.chain_hash or "") if before else ""
+    broken = None
+    checked = 0
+    for e in rows:
+        if not e.content_hash:                        # legacy row — not chained, not verifiable
+            prev_chain = e.chain_hash or ""
+            continue
+        content = _audit_content(e.actor_username, e.actor_type, e.action, e.resource_type,
+                                 e.resource_id, e.org_id, e.detail, e.created_at)
+        ch = hashlib.sha256(content.encode()).hexdigest()
+        expect = hashlib.sha256((prev_chain + ch).encode()).hexdigest()
+        if ch != e.content_hash or expect != e.chain_hash:
+            broken = e.id
+            break
+        checked += 1
+        prev_chain = e.chain_hash
+    return {"checked": checked, "intact": broken is None, "first_broken_id": broken}
 
 
 class BookingsPaused(Exception):
@@ -870,16 +1141,29 @@ def record_routing_decision(db: Session, source: str, user_id, intent: dict,
 
 
 class MultiNodeJob(Base):
-    """A fan-out job (render frames / transcode segments) assembled from N parts."""
+    """A multi-node job assembled from N parts.
+
+    Two shapes share this table:
+      * FAN-OUT (kind=render|transcode): N independent segments + a stitch step. Segments never
+        talk to each other; a dropped one just re-runs.
+      * DISTRIBUTED (kind=distributed): N ranks that form ONE cluster and communicate over the VPN
+        (e.g. torchrun/NCCL all-reduce). rank 0 is the rendezvous master; its VPN-reachable
+        address is stored here and handed to the other ranks so they can join. No stitch step —
+        the job completes when every rank finishes, and fails if any rank dies (gang semantics)."""
     __tablename__ = "multinode_jobs"
     id = Column(Integer, primary_key=True, index=True)
     buyer_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
-    kind = Column(String, nullable=False)              # render|transcode
+    kind = Column(String, nullable=False)              # render|transcode|distributed
     params = Column(Text, nullable=True)
-    total_segments = Column(Integer, default=0)
+    total_segments = Column(Integer, default=0)        # = world_size for a distributed job
     status = Column(String, default="running")         # running|assembling|complete|failed
     output_ref = Column(String, nullable=True)
     stitch_task_id = Column(Integer, nullable=True)
+    # --- distributed-cluster coordination (null for fan-out jobs) ---
+    backend = Column(String, nullable=True)            # nccl|gloo — the collective backend
+    master_addr = Column(String, nullable=True)        # rank-0's VPN-reachable host (rendezvous)
+    master_port = Column(Integer, nullable=True)       # rank-0's rendezvous port
+    rendezvous_at = Column(DateTime, nullable=True)    # when rank 0 registered the address
     created_at = Column(DateTime, default=_utcnow)
 
 
@@ -893,6 +1177,11 @@ class JobSegment(Base):
     range_end = Column(Float, nullable=True)
     output_ref = Column(String, nullable=True)
     status = Column(String, default="pending")         # pending|done
+    # For DISTRIBUTED clusters: this rank's VPN-reachable address, so the whole cluster can be
+    # exported as an MPI hostfile / Ray address / torchrun rdzv endpoint (null for fan-out).
+    peer_host = Column(String, nullable=True)
+    peer_port = Column(Integer, nullable=True)
+    slots = Column(Integer, nullable=True)             # GPUs this rank contributes (mpirun slots)
 
 
 class Checkpoint(Base):
@@ -905,6 +1194,63 @@ class Checkpoint(Base):
     size_bytes = Column(Integer, default=0)
     content_hash = Column(String, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
+
+
+class DatabaseBackup(Base):
+    """A disaster-recovery backup of the PLATFORM database (not a buyer's job volume — that's
+    Checkpoint). One row per backup attempt: where the encrypted dump lives in object storage,
+    its size + SHA-256 (integrity), which engine produced it, and whether it succeeded. The
+    bytes live in S3; the DB holds only the reference + hash so a backup can be verified and
+    restored. See backup.py + docs/BACKUP_RUNBOOK.md."""
+    __tablename__ = "database_backups"
+    id = Column(Integer, primary_key=True, index=True)
+    s3_key = Column(String, nullable=False)                 # key within the bucket
+    s3_uri = Column(String, nullable=True)                  # s3://bucket/key
+    engine = Column(String, nullable=False)                 # postgresql | sqlite
+    environment = Column(String, nullable=True)             # development|staging|production
+    size_bytes = Column(Integer, default=0)                 # compressed size
+    sha256 = Column(String, nullable=True)                  # of the compressed object (integrity)
+    status = Column(String, default="ok", index=True)       # ok | failed
+    error = Column(Text, nullable=True)                     # populated when status=failed
+    created_at = Column(DateTime, default=_utcnow, index=True)
+
+
+def record_database_backup(db: Session, *, s3_key, s3_uri, engine, environment,
+                           size_bytes, sha256, status="ok", error=None) -> "DatabaseBackup":
+    row = DatabaseBackup(s3_key=s3_key, s3_uri=s3_uri, engine=engine, environment=environment,
+                         size_bytes=int(size_bytes or 0), sha256=sha256, status=status,
+                         error=(str(error)[:2000] if error else None))
+    db.add(row); db.commit(); db.refresh(row)
+    return row
+
+
+def list_database_backups(db: Session, limit: int = 50, status: str = None) -> list:
+    q = db.query(DatabaseBackup)
+    if status:
+        q = q.filter(DatabaseBackup.status == status)
+    return q.order_by(DatabaseBackup.created_at.desc(), DatabaseBackup.id.desc()).limit(limit).all()
+
+
+def latest_database_backup(db: Session, status: str = "ok") -> "DatabaseBackup":
+    return (db.query(DatabaseBackup).filter(DatabaseBackup.status == status)
+            .order_by(DatabaseBackup.created_at.desc(), DatabaseBackup.id.desc()).first())
+
+
+def prune_database_backups(db: Session, keep: int) -> list:
+    """Delete the DB rows for successful backups beyond the newest `keep`, returning the list of
+    (id, s3_key) removed so the caller can delete the objects. Failed rows are never counted
+    toward retention (they hold no restorable object) but are pruned alongside old ones."""
+    if keep is None or keep < 0:
+        return []
+    ok = (db.query(DatabaseBackup).filter(DatabaseBackup.status == "ok")
+          .order_by(DatabaseBackup.created_at.desc(), DatabaseBackup.id.desc()).all())
+    removed = []
+    for row in ok[keep:]:
+        removed.append((row.id, row.s3_key))
+        db.delete(row)
+    if removed:
+        db.commit()
+    return removed
 
 
 class Notification(Base):
@@ -939,6 +1285,21 @@ class IdleSettlement(Base):
     credited_usd = Column(Money, default=Decimal(0))
     created_at = Column(DateTime, default=_utcnow)
     __table_args__ = (UniqueConstraint("worker_id", "period", name="uq_idle_settle"),)
+
+
+class DiskSettlement(Base):
+    """Idempotent record of storage-network earnings credited per node per period.
+    Mirrors IdleSettlement: one row per (node_id, period); node_id is `pbdisk-<spec_id>`."""
+    __tablename__ = "disk_settlements"
+    id = Column(Integer, primary_key=True, index=True)
+    node_id = Column(String, index=True, nullable=False)
+    period = Column(String, nullable=False)
+    spec_id = Column(Integer, nullable=True)
+    provider = Column(String, nullable=True)
+    gross_usd = Column(Money, default=Decimal(0))
+    credited_usd = Column(Money, default=Decimal(0))
+    created_at = Column(DateTime, default=_utcnow)
+    __table_args__ = (UniqueConstraint("node_id", "period", name="uq_disk_settle"),)
 
 
 class DemoRequest(Base):
@@ -987,6 +1348,239 @@ class RevokedApiKey(Base):
     __tablename__ = "revoked_api_keys"
     jti = Column(String, primary_key=True, index=True)
     revoked_at = Column(DateTime, default=_utcnow)
+
+
+class NodeInstallToken(Base):
+    """A short, URL-safe enrollment token for the one-line installer.
+
+    `curl <server>/i/<token> | bash` (or `irm <server>/i/<token>.ps1 | iex`) fetches an
+    installer with a FRESHLY-minted, node-scoped API key baked in — so a machine onboards
+    with no interactive input and nothing to hand-edit. Each fetch mints its own worker key,
+    so the same token can enrol a whole rig farm, each machine independently revocable. The
+    token is a bearer capability: it only enrols NODES for one seller (it cannot log in, spend,
+    or withdraw) and it expires. Bound to a seller; carries an optional pinned price (null =>
+    the node auto-prices from its GPU benchmark)."""
+    __tablename__ = "install_tokens"
+    id = Column(Integer, primary_key=True, index=True)
+    token = Column(String, unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    price = Column(Money, nullable=True)             # pinned USD/hr, or null to auto-price
+    created_at = Column(DateTime, default=_utcnow)
+    expires_at = Column(DateTime, nullable=False)
+
+
+INSTALL_TOKEN_TTL_DAYS = 30   # enrollment tokens are bearer capabilities — bound + expiring
+
+
+def create_install_token(db: Session, user: "User", price=None,
+                         ttl_days: int = INSTALL_TOKEN_TTL_DAYS) -> "NodeInstallToken":
+    """Mint an enrollment token bound to `user`. `price` (optional) pins the listing rate;
+    None lets the node auto-price from its benchmark."""
+    tok = secrets.token_urlsafe(9)                   # ~12 url-safe chars, unguessable
+    row = NodeInstallToken(
+        token=tok, user_id=user.id,
+        price=(Decimal(str(price)) if price is not None else None),
+        expires_at=_utcnow() + timedelta(days=int(ttl_days)))
+    db.add(row); db.commit(); db.refresh(row)
+    return row
+
+
+def resolve_install_token(db: Session, token: str) -> "NodeInstallToken | None":
+    """Return the token row if it exists and has not expired, else None (fail-closed)."""
+    if not token:
+        return None
+    row = db.query(NodeInstallToken).filter(NodeInstallToken.token == token).first()
+    if row is None:
+        return None
+    exp = row.expires_at
+    if exp is not None and getattr(exp, "tzinfo", None) is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if exp is not None and exp < _utcnow():
+        return None
+    return row
+
+
+# ------------------ Paid data API: metering + price-history snapshots ------------------
+
+class ApiUsage(Base):
+    """Per-account metered usage of the data API, one row per calendar month. Every data call is
+    counted; calls beyond the free monthly quota are billed pay-as-you-go against the wallet
+    balance and tallied here (amount_usd)."""
+    __tablename__ = "api_usage"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    period = Column(String, index=True, nullable=False)          # 'YYYY-MM'
+    calls = Column(Integer, default=0, nullable=False)
+    billed_calls = Column(Integer, default=0, nullable=False)
+    amount_usd = Column(Money, default=Decimal(0), nullable=False)
+    updated_at = Column(DateTime, default=_utcnow)
+    __table_args__ = (UniqueConstraint("user_id", "period", name="uq_api_usage_user_period"),)
+
+
+class PriceSnapshot(Base):
+    """A timestamped point in the GPU price index — the raw material the data API sells as history.
+    Written periodically by the maintenance loop; one row per GPU model per capture."""
+    __tablename__ = "price_snapshots"
+    id = Column(Integer, primary_key=True, index=True)
+    captured_at = Column(DateTime, default=_utcnow, index=True, nullable=False)
+    gpu_model = Column(String, index=True, nullable=False)
+    reference_price = Column(Money, nullable=True)   # benchmark-anchored reference $/hr
+    avg_price = Column(Money, nullable=True)         # mean of live listings (null if none online)
+    min_price = Column(Money, nullable=True)
+    max_price = Column(Money, nullable=True)
+    live_count = Column(Integer, default=0, nullable=False)
+
+
+def _period(now=None) -> str:
+    return (now or _utcnow()).strftime("%Y-%m")
+
+
+def charge_wallet(db: Session, user_id: int, amount, *, reference_type: str,
+                  description: str = None) -> bool:
+    """Atomically debit the user's WALLET BALANCE and book the charge to platform revenue.
+    Returns False (no charge) if the balance is insufficient. Balanced double-entry."""
+    amt = q(amount)
+    if amt <= 0:
+        return True
+    if not try_debit(db, user_id, amt):          # atomic, no overspend
+        return False
+    post(db, reference_type, legs=[
+        (acct_buyer(user_id), DEBIT,  amt, user_id),
+        (PLATFORM_REVENUE,    CREDIT, amt),
+    ], reference_id=user_id, description=description or reference_type, entry_type=reference_type)
+    db.commit()
+    return True
+
+
+def meter_data_call(db: Session, user_id: int, *, free_quota: int, price_per_call, units=1) -> dict:
+    """Count one data-API call for this user and bill it if it's past the free monthly TRIAL quota.
+
+    `units` is the endpoint's price weight (commodity=1, premium>1): the charge is
+    price_per_call * units, and each call consumes `units` of the free trial (so premium calls
+    burn the trial faster). A billable call is served only if the wallet balance covers the charge;
+    otherwise it is NOT counted and the caller gets ``{"ok": False, "reason": "insufficient_balance"}``
+    (surface as HTTP 402). Pricing 0 keeps the API free."""
+    units = max(1, int(units))
+    period = _period()
+    row = (db.query(ApiUsage)
+           .filter(ApiUsage.user_id == user_id, ApiUsage.period == period).first())
+    if row is None:
+        row = ApiUsage(user_id=user_id, period=period, calls=0, billed_calls=0,
+                       amount_usd=Decimal(0))
+        db.add(row); db.flush()
+    charge = q(D(str(price_per_call)) * units)
+    within_free = row.calls < int(free_quota)     # trial measured in call-units already consumed
+    if within_free or charge <= 0:
+        row.calls += units
+        row.updated_at = _utcnow()
+        db.commit()
+        return {"ok": True, "billed": False, "period": period, "calls": row.calls, "units": units,
+                "free_quota": int(free_quota),
+                "free_remaining": max(0, int(free_quota) - row.calls)}
+    # past the free trial and pricing is on -> must pay
+    if not charge_wallet(db, user_id, charge, reference_type="data_api",
+                         description="data API usage"):
+        return {"ok": False, "reason": "insufficient_balance",
+                "price_per_call": float(charge), "period": period}
+    row.calls += units
+    row.billed_calls += 1
+    row.amount_usd = q(D(row.amount_usd) + charge)
+    row.updated_at = _utcnow()
+    db.commit()
+    return {"ok": True, "billed": True, "charged": float(charge), "units": units, "period": period,
+            "calls": row.calls, "billed_calls": row.billed_calls,
+            "amount_usd": float(row.amount_usd), "free_quota": int(free_quota),
+            "free_remaining": 0}
+
+
+def data_api_revenue(db: Session) -> dict:
+    """Data-API monetization scoreboard: billed calls + revenue this month and all-time.
+    Revenue is read from the ledger (PLATFORM_REVENUE credits tagged 'data_api') — the books."""
+    period = _period()
+    month = db.query(ApiUsage).filter(ApiUsage.period == period).all()
+    allrows = db.query(ApiUsage).all()
+    rev_total = q(sum((D(e.amount) for e in db.query(LedgerEntry)
+                       .filter(LedgerEntry.entry_type == "data_api",
+                               LedgerEntry.direction == CREDIT,
+                               LedgerEntry.account == PLATFORM_REVENUE).all()), Decimal(0)))
+    return {
+        "period": period,
+        "revenue_usd_month": float(q(sum((D(r.amount_usd) for r in month), Decimal(0)))),
+        "revenue_usd_total": float(rev_total),
+        "billed_calls_month": sum(int(r.billed_calls or 0) for r in month),
+        "billed_calls_total": sum(int(r.billed_calls or 0) for r in allrows),
+        "calls_month": sum(int(r.calls or 0) for r in month),
+        "paying_accounts_month": sum(1 for r in month if (r.billed_calls or 0) > 0),
+    }
+
+
+def usage_summary(db: Session, user_id: int, *, free_quota: int) -> dict:
+    """The caller's data-API usage this month (free to check — not itself billed)."""
+    period = _period()
+    row = (db.query(ApiUsage)
+           .filter(ApiUsage.user_id == user_id, ApiUsage.period == period).first())
+    calls = row.calls if row else 0
+    return {"period": period, "calls": calls,
+            "billed_calls": (row.billed_calls if row else 0),
+            "amount_usd": float(row.amount_usd) if row else 0.0,
+            "free_quota": int(free_quota),
+            "free_remaining": max(0, int(free_quota) - calls)}
+
+
+def _live_price_index(db: Session):
+    """Current index: for each recognised GPU, its benchmark reference price and the live
+    marketplace stats (avg/min/max/count). Shared by the snapshot job and the data endpoint."""
+    import pricing_engine
+    import gpu_benchmark
+    live = {}
+    for s in db.query(SellerSpec).all():
+        if not spec_is_live(s):
+            continue
+        key = gpu_benchmark.normalize_model(s.gpu_model)
+        if key is None:
+            continue
+        live.setdefault(key, []).append(float(s.price_per_hour or 0))
+    rows = []
+    for r in pricing_engine.catalog():
+        ls = live.get(r["gpu_model"], [])
+        rows.append({
+            "gpu_model": r["gpu_model"],
+            "benchmark_tflops_fp16": r.get("benchmark_tflops_fp16"),
+            "reference_price": r.get("reference_price_per_hour"),
+            "avg_price": (round(sum(ls) / len(ls), 2) if ls else None),
+            "min_price": (round(min(ls), 2) if ls else None),
+            "max_price": (round(max(ls), 2) if ls else None),
+            "live_count": len(ls),
+        })
+    return rows
+
+
+def record_price_snapshot(db: Session) -> int:
+    """Write one PriceSnapshot row per GPU model at the current index. Returns rows written."""
+    n = 0
+    for r in _live_price_index(db):
+        db.add(PriceSnapshot(
+            gpu_model=r["gpu_model"],
+            reference_price=(q(r["reference_price"]) if r["reference_price"] is not None else None),
+            avg_price=(q(r["avg_price"]) if r["avg_price"] is not None else None),
+            min_price=(q(r["min_price"]) if r["min_price"] is not None else None),
+            max_price=(q(r["max_price"]) if r["max_price"] is not None else None),
+            live_count=r["live_count"]))
+        n += 1
+    db.commit()
+    return n
+
+
+def price_history(db: Session, *, gpu_model: str = None, since=None, limit: int = 5000):
+    """Historical price-index points, newest first. Optional GPU filter + `since` datetime."""
+    q_ = db.query(PriceSnapshot)
+    if gpu_model:
+        import gpu_benchmark
+        key = gpu_benchmark.normalize_model(gpu_model) or gpu_model
+        q_ = q_.filter(PriceSnapshot.gpu_model == key)
+    if since is not None:
+        q_ = q_.filter(PriceSnapshot.captured_at >= since)
+    return q_.order_by(PriceSnapshot.captured_at.desc()).limit(int(limit)).all()
 
 
 class WGPeer(Base):
@@ -1500,13 +2094,24 @@ def _ensure_columns():
                      ("is_demo", "BOOLEAN NOT NULL DEFAULT false")],
         "specs": [("min_price", "FLOAT"), ("max_price", "FLOAT"),
                   ("auto_price", "BOOLEAN DEFAULT false"), ("public_id", "VARCHAR"),
-                  ("is_demo", "BOOLEAN NOT NULL DEFAULT false")],
+                  ("is_demo", "BOOLEAN NOT NULL DEFAULT false"),
+                  ("tee_attested_at", "TIMESTAMP"),
+                  ("benchmark_verdict", "VARCHAR"),
+                  ("benchmark_elapsed_s", "FLOAT"),
+                  ("disk_enabled", "BOOLEAN DEFAULT false"),
+                  ("disk_provider", "VARCHAR"), ("disk_alloc_gb", "INTEGER"),
+                  ("disk_used_gb", "FLOAT"), ("disk_est_daily_usd", "FLOAT"),
+                  ("disk_reported_at", "TIMESTAMP"),
+                  ("cached_models", "TEXT"), ("cached_models_at", "TIMESTAMP")],
         "users": [("referral_code", "VARCHAR"), ("referred_by", "INTEGER"),
                   ("referral_rewarded", "BOOLEAN DEFAULT false"),
                   ("referral_signup_meta", "VARCHAR"),("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
                   ("email_token_exp", "TIMESTAMP"),
                   ("is_demo", "BOOLEAN NOT NULL DEFAULT false"),
-                  ("created_at", "TIMESTAMP")],
+                  ("created_at", "TIMESTAMP"),
+                  ("totp_secret", "VARCHAR"),
+                  ("totp_enabled", "BOOLEAN NOT NULL DEFAULT false"),
+                  ("totp_backup_codes", "TEXT")],
         "platform": [("bookings_paused", "BOOLEAN DEFAULT false"),
                      ("pause_reason", "VARCHAR"), ("paused_at", "TIMESTAMP"),
                      ("landing_video_id", "VARCHAR"),
@@ -1518,6 +2123,14 @@ def _ensure_columns():
         "payout_obligations": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
         "payout_batches": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
         "connected_accounts": [("gateway_mode", "VARCHAR")],
+        "tasks": [("result_content_hash", "VARCHAR"),
+                  ("result_signature", "VARCHAR"), ("result_proof", "TEXT")],
+        "multinode_jobs": [("backend", "VARCHAR"), ("master_addr", "VARCHAR"),
+                           ("master_port", "INTEGER"), ("rendezvous_at", "TIMESTAMP")],
+        "job_segments": [("peer_host", "VARCHAR"), ("peer_port", "INTEGER"),
+                         ("slots", "INTEGER")],
+        "audit_events": [("org_id", "INTEGER"), ("content_hash", "VARCHAR"),
+                         ("chain_hash", "VARCHAR")],
     }
     try:
         insp = _inspect(engine)
@@ -1536,11 +2149,113 @@ def _ensure_columns():
             pass  # never block startup on a best-effort migration
 
 
+def _ensure_check_constraints():
+    """Best-effort: add the money-safety CHECK constraints to an EXISTING (pre-constraint) DB.
+    create_all() only adds constraints to NEW tables, so a database whose `users`/`ledger` tables
+    predate these constraints would keep allowing negative balances and invalid ledger legs.
+
+    Postgres only (SQLite cannot ALTER TABLE ADD CONSTRAINT — fresh SQLite DBs get them via
+    create_all). Guarded so it NEVER blocks startup or a deploy: each constraint is skipped if it
+    already exists OR if any legacy row would violate it (which would make the ALTER fail) — in
+    that case we log the count so an operator can remediate, then the constraint is added on a
+    later boot. Idempotent."""
+    import logging as _logging
+    from sqlalchemy import text as _text
+    if not engine.dialect.name.startswith("postgres"):
+        return
+    wanted = [
+        ("users",  "ck_user_balance_nonneg",  "balance >= 0"),
+        ("users",  "ck_user_earnings_nonneg", "earnings >= 0"),
+        ("ledger", "ck_ledger_amount_pos",    "amount > 0"),
+        ("ledger", "ck_ledger_direction",
+         "direction is not null and direction in ('debit','credit')"),
+    ]
+    for table, name, check in wanted:
+        try:
+            with engine.begin() as conn:
+                if conn.execute(_text("SELECT 1 FROM pg_constraint WHERE conname = :n"),
+                                {"n": name}).first():
+                    continue                                   # already present
+                bad = conn.execute(
+                    _text(f"SELECT count(*) FROM {table} WHERE NOT ({check})")).scalar() or 0
+                if bad:
+                    _logging.getLogger("petabyte").warning(
+                        "skip constraint %s on %s: %d legacy row(s) violate it — remediate, "
+                        "then it will be added on the next boot", name, table, bad)
+                    continue                                   # adding would fail; don't block
+                conn.execute(_text(f"ALTER TABLE {table} ADD CONSTRAINT {name} CHECK ({check})"))
+        except Exception:  # noqa: BLE001 — never block startup on a best-effort constraint add
+            pass
+
+
+# Distinct from main._MAINTENANCE_LOCK_ID; stable so every worker contends on the same key.
+_SCHEMA_LOCK_ID = 918273646
+
+
 def init_db():
-    Base.metadata.create_all(bind=engine)
+    """Bring the schema up to date, idempotently AND safely under concurrency.
+
+    `create_all(checkfirst=True)` and the ALTER/CREATE-INDEX passes are each non-atomic across
+    connections, so on a multi-worker boot (gunicorn) two processes can race — e.g. both issue
+    CREATE TABLE and the loser fails with 'relation <table>_id_seq already exists' (the pg_class
+    UniqueViolation we saw). On Postgres we serialize the WHOLE setup behind a session advisory
+    lock: one worker does the work while the rest block, then run the same idempotent passes and
+    no-op. SQLite (dev/tests) has no cross-process concurrency, so it runs the passes directly."""
+    if not engine.dialect.name.startswith("postgres"):
+        _schema_setup()
+        return
+    conn = engine.connect()
+    try:
+        conn.exec_driver_sql("SELECT pg_advisory_lock(%s)", (_SCHEMA_LOCK_ID,))
+        _schema_setup()
+    finally:
+        try:
+            conn.exec_driver_sql("SELECT pg_advisory_unlock(%s)", (_SCHEMA_LOCK_ID,))
+        finally:
+            conn.close()
+
+
+def _schema_setup():
+    _create_all_safe()
     _ensure_columns()
+    _ensure_check_constraints()
     _ensure_indexes()
     _backfill_public_ids()
+
+
+def _create_all_safe():
+    """create_all, healing a half-applied earlier deploy (orphaned SERIAL sequence) if needed."""
+    try:
+        Base.metadata.create_all(bind=engine, checkfirst=True)
+    except Exception:  # noqa: BLE001
+        _create_all_resilient()
+
+
+def _create_all_resilient():
+    """Last resort: create tables one at a time, tolerating one that already exists and clearing an
+    ORPHANED SERIAL sequence (sequence present but its table absent — a prior create that failed
+    mid-way) before retrying that single table. Never blocks startup on a benign 'already exists'."""
+    import logging as _logging
+    from sqlalchemy import inspect as _inspect, text as _text
+    from sqlalchemy.exc import ProgrammingError, IntegrityError, OperationalError
+    log = _logging.getLogger("petabyte")
+    existing = set(_inspect(engine).get_table_names())
+    for table in Base.metadata.sorted_tables:
+        if table.name in existing:
+            continue
+        try:
+            table.create(bind=engine, checkfirst=True)
+        except (ProgrammingError, IntegrityError, OperationalError) as e:
+            if "already exists" not in str(e).lower():
+                raise
+            # Drop the orphaned sequence ONLY when the table itself is genuinely absent, then retry.
+            try:
+                with engine.begin() as conn:
+                    if not _inspect(conn).has_table(table.name):
+                        conn.execute(_text(f'DROP SEQUENCE IF EXISTS "{table.name}_id_seq" CASCADE'))
+                table.create(bind=engine, checkfirst=True)
+            except Exception:  # noqa: BLE001
+                log.warning("schema: could not create table %s (continuing): %s", table.name, e)
 
 
 def _backfill_public_ids():
@@ -1611,6 +2326,52 @@ def login_user(db: Session, username: str, password: str) -> User | None:
     if user and verify_password(password, user.password):
         return user
     return None
+
+
+# ------------------ Two-factor auth (TOTP) storage helpers ------------------
+
+def set_totp_secret(db: Session, user: User, enc_secret: str) -> None:
+    """Store a PENDING (encrypted) TOTP secret. 2FA is not active until a code confirms it."""
+    user.totp_secret = enc_secret
+    user.totp_enabled = False
+    db.add(user); db.commit()
+
+
+def enable_totp(db: Session, user: User, backup_hashes: list) -> None:
+    user.totp_enabled = True
+    user.totp_backup_codes = json.dumps(backup_hashes)
+    db.add(user); db.commit()
+
+
+def disable_totp(db: Session, user: User) -> None:
+    user.totp_secret = None
+    user.totp_enabled = False
+    user.totp_backup_codes = None
+    db.add(user); db.commit()
+
+
+def hash_backup_code(code: str) -> str:
+    return bcrypt.hashpw(code.encode()[:72], bcrypt.gensalt()).decode()
+
+
+def consume_backup_code(db: Session, user: User, code: str) -> bool:
+    """Single-use recovery codes: if `code` matches an unused hash, remove it and return True."""
+    if not user.totp_backup_codes:
+        return False
+    try:
+        codes = json.loads(user.totp_backup_codes)
+    except Exception:  # noqa: BLE001
+        return False
+    for i, h in enumerate(codes):
+        try:
+            if bcrypt.checkpw(code.encode()[:72], h.encode()):
+                codes.pop(i)
+                user.totp_backup_codes = json.dumps(codes)
+                db.add(user); db.commit()
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
 
 
 def get_user_by_username(db: Session, username: str) -> User | None:
@@ -2003,11 +2764,17 @@ def meter_and_expire(db: Session) -> int:
 # ------------------ Demand-based auto-pricing ------------------
 
 def reprice_specs(db: Session, reference_price: float = None) -> int:
-    """Move each opted-in spec's price with demand for its GPU class, clamped to
-    [min_price, max_price] and always kept below the cloud reference. Opt-in only,
-    always within the seller's own bounds. Returns count repriced."""
-    ref = reference_price if reference_price is not None else \
-        float(os.getenv("AWS_REFERENCE_PRICE", "12.29"))
+    """Recommend a price for each opted-in spec with the shared pricing engine and apply it.
+
+    The old engine slid the listing around the midpoint of the seller's OWN [min,max] band with
+    a demand multiplier — it never asked what the GPU is actually worth. This anchors on the
+    per-GPU cloud on-demand rate (Petabyte's "cheaper than cloud, verified" value prop), then
+    adjusts for demand, verified trust, and premiums via ``pricing_engine.recommend`` — the SAME
+    pure function the /price/recommendation endpoint shows the seller, so the batch and the
+    preview never disagree. Opt-in only (auto_price), always clamped inside the seller's own
+    [min_price, max_price] and kept below cloud. Returns count repriced."""
+    import pricing_engine   # local import: db.py must not depend on it at module load
+    # Per-GPU-class demand: busy / total across live, attested specs of the same GPU model.
     busy_by, total_by = {}, {}
     for s in db.query(SellerSpec).filter(SellerSpec.attested == True).all():  # noqa: E712
         if not spec_is_live(s):
@@ -2017,17 +2784,38 @@ def reprice_specs(db: Session, reference_price: float = None) -> int:
         busy = max(0, total - (s.available_units or 0))
         busy_by[key] = busy_by.get(key, 0) + busy
         total_by[key] = total_by.get(key, 0) + total
+
+    auto = db.query(SellerSpec).filter(SellerSpec.auto_price == True).all()  # noqa: E712
+    # Owner reputation in one query (avoid N+1) — a premium factor in the engine.
+    owner_ids = {s.user_id for s in auto if s.user_id is not None}
+    rep_by = {}
+    if owner_ids:
+        for u in db.query(User).filter(User.id.in_(owner_ids)).all():
+            rep_by[u.id] = u.reputation
+
     n = 0
-    for s in db.query(SellerSpec).filter(SellerSpec.auto_price == True).all():  # noqa: E712
+    for s in auto:
         if s.min_price is None or s.max_price is None or s.max_price < s.min_price:
             continue
         key = (s.gpu_model or "cpu").lower()
         total = total_by.get(key, 1)
         util = (busy_by.get(key, 0) / total) if total else 0.0     # 0..1
-        mult = D("0.85") + D("0.40") * D(util)          # idle 0.85x -> full 1.25x
-        base = (D(s.min_price) + D(s.max_price)) / Decimal(2)
-        price = max(D(s.min_price), min(D(s.max_price), base * mult))
-        price = qc(min(price, D(ref) * D("0.95")))     # never >= cloud reference
+        cloud_ref = pricing_engine.cloud_reference_for(s.gpu_model)
+        if cloud_ref is None and reference_price is not None:
+            cloud_ref = float(reference_price)   # caller-supplied fallback anchor
+        rec = pricing_engine.recommend(
+            cloud_ref,
+            perf_reference=pricing_engine.performance_reference_price(s.gpu_model),
+            utilization=util,
+            trust_level=trust_level_for(s).get("level"),
+            benchmark_verdict=getattr(s, "benchmark_verdict", None),
+            confidential=spec_confidential_active(s),
+            region_verified=bool(getattr(s, "region_verified", False)),
+            reputation=rep_by.get(s.user_id),
+            min_price=float(s.min_price), max_price=float(s.max_price),
+            current_price=float(s.price_per_hour or 0),
+        )
+        price = qc(D(str(rec["recommended_price"])))
         if abs(price - D(s.price_per_hour)) >= D("0.01"):
             db.add(PriceChange(spec_id=s.id, old_price=s.price_per_hour or 0,
                                new_price=price, utilization=round(util, 3),
@@ -2217,10 +3005,25 @@ def mark_task_running(db: Session, task: "Task") -> None:
 
 
 def submit_task_result(db: Session, task: "Task", result: str,
-                       status: str = "completed") -> None:
+                       status: str = "completed", content_hash: str = None,
+                       signature: str = None, proof: dict = None) -> None:
     task.result = result
     task.status = status if status in ("completed", "failed", "running") else "completed"
     task.completed_at = _utcnow()
+    if content_hash:
+        # The seller-signed sha256 of the PLAINTEXT output bytes (from the signed proof). Stored
+        # so a fraction of real jobs can be independently re-executed and compared (quorum),
+        # instead of trusting a signed object-ref string. (#65)
+        task.result_content_hash = str(content_hash)[:128]
+    if signature:
+        # Retain the node's Ed25519 signature + the exact signed payload so the BUYER can
+        # verify the result offline against the node's attested pubkey (verifiable receipt).
+        import json as _json
+        task.result_signature = str(signature)[:256]
+        try:
+            task.result_proof = _json.dumps(proof or {}, sort_keys=True)[:4000]
+        except Exception:
+            task.result_proof = None
     db.add(task); db.commit()
 
 
@@ -2646,7 +3449,39 @@ def set_spec_confidential(db: Session, spec: "SellerSpec", vendor: str,
     spec.tee_vendor = vendor
     spec.tee_measurement = measurement
     spec.tee_report = report
+    spec.tee_attested_at = _utcnow()          # freshness clock — confidential status expires
     db.add(spec); db.commit()
+
+
+def _tee_attestation_ttl_s() -> int:
+    """How long a confidential (TEE) attestation is honored before re-attestation is
+    required. Confidential computing is only meaningful if the enclave state is FRESH —
+    a stale 'confidential=True' from months ago attests nothing about the machine today."""
+    try:
+        return int(os.getenv("TEE_ATTESTATION_TTL_S", str(24 * 3600)))
+    except ValueError:
+        return 24 * 3600
+
+
+def spec_confidential_active(spec, now=None, ttl_s=None) -> bool:
+    """True only if this spec is confidential AND its TEE attestation is still fresh.
+
+    A confidential booking/dispatch must gate on THIS, not the raw `confidential` flag: the
+    flag alone can be stale, and (combined with the production fail-closed verifier in
+    utils.verify_tee_report) this keeps 'confidential' meaning a currently-attested enclave."""
+    if not getattr(spec, "confidential", False):
+        return False
+    ts = getattr(spec, "tee_attested_at", None)
+    if ts is None:
+        return False                          # confidential but never stamped -> not fresh
+    now = now or _utcnow()
+    ttl = _tee_attestation_ttl_s() if ttl_s is None else ttl_s
+    # SQLite round-trips datetimes tz-naive while _utcnow() is tz-aware — compare in naive UTC.
+    if now.tzinfo is not None:
+        now = now.replace(tzinfo=None)
+    if ts.tzinfo is not None:
+        ts = ts.replace(tzinfo=None)
+    return (now - ts).total_seconds() <= ttl
 
 
 
@@ -2671,6 +3506,27 @@ def get_membership(db: Session, org_id: int, user_id: int):
             .filter(OrgMember.org_id == org_id, OrgMember.user_id == user_id).first())
 
 
+def list_orgs_for_user(db: Session, user_id: int):
+    """Every org the user belongs to, with their role and the org's live wallet/budget.
+    Powers the console Teams panel — the user can't act on an org whose id they don't know,
+    so the console needs a way to enumerate their memberships (there is no public org directory)."""
+    rows = (db.query(OrgMember, Organization)
+            .join(Organization, Organization.id == OrgMember.org_id)
+            .filter(OrgMember.user_id == user_id)
+            .order_by(Organization.id.asc()).all())
+    out = []
+    for m, org in rows:
+        cap = float(org.budget_cap or 0)
+        out.append({
+            "org_id": org.id, "name": org.name, "your_role": m.role,
+            "balance": round(float(org.balance or 0), 2),
+            "budget_cap": (round(cap, 2) if cap else None),
+            "spent": round(float(org.spent or 0), 2),
+            "members": db.query(OrgMember).filter(OrgMember.org_id == org.id).count(),
+        })
+    return out
+
+
 def org_members(db: Session, org_id: int):
     rows = db.query(OrgMember).filter(OrgMember.org_id == org_id).all()
     out = []
@@ -2690,6 +3546,182 @@ def add_org_member(db: Session, org: "Organization", username: str, role: str) -
         return True
     db.add(OrgMember(org_id=org.id, user_id=u.id, role=role)); db.commit()
     return True
+
+
+def org_admin_count(db: Session, org_id: int) -> int:
+    return db.query(OrgMember).filter(OrgMember.org_id == org_id,
+                                      OrgMember.role == "admin").count()
+
+
+def set_org_member_role(db: Session, org_id: int, username: str, role: str) -> str:
+    """Change an existing member's role. Returns a status string the API maps to HTTP:
+    'ok' | 'not_found' (user isn't a member) | 'last_admin' (would leave the org with no admin).
+    An org must always keep at least one admin — demoting the sole admin is refused."""
+    if role not in ("admin", "billing", "member"):
+        raise ValueError("role must be admin|billing|member")
+    u = db.query(User).filter(User.username == username).first()
+    if not u:
+        return "not_found"
+    m = get_membership(db, org_id, u.id)
+    if not m:
+        return "not_found"
+    if m.role == "admin" and role != "admin" and org_admin_count(db, org_id) <= 1:
+        return "last_admin"
+    m.role = role
+    db.add(m); db.commit()
+    return "ok"
+
+
+def remove_org_member(db: Session, org_id: int, username: str) -> str:
+    """Remove a member from an org. Returns 'ok' | 'not_found' | 'last_admin'.
+    Removing the sole admin is refused so an org can never become unmanageable."""
+    u = db.query(User).filter(User.username == username).first()
+    if not u:
+        return "not_found"
+    m = get_membership(db, org_id, u.id)
+    if not m:
+        return "not_found"
+    if m.role == "admin" and org_admin_count(db, org_id) <= 1:
+        return "last_admin"
+    db.delete(m); db.commit()
+    return "ok"
+
+
+# ------------------ Persistent volumes (content-addressed, incremental snapshots) ------------------
+
+def create_volume(db: Session, buyer: "User", name: str, size_limit_gb=None, org_id=None):
+    v = Volume(buyer_id=buyer.id, org_id=org_id, name=name,
+               size_limit_gb=(int(size_limit_gb) if size_limit_gb else None))
+    db.add(v); db.commit(); db.refresh(v)
+    return v
+
+
+def get_volume(db: Session, volume_id: int):
+    return db.query(Volume).filter(Volume.id == volume_id).first()
+
+
+def list_volumes(db: Session, buyer_id: int):
+    from sqlalchemy import func
+    rows = (db.query(Volume).filter(Volume.buyer_id == buyer_id)
+            .order_by(Volume.id.desc()).all())
+    out = []
+    for v in rows:
+        # dedup savings = sum of the LOGICAL size of every snapshot minus what we actually hold.
+        logical = int(db.query(func.coalesce(func.sum(VolumeSnapshot.total_bytes), 0))
+                      .filter(VolumeSnapshot.volume_id == v.id).scalar() or 0)
+        out.append({"id": v.id, "name": v.name, "org_id": v.org_id,
+                    "size_limit_gb": v.size_limit_gb, "bytes_stored": v.bytes_stored,
+                    "snapshots": v.snapshot_count,
+                    "dedup_saved_bytes": max(0, logical - int(v.bytes_stored or 0)),
+                    "created_at": v.created_at.isoformat() if v.created_at else None})
+    return out
+
+
+def volume_blob_shas(db: Session, volume_id: int) -> set:
+    return {r.sha256 for r in db.query(VolumeBlob.sha256).filter(VolumeBlob.volume_id == volume_id)}
+
+
+def volume_blob_exists(db: Session, volume_id: int, sha256: str) -> bool:
+    return db.query(VolumeBlob.id).filter(
+        VolumeBlob.volume_id == volume_id, VolumeBlob.sha256 == sha256).first() is not None
+
+
+def register_volume_blob(db: Session, volume_id: int, sha256: str, size: int) -> bool:
+    """Add a blob to the index if new. Returns True iff newly added (i.e. it counts toward the
+    delta / the volume's real stored bytes); False if it was already present (deduplicated)."""
+    if volume_blob_exists(db, volume_id, sha256):
+        return False
+    db.add(VolumeBlob(volume_id=volume_id, sha256=sha256, size=int(size)))
+    v = db.query(Volume).filter(Volume.id == volume_id).first()
+    if v:
+        v.bytes_stored = int(v.bytes_stored or 0) + int(size)
+        db.add(v)
+    db.commit()
+    return True
+
+
+def plan_snapshot(db: Session, volume_id: int, files: list) -> dict:
+    """Given the manifest a client WANTS to snapshot, return which content blobs are MISSING (the
+    delta to upload) vs. already held (deduped). Files are [{path, sha256, size, ...}]. This is the
+    'only send the delta' step — unchanged content is never uploaded again."""
+    have = volume_blob_shas(db, volume_id)
+    seen, missing, missing_bytes, reused = set(), [], 0, 0
+    for f in files:
+        sha = f["sha256"]
+        if sha in seen:
+            continue
+        seen.add(sha)
+        if sha in have:
+            reused += 1
+        else:
+            missing.append({"sha256": sha, "size": int(f.get("size", 0))})
+            missing_bytes += int(f.get("size", 0))
+    return {"missing": missing, "missing_bytes": missing_bytes,
+            "reused_blobs": reused, "unique_blobs": len(seen),
+            "total_bytes": sum(int(f.get("size", 0)) for f in files)}
+
+
+def finalize_snapshot(db: Session, volume: "Volume", files: list, present_shas: set,
+                      label=None, vm_id=None) -> "VolumeSnapshot":
+    """Record a snapshot. `present_shas` is the set of sha256 the caller has VERIFIED exist in object
+    storage (uploaded now or already held). Any referenced blob not yet indexed is registered here,
+    and its bytes count as this snapshot's delta. Raises if a referenced blob isn't present."""
+    delta = 0
+    for f in files:
+        sha, size = f["sha256"], int(f.get("size", 0))
+        if volume_blob_exists(db, volume.id, sha):
+            continue
+        if sha not in present_shas:
+            raise ValueError(f"blob {sha[:12]} was never uploaded")
+        if register_volume_blob(db, volume.id, sha, size):
+            delta += size
+    seq = int(volume.snapshot_count or 0) + 1
+    snap = VolumeSnapshot(
+        volume_id=volume.id, seq=seq, label=label, vm_id=vm_id,
+        manifest=json.dumps(files, separators=(",", ":")),
+        total_bytes=sum(int(f.get("size", 0)) for f in files), delta_bytes=delta)
+    db.add(snap)
+    volume.snapshot_count = seq
+    db.add(volume); db.commit(); db.refresh(snap)
+    return snap
+
+
+def list_snapshots(db: Session, volume_id: int):
+    rows = (db.query(VolumeSnapshot).filter(VolumeSnapshot.volume_id == volume_id)
+            .order_by(VolumeSnapshot.seq.desc()).all())
+    return [{"id": s.id, "seq": s.seq, "label": s.label, "vm_id": s.vm_id,
+             "total_bytes": s.total_bytes, "delta_bytes": s.delta_bytes,
+             "files": len(json.loads(s.manifest or "[]")),
+             "created_at": s.created_at.isoformat() if s.created_at else None} for s in rows]
+
+
+def get_snapshot(db: Session, volume_id: int, snapshot_id: int):
+    return (db.query(VolumeSnapshot)
+            .filter(VolumeSnapshot.volume_id == volume_id, VolumeSnapshot.id == snapshot_id).first())
+
+
+def restore_manifest(db: Session, volume_id: int, snap: "VolumeSnapshot", since=None) -> dict:
+    """The files to reconstruct a snapshot. With `since` (an earlier snapshot), return ONLY the files
+    whose content changed since then — the delta the client still needs (it already has the rest)."""
+    files = json.loads(snap.manifest or "[]")
+    full_size = sum(int(f.get("size", 0)) for f in files)
+    out = files
+    if since is not None:
+        base = {f["path"]: f["sha256"] for f in json.loads(since.manifest or "[]")}
+        out = [f for f in files if base.get(f["path"]) != f["sha256"]]
+    return {"files": out, "full_size": full_size,
+            "delta_size": sum(int(f.get("size", 0)) for f in out),
+            "is_delta": since is not None, "file_count": len(files), "delta_count": len(out)}
+
+
+def delete_volume(db: Session, volume: "Volume") -> list:
+    """Delete the volume + its snapshots + blob index. Returns the list of blob sha256 that were
+    held, so the caller can remove them from object storage."""
+    shas = [r.sha256 for r in db.query(VolumeBlob.sha256).filter(VolumeBlob.volume_id == volume.id)]
+    db.query(VolumeSnapshot).filter(VolumeSnapshot.volume_id == volume.id).delete()
+    db.query(VolumeBlob).filter(VolumeBlob.volume_id == volume.id).delete()
+    db.delete(volume); db.commit()
+    return shas
 
 
 def org_deposit(db: Session, org: "Organization", amount: float) -> float:
@@ -2768,16 +3800,55 @@ def get_task_logs(db: Session, task_id: int, after_id: int = 0):
 
 # ------------------ Benchmarks ------------------
 
-def set_benchmark(db: Session, spec: "SellerSpec", tokens_sec: float, meta: dict) -> None:
+def set_benchmark(db: Session, spec: "SellerSpec", tokens_sec: float, meta: dict,
+                  verdict: str = None, elapsed_s: float = None) -> None:
     import json as _json
     spec.benchmark_tokens_sec = tokens_sec
     spec.benchmark_meta = _json.dumps(meta or {})
     spec.benchmark_at = _utcnow()
+    if verdict is not None:
+        # consistency of the reported number with the CLAIMED gpu_model's public band.
+        spec.benchmark_verdict = str(verdict)[:32]
+    if elapsed_s is not None:
+        spec.benchmark_elapsed_s = float(elapsed_s)
     db.add(spec); db.commit()
 
 
+def record_benchmark_sample(db: Session, spec: "SellerSpec", *, source: str,
+                            metrics: dict = None, verdict: str = None,
+                            pow_verified: bool = None, elapsed_s: float = None,
+                            tokens_sec: float = None) -> "BenchmarkSample":
+    """Append a labelled training example (features + context) to the authenticity dataset.
+    Best-effort: a logging failure must never break the benchmark/idle path."""
+    import json as _json
+    seller = get_user_by_id(db, spec.user_id) if spec is not None else None
+    row = BenchmarkSample(
+        spec_id=(spec.id if spec is not None else None),
+        seller_id=(spec.user_id if spec is not None else None),
+        gpu_model=(spec.gpu_model if spec is not None else None),
+        source=source, metrics=_json.dumps(metrics or {}), verdict=verdict,
+        pow_verified=pow_verified, elapsed_s=elapsed_s, tokens_sec=tokens_sec,
+        reputation=(getattr(seller, "reputation", None) if seller is not None else None),
+        jobs_completed=(spec.jobs_completed if spec is not None else None),
+        jobs_failed=(spec.jobs_failed if spec is not None else None),
+        fraud_count=(spec.fraud_count if spec is not None else None),
+        attested=(spec.attested if spec is not None else None),
+        confidential=(spec.confidential if spec is not None else None),
+        region_verified=(spec.region_verified if spec is not None else None),
+    )
+    db.add(row); db.commit(); db.refresh(row)
+    return row
+
+
 def create_benchmark_task(db: Session, spec: "SellerSpec"):
-    task = Task(spec_id=spec.id, task_type="benchmark", status="pending", priority=5)
+    import json as _json
+    import random as _random
+    # A FRESH server challenge rides with every benchmark: the node must return
+    # compute_test_hash(size, seed) for THIS seed, proving it actually ran seeded work now —
+    # a pre-canned or replayed benchmark number can't answer a seed it never saw.
+    challenge = {"bench_seed": _random.randint(1, 2_000_000_000), "bench_size": 50000}
+    task = Task(spec_id=spec.id, task_type="benchmark", status="pending", priority=5,
+                code=_json.dumps(challenge))
     db.add(task); db.commit(); db.refresh(task)
     return task
 
@@ -2918,6 +3989,7 @@ def try_debit_earnings(db: Session, user_id: int, amount) -> bool:
 
 
 def credit_earnings(db: Session, user_id: int, amount: float) -> None:
+    amount = q(amount)   # coerce to the money type — a float here breaks the in-session evaluator
     db.execute(update(User).where(User.id == user_id)
                .values(earnings=User.earnings + amount))
     db.commit()
@@ -2942,23 +4014,84 @@ def get_payout_method(db: Session, method_id: int, user_id: int):
                     SellerPayoutMethod.user_id == user_id).first())
 
 
+def instant_payout_fee(amount) -> Decimal:
+    """The fee for an INSTANT (on-demand) payout of `amount`: max(flat floor, pct). Never exceeds
+    the amount. Scheduled/batch payouts are free (fee 0) — this is charged only when the seller
+    chooses instant cash-out."""
+    amt = qc(amount)
+    if amt <= 0:
+        return qc(0)
+    fee = INSTANT_PAYOUT_FEE_MIN if INSTANT_PAYOUT_FEE_MIN > (amt * INSTANT_PAYOUT_FEE_PCT) \
+        else (amt * INSTANT_PAYOUT_FEE_PCT)
+    return qc(fee if fee < amt else amt)
+
+
+def seller_cleared_jobs(db: Session, user_id: int) -> int:
+    """Count of this seller's completed (released) paid bookings — the 'verified jobs' bar."""
+    return db.query(Booking).filter(Booking.seller_id == user_id,
+                                    Booking.status == "released").count()
+
+
+def is_payout_matured(db: Session, user) -> bool:
+    """True once a seller is trusted enough for INSTANT (fast) payout: good reputation AND at
+    least PAYOUT_MATURITY_MIN_JOBS completed jobs. New/low-rep sellers must use the free scheduled
+    path (which still respects the clearing hold) — closing the fast-exit fraud window."""
+    uid = getattr(user, "id", user)
+    rep = int(getattr(user, "reputation", 0) or 0)
+    return rep >= MIN_REPUTATION and seller_cleared_jobs(db, uid) >= PAYOUT_MATURITY_MIN_JOBS
+
+
+def held_earnings(db: Session, user_id: int, *, now=None, hold_hours=None) -> Decimal:
+    """Sum of payouts from bookings this seller completed within the clearing/dispute window —
+    money that has been earned but is not yet withdrawable (a window to catch a bad job first)."""
+    now = now or _utcnow()
+    hrs = EARNINGS_HOLD_HOURS if hold_hours is None else int(hold_hours)
+    cutoff = now - timedelta(hours=hrs)
+    if getattr(cutoff, "tzinfo", None) is not None:
+        cutoff = cutoff.replace(tzinfo=None)   # released_at is stored naive-UTC
+    total = Decimal(0)
+    for b in db.query(Booking).filter(Booking.seller_id == user_id,
+                                      Booking.status == "released",
+                                      Booking.released_at.isnot(None),
+                                      Booking.released_at >= cutoff).all():
+        total += D(b.seller_payout)
+    return q(total)
+
+
+def withdrawable_earnings(db: Session, user, *, now=None) -> Decimal:
+    """Earnings a seller can withdraw RIGHT NOW = total earnings minus amounts still in the
+    clearing/dispute hold. Never negative."""
+    u = user if hasattr(user, "earnings") else get_user_by_id(db, user)
+    w = D(u.earnings) - held_earnings(db, u.id, now=now)
+    return q(w if w > 0 else Decimal(0))
+
+
 def request_payout(db: Session, user: "User", method: "SellerPayoutMethod",
-                   amount: float) -> "Payout":
-    """Atomically debit earnings and enqueue a payout. Returns None if short."""
+                   amount: float, *, fee=0.0) -> "Payout":
+    """Atomically debit earnings and enqueue a payout. Returns None if short. `fee` > 0 is the
+    instant-payout fee: the seller's earnings drop by the GROSS `amount`, the rail receives
+    `amount - fee`, and `fee` is booked to PLATFORM_REVENUE (a real revenue leg). fee=0 is the
+    free scheduled/normal path (unchanged)."""
     if amount <= 0 or not method.verified:
         return None
-    if not try_debit_earnings(db, user.id, amount):
+    gross = qc(amount)
+    fee = qc(fee) if (fee and qc(fee) > 0) else qc(0)
+    if fee >= gross:                       # the fee must be smaller than the amount
         return None
-    p = Payout(user_id=user.id, method_id=method.id, amount_usd=qc(amount),
+    net = gross - fee
+    if not try_debit_earnings(db, user.id, gross):
+        return None
+    p = Payout(user_id=user.id, method_id=method.id, amount_usd=net, fee_usd=fee,
                kind=method.kind, status="requested")
     db.add(p); db.flush()
-    # money LEAVES the system: seller earnings drain to the external payout rail.
-    # This was previously not ledgered at all — earnings simply vanished from the books.
-    post(db, "payout", legs=[
-        (acct_seller(user.id), DEBIT,  qc(amount), user.id),
-        (EXTERNAL_PAYOUTS,     CREDIT, qc(amount)),
-    ], reference_id=p.id, description=f"payout via {method.kind}",
-       entry_type="payout")
+    # money LEAVES the system: seller earnings (gross) split into the rail (net) + our fee.
+    legs = [(acct_seller(user.id), DEBIT, gross, user.id),
+            (EXTERNAL_PAYOUTS,     CREDIT, net)]
+    if fee > 0:
+        legs.append((PLATFORM_REVENUE, CREDIT, fee))
+    post(db, "payout", legs=legs, reference_id=p.id,
+         description=f"payout via {method.kind}" + (" (instant)" if fee > 0 else ""),
+         entry_type="payout")
     db.commit(); db.refresh(p)
     return p
 
@@ -2972,8 +4105,9 @@ def set_payout_status(db: Session, payout: "Payout", status: str,
     if reason:
         payout.reason = reason
     db.add(payout); db.commit()
-    if status == "failed":                       # return the money on failure
-        credit_earnings(db, payout.user_id, payout.amount_usd)
+    if status == "failed":                       # return the money on failure — the GROSS
+        # (net that would have been sent + any instant fee), so the seller is fully made whole.
+        credit_earnings(db, payout.user_id, q(payout.amount_usd) + q(payout.fee_usd or 0))
 
 
 def pending_payouts(db: Session):
@@ -3026,8 +4160,11 @@ def run_due_schedules(db: Session, now_utc=None) -> int:
             continue
         user = db.query(User).filter(User.id == sch.user_id).first()
         method = db.query(SellerPayoutMethod).filter(SellerPayoutMethod.id == sch.method_id).first()
-        if user and method and method.verified and (user.earnings or 0) >= sch.min_amount:
-            request_payout(db, user, method, qc(user.earnings))
+        # Only pay out earnings that have CLEARED the hold window (scheduled payouts respect the
+        # same anti-fraud hold as manual ones, so a schedule can't be used to dodge it).
+        avail = withdrawable_earnings(db, user, now=now_utc) if user else Decimal(0)
+        if user and method and method.verified and avail >= q(sch.min_amount) and avail > 0:
+            request_payout(db, user, method, qc(avail))
             fired += 1
         sch.last_run_at = now_utc
         sch.next_run_at = compute_next_run(now_utc, sch.day_of_week, sch.hour,
@@ -3110,6 +4247,86 @@ def get_multinode_job(db: Session, job_id: int):
     return db.query(MultiNodeJob).filter(MultiNodeJob.id == job_id).first()
 
 
+# ------------------- DISTRIBUTED (multi-node cluster) coordination -------------------
+
+def create_distributed_job(db: Session, buyer: "User", params: dict,
+                           world_size: int, backend: str = "nccl"):
+    """A coordinated N-rank cluster (kind='distributed'). total_segments == world_size."""
+    import json as _j
+    job = MultiNodeJob(buyer_id=buyer.id, kind="distributed", params=_j.dumps(params or {}),
+                       total_segments=int(world_size), status="running", backend=backend)
+    db.add(job); db.commit(); db.refresh(job)
+    return job
+
+
+def set_rendezvous(db: Session, job: "MultiNodeJob", addr: str, port: int) -> bool:
+    """Record rank-0's VPN-reachable address so the other ranks can join. First writer wins:
+    once set, a different address is refused (returns False) — the cluster has one master."""
+    if job.master_addr and (job.master_addr != addr or job.master_port != int(port)):
+        return False
+    job.master_addr = addr
+    job.master_port = int(port)
+    if job.rendezvous_at is None:
+        job.rendezvous_at = _utcnow()
+    db.add(job); db.commit()
+    return True
+
+
+def rendezvous_info(db: Session, job: "MultiNodeJob") -> dict:
+    return {"job_id": job.id, "status": job.status, "world_size": job.total_segments,
+            "backend": job.backend, "master_addr": job.master_addr,
+            "master_port": job.master_port, "ready": bool(job.master_addr)}
+
+
+def distributed_job_for_task(db: Session, task_id: int):
+    """The distributed cluster a task belongs to (via its segment), or None."""
+    seg = db.query(JobSegment).filter(JobSegment.task_id == task_id).first()
+    if not seg:
+        return None
+    job = db.query(MultiNodeJob).filter(MultiNodeJob.id == seg.job_id).first()
+    return job if (job and job.kind == "distributed") else None
+
+
+def rank_for_agent(db: Session, job: "MultiNodeJob", agent_user: "User"):
+    """The (segment, rank) this agent owns in the job — the segment whose task runs on a spec
+    owned by this agent. Rank == segment.idx. Returns (None, None) if the agent has no rank here."""
+    segs = (db.query(JobSegment).filter(JobSegment.job_id == job.id)
+            .order_by(JobSegment.idx.asc()).all())
+    for seg in segs:
+        t = db.query(Task).filter(Task.id == seg.task_id).first()
+        if not t:
+            continue
+        spec = db.query(SellerSpec).filter(SellerSpec.id == t.spec_id).first()
+        if spec and spec.user_id == agent_user.id:
+            return seg, seg.idx
+    return None, None
+
+
+def register_peer(db: Session, seg: "JobSegment", host: str, port: int, slots: int = 1):
+    """Record a rank's VPN-reachable address so the whole cluster can be exported to the tools an
+    org already runs (an MPI hostfile, a Ray address, a torchrun rendezvous endpoint)."""
+    seg.peer_host = host
+    seg.peer_port = int(port)
+    seg.slots = max(1, int(slots or 1))
+    db.add(seg); db.commit()
+    return seg
+
+
+def cluster_peers(db: Session, job: "MultiNodeJob"):
+    """Every rank of a distributed job, ordered by rank, with its registered VPN address."""
+    segs = (db.query(JobSegment).filter(JobSegment.job_id == job.id)
+            .order_by(JobSegment.idx.asc()).all())
+    return [{"rank": s.idx, "host": s.peer_host, "port": s.peer_port,
+             "slots": (s.slots or 1), "is_master": s.idx == 0,
+             "registered": bool(s.peer_host), "status": s.status} for s in segs]
+
+
+def cluster_ready(db: Session, job: "MultiNodeJob") -> bool:
+    """True once every rank has registered its address (the cluster is fully addressable)."""
+    peers = cluster_peers(db, job)
+    return bool(peers) and all(p["registered"] for p in peers)
+
+
 def job_segments(db: Session, job_id: int):
     return (db.query(JobSegment).filter(JobSegment.job_id == job_id)
             .order_by(JobSegment.idx.asc()).all())
@@ -3188,6 +4405,168 @@ def reconcile_idle_earnings(db: Session, earnings: dict, take_rate: float) -> di
 
 def idle_credited_total(db: Session, spec_id: int) -> float:
     rows = db.query(IdleSettlement).filter(IdleSettlement.spec_id == spec_id).all()
+    return round(sum(r.credited_usd for r in rows), 6)
+
+
+
+# ------------------ Spare-disk rental (web3/BitTorrent storage) ------------------
+
+DISK_PROVIDERS = {"storj", "btfs", "sia"}   # supported storage-network adapters
+
+
+def disk_node_name(spec: "SellerSpec") -> str:
+    """The UNIQUE node name this spec contributes storage under — the attribution key that maps
+    a settled storage payout back to exactly one seller (like the NiceHash worker `pb-<id>`)."""
+    return f"pbdisk-{spec.id}"
+
+
+def spec_id_from_disk_node(node_id: str):
+    try:
+        return int(node_id.rsplit("-", 1)[-1])   # "pbdisk-<spec_id>"
+    except (ValueError, AttributeError):
+        return None
+
+
+def set_disk_rental(db: Session, spec: "SellerSpec", enabled: bool,
+                    provider: str = None, alloc_gb: int = None) -> None:
+    """Turn a node's disk rental on/off and set its provider + GB cap. Enabling is EXPLICIT and
+    requires real args — the caller (API) rejects enable without a provider AND a cap; this helper
+    just persists what it's given. Disabling leaves the config so re-enabling is one click;
+    delete_disk_rental clears it."""
+    spec.disk_enabled = bool(enabled)
+    if provider is not None:
+        spec.disk_provider = provider
+    if alloc_gb is not None:
+        spec.disk_alloc_gb = max(0, int(alloc_gb))
+    db.add(spec); db.commit()
+
+
+def delete_disk_rental(db: Session, spec: "SellerSpec") -> None:
+    """Cancel + delete: disable and clear the config (the agent then removes the node container
+    and wipes its data dir on the next heartbeat)."""
+    spec.disk_enabled = False
+    spec.disk_provider = None
+    spec.disk_alloc_gb = None
+    spec.disk_used_gb = None
+    spec.disk_est_daily_usd = None
+    db.add(spec); db.commit()
+
+
+def record_disk_report(db: Session, spec: "SellerSpec", provider: str,
+                       used_gb: float, est_daily_usd: float) -> None:
+    spec.disk_provider = provider or spec.disk_provider
+    spec.disk_used_gb = used_gb
+    spec.disk_est_daily_usd = est_daily_usd
+    spec.disk_reported_at = _utcnow()
+    db.add(spec); db.commit()
+
+
+# ------------------ Model cache-locality (scheduler signal) ------------------
+
+MAX_CACHED_MODELS = 2000
+
+
+def set_spec_cached_models(db: Session, spec: "SellerSpec", model_ids) -> int:
+    """Record which model ids a node holds locally (reported by the agent). Deduped, bounded, and
+    charset-checked so a compromised agent can't inject junk. Returns the stored count."""
+    import re
+    clean, seen = [], set()
+    for m in (model_ids or []):
+        s = str(m or "").strip()
+        # a model id is publisher/name or a bare alias — same safe charset as ids.py
+        if not s or len(s) > 200 or s in seen:
+            continue
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$", s) or ".." in s:
+            continue
+        seen.add(s)
+        clean.append(s)
+        if len(clean) >= MAX_CACHED_MODELS:
+            break
+    spec.cached_models = json.dumps(clean)
+    spec.cached_models_at = _utcnow()
+    db.add(spec); db.commit()
+    return len(clean)
+
+
+def spec_cached_models(spec: "SellerSpec") -> list:
+    try:
+        v = json.loads(spec.cached_models) if spec.cached_models else []
+        return v if isinstance(v, list) else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def node_has_model_cached(spec: "SellerSpec", model_id: str) -> bool:
+    return model_id in spec_cached_models(spec)
+
+
+def specs_with_model_cached(db: Session, model_id: str):
+    """Online specs that already hold `model_id` locally (the cache-locality candidates)."""
+    rows = (db.query(SellerSpec)
+            .filter(SellerSpec.cached_models.isnot(None), SellerSpec.status == "online").all())
+    return [s for s in rows if node_has_model_cached(s, model_id)]
+
+
+def rank_specs_for_model(specs, model_id: str):
+    """Stable-partition candidate specs so those that already hold `model_id` come first (all other
+    scheduling constraints being equal). Pure — the scheduler calls this as a final tiebreaker so a
+    20-100 GB weight file isn't re-downloaded when an equally-good node already has it."""
+    if not model_id:
+        return list(specs)
+    cached, rest = [], []
+    for s in specs:
+        (cached if node_has_model_cached(s, model_id) else rest).append(s)
+    return cached + rest
+
+
+def reconcile_disk_earnings(db: Session, earnings: dict, take_rate: float) -> dict:
+    """earnings = {node_id: {"period": str, "amount": float, "provider": str}} of SETTLED storage
+    payouts. Credits each seller's unified balance (amount * (1-take)); idempotent per
+    (node, period). Same shape/guarantees as reconcile_idle_earnings."""
+    credited = 0
+    seller_total = Decimal(0)
+    platform_total = Decimal(0)
+    plat = get_or_create_platform(db)
+    for node_id, info in earnings.items():
+        period = str(info.get("period"))
+        gross = q(info.get("amount", 0))
+        if gross <= 0:
+            continue
+        rec = DiskSettlement(node_id=node_id, period=period,
+                             spec_id=spec_id_from_disk_node(node_id),
+                             provider=info.get("provider"), gross_usd=gross)
+        db.add(rec)
+        try:
+            db.commit()                     # unique(node,period) -> idempotent claim
+        except IntegrityError:
+            db.rollback()
+            continue                        # already settled this period
+        spec = db.query(SellerSpec).filter(SellerSpec.id == rec.spec_id).first()
+        owner = db.query(User).filter(User.id == spec.user_id).first() if spec else None
+        if not owner:
+            continue
+        seller_cut = q(gross * (Decimal(1) - D(take_rate)))
+        platform_cut = q(gross - seller_cut)
+        owner.earnings = q(D(owner.earnings) + seller_cut)
+        plat.revenue = q(D(plat.revenue) + platform_cut)
+        rec.credited_usd = seller_cut
+        db.add_all([owner, plat, rec])
+        post(db, "disk_rental", legs=[
+            (EXTERNAL_STORAGE,         DEBIT,  gross),
+            (acct_seller(owner.id),    CREDIT, seller_cut, owner.id),
+            (PLATFORM_REVENUE,         CREDIT, platform_cut),
+        ], reference_id=rec.id, description="disk rental settlement",
+           idempotency_key=f"disk:{node_id}:{period}", entry_type="disk_rental")
+        db.commit()
+        credited += 1
+        seller_total += seller_cut
+        platform_total += platform_cut
+    return {"credited_nodes": credited, "seller_total": q(seller_total),
+            "platform_total": q(platform_total)}
+
+
+def disk_credited_total(db: Session, spec_id: int) -> float:
+    rows = db.query(DiskSettlement).filter(DiskSettlement.spec_id == spec_id).all()
     return round(sum(r.credited_usd for r in rows), 6)
 
 

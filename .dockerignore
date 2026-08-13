@@ -1,0 +1,26 @@
+# Keep the image small and free of local/dev artifacts + anything secret.
+.git
+.github
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+*.db
+*.db-wal
+*.db-shm
+**/*.db
+.venv
+venv
+env/
+node_modules
+**/.pytest_cache
+**/.ruff_cache
+*.log
+.env
+**/.env
+.DS_Store
+scratchpad/
+tmp/
+dist/
+build/
+desktop-app/dist
+desktop-app/build

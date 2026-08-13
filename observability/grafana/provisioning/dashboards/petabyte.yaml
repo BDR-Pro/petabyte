@@ -1,6 +1,9 @@
 # Grafana dashboard provider — loads Petabyte dashboards from disk.
-# Dashboards are version-controlled JSON in this repo and mounted into the
-# Grafana container at /var/lib/grafana/dashboards (read-only recommended).
+# Dashboards are version-controlled JSON in this repo and mounted into the Grafana
+# container at /etc/grafana/dashboards (read-only). This path MUST match the bind-mount
+# destination in ../../docker-compose.yml — it is deliberately NOT under /var/lib/grafana
+# (the persistent named volume) so the named volume can never mask the dashboard files.
+# grafana/verify_provisioning.py asserts provider-path == compose-mount at build time.
 apiVersion: 1
 
 providers:
@@ -14,5 +17,5 @@ providers:
     allowUiUpdates: false
     updateIntervalSeconds: 30
     options:
-      path: /var/lib/grafana/dashboards
+      path: /etc/grafana/dashboards
       foldersFromFilesStructure: false

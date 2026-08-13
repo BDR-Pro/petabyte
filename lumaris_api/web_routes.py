@@ -1,0 +1,152 @@
+"""web_routes.py — the static public web surface (marketing / legal / trust / status / info).
+
+The first slice of a staged `main.py` -> domain-routers extraction. Every handler here returns
+a pre-rendered HTML/text constant with NO database or auth dependency, so the whole surface
+lifts out of the monolith with zero coupling and no circular import — `main` mounts it with a
+single `app.include_router(...)`.
+
+Staged plan (why this one is first): the remaining domains — trust (`/trust/summary`,
+`/jobs/{id}/receipt`), compute lifecycle, payments — use shared dependencies
+(`get_db`, `get_current_user`, `_username`) that still live in `main.py`. Extracting those
+routers cleanly requires lifting those dependencies into a `deps.py` FIRST (so a router can
+import them without importing `main`). This static-page slice needs none of that, so it is the
+safe, self-contained first step that establishes the pattern behind the green test suite.
+"""
+from fastapi import APIRouter
+from fastapi.responses import HTMLResponse, PlainTextResponse
+
+from pages import (
+    TRUST_HTML, STATUS_HTML, METRICS_HTML, BUY_HTML, SELLER_EARNINGS_HTML, TEMPLATES_HTML,
+    DEMO_HTML, CONTACT_HTML, PRICING_HTML, SECURITY_HTML, PRIVACY_HTML, TERMS_HTML, AUP_HTML,
+    REFUNDS_HTML, GPU_DETAIL_HTML, GAMERS_HTML, ARTISTS_HTML, CLUSTER_HTML, CONSOLE_HTML,
+)
+
+router = APIRouter(tags=["web"])
+
+
+@router.get("/trust", response_class=HTMLResponse)
+def trust_page():
+    return HTMLResponse(TRUST_HTML)
+
+
+@router.get("/.well-known/security.txt", response_class=PlainTextResponse)
+@router.get("/security.txt", response_class=PlainTextResponse)
+def security_txt():
+    """RFC 9116 security contact — the file security researchers look for first."""
+    return (
+        "# Petabyte vulnerability disclosure — see /security and the repo SECURITY.md\n"
+        "Contact: mailto:security@petabyte.market\n"
+        "Contact: https://github.com/BDR-Pro/petabyte/security/advisories/new\n"
+        "Policy: https://petabyte.market/security\n"
+        "Expires: 2027-08-01T00:00:00Z\n"
+        "Preferred-Languages: en\n"
+    )
+
+
+@router.get("/status", response_class=HTMLResponse)
+def status_page():
+    """Plain service status — honest, generated from live heartbeats."""
+    return HTMLResponse(STATUS_HTML)
+
+
+@router.get("/metrics", response_class=HTMLResponse)
+def metrics_page():
+    """Investor / operations metrics dashboard (data from /metrics/overview)."""
+    return HTMLResponse(METRICS_HTML)
+
+
+@router.get("/buy/{public_id}", response_class=HTMLResponse)
+def buy_page(public_id: str):
+    """Browser checkout + run experience for one GPU: the buyer completes the entire
+    Stripe compute-tx lifecycle (authorize -> card -> reserve -> dispatch -> run ->
+    capture -> receipt) without touching an internal endpoint by hand. The spec id is
+    read client-side from the path."""
+    return HTMLResponse(BUY_HTML)
+
+
+@router.get("/cluster", response_class=HTMLResponse)
+@router.get("/distributed", response_class=HTMLResponse)
+def cluster_page():
+    """Buyer-facing distributed-compute launcher: form a cluster of N GPUs across different
+    machines (one job, wired over the VPN), or export it to your own scheduler (Slurm/MPI/Ray).
+    NOTE: the POST /distributed API endpoint is unaffected — this GET only serves the page."""
+    return HTMLResponse(CLUSTER_HTML)
+
+
+@router.get("/console", response_class=HTMLResponse)
+def console_page():
+    """Unified operator console for the signed-in user: everything they launched as a BUYER
+    (VMs with stable addresses, distributed clusters, spend/runway) and a summary of everything
+    they host as a SELLER (nodes, earnings, with a link to the full earnings page). Data comes
+    from /me, /buyer/spend, /vms, /clusters, /seller/dashboard."""
+    return HTMLResponse(CONSOLE_HTML)
+
+
+@router.get("/seller/payouts", response_class=HTMLResponse)
+def seller_payouts_page():
+    """Seller Stripe onboarding + earnings/transfers/payouts (data from /payments/*).
+    Distinct from the JSON API at /seller/earnings and /seller/earnings/stripe."""
+    return HTMLResponse(SELLER_EARNINGS_HTML)
+
+
+@router.get("/templates-catalog", response_class=HTMLResponse)
+@router.get("/catalog", response_class=HTMLResponse)
+def templates_page():
+    return TEMPLATES_HTML
+
+
+@router.get("/demo", response_class=HTMLResponse)
+@router.get("/book-a-demo", response_class=HTMLResponse)
+def demo_page():
+    return DEMO_HTML
+
+
+@router.get("/contact", response_class=HTMLResponse)
+def contact_page():
+    return CONTACT_HTML
+
+
+@router.get("/pricing", response_class=HTMLResponse)
+def pricing_page():
+    return PRICING_HTML
+
+
+@router.get("/security", response_class=HTMLResponse)
+def security_page():
+    return SECURITY_HTML
+
+
+@router.get("/privacy", response_class=HTMLResponse)
+def privacy_page():
+    return PRIVACY_HTML
+
+
+@router.get("/terms", response_class=HTMLResponse)
+def terms_page():
+    return TERMS_HTML
+
+
+@router.get("/acceptable-use", response_class=HTMLResponse)
+def aup_page():
+    return AUP_HTML
+
+
+@router.get("/refunds", response_class=HTMLResponse)
+@router.get("/refund-policy", response_class=HTMLResponse)
+def refunds_page():
+    return REFUNDS_HTML
+
+
+@router.get("/gpu/{public_id}", response_class=HTMLResponse)
+def gpu_detail_page(public_id: str):
+    return GPU_DETAIL_HTML
+
+
+@router.get("/gamers", response_class=HTMLResponse)
+def gamers_page():
+    return GAMERS_HTML
+
+
+@router.get("/artists", response_class=HTMLResponse)
+def artists_page():
+    return ARTISTS_HTML

@@ -136,6 +136,20 @@ for _g in ("petabyte_ledger_balanced", "petabyte_ledger_imbalanced_tx",
 ok("ledger heartbeat reports balanced on this marketplace",
    _gauges.get("petabyte_ledger_balanced") == 1 and _gauges.get("petabyte_ledger_imbalanced_tx") == 0)
 
+# ---- trust & integrity gauges: the verification moat, made measurable ----
+_rows = main._marketplace_metrics()
+_tg = {r["name"]: r["value"] for r in _rows}
+for _g in ("petabyte_attested_gpus", "petabyte_confidential_nodes_active",
+           "petabyte_jobs_completed_total", "petabyte_results_content_bound",
+           "petabyte_verifiable_receipts", "petabyte_sellers_fraud_flagged"):
+    ok(f"trust collector emits {_g}", _g in _tg)
+ok("trust-tier gauge is labelled by BOUNDED tier (not a seller id)",
+   any(r["name"] == "petabyte_trust_tier_gpus" and set(r["labels"]) <= {"tier", "environment"}
+       and r["labels"]["tier"] in ("agent_verified", "benchmark_consistent", "benchmark_flagged")
+       for r in _rows))
+ok("attested-GPU gauge matches the honest /trust summary count",
+   _tg.get("petabyte_attested_gpus") == c.get("/trust/summary").json()["attested_gpus"])
+
 # ---- explainable routing + predicted success ----
 r = c.post("/route", json={"min_vram": 8, "hours": 1}).json()
 ok("route selects the bookable node", len(r.get("selected", [])) == 1)

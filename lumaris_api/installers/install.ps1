@@ -1,8 +1,10 @@
 # Petabyte Windows node installer — runs the (tested) Linux agent inside WSL2.
-# Run in an ELEVATED PowerShell:
+# Run in an ELEVATED PowerShell (the /install page generates this with your key filled in):
 #   $env:PETABYTE_API_URL="https://petabyte.market"
-#   $env:PETABYTE_API_KEY="pk_your_node_key"; $env:PRICE_PER_HOUR="1.5"
+#   $env:PETABYTE_API_KEY="pk_your_node_key"
 #   irm https://petabyte.market/install.ps1 | iex
+# PRICE_PER_HOUR is optional: leave it unset to auto-price from your GPU's benchmark,
+# or set $env:PRICE_PER_HOUR="1.5" to pin your own rate.
 #
 # What it does:
 #   1) Verifies admin + NVIDIA driver (nvidia-smi on Windows).
@@ -73,7 +75,7 @@ Write-Host "==> installing the Petabyte agent inside $Distro"
 $sh = @(
     "export PETABYTE_API_URL='$($env:PETABYTE_API_URL)'",
     "export PETABYTE_API_KEY='$($env:PETABYTE_API_KEY)'",
-    "export PRICE_PER_HOUR='$(if ($env:PRICE_PER_HOUR) { $env:PRICE_PER_HOUR } else { '1.0' })'",
+    "export PRICE_PER_HOUR='$(if ($env:PRICE_PER_HOUR) { $env:PRICE_PER_HOUR } else { '' })'",
     "export UNITS='$(if ($env:UNITS) { $env:UNITS } else { '1' })'",
     "export GPU_MODEL='$($env:GPU_MODEL)'",
     "if [ -f ./install.sh ]; then bash ./install.sh; else bash <(curl -fsSL $($env:PETABYTE_API_URL)/install.sh); fi"

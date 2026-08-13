@@ -26,9 +26,10 @@ no separate frontend service, no build step). Pages are plain HTML strings in
   `/static/petabyte-logo.png` (teal-gradient) with `/favicon.ico` + apple-touch icon.
 - **No auth wall on the site.** All pages, including `/keys`, render without a forced
   sign-in. Google sign-in is a discreet, optional entry point; the JWT (when present)
-  is stored in `localStorage` as `pb_token` and used by `/keys` and `/app`. Sign-in
-  redirects to `/app#t=<jwt>`; a bootstrap script captures the fragment and cleans the
-  URL. Money/compute API endpoints stay authenticated server-side.
+  is stored in `localStorage` as `pb_token` and used by `/keys` and `/console`. Sign-in
+  redirects to `/console#t=<jwt>`; a bootstrap script captures the fragment and cleans the
+  URL. Money/compute API endpoints stay authenticated server-side. (`/app` is a permanent
+  redirect to `/console` for backward compatibility.)
 - **Live data:** landing + marketplace poll `/marketplace/stats` and
   `/marketplace/specs` (both public, read-only).
 - **Investor page** mirrors the `Petabyte_Cloud_OnePager.pdf` layout (problem/solution,

@@ -34,12 +34,9 @@ TEMPLATES = {
         "image": "vllm/vllm-openai:latest", "port": 8000, "gpu": True,
         "desc": "vLLM — high-throughput OpenAI-compatible inference",
         "model_arg": "--model",                # e.g. a HF model id
-        "cache": "/root/.cache/huggingface",
-    },
-    "tensorrt-llm": {
-        "egress": "limited",
-        "image": "nvcr.io/nvidia/tritonserver:24.05-trtllm-python-py3", "port": 8000,
-        "gpu": True, "desc": "TensorRT-LLM via Triton (max throughput on NVIDIA)",
+        # vLLM will NOT boot without a model. A one-click launch falls back to this small,
+        # ungated model so the server actually starts; the buyer can override via params.model.
+        "default_model": "facebook/opt-125m",
         "cache": "/root/.cache/huggingface",
     },
     "comfyui": {
@@ -47,12 +44,6 @@ TEMPLATES = {
         "image": "yanwk/comfyui-boot:latest", "port": 8188, "gpu": True,
         "desc": "ComfyUI — node-based Stable Diffusion",
         "cache": "/root/.cache",
-    },
-    "ffmpeg": {
-        "egress": "none",
-        "image": "jrottenberg/ffmpeg:6.1-nvidia", "port": 0, "gpu": True,
-        "desc": "FFmpeg transcode node (NVENC/NVDEC; use /transcode for segment jobs)",
-        "cache": "/tmp",
     },
     "blender": {
         "egress": "none",
@@ -85,11 +76,6 @@ TEMPLATES = {
         "cache": "/home/jovyan/work",
         "stateful": True,                 # people leave notebooks running; snapshot them
     },
-    "pytorch": {
-        "egress": "limited",
-        "image": "pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime", "port": 0, "gpu": True,
-        "desc": "PyTorch + CUDA base — bring your own training script",
-    },
     "sd-webui": {
         "egress": "limited",
         "image": "universonic/stable-diffusion-webui:latest", "port": 7860, "gpu": True,
@@ -99,9 +85,9 @@ TEMPLATES = {
 }
 
 
-_KIND = {"blender": "render", "ffmpeg": "render", "comfyui": "art", "sd-webui": "art",
+_KIND = {"blender": "render", "comfyui": "art", "sd-webui": "art",
          "minecraft": "game", "valheim": "game", "factorio": "game",
-         "jupyter": "notebook", "pytorch": "notebook"}
+         "jupyter": "notebook"}
 
 # Recommended minimum VRAM (GB) to run each GPU template without exhausting GPU
 # memory. Placement — both auto-pick and an explicitly pinned host — filters out

@@ -95,6 +95,14 @@ ok("large job is profitable: 10% commission > processing fee",
 os.environ["STRIPE_FEE_BPS"] = "0"; os.environ["STRIPE_FEE_FIXED_MINOR"] = "0"
 ok("processing fee honors env overrides (0 bps + 0 fixed -> 0)",
    estimate_processing_fee_minor(1000) == 0)
+# A misconfigured fee can NEVER exceed the captured amount (else capture() posts a fee credit
+# larger than the payment and corrupts the clearing balance). bps is clamped to <=100%.
+os.environ["STRIPE_FEE_BPS"] = "20000"; os.environ["STRIPE_FEE_FIXED_MINOR"] = "0"
+ok("an oversized fee (bps=20000) is CAPPED at the captured amount",
+   estimate_processing_fee_minor(1000) == 1000)
+os.environ["STRIPE_FEE_BPS"] = "290"; os.environ["STRIPE_FEE_FIXED_MINOR"] = "1000000"
+ok("an oversized FIXED fee is CAPPED at the captured amount",
+   estimate_processing_fee_minor(1000) == 1000)
 os.environ.pop("STRIPE_FEE_BPS", None); os.environ.pop("STRIPE_FEE_FIXED_MINOR", None)
 
 print(f"\n=== pricing: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")

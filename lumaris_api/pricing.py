@@ -229,9 +229,13 @@ def estimate_processing_fee_minor(amount_minor: int, currency: str = "usd") -> i
     amt = int(amount_minor)
     if amt <= 0:
         return 0
-    bps = max(0, _env_int("STRIPE_FEE_BPS", 290))
+    # Clamp misconfiguration: bps in [0, 10000] (0–100%), fixed non-negative. Then cap the whole
+    # estimate at the captured amount — a processing fee can never exceed the charge, and letting
+    # it (e.g. STRIPE_FEE_BPS=20000) would post a fee credit larger than the payment and corrupt
+    # the EXTERNAL_PAYMENTS clearing balance.
+    bps = min(10000, max(0, _env_int("STRIPE_FEE_BPS", 290)))
     fixed = max(0, _env_int("STRIPE_FEE_FIXED_MINOR", 30))
-    return (amt * bps) // 10000 + fixed
+    return min(amt, (amt * bps) // 10000 + fixed)
 
 
 def refund_split(settlement: dict, refund_amount: int) -> dict:

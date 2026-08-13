@@ -40,28 +40,50 @@ run_suite "smoke (sqlite)"        python smoke_test.py
 run_suite "adversarial (sqlite)"  python adversarial_test.py
 run_suite "stripe connect (sqlite)" python stripe_test.py
 run_suite "payout routing (sqlite)" python payout_test.py
+run_suite "payout rails (irreversible USDC gated + fail-closed)" python payout_rails_test.py
 run_suite "email (mailgun, offline)" python email_test.py
 run_suite "matmul result validation (offline)" python matmul_validation_test.py
 run_suite "account (reset + cal webhook + demo notify)" python account_test.py
 run_suite "wallet (add funds via stripe checkout)" python wallet_test.py
 run_suite "seller integrity audits (anti-fraud)" python seller_audit_test.py
 run_suite "quorum verification (redundant re-execution)" python quorum_test.py
+run_suite "real-job re-verification (content-hash quorum on real work)" python reverify_test.py
 run_suite "marketplace intelligence (health/routing/trust/timeline)" python marketplace_test.py
 run_suite "github config (manifest/validator/generator/drift)" python config_test.py
 run_suite "ENV_VARS bundle (parser/secret-guard/precedence)" python env_vars_test.py
 run_suite "observability (correlation/redaction/cardinality/degrade)" python observability_test.py
+run_suite "product analytics (posthog funnel mirror; off-by-default, no PII)" python product_analytics_test.py
 run_suite "sentry (degrade-safe init + before_send redaction)" python sentry_test.py
 run_suite "seller payable metric (mode-separated payout gauge)" python seller_payable_metric_test.py
 run_suite "funding metrics (canonical, scope-separated, honest)" python funding_metrics_test.py
 run_suite "db invariants (money-impossible states rejected at DB layer)" python db_invariants_test.py
 run_suite "security (ip-spoof / cross-tenant refs / stored-xss at write time)" python security_test.py
+run_suite "confidential computing (TEE fail-closed in prod + attestation freshness)" python tee_test.py
+run_suite "gpu benchmark authenticity (score vs public reference band)" python gpu_benchmark_test.py
+run_suite "authenticity training dataset (feature rows + labels export)" python training_data_test.py
+run_suite "seller earnings forecast (net/hr exact + honest estimates)" python earnings_test.py
+run_suite "pricing engine (cloud-anchored, demand+trust, explainable, clamped)" python pricing_engine_test.py
+run_suite "GPU ROI (buy-and-rent breakeven: transparent, honest, affiliate-tagged)" python hardware_reference_test.py
+run_suite "paid data API (metered, pay-as-you-go from wallet, scope-gated, price history)" python data_api_test.py
+run_suite "distributed compute (one job across N GPUs on different machines, VPN cluster, gang-scheduled)" python distributed_test.py
+run_suite "agent WireGuard (keys/config/peers + fail-closed bring-up)" bash -c "cd ../lumaris_agent && python wireguard_test.py"
 run_suite "reservation reclaim (abandoned GPU capacity)" python reservation_reclaim_test.py
+run_suite "database backup to S3 (disaster recovery: dump/gzip/sha256/retention/verify)" python backup_test.py
+run_suite "sanctions screen (free public OFAC: country embargo + SDN crypto address, fail-closed)" python sanctions_test.py
+run_suite "launch templates (every template is a real, pullable, runnable container)" python templates_test.py
 run_suite "observability smoke (local tier; remote skipped offline)" \
           bash -c "cd .. && python scripts/observability_smoke_test.py"
 run_suite "grafana dashboards (metric-existence + generator determinism)" \
           bash -c "cd .. && python observability/grafana/validate_dashboards.py && \
                    python observability/grafana/build_dashboards.py && \
                    git diff --exit-code observability/grafana/dashboards"
+run_suite "grafana provisioning (provider<->mount, folder, live-verify guards)" \
+          bash -c "cd .. && python observability/grafana/verify_provisioning.py && \
+                   python observability/grafana/verify_provisioning_test.py"
+run_suite "agent sandbox (buyer job can't harm the seller host)" \
+          bash -c "cd ../lumaris_agent && python sandbox_test.py"
+run_suite "agent pricing (node auto-prices from its GPU benchmark; no invented flat rate)" \
+          bash -c "cd ../lumaris_agent && python provision_test.py"
 run_suite "tunnel (nat + failover)" bash -c "cd ../lumaris_gateway && python tunnel_test.py"
 
 # ---- UI/UX surfaces (web + CLI + packaged exe) -------------------------------
@@ -82,7 +104,7 @@ run_suite "browser UI (responsive/console-errors/journeys; opt-in Playwright)" \
           bash -c "cd .. && python scripts/e2e/browser_ui_test.py"
 
 rm -f smoke.db* adv.db* stripe_test.db* payout_test.db* seller_payable_metric_test.db* \
-      reservation_reclaim_test.db* security.db* web_ui_test.db* ../lumaris_gateway/tunnel.db*
+      reservation_reclaim_test.db* backup_test.db* security.db* web_ui_test.db* ../lumaris_gateway/tunnel.db*
 
 # Informational: honest seller-payout country coverage. This deliberately reports a
 # SHORTFALL (0/100) today and is NOT a gate — coverage grows only through real provider
