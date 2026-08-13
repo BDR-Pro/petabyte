@@ -174,6 +174,74 @@ def run(pw, buyer_t, seller_t, pub, role_t):
            "; ".join(m for k, m in errs if _serious(m))[:120])
         page.close()
 
+        # ---------- JOURNEY: AWS-style Launch Compute (/launch) ----------
+        print("\n-- launch: guided launcher, template-first + machine-first --")
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        errs = []
+        _attach_error_capture(page, errs)
+        page.on("dialog", lambda d: d.accept("E2E launch template"))  # save-as-template prompt()
+        _auth(page, buyer_t)
+        # template-first
+        page.goto(B + "/launch", wait_until="domcontentloaded")
+        page.wait_for_selector("#tgrid .pick", timeout=20000)
+        ok("launch: workload cards render from the curated catalog (/templates)",
+           page.locator("#tgrid .pick").count() >= 5)
+        page.click('#tgrid .pick[data-v="pytorch"]')
+        page.wait_for_selector("#costbody .sumrow", timeout=20000)
+        cost = page.text_content("#costbody") or ""
+        ok("launch: server-priced cost panel appears after choosing a template",
+           "$" in cost and "Estimated total" in cost)
+        ok("launch: the chosen template is visually selected (aria-checked)",
+           page.get_attribute('#tgrid .pick[data-v="pytorch"]', "aria-checked") == "true")
+        ok("launch: a Review & Launch action is offered to the signed-in buyer",
+           page.locator("#reviewbtn").is_visible())
+        # change the template — selection must move
+        page.click('#tgrid .pick[data-v="ollama"]')
+        page.wait_for_timeout(300)
+        ok("launch: changing the template updates the selection",
+           page.get_attribute('#tgrid .pick[data-v="ollama"]', "aria-checked") == "true"
+           and page.get_attribute('#tgrid .pick[data-v="pytorch"]', "aria-checked") == "false")
+        # save a reusable launch template (localStorage, no secrets) + survive reload
+        page.click("#savetplbtn")
+        page.wait_for_timeout(400)
+        ok("launch: save-as-template stores a reusable config",
+           page.locator("#mytplgrid .pick").count() >= 1)
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#tgrid .pick", timeout=20000)
+        page.wait_for_timeout(400)
+        ok("launch: saved templates persist across reload (localStorage)",
+           page.locator("#mytpls").is_visible())
+        # machine-first: /launch?spec= preselects custom-code and prices THAT host
+        page.goto(B + "/launch?spec=" + pub, wait_until="domcontentloaded")
+        page.wait_for_selector("#costbody .sumrow", timeout=20000)
+        ok("launch [machine-first]: ?spec= prices the chosen host",
+           "$" in (page.text_content("#costbody") or ""))
+        ok("launch [machine-first]: the chosen host is selected in the list",
+           page.locator('#mlist .mpick[aria-checked="true"]').count() >= 1)
+        # mobile: no horizontal overflow (the card descriptions used to spill)
+        page.set_viewport_size({"width": 390, "height": 844})
+        page.wait_for_timeout(300)
+        ok("launch [mobile]: no horizontal overflow", _no_overflow(page))
+        ok("launch: no serious JS errors", not [m for k, m in errs if _serious(m)],
+           "; ".join(m for k, m in errs if _serious(m))[:140])
+        page.close()
+
+        # anonymous: can browse + see price, but the launch action is gated behind sign-in
+        print("\n-- launch: anonymous user is gated at launch --")
+        apage = browser.new_page(viewport={"width": 1280, "height": 900})
+        aerrs = []
+        _attach_error_capture(apage, aerrs)
+        apage.goto(B + "/launch", wait_until="domcontentloaded")
+        apage.wait_for_selector("#tgrid .pick", timeout=20000)
+        ok("launch [anon]: guests see a sign-in prompt", apage.locator("#lc_signedout").is_visible())
+        apage.click('#tgrid .pick[data-v="pytorch"]')
+        apage.wait_for_timeout(800)
+        ok("launch [anon]: the launch action is hidden until sign-in",
+           not apage.locator("#reviewbtn").is_visible())
+        ok("launch [anon]: no serious JS errors", not [m for k, m in aerrs if _serious(m)],
+           "; ".join(m for k, m in aerrs if _serious(m))[:140])
+        apage.close()
+
         # ---------- JOURNEY: seller dashboard shows status + earnings ----------
         print("\n-- seller journey: node status + earnings render --")
         page = browser.new_page(viewport={"width": 1280, "height": 900})
@@ -300,7 +368,10 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         try:
             page.wait_for_selector('#mrows td[data-l="GPU"]', timeout=15000)
             lab = page.evaluate("""() => {
-              const tds = [...document.querySelectorAll('#mrows td')].filter(td => td.offsetParent !== null && (td.textContent||'').trim());
+              // Data cells must carry a stacked-card label; action-button cells (.tbl-action)
+              // are self-describing and intentionally label-less (same as the pricing table).
+              const tds = [...document.querySelectorAll('#mrows td')].filter(td =>
+                td.offsetParent !== null && (td.textContent||'').trim() && !td.classList.contains('tbl-action'));
               return {total: tds.length, withLabel: tds.filter(td => td.getAttribute('data-l')).length};
             }""")
             ok("phone: every marketplace card cell carries its label (data-l)",
