@@ -2044,6 +2044,41 @@ def devs_portal():
     return _scalar_portal("/devs/openapi.json", "Petabyte Developer API")
 
 
+# ------------------- WIKI: new-user guide, rendered in the SAME Scalar docs environment -------------------
+# The source of truth is the Markdown in wiki/ (GitHub-readable). Here we assemble those pages into one
+# OpenAPI `info.description` — which Scalar renders as rich Markdown with a heading-driven sidebar — and
+# serve it through the exact same Scalar shell (_scalar_portal) as /docs, /data and /devs.
+_WIKI_ORDER = ["index", "overview", "getting-started", "buyers", "sellers", "cli", "models",
+               "storage", "teams-and-security", "payments-and-trust", "api", "self-hosting", "glossary"]
+
+
+def _wiki_markdown() -> str:
+    base = os.path.join(os.path.dirname(__file__), "..", "wiki")
+    parts = []
+    for name in _WIKI_ORDER:
+        p = os.path.join(base, name + ".md")
+        if os.path.exists(p):
+            try:
+                parts.append(open(p, encoding="utf-8").read().strip())
+            except Exception:  # noqa: BLE001
+                continue
+    return "\n\n---\n\n".join(parts) or "# Petabyte Wiki\n\nDocumentation is being prepared."
+
+
+@app.get("/wiki/openapi.json", include_in_schema=False)
+def wiki_openapi():
+    """A minimal OpenAPI doc whose description IS the wiki — so Scalar renders it like the API docs."""
+    return JSONResponse({"openapi": "3.1.0", "paths": {}, "tags": [],
+                         "info": {"title": "Petabyte — Wiki & Guide", "version": "1.0",
+                                  "description": _wiki_markdown()}})
+
+
+@app.get("/wiki", include_in_schema=False)
+def wiki_portal():
+    """The new-user wiki, rendered in the same Scalar docs environment as the API reference."""
+    return _scalar_portal("/wiki/openapi.json", "Petabyte — Wiki & Guide")
+
+
 @app.exception_handler(BookingsPaused)
 async def _bookings_paused_handler(request: Request, exc: BookingsPaused):
     """The kill switch is on. 503 + Retry-After: honest, and clients back off."""

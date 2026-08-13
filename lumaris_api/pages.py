@@ -290,7 +290,7 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
 <div class="collapse navbar-collapse" id="pbnav">
 <div class="navlinks">
   <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/models" data-ar="النماذج">Models</a><a href="/cluster" data-ar="الحوسبة الموزعة">Distributed</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
-  <a href="/metrics" data-ar="المقاييس">Metrics</a><a href="/install" data-ar="لمالكي كروت الرسومات">For GPU owners</a><a href="/security" data-ar="الأمان">Security</a><a href="/developers" data-ar="المطورون">Developers</a>
+  <a href="/metrics" data-ar="المقاييس">Metrics</a><a href="/install" data-ar="لمالكي كروت الرسومات">For GPU owners</a><a href="/security" data-ar="الأمان">Security</a><a href="/wiki" data-ar="الويكي">Wiki</a><a href="/developers" data-ar="المطورون">Developers</a>
 </div>
 <div class="navcta">
   <a class="signin" id="adminlink" href="/admin" style="display:none">Admin</a>
@@ -325,7 +325,7 @@ _FOOT = """<footer>
     <a href="/install">List your PC</a><a href="/account">Earnings</a><a href="/keys">API keys</a>
   </div>
   <div class="fcol"><div class="fh">Developers</div>
-    <a href="/docs">API reference</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/developers">Quickstart</a><a href="/keys">API keys</a>
+    <a href="/wiki">Wiki</a><a href="/docs">API reference</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/developers">Quickstart</a><a href="/keys">API keys</a>
   </div>
   <div class="fcol"><div class="fh">Company</div>
     <a href="/security">Security &amp; trust</a><a href="/investors">About</a><a href="/status">Status</a>
