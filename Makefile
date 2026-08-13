@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e browser-e2e test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real
+.PHONY: help investor-demo demo-reset demo-seed demo-test populate-demo stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e browser-e2e test-browser-e2e cluster-demo test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real
 
 help:
 	@echo "Petabyte make targets:"
@@ -11,6 +11,7 @@ help:
 	@echo "  make demo-reset      Wipe and reseed the demo, then start the server"
 	@echo "  make demo-seed       Seed the demo only (no server)"
 	@echo "  make demo-test       Run the demo correctness/honesty test suite"
+	@echo "  make populate-demo   Fill a DB with realistic labelled demo data for UI/UX testing (docs/populate-data.md)"
 	@echo "  make stripe-demo     Narrated Stripe Connect flow (test mode, fake gateway)"
 	@echo "  make stripe-test     Run the Stripe Connect test suite (offline assertions)"
 	@echo "  make stripe-integration  Real Stripe TEST-mode integration (needs sk_test_; skips otherwise)"
@@ -18,6 +19,7 @@ help:
 	@echo "  make email-integration  Send a REAL Mailgun email (needs MAILGUN_API_KEY; skips otherwise)"
 	@echo "  make local-e2e       Run the whole platform locally + a buyer/seller/admin flow (offline)"
 	@echo "  make browser-e2e     Drive the full buyer+seller journey through the real browser UI (Playwright)"
+	@echo "  make cluster-demo    Launch a distributed cluster across N machines (buyer side); default = built-in all-reduce self-test"
 	@echo "  make reconcile       Reconcile internal ledger + transactions vs Stripe (test mode)"
 	@echo "  make audit-ledger    Ledger integrity + booking/payout cross-checks (read-only; fails on drift)"
 	@echo "  make payout-test     Run the provider-neutral global payout routing suite"
@@ -51,6 +53,16 @@ demo-seed:
 demo-test:
 	cd $(API) && python3 demo_test.py
 
+# Fill a DB with realistic, LABELLED demo data for UI/UX testing (superset of the investor demo:
+# also seeds disk rental, idle mining, a distributed cluster, and VMs). See docs/populate-data.md.
+#   make populate-demo                         # -> ./demo.db (wipe + seed + enrich)
+#   make populate-demo DB=sqlite:///./ui.db    # -> a specific SQLite file
+#   make populate-demo ARGS=--keep             # enrich without wiping
+DB ?=
+ARGS ?=
+populate-demo:
+	$(if $(DB),DATABASE_URL=$(DB) ,)python3 scripts/populate_demo_data.py $(ARGS)
+
 # The deterministic Stripe Connect walkthrough (test mode, offline fake gateway).
 stripe-demo:
 	cd $(API) && python3 stripe_demo.py
@@ -73,6 +85,29 @@ local-e2e:
 # Needs Playwright's Chromium: python -m playwright install chromium
 browser-e2e:
 	python3 scripts/e2e/browser_e2e.py
+
+# Distributed cluster demo (buyer side): launch one job across N distinct machines and watch it
+# form + complete. Defaults to the built-in all-reduce SELF-TEST (no GPU/image), the reliable live
+# demo. Override with vars, e.g.:
+#   make cluster-demo API_URL=https://petabyte.market BUYER=labowner WORLD_SIZE=2
+#   make cluster-demo CLUSTER_ARGS="--image pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime \
+#       --command 'torchrun train.py --epochs 3' --vpn"
+API_URL ?= https://petabyte.market
+BUYER ?= testUserBuyer
+WORLD_SIZE ?= 2
+CLUSTER_ARGS ?= --selftest
+cluster-demo:
+	python3 scripts/e2e/cluster_demo.py --api-url $(API_URL) --buyer $(BUYER) \
+		--world-size $(WORLD_SIZE) $(CLUSTER_ARGS)
+
+# Browser E2E against the live TEST site (default https://test.petabyte.market). Personas +
+# UX/UI + authorization, writing artifacts/e2e_browser_report.txt. This is what CI runs
+# (.github/workflows/browser-e2e.yml). Thin wrapper — one command; login-gated personas skip
+# without E2E_* credentials. Never runs against LIVE (the suite aborts if it detects live mode).
+test-browser-e2e:
+	pip install -q -r tests/e2e/requirements.txt
+	python -m playwright install --with-deps chromium
+	python -m pytest -q tests/e2e
 
 # Mailgun transactional email: offline unit suite, and an opt-in real send.
 email-test:

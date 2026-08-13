@@ -1,7 +1,7 @@
 """Static site pages served by the API (same-origin, no build step).
 
 Brand: Petabyte — deep-navy background with teal/cyan bioluminescent
-accents and an amber energy accent, Space Grotesk (display) + Inter (body) +
+accents and an amber energy accent, Sora (display) + Figtree (body) +
 JetBrains Mono (data). The hexagon node mark (/static/petabyte-logo.png) is the
 signature. Token persists in localStorage as 'pb_token' across pages.
 """
@@ -52,7 +52,13 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 .navbar-toggler{border:1px solid var(--line2);border-radius:999px;padding:7px 11px;color:var(--mut)}
 .navbar-toggler:focus{box-shadow:0 0 0 4px rgba(53,224,208,.15)}
 .navbar-toggler svg{width:18px;height:18px;display:block}
+/* the hamburger is mobile-only; hide it on desktop even if the Bootstrap CDN is slow/blocked */
+@media(min-width:992px){.navbar-toggler{display:none!important}}
 @media(max-width:991.98px){
+ /* Hide the collapsed menu by default WITHOUT relying on the Bootstrap CDN stylesheet: if
+    that asset is slow or blocked, the signed-in nav (mename + theme + sign-out + CTAs) must
+    not render open and overflow the viewport. Mirrors Bootstrap's own .collapse:not(.show). */
+ .navbar-collapse:not(.show){display:none}
  .navbar-collapse{flex-basis:100%;padding:10px 4px 12px}
  .navlinks{flex-direction:column;gap:2px;margin-inline-start:0}
  .navlinks a{padding:9px 13px}
@@ -81,6 +87,7 @@ body{background:
  radial-gradient(1400px 900px at 50% 120%,rgba(20,154,144,.10),transparent 60%),
  var(--abyss);
  color:var(--ink);font-family:var(--body);font-size:14.5px;line-height:1.65;-webkit-font-smoothing:antialiased;
+ overflow-x:clip;
  transition:background-color .3s,color .3s}
 a{color:inherit;text-decoration:none}
 .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
@@ -167,6 +174,12 @@ html[data-theme=light] .codeline{background:#0E1A2E}
 .badge{font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:999px;border:1px solid var(--line2);color:var(--mut)}
 .badge.ok{color:var(--teal);border-color:rgba(53,224,208,.4);background:rgba(53,224,208,.09)}
 .badge.cc{color:var(--amber);border-color:rgba(255,178,36,.4);background:rgba(255,178,36,.09)}
+/* ---------- test-mode banner (shown on money screens whenever payments are in sandbox/TEST) ---------- */
+.pb-testmode{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;
+  margin:0 0 18px;padding:10px 14px;border-radius:var(--r);font-size:13px;line-height:1.4;
+  color:var(--amber);border:1px solid rgba(255,178,36,.4);background:rgba(255,178,36,.09)}
+.pb-testmode b{font-family:var(--mono);font-size:10px;letter-spacing:.06em;padding:3px 8px;border-radius:999px;
+  color:#241802;background:linear-gradient(180deg,var(--amber-br),var(--amber))}
 /* ---------- stats ---------- */
 .stats{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
 .stat{flex:1 1 22%;min-width:150px;background:linear-gradient(180deg,var(--depth2),var(--panel2));padding:20px 22px}
@@ -276,11 +289,12 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
 </button>
 <div class="collapse navbar-collapse" id="pbnav">
 <div class="navlinks">
-  <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
-  <a href="/metrics" data-ar="المقاييس">Metrics</a><a href="/install" data-ar="لمالكي كروت الرسومات">For GPU owners</a><a href="/security" data-ar="الأمان">Security</a><a href="/developers" data-ar="المطورون">Developers</a>
+  <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/models" data-ar="النماذج">Models</a><a href="/cluster" data-ar="الحوسبة الموزعة">Distributed</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
+  <a href="/metrics" data-ar="المقاييس">Metrics</a><a href="/install" data-ar="لمالكي كروت الرسومات">For GPU owners</a><a href="/security" data-ar="الأمان">Security</a><a href="/wiki" data-ar="الويكي">Wiki</a><a href="/developers" data-ar="المطورون">Developers</a>
 </div>
 <div class="navcta">
   <a class="signin" id="adminlink" href="/admin" style="display:none">Admin</a>
+  <a class="signin" id="consolelink" href="/console" style="display:none">Console</a>
   <a class="signin" id="mename" href="/account" style="display:none;color:var(--teal)"></a>
   <button class="themetoggle" onclick="toggleLang()" aria-label="Switch language" title="English / العربية" style="font-family:var(--mono);font-size:11px;font-weight:600" id="langbtn">AR</button>
   <button class="themetoggle" onclick="toggleTheme()" aria-label="Toggle light or dark theme" title="Toggle light / dark">
@@ -290,7 +304,7 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
   <a class="signin" id="signinlink" href="/login">Sign in</a>
   <a class="signin" id="signoutlink" href="#" onclick="signout();return false" style="display:none">Sign out</a>
   <a class="btn btn-ghost" href="/demo" data-ar="احجز عرضاً">Book a demo</a>
-  <a class="btn btn-amber" href="/app">Open app</a>
+  <a class="btn btn-amber" href="/console">Open console</a>
 </div>
 </div>
 </div></nav>"""
@@ -302,7 +316,7 @@ _FOOT = """<footer>
     <p class="mut" style="font-size:12px;margin-top:10px;max-width:30ch">A verified marketplace for community GPU power. Operated from Riyadh by Petabyte, Inc.</p>
   </div>
   <div class="fcol"><div class="fh">Product</div>
-    <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/pricing" data-ar="الأسعار">Pricing</a><a href="/app">Console</a>
+    <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/cluster" data-ar="الحوسبة الموزعة">Distributed</a><a href="/pricing" data-ar="الأسعار">Pricing</a><a href="/console">Console</a>
   </div>
   <div class="fcol"><div class="fh">Use cases</div>
     <a href="/artists">Rendering &amp; art</a><a href="/gamers">Game servers</a><a href="/developers">AI &amp; inference</a>
@@ -311,7 +325,7 @@ _FOOT = """<footer>
     <a href="/install">List your PC</a><a href="/account">Earnings</a><a href="/keys">API keys</a>
   </div>
   <div class="fcol"><div class="fh">Developers</div>
-    <a href="/docs">API reference</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/developers">Quickstart</a><a href="/keys">API keys</a>
+    <a href="/wiki">Wiki</a><a href="/docs">API reference</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/developers">Quickstart</a><a href="/keys">API keys</a>
   </div>
   <div class="fcol"><div class="fh">Company</div>
     <a href="/security">Security &amp; trust</a><a href="/investors">About</a><a href="/status">Status</a>
@@ -339,19 +353,30 @@ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'
 function authed(){return !!tok();}
 async function api(p,o){o=o||{};o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
  if(tok())o.headers['Authorization']='Bearer '+tok();var r=await fetch(p,o);var b={};try{b=await r.json()}catch(e){}return {ok:r.ok,status:r.status,body:b};}
+// Money-screen honesty: any page with a #pbtestmode slot shows a clear TEST-MODE banner while the
+// platform is in sandbox / Stripe test mode — so no one ever mistakes a demo for a real charge.
+async function pbTestBanner(){var el=document.getElementById('pbtestmode');if(!el)return;
+ try{var r=await fetch('/payments/config');var c=await r.json();
+  if(c&&c.test_mode){el.innerHTML='<div class="pb-testmode" role="status" data-ar="وضع تجريبي — لا تُخصم أي بطاقة حقيقية ولا تتحرك أي أموال حقيقية. للعروض فقط."><b>TEST MODE</b><span>No real card is charged and no real money moves — this is a sandbox for demos.</span></div>';}
+  else{el.textContent='';}
+ }catch(e){}}
+document.addEventListener('DOMContentLoaded',pbTestBanner);
 function toggleLang(){
   var h=document.documentElement, next=(h.getAttribute('dir')==='rtl')?'en':'ar';
   try{localStorage.setItem('pb_lang',next);}catch(e){}
   location.reload();
 }
-// Translate in place. Every translatable node carries data-ar; we swap textContent
-// and flip direction. No separate Arabic build to drift out of sync.
+// Translate in place. Every translatable node carries data-ar; we swap innerHTML (NOT
+// textContent — that would flatten child markup like gradient spans, links, <code> and <b>
+// even for English readers) and flip direction. No separate Arabic build to drift out of sync.
 function applyLang(){
   var ar = document.documentElement.getAttribute('dir')==='rtl';
   var b=document.getElementById('langbtn'); if(b) b.textContent = ar ? 'EN' : 'AR';
   document.querySelectorAll('[data-ar]').forEach(function(el){
-    if(!el.hasAttribute('data-en')) el.setAttribute('data-en', el.textContent);
-    el.textContent = ar ? el.getAttribute('data-ar') : el.getAttribute('data-en');
+    // Snapshot the ORIGINAL English markup once; data-ar is authored as plain text, so setting
+    // innerHTML from it is safe (only ever our own server-rendered markup, never user input).
+    if(!el.hasAttribute('data-en-html')) el.setAttribute('data-en-html', el.innerHTML);
+    el.innerHTML = ar ? el.getAttribute('data-ar') : el.getAttribute('data-en-html');
   });
   document.querySelectorAll('[data-ar-ph]').forEach(function(el){
     if(!el.hasAttribute('data-en-ph')) el.setAttribute('data-en-ph', el.placeholder||'');
@@ -364,7 +389,7 @@ function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-the
 function signout(){try{localStorage.removeItem('pb_token');}catch(e){}location.href='/';}
 (function(){var si=document.getElementById('signinlink'),so=document.getElementById('signoutlink');
  if(authed()){if(si)si.style.display='none';if(so)so.style.display='';}else{if(si)si.style.display='';if(so)so.style.display='none';}})();
-(async function(){try{if(authed()){var r=await api('/me');if(r.ok){var m=document.getElementById('mename');if(m){m.textContent='● '+r.body.username;m.style.display='';}
+(async function(){try{if(authed()){var cl=document.getElementById('consolelink');if(cl)cl.style.display='';var r=await api('/me');if(r.ok){var m=document.getElementById('mename');if(m){m.textContent='● '+r.body.username;m.style.display='';}
  if(r.body.is_admin){var a=document.getElementById('adminlink');if(a)a.style.display='';}}}}catch(e){}})();
 window.PBICONS={
  blender:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>',
@@ -766,7 +791,7 @@ MARKETPLACE_HTML = _page("Petabyte — marketplace",
     <tbody id="mrows"><tr><td colspan="8" style="padding:24px;text-align:center" class="mut mono">loading…</td></tr></tbody></table>
   </div>
   <div style="margin-top:18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-    <a class="btn btn-amber" href="/app" data-ar="سجّل الدخول للحجز ←">Sign in to book →</a>
+    <a class="btn btn-amber" href="/console" data-ar="سجّل الدخول للحجز ←">Sign in to book →</a>
     <span class="mut" data-ar="التصفّح متاح للجميع. الحجز يتطلّب حساباً. يتحدّث التوفّر مباشرةً.">Browsing is open. Booking needs an account. Availability updates live.</span>
   </div>
 </div>
@@ -786,14 +811,14 @@ async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await 
   var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
   var rep=(s.reputation_score!=null?s.reputation_score:'—')+(s.success_rate!=null?' <span class="mut" style="font-size:10px">('+s.success_rate+'%)</span>':'');
   var vram=s.vram_gb?((s.gpu_count>1?s.gpu_count+'× ':'')+s.vram_gb+'GB'):'—';
-  return '<tr><td style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
-   '<td class="mono mut" style="font-size:12px">'+vram+'</td>'+
-   '<td class="mono amber">$'+s.price_per_hour.toFixed(2)+(s.auto_price?' <span class="badge cc" title="demand-priced within seller bounds">auto</span>':'')+'</td>'+
+  return '<tr><td data-l="GPU" style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
+   '<td data-l="VRAM" class="mono mut" style="font-size:12px">'+vram+'</td>'+
+   '<td data-l="$/hr" class="mono amber">$'+s.price_per_hour.toFixed(2)+(s.auto_price?' <span class="badge cc" title="demand-priced within seller bounds">auto</span>':'')+'</td>'+
    '<td data-l="vs cloud" class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
-   '<td>'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
+   '<td data-l="Trust">'+(t.join(' ')||'<span class="mut mono" style="font-size:11px">standard</span>')+'</td>'+
    '<td data-l="Region" class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
-   '<td class="mono" style="color:'+rc+'">'+rep+'</td>'+
-   '<td class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
+   '<td data-l="Reputation" class="mono" style="color:'+rc+'">'+rep+'</td>'+
+   '<td data-l="Free" class="mono" style="color:var(--teal)">'+s.available_units+'</td></tr>';}).join('');}
 load();setInterval(load,8000);
 </script>""")
 
@@ -805,77 +830,298 @@ INSTALL_HTML = _page("Petabyte — become a seller",
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px" data-ar="أدرِج كرت رسوماتك بأمرٍ واحد">List your GPU in <span class="grad-teal">one command</span></h1>
   <p class="mut" style="max-width:56ch" data-ar="أي جهاز NVIDIA يمكن أن يصبح عقدة. يتحقق المُثبِّت من عتادك، ويعزل المهام داخل Docker، ويجعلك متصلاً خلال ٣٠ ثانية تقريباً. دون حصرية.">Any NVIDIA machine can become a node. The installer verifies your hardware, sandboxes jobs in Docker, and brings you online in ~30 seconds. No exclusivity.</p>
 </div>
+<!-- PRIMARY path: as easy as starting a miner — paste a wallet, no account needed -->
 <div class="wrap" style="padding:6px 22px 0">
+  <div class="card" style="border-color:rgba(240,180,41,.35);background:linear-gradient(180deg,rgba(240,180,41,.06),transparent)">
+    <div class="lbl am" data-ar="ابدأ مثل المُعدِّن · بلا حساب">Start like a miner · no account</div>
+    <p class="mut" style="margin-bottom:6px" data-ar="الصق محفظة USDC التي تريد أن تُدفع إليها. هذه هويتك وعنوان استلامك — بلا بريد، بلا كلمة مرور. شغّل الأمر الوحيد الذي نعطيك إياه، ويتصل كرت رسوماتك. (السحب لاحقاً يتطلب تحقق هوية سريع كما يفرض النظام.)">Paste the USDC wallet you want to be paid to. That's your identity <i>and</i> your payout address — no email, no password. Run the one command we hand back and your GPU is online. <b class="teal">Withdrawing later needs a quick identity check</b>, as regulation requires.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
+      <input id="qwallet" placeholder="0x… your USDC wallet" size="30" spellcheck="false" style="font-family:ui-monospace,monospace;min-width:min(340px,90vw)" onkeydown="if(event.key==='Enter')walletStart(null,this)"/>
+      <button class="btn-amber" id="qbtn" data-act="walletStart" data-ar="أنشئ أمر التثبيت">Create my installer</button>
+      <span id="qmsg" class="mono" style="font-size:12.5px"></span>
+    </div>
+    <p class="mut" style="font-size:11.5px;margin-top:9px" data-ar="USDC على إيثريوم أو بوليجون أو Base أو Arbitrum أو Optimism. نفحص العناوين مقابل قائمة OFAC.">USDC on Ethereum, Polygon, Base, Arbitrum or Optimism. Addresses are screened against the OFAC sanctions list.</p>
+  </div>
+</div>
+<div class="wrap" style="padding:14px 22px 0"><div class="mut" style="font-size:12px;text-align:center;letter-spacing:.04em" data-ar="أو استخدم حساباً كاملاً لتحديد سعر مخصص">— or use a full account to set a custom price —</div></div>
+<!-- signed OUT: one prompt to sign in, nothing else to read yet -->
+<div class="wrap" id="iksignin" style="padding:6px 22px 0;display:none">
   <div class="card" style="border-color:rgba(79,214,201,.3);background:linear-gradient(180deg,rgba(79,214,201,.05),transparent)">
-    <div class="lbl" data-ar="الخطوة ١ · مفتاح جهازك">Step 1 · your node key</div>
-    <p class="mut" id="ikhint" data-ar="تتصل الأجهزة عبر مفتاح API — لا تُخزَّن أي كلمة مرور على الجهاز إطلاقاً. سجّل الدخول لإنشاء مفتاح.">Nodes connect with an API key — no password ever lives on the machine. <a class="teal" href="/login">Sign in</a> to generate one.</p>
-    <div id="ikauthed" style="display:none">
-      <p class="mut" style="margin-bottom:12px" data-ar="أنشئ مفتاح جهاز، ثم ألصقه في الأمر أدناه كـ PETABYTE_API_KEY. يسجّل الجهاز نفسه ويثبت عتاده بهذا المفتاح.">Generate a node key, then paste it into the command below as <code class="teal">PETABYTE_API_KEY</code>. The node registers &amp; attests itself with this key.</p>
-      <button class="btn-amber" onclick="mkkey()" data-ar="أنشئ مفتاح جهاز">Create node key</button>
-      <pre id="ikkey" style="display:none;margin-top:14px"></pre>
+    <div class="lbl" data-ar="الخطوة ١ · سجّل الدخول">Step 1 · sign in</div>
+    <p class="mut" data-ar="تتصل الأجهزة عبر مفتاح API — لا تُخزَّن أي كلمة مرور على الجهاز إطلاقاً. سجّل الدخول أو أنشئ حساباً مجانياً لتوليد أمر التثبيت الجاهز.">Nodes connect with an API key — no password ever lives on the machine. <a class="teal" href="/login">Sign in or create a free account</a> and your ready-to-paste installer appears right here.</p>
+  </div>
+</div>
+<!-- signed IN: pick a price (optional) and generate the exact command in one click -->
+<div class="wrap" id="ikgen" style="padding:6px 22px 0;display:none">
+  <div class="card" style="border-color:rgba(79,214,201,.3);background:linear-gradient(180deg,rgba(79,214,201,.05),transparent)">
+    <div class="lbl" data-ar="الخطوة ١ · حدّد سعرك (اختياري)">Step 1 · set your price <span class="mut">(optional)</span></div>
+    <p class="mut" style="margin-bottom:12px" data-ar="اكتب اسم كرت رسوماتك لرؤية سعر عادل بالساعة، مبني على مرجع الأداء والأجهزة الحيّة. أو اترك الخانة فارغة وسيسعّر كل جهاز نفسه تلقائياً من مقياس أداء كرت رسوماته حين يتصل — لا حاجة لتخمين رقم.">Type your GPU to see a fair hourly price — built from the performance benchmark and live nodes. Or leave it blank: each node auto-prices from its own GPU's benchmark when it comes online, so you never have to guess a number.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <input id="pgpu" placeholder="e.g. RTX 4090" size="14" onkeydown="if(event.key==='Enter')sugPrice()"/>
+      <button class="btn btn-teal" data-act="sugPrice" data-ar="اقترح">Suggest</button>
+      <span class="mut">$</span>
+      <input id="pprice" placeholder="auto" size="4" inputmode="decimal" style="text-align:right"/>
+      <span class="mut">/hr</span>
+      <span id="psug" class="mono mut" style="font-size:12.5px"></span>
+    </div>
+    <div style="margin-top:18px">
+      <button class="btn-amber" id="genbtn" data-act="genInstaller" data-ar="أنشئ مفتاحي وأمر التثبيت">Create my node key &amp; installer command</button>
     </div>
   </div>
 </div>
-<div class="wrap" style="padding:12px 22px 30px">
-  <div class="mini" style="margin:6px 0 12px" data-ar="الخطوة ٢ · شغّل المُثبِّت">Step 2 · run the installer</div>
-  <div class="cols c3">
-    <div class="card"><div class="lbl" data-ar="لينكس · أوبونتو/دبيان">Linux · Ubuntu/Debian</div>
-      <pre>PETABYTE_API_URL=https://petabyte.market \\
-PETABYTE_API_KEY=pk_your_node_key \\
-PRICE_PER_HOUR=1.5 \\
-bash &lt;(curl -fsSL https://petabyte.market/install.sh)</pre></div>
-    <div class="card"><div class="lbl" data-ar="ويندوز · WSL2">Windows · WSL2</div>
-      <pre>$env:PETABYTE_API_URL="https://petabyte.market"
-$env:PETABYTE_API_KEY="pk_your_node_key"
-$env:PRICE_PER_HOUR="1.5"
-irm https://petabyte.market/install.ps1 | iex</pre>
-      <p class="mut" style="font-size:12px;margin-top:9px" data-ar="PowerShell بصلاحيات المدير. يثبّت WSL2 والوكيل.">Elevated PowerShell. Installs WSL2 + the agent.</p></div>
-    <div class="card"><div class="lbl" data-ar="تحقّق">Verify</div>
-      <pre>systemctl status petabyte-agent
+<!-- generated result: real key + this server's address + your price, already filled in -->
+<div class="wrap" id="ikout" style="padding:12px 22px 6px;display:none">
+  <div class="mini" style="margin:6px 0 10px" data-ar="الخطوة ٢ · شغّل هذا على جهازك">Step 2 · run this on your GPU machine</div>
+  <p class="mut" style="max-width:64ch;margin-bottom:12px" data-ar="أمر واحد يثبّت الوكيل، يقيس أداء كرت رسوماتك، ويتصل — لا مفتاح تلصقه، ولا خطوات تفاعلية. إن لم تحدد سعراً، يسعّر الجهاز نفسه من مقياس الأداء. عامل هذا الرابط كأنه كلمة مرور: كل تشغيل يُسجّل جهازاً باسم حسابك، وينتهي خلال ٣٠ يوماً.">One command installs the agent, benchmarks your GPU, and brings the node online — <b class="teal">no key to paste, nothing interactive</b>. If you didn't set a price, the node auto-prices from its benchmark. Treat this link like a password: each run enrols a worker under your account, and it expires in 30 days.</p>
+  <div class="cols c2">
+    <div class="card"><div class="lbl" data-ar="لينكس · ماك">Linux · macOS <span class="mut">— paste in a terminal</span></div>
+      <pre id="cmdlinux" style="white-space:pre-wrap;word-break:break-all"></pre>
+      <button class="btn btn-teal" style="margin-top:10px" data-act="pbCopy" data-a1="seller_linux" data-ar="نسخ">Copy command</button></div>
+    <div class="card"><div class="lbl" data-ar="ويندوز · PowerShell (يثبّت WSL2)">Windows · PowerShell <span class="mut">(installs WSL2)</span></div>
+      <pre id="cmdwin" style="white-space:pre-wrap;word-break:break-all"></pre>
+      <button class="btn btn-teal" style="margin-top:10px" data-act="pbCopy" data-a1="seller_win" data-ar="نسخ">Copy command</button>
+      <p class="mut" style="font-size:12px;margin-top:9px" data-ar="شغّله في PowerShell بصلاحيات المدير.">Run in an elevated PowerShell window.</p></div>
+  </div>
+  <div class="card" style="margin-top:14px"><div class="lbl" data-ar="ثم راقبه وهو يتصل">Then watch it come online</div>
+    <pre>systemctl status petabyte-agent
 journalctl -u petabyte-agent -f</pre>
-      <p class="mut" style="font-size:12px;margin-top:9px" data-ar="يظهر كرت رسوماتك في السوق خلال دقيقة.">Your GPU appears in the <a class="teal" href="/marketplace">marketplace</a> within a minute.</p></div>
+    <p class="mut" style="font-size:13px;margin-top:9px" data-ar="يظهر كرت رسوماتك في السوق ولوحة التحكم خلال دقيقة.">Your GPU appears in the <a class="teal" href="/marketplace">marketplace</a> and your <a class="teal" href="/console">dashboard</a> within a minute.</p>
   </div>
-  <div class="card" style="margin-top:16px">
-    <div class="lbl" data-ar="كم ينبغي أن أطلب؟">What should I charge?</div>
-    <p class="mut" style="margin-bottom:10px" data-ar="اكتب اسم كرت رسوماتك — نقترح سعراً بناءً على ما تطلبه الأجهزة المشابهة والمرجع السحابي. القرار النهائي دائماً لك.">Type your GPU — we suggest a price from what similar live nodes charge and the cloud reference. You always set the final number.</p>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-      <input id="pgpu" placeholder="e.g. RTX 4090" size="14" onkeydown="if(event.key==='Enter')suggest()"/>
-      <button class="btn btn-teal" onclick="suggest()" data-ar="اقترح سعراً">Suggest a price</button>
-      <span id="psug" class="mono" style="font-size:13px"></span>
-    </div>
-  </div>
-  <div class="card" style="margin-top:16px"><div class="lbl" data-ar="جرّبه دون مخاطرة">Try it risk-free</div>
+</div>
+<div class="wrap" style="padding:12px 22px 30px">
+  <div class="card"><div class="lbl" data-ar="جرّبه دون مخاطرة">Try it risk-free</div>
     <p class="mut" data-ar="يعمل الوكيل داخل بيئة لينكس معزولة — لا يمسّ ألعابك أو ملفاتك، ويعمل فقط حين يكون جهازك خاملاً. أوقفه مؤقتاً متى شئت، أو أزِله تماماً بأمرٍ واحد. وإذا فعّلت Petabyte خاصية WSL لك، فإن إلغاء التثبيت يعيدها كما كانت.">The agent runs in an isolated Linux sandbox — it never touches your games or files, and only works when your PC is idle. <b class="teal">Pause</b> anytime, or <b class="teal">remove it completely</b> in one command. If Petabyte turned on WSL for you, uninstalling turns it back off.</p>
     <pre style="margin-top:10px">$env:PETABYTE_ACTION="pause";     irm https://petabyte.market/manage.ps1 | iex
 $env:PETABYTE_ACTION="uninstall"; irm https://petabyte.market/manage.ps1 | iex</pre>
   </div>
   <div class="card" style="margin-top:16px"><div class="lbl am" data-ar="استلم أرباحك">Get paid</div>
-    <p class="mut" data-ar="رصيد واحد. اسحب في أي وقت أو وفق جدول أسبوعي — تحويل بنكي أو USDC أو بطاقة هدية. فعّل خيار التعدين عند الخمول لتكسب دخلاً في الخلفية كلما لم يكن جهازك مؤجراً.">One balance. Withdraw anytime or on a weekly schedule — bank, USDC, or gift card. Opt in to idle-fallback and earn a background trickle whenever the node isn't rented. <a class="teal" href="/app">Open the app →</a></p>
+    <p class="mut" data-ar="رصيد واحد. اسحب في أي وقت أو وفق جدول أسبوعي — تحويل بنكي أو USDC أو بطاقة هدية. فعّل خيار التعدين عند الخمول لتكسب دخلاً في الخلفية كلما لم يكن جهازك مؤجراً.">One balance. Withdraw anytime or on a weekly schedule — bank, USDC, or gift card. Opt in to idle-fallback and earn a background trickle whenever the node isn't rented. <a class="teal" href="/console">Open the console →</a></p>
+  </div>
+  <div class="card" style="margin-top:16px"><div class="lbl" data-ar="تفكّر في شراء كرت رسومات؟">Thinking of buying a GPU to rent?</div>
+    <p class="mut" data-ar="احسب الأرباح الصافية، ومتى يسترد الكرت ثمنه، والعائد السنوي لكل كرت — بأرقام شفافة يمكنك تعديلها.">See net earnings, payback time and 1-year ROI per card — transparent numbers you can tune to your own electricity and utilization. <a class="teal" href="/roi">Open the ROI calculator →</a></p>
   </div>
 </div>
 <script>
-async function suggest(){var g=(document.getElementById('pgpu').value||'').trim();
-  var r=await fetch('/pricing/suggest?gpu_model='+encodeURIComponent(g));var b=await r.json();
-  document.getElementById('psug').innerHTML='Suggested <b class="amber">$'+b.suggested_price+'/hr</b> <span class="mut">· '+b.basis+' · cloud ≈ $'+b.cloud_reference+'</span>';}
-(function(){ if(authed()){var a=document.getElementById('ikauthed'),h=document.getElementById('ikhint');if(a)a.style.display='';if(h)h.style.display='none';} })();
-async function mkkey(){
-  await api('/change_role',{method:'POST',body:JSON.stringify({role:'seller'})});   // idempotent
-  var r=await api('/create_api_key?days=90&label=node&scopes=node,jobs',{method:'POST'});
-  var el=document.getElementById('ikkey'); el.style.display='';
-  el.textContent = r.ok ? ('Copy now — shown once:\\n\\nPETABYTE_API_KEY='+r.body.api_key)
-                        : 'Could not create a key — make sure you are signed in.';
+function _esch(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+async function sugPrice(){var g=(document.getElementById('pgpu').value||'').trim();
+  try{var r=await fetch('/pricing/suggest?gpu_model='+encodeURIComponent(g));var b=await r.json();
+    if(b&&b.suggested_price){document.getElementById('pprice').value=Number(b.suggested_price).toFixed(2);}
+    document.getElementById('psug').innerHTML=(b&&b.suggested_price)?('· '+b.basis+' · cloud ≈ $'+b.cloud_reference):'';
+  }catch(e){document.getElementById('psug').textContent='';}}
+async function genInstaller(a1, btn){
+  if(!authed()){location.href='/login';return;}
+  if(btn&&btn.disabled)return;
+  var lbl=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='Creating…';}
+  // Explicit price pins the rate; a blank field lets each node auto-price from its GPU benchmark.
+  var pt=(document.getElementById('pprice').value||'').trim(), pn=parseFloat(pt);
+  var body=(pt!==''&&pn>0)?JSON.stringify({price:pn}):JSON.stringify({});
+  var r=await api('/nodes/install_token',{method:'POST',body:body});
+  if(btn){btn.disabled=false;btn.textContent=lbl;}
+  if(!(r.ok&&r.body&&r.body.install)){alert('Could not create your installer — please make sure you are signed in.');return;}
+  _renderCmds(r.body.install.linux, r.body.install.windows);
 }
+// Fill the two command boxes from the server-built one-liners and reveal them. The whole command
+// is a single curl|bash / irm|iex — no key to paste, nothing interactive. Shared by both paths.
+function _renderCmds(linux, win){
+  window._PBCMDS['seller_linux']=linux; window._PBCMDS['seller_win']=win;
+  document.getElementById('cmdlinux').innerHTML=_esch(linux);
+  document.getElementById('cmdwin').innerHTML=_esch(win);
+  var out=document.getElementById('ikout'); out.style.display='';
+  out.scrollIntoView({behavior:'smooth',block:'start'});
+}
+// Wallet-only path: no login. Paste a USDC wallet -> a token-bound one-liner comes back.
+async function walletStart(a1, btn){
+  var w=(document.getElementById('qwallet').value||'').trim();
+  var msg=document.getElementById('qmsg');
+  if(!/^0x[0-9a-fA-F]{40}$/.test(w)){ msg.style.color='var(--amber)';
+    msg.textContent='Enter a 0x… wallet address (42 characters).'; return; }
+  if(btn&&btn.disabled)return; var lbl=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='Creating…';} msg.textContent='';
+  try{
+    var r=await fetch('/nodes/quickstart',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wallet:w})});
+    var b=await r.json();
+    if(btn){btn.disabled=false;btn.textContent=lbl;}
+    if(!r.ok || !b.install){ msg.style.color='var(--amber)';
+      msg.textContent=(b&&b.detail)?b.detail:'Could not create your installer — try again.'; return; }
+    msg.style.color='var(--teal)'; msg.textContent='✓ ready below';
+    _renderCmds(b.install.linux, b.install.windows);
+  }catch(e){ if(btn){btn.disabled=false;btn.textContent=lbl;}
+    msg.style.color='var(--amber)'; msg.textContent='Network error — try again.'; }
+}
+(function(){var si=document.getElementById('iksignin'),gn=document.getElementById('ikgen');
+  if(authed()){if(gn)gn.style.display='';}else{if(si)si.style.display='';}})();
+</script>""")
+
+
+ROI_HTML = _page("Petabyte — GPU ROI calculator",
+    desc="Buy a GPU and rent it: see net earnings, payback time and 1-year ROI per card. Transparent math, editable assumptions, live benchmark-anchored prices.",
+    path="/roi", body="""
+<div class="wrap" style="padding:48px 22px 10px">
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="حاسبة العائد">rig economics</span></div>
+  <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px" data-ar="اشترِ كرت رسومات وأجّره — متى يسترد ثمنه؟">Buy a GPU and rent it — <span class="grad-teal">when does it pay for itself?</span></h1>
+  <p class="mut" style="max-width:64ch" data-ar="نعرض لك الحساب كاملاً: الأرباح بالساعة (من سعر السوق المرتكز على الأداء) ناقص عمولة المنصة والكهرباء، مقابل تكلفة العتاد. عدّل الافتراضات وشاهد نقطة التعادل والعائد السنوي.">Here's the full math: earnings per hour (from the benchmark-anchored market price) minus our fee and electricity, against what the card costs. Tune the assumptions and watch the breakeven and 1-year ROI change.</p>
+</div>
+<div class="wrap" style="padding:6px 22px 0">
+  <div class="card" style="border-color:rgba(240,180,41,.30);background:linear-gradient(180deg,rgba(240,180,41,.05),transparent)">
+    <b class="amber" data-ar="هذا نموذج، وليس وعداً.">This is a model, not a promise.</b>
+    <span class="mut" data-ar="أكبر عامل هو عدد ساعات التأجير يومياً — وهو يعتمد على الطلب، والطلب ما زال مبكّراً. اضبطه على ما تتوقعه. اختر «الكرت فقط» أو «الحاسوب كامل» (يضيف تكلفة بقية القطع واستهلاكها). تكلفة العتاد افتراضها سعر الإطلاق؛ اكتب سعر اليوم. الكهرباء تُحسب أثناء ساعات التشغيل فقط.">The biggest factor is <b>how many hours a day it's actually rented</b> — that's demand-dependent, and demand is still early. Set it to what you realistically expect. Choose <b>GPU-only</b> or <b>whole PC</b> (adds the rest-of-build cost + its power). Hardware cost defaults to launch MSRP — type today's real price. Electricity counts load only while it's running.</span>
+  </div>
+</div>
+<div class="wrap" style="padding:14px 22px 0">
+  <div class="cols c3">
+    <div class="card"><div class="lbl" data-ar="ساعات التأجير يومياً">Hours rented per day</div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <input id="hours" type="range" min="0" max="24" value="8" step="1" style="flex:1" oninput="roiRecalc()"/>
+        <b class="mono teal" id="hoursv" style="min-width:5ch;text-align:right">8 h</b>
+      </div>
+      <p class="mut" style="font-size:12px;margin-top:6px" data-ar="غيّرها من ساعة واحدة إلى ٢٤. كن متحفظاً في البداية.">Drag from 1 to 24. Be conservative early on.</p></div>
+    <div class="card"><div class="lbl" data-ar="سعر الكهرباء">Electricity — $ per kWh</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="mut">$</span>
+        <input id="kwh" value="0.12" size="5" inputmode="decimal" style="text-align:right" oninput="roiRecalc()"/>
+        <span class="mut">/ kWh</span>
+      </div>
+      <p class="mut" style="font-size:12px;margin-top:6px" data-ar="متوسط أمريكا ≈ ٠٫١٧. استخدم سعر فاتورتك.">US avg ≈ $0.17. Use your bill's rate.</p></div>
+    <div class="card"><div class="lbl" data-ar="ما الذي تحسبه؟">Cost & power of…</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="scopeGpu" class="btn btn-teal" data-ar="الكرت فقط" onclick="roiScope(false)">Just the GPU</button>
+        <button id="scopePc" class="btn" data-ar="الحاسوب كامل" onclick="roiScope(true)">Whole PC</button>
+      </div>
+      <p class="mut" id="scopeNote" style="font-size:12px;margin-top:8px"></p></div>
+  </div>
+</div>
+<div class="wrap" style="padding:14px 22px 6px">
+  <div id="roihead" class="mut mono" style="font-size:13px;margin-bottom:10px"></div>
+  <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;min-width:760px" class="mono">
+      <thead><tr style="text-align:left;border-bottom:1px solid var(--line)">
+        <th style="padding:8px 10px" data-ar="الكرت">GPU</th>
+        <th style="padding:8px 10px" data-ar="تحتفظ/ساعة">You keep /hr</th>
+        <th style="padding:8px 10px" data-ar="كهرباء/ساعة">Power /hr</th>
+        <th style="padding:8px 10px" id="thcost" data-ar="تكلفة العتاد">Hardware $</th>
+        <th style="padding:8px 10px" data-ar="صافي/شهر">Net /mo</th>
+        <th style="padding:8px 10px" data-ar="التعادل">Breakeven</th>
+        <th style="padding:8px 10px" data-ar="العائد السنوي">1-yr ROI</th>
+        <th style="padding:8px 10px" data-ar="اشترِ">Buy</th>
+      </tr></thead>
+      <tbody id="roirows"><tr><td colspan="8" class="mut" style="padding:14px 10px">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <p id="roidisc" class="mut" style="font-size:11.5px;margin-top:12px"></p>
+  <p class="mut" style="font-size:11.5px;margin-top:4px" data-ar="الأرباح مبنية على السعر المرجعي المرتكز على أداء الكرت (ما يدفعه المشتري) ناقص عمولتنا؛ السعر الفعلي يحدده البائع والطلب. لا شيء هنا مضمون.">Earnings use the benchmark-anchored reference price (what a buyer pays) minus our fee; the real price is set by the seller and demand. Nothing here is guaranteed.</p>
+  <div style="margin-top:18px"><a class="btn btn-amber" href="/install" data-ar="ابدأ مثل المُعدِّن ←">Start earning — paste your wallet →</a></div>
+</div>
+<div class="wrap" style="padding:22px 22px 40px">
+  <div class="lbl" style="margin-bottom:12px" data-ar="عتاد وأدوات مفيدة">Gear &amp; tools for your rig</div>
+  <div id="gearlist" class="cols c3"></div>
+  <p id="geardisc" class="mut" style="font-size:11.5px;margin-top:12px"></p>
+</div>
+<script>
+var _ROI=null, _FULL=false;
+function _e2(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function _money(n){return (n>=0?'':'-')+'$'+Math.abs(n).toFixed(2);}
+function roiScope(full){ _FULL=full;
+  var a=document.getElementById('scopePc'), b=document.getElementById('scopeGpu');
+  a.className=full?'btn btn-teal':'btn'; b.className=full?'btn':'btn btn-teal';
+  for(var i=0;_ROI&&i<_ROI.gpus.length;i++){ _ROI.gpus[i]._cost=null; }  // reset overrides on scope change
+  roiRecalc(); }
+function roiCost(el){ if(!_ROI)return; var g=el.getAttribute('data-g'); var v=parseFloat(el.value);
+  for(var i=0;i<_ROI.gpus.length;i++){ if(_ROI.gpus[i].gpu_model===g){ _ROI.gpus[i]._cost=(v>0?v:null); } }
+  roiRecalc(); }
+function _defCost(g){ return g.gpu_cost_usd + (_FULL?g.system_cost_ref:0); }
+function roiRecalc(){
+  if(!_ROI)return;
+  var hours=parseFloat(document.getElementById('hours').value); if(!(hours>=0))hours=0;
+  var kwh=parseFloat((document.getElementById('kwh').value||'').trim()); if(!(kwh>=0))kwh=0;
+  document.getElementById('hoursv').textContent=hours+' h';
+  var rows=_ROI.gpus.map(function(g){
+    var watts=g.gpu_tdp_w+(_FULL?g.system_watts_ref:0);
+    var cost=(g._cost&&g._cost>0)?g._cost:_defCost(g);
+    var powerHr=(watts/1000)*kwh;
+    var netHr=g.net_price_per_hr-powerHr;              // per rented hour, after power
+    var netDay=netHr*hours, netMo=netDay*30;
+    var be=(netDay>0)?(cost/netDay):null;             // days
+    var roi=(cost>0)?(netDay*365/cost*100):null;
+    return {g:g,watts:watts,cost:cost,powerHr:powerHr,netMo:netMo,be:be,roi:roi};
+  });
+  rows.sort(function(a,b){ var an=(a.be==null),bn=(b.be==null); if(an!==bn)return an?1:-1; return (a.be||0)-(b.be||0); });
+  var html=rows.map(function(r){
+    var g=r.g;
+    var beTxt=(r.be==null)?'<span class="mut">— never</span>':((r.be<60)?(r.be.toFixed(0)+' days'):((r.be/30).toFixed(1)+' mo'));
+    var beColor=(r.be==null)?'var(--mut)':((r.be<270)?'var(--teal)':((r.be<540)?'var(--amber)':'var(--mut)'));
+    var roiTxt=(r.roi==null)?'—':(r.roi.toFixed(0)+'%/yr');
+    var buys=(g.buy_urls||[]).map(function(b){return '<a class="teal" href="'+b.url+'" target="_blank" rel="noopener nofollow sponsored">'+_e2(b.retailer)+'</a>';}).join(' · ');
+    return '<tr style="border-bottom:1px solid var(--line)">'+
+      '<td style="padding:8px 10px"><b>'+_e2(g.gpu_model)+'</b> <span class="mut" style="font-size:11px">'+(g.benchmark_tflops_fp16||'')+' TF · '+r.watts+'W</span></td>'+
+      '<td style="padding:8px 10px">$'+g.net_price_per_hr.toFixed(2)+'</td>'+
+      '<td style="padding:8px 10px" class="mut">'+_money(r.powerHr)+'</td>'+
+      '<td style="padding:8px 10px"><span class="mut">$</span><input data-g="'+_e2(g.gpu_model)+'" value="'+Math.round(r.cost)+'" size="5" inputmode="decimal" style="width:6ch;text-align:right;background:transparent;border:1px solid var(--line);border-radius:6px;color:inherit;padding:2px 4px" oninput="roiCost(this)"/></td>'+
+      '<td style="padding:8px 10px;color:'+(r.netMo>0?'var(--teal)':'var(--mut)')+'">'+_money(r.netMo)+'</td>'+
+      '<td style="padding:8px 10px;color:'+beColor+'">'+beTxt+'</td>'+
+      '<td style="padding:8px 10px">'+roiTxt+'</td>'+
+      '<td style="padding:8px 10px">'+buys+'</td>'+
+      '</tr>';
+  }).join('');
+  document.getElementById('roirows').innerHTML=html||'<tr><td colspan="8" class="mut" style="padding:14px 10px">No data.</td></tr>';
+  var a=_ROI.assumptions;
+  document.getElementById('thcost').textContent=_FULL?'Whole-PC $':'GPU $';
+  document.getElementById('scopeNote').textContent=_FULL
+    ?('Adds ~$'+a.system_cost_ref_usd+' and ~'+a.system_watts_ref+'W for the rest of the build (editable per row).')
+    :('Just the card. Switch to Whole PC to add ~$'+a.system_cost_ref_usd+' + ~'+a.system_watts_ref+'W for CPU/board/PSU/etc.');
+  document.getElementById('roihead').textContent='Rented '+hours+' h/day at $'+kwh.toFixed(2)+'/kWh, after our '+a.platform_fee_pct+'% fee, '+(_FULL?'whole-PC':'GPU-only')+' — soonest payback first:';
+}
+(function(){
+  fetch('/pricing/roi').then(function(r){return r.json();}).then(function(d){
+    _ROI=d;
+    var disc=(d.affiliate&&d.affiliate.disclosure)?d.affiliate.disclosure:'';
+    if(d.affiliate&&!d.affiliate.enabled){ disc+=' (Affiliate programs not enabled yet — links are plain, non-monetised searches.)'; }
+    document.getElementById('roidisc').textContent=disc;
+    roiScope(false);
+  }).catch(function(e){ document.getElementById('roirows').innerHTML='<tr><td colspan="8" class="mut" style="padding:14px 10px">Could not load pricing.</td></tr>'; });
+  fetch('/partners').then(function(r){return r.json();}).then(function(d){
+    var el=document.getElementById('gearlist'); if(!el)return;
+    el.innerHTML=(d.partners||[]).map(function(p){
+      return '<div class="card"><div class="lbl" style="font-size:11px;letter-spacing:.04em">'+_e2(p.category)+'</div>'+
+        '<a class="teal" href="'+p.url+'" target="_blank" rel="noopener nofollow sponsored" style="font-weight:600">'+_e2(p.name)+' →</a>'+
+        '<p class="mut" style="font-size:12.5px;margin-top:6px">'+_e2(p.blurb)+'</p></div>';
+    }).join('');
+    var gd=document.getElementById('geardisc');
+    if(gd){ gd.textContent=(d.affiliate&&d.affiliate.disclosure)?d.affiliate.disclosure:''; }
+  }).catch(function(e){});
+})();
 </script>""")
 
 
 DEVELOPERS_HTML = _page("Petabyte — developers",
-    desc="Launch GPU workloads from the API in one call. Keys, scopes, templates and a full reference.", path="/developers", body="""
+    desc="Two APIs: rent GPUs and run jobs (Developer API), or buy live GPU-market data (Data API). Interactive Scalar references, scoped keys, try-free sandbox.", path="/developers", body="""
 <div class="wrap" style="padding:48px 22px 10px">
   <div class="eyebrow"><span class="dot"></span> API reference</div>
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px">Build on the <span class="grad-teal">exchange</span></h1>
-  <p class="mut">REST + JSON. Full interactive schema at <a class="teal" href="/docs">/docs</a> · keys on the <a class="teal" href="/keys">keys page</a>.</p>
+  <p class="mut">Two products, two references. REST + JSON · keys on the <a class="teal" href="/keys">keys page</a>.</p>
 </div>
-<div class="wrap" style="padding:12px 22px 30px">
+<div class="wrap" style="padding:12px 22px 8px">
+  <div class="cols c2">
+    <div class="card" style="border-color:rgba(255,183,77,.32);background:linear-gradient(180deg,rgba(255,183,77,.06),transparent)">
+      <div class="lbl am">Developer API <span class="mut">· build compute</span></div>
+      <p class="mut" style="font-size:13.5px;margin:6px 0 12px">Rent verified GPUs by the hour with escrow, deploy workloads and templates, run jobs, manage wallet &amp; payouts. Scoped keys carry <code class="teal">node</code> / <code class="teal">jobs</code>.</p>
+      <a class="btn btn-amber arrow-fwd" href="/devs">Open the Developer API reference </a>
+    </div>
+    <div class="card" style="border-color:rgba(79,214,201,.32);background:linear-gradient(180deg,rgba(79,214,201,.06),transparent)">
+      <div class="lbl">Data API <span class="mut">· buy market data</span></div>
+      <p class="mut" style="font-size:13.5px;margin:6px 0 12px">Live GPU price index, history, savings, supply, demand, workloads, templates and the authenticity dataset. Metered, pay-as-you-go. Scoped key carries <code class="teal">data</code>.</p>
+      <a class="btn btn-teal arrow-fwd" href="/data">Open the Data API reference </a>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px;border-color:rgba(255,255,255,.10)">
+    <p class="mut" style="font-size:12.5px;margin:0"><b>Two products, two references — they share no endpoint.</b> Nothing in the Data API appears in the Developer API, and vice-versa. The Data API is gated to <code class="teal">data</code>-scoped keys — a <code class="teal">node</code>/<code class="teal">jobs</code> key is refused there (403). Full combined schema at <a class="teal" href="/docs">/docs</a>.</p>
+  </div>
+</div>
+<div class="wrap" style="padding:20px 22px 6px">
+  <div class="eyebrow"><span class="dot"></span> quick reference</div>
+</div>
+<div class="wrap" style="padding:8px 22px 30px">
   <div class="cols c2">
     <div class="card"><div class="lbl">Accounts</div>
       <p class="mono" style="font-size:12.5px;line-height:2.05">
@@ -893,13 +1139,55 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
       POST /create_task <span class="mut">notebook · template · vm</span><br>
       POST /transcode <span class="mut">video fan-out</span><br>
       POST /render <span class="mut">Blender fan-out</span></p></div>
+    <div class="card"><div class="lbl">Distributed <span class="mut">· 1 job, N GPUs</span></div>
+      <p class="mono" style="font-size:12.5px;line-height:2.05">
+      POST /distributed <span class="mut">cluster across N machines</span><br>
+      POST /jobs/rendezvous <span class="mut">each rank posts VPN addr</span><br>
+      GET /jobs/{id}/hostfile <span class="mut">MPI / torchrun hostfile</span><br>
+      GET /jobs/{id}/cluster <span class="mut">nodes + launch cmds</span></p>
+      <p class="mut" style="font-size:12px;margin-top:8px">Split one job across up to 100 GPUs on <b>different machines</b>, wired into one <b>torchrun/NCCL cluster over the VPN</b>. Gang-scheduled (one rank per PC), escrowed all-or-nothing.</p></div>
+    <div class="card"><div class="lbl">Use your own scheduler <span class="mut">· another provider</span></div>
+      <p class="mut" style="font-size:13px;margin:4px 0 8px">Already on <b>Slurm, MPI, Ray or Kubernetes</b>? Don't change your stack — burst into Petabyte as an extra node pool. The cluster exports as the artifacts your launcher already reads:</p>
+      <p class="mono" style="font-size:12px;line-height:1.9">
+      mpirun --hostfile hostfile -np N …<br>
+      torchrun --master_addr=&lt;rank0&gt; …<br>
+      ray start --address=&lt;rank0&gt;<br>
+      slurm: ResumeProgram → POST /distributed</p>
+      <p class="mut" style="font-size:12px;margin-top:6px">Petabyte is another provider, not an infra change.</p></div>
     <div class="card"><div class="lbl am">Wallet &amp; payouts</div>
       <p class="mono" style="font-size:12.5px;line-height:2.05">
       GET /wallet <span class="mut">balance + earnings</span><br>
       POST /wallet/methods <span class="mut">gift · USDC · bank</span><br>
-      POST /wallet/withdraw <span class="mut">cash out</span></p></div>
+      POST /wallet/withdraw <span class="mut">cash out (free / ⚡instant)</span></p></div>
+    <div class="card"><div class="lbl">Data API <span class="mut">· metered</span></div>
+      <p class="mono" style="font-size:12.5px;line-height:2.05">
+      GET /api/v1/data/gpu-prices <span class="mut">price index</span><br>
+      GET /api/v1/data/gpu-prices/history <span class="mut">time-series</span><br>
+      GET /api/v1/data/savings <span class="mut">vs-cloud index</span><br>
+      GET /api/v1/data/availability <span class="mut">live supply</span><br>
+      GET /api/v1/data/demand <span class="mut">bookings, GMV, realized $/hr</span><br>
+      GET /api/v1/data/workloads <span class="mut">job &amp; template mix</span><br>
+      GET /api/v1/data/templates <span class="mut">templates bought: jobs, buyers, GMV, models</span><br>
+      GET /api/v1/data/market <span class="mut">inventory summary</span><br>
+      GET /api/v1/data/benchmarks <span class="mut">authenticity dataset</span><br>
+      GET /api/v1/data/usage <span class="mut">your quota (free)</span></p>
+      <p class="mut" style="font-size:12px;margin-top:8px">Needs a <code class="teal">data</code>-scoped key. A free monthly quota, then pay-as-you-go from your wallet balance. Datasets are aggregate/anonymized — no seller identity.</p></div>
+    <div class="card" style="border-color:rgba(79,214,201,.3);background:linear-gradient(180deg,rgba(79,214,201,.05),transparent)">
+      <div class="lbl">Try it free <span class="mut">· no signup</span></div>
+      <p class="mut" style="font-size:12.5px;margin:2px 0 10px">Two ways to explore before you spend a cent:</p>
+      <p class="mono" style="font-size:12.5px;line-height:1.9">
+      <b class="teal">1 · Dummy data, keyless.</b> Example payloads for every dataset:</p>
+      <div class="codeline" style="margin:6px 0 12px"><code>curl -s https://petabyte.market/api/v1/data/sample</code></div>
+      <p class="mono" style="font-size:12.5px;line-height:1.9">
+      <b class="teal">2 · Real data, sandbox key.</b> Live endpoints, free &amp; unmetered:</p>
+      <div class="codeline" style="margin:6px 0 8px"><code>curl -s https://petabyte.market/api/v1/data/gpu-prices -H "X-API-KEY: {{SANDBOX_KEY}}"</code></div>
+      <p class="mut" style="font-size:12px;margin-top:8px">The sandbox key <code class="teal">{{SANDBOX_KEY}}</code> is read-only, never billed, and safe to publish. When you're ready for production, mint a <code class="teal">data</code>-scoped key and top up your wallet.</p></div>
   </div>
-  <div style="margin-top:18px"><a class="btn btn-amber" href="/docs">Open interactive docs →</a></div>
+  <div style="margin-top:18px;display:flex;gap:12px;flex-wrap:wrap">
+    <a class="btn btn-amber" href="/devs">Developer API reference →</a>
+    <a class="btn btn-teal" href="/data">Data API reference →</a>
+    <a class="btn" href="/docs" style="border:1px solid rgba(255,255,255,.18)">Full schema (/docs) →</a>
+  </div>
 </div>""")
 
 
@@ -1034,7 +1322,33 @@ ADMIN_HTML = _page("Petabyte — admin", """
     <div class="panel" style="margin-top:12px;padding:16px 18px;display:flex;flex-wrap:wrap;gap:22px;align-items:center">
       <div><span class="mini">Platform revenue</span><div class="mono teal" style="font-size:18px;font-weight:600" id="a_rev">—</div></div>
       <div><span class="mini">Payouts pending</span><div class="mono amber" style="font-size:18px;font-weight:600" id="a_pend">—</div></div>
+      <div style="margin-inline-start:auto"><span class="mini" id="a_asof"></span></div>
     </div>
+  </div>
+
+  <div class="wrap" style="padding:14px 22px 2px">
+    <div class="lbl" style="margin-bottom:10px">Live operations</div>
+    <div class="stats">
+      <div class="stat"><div class="l">GPU utilization</div><div class="n teal" id="a_util">—</div><div class="mini" id="a_util_sub"></div></div>
+      <div class="stat"><div class="l">Active VMs</div><div class="n" id="a_vms">—</div><div class="mini" id="a_vms_sub"></div></div>
+      <div class="stat"><div class="l">Clusters running</div><div class="n" id="a_clusters">—</div><div class="mini" id="a_clusters_sub"></div></div>
+      <div class="stat"><div class="l">In escrow</div><div class="n amber" id="a_escrow">—</div><div class="mini" id="a_escrow_sub"></div></div>
+    </div>
+    <div class="stats" style="margin-top:10px">
+      <div class="stat"><div class="l">Disk rental</div><div class="n" id="a_disk">—</div><div class="mini" id="a_disk_sub"></div></div>
+      <div class="stat"><div class="l">Teams</div><div class="n" id="a_teams">—</div><div class="mini" id="a_teams_sub"></div></div>
+      <div class="stat"><div class="l">Ledger</div><div class="n" id="a_ledger">—</div><div class="mini" id="a_ledger_sub"></div></div>
+      <div class="stat"><div class="l">Payout backlog</div><div class="n" id="a_backlog">—</div><div class="mini" id="a_backlog_sub"></div></div>
+    </div>
+  </div>
+
+  <div class="wrap" style="padding:12px 22px 2px">
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <a class="btn btn-ghost" href="/metrics">Marketplace metrics</a>
+      <a class="btn btn-ghost" href="/admin/funding-view">Funding metrics</a>
+      <a class="btn btn-ghost" href="/status">Public status</a>
+    </div>
+    <p class="mini" style="margin-top:8px">Full time-series (per-endpoint latency, error rates, background workers) live in Grafana; these tiles are the at-a-glance operational heartbeat, refreshed every 20s.</p>
   </div>
 
   <div class="wrap" style="padding:22px 22px 4px">
@@ -1128,7 +1442,41 @@ async function boot(){
   document.getElementById('a_rev').textContent=money(o.platform_revenue);
   document.getElementById('a_pend').textContent=o.payouts_pending.count+' · '+money(o.payouts_pending.amount);
   document.getElementById('console').style.display='';
-  loadUsers();loadSpecs();loadPayouts();loadIncidents();loadPayments();loadVideo();
+  loadOps();loadUsers();loadSpecs();loadPayouts();loadIncidents();loadPayments();loadVideo();
+  if(!window._adminTick){window._adminTick=setInterval(function(){loadOverviewTiles();loadOps();},20000);}
+}
+async function loadOverviewTiles(){
+  var ov=await api('/admin/overview');if(!ov.ok)return;var o=ov.body;
+  document.getElementById('a_users').textContent=o.users.total;
+  document.getElementById('a_nodes').textContent=o.specs.online;
+  document.getElementById('a_jobs').textContent=o.jobs.completed;
+  document.getElementById('a_gmv').textContent=money(o.gmv);
+  document.getElementById('a_rev').textContent=money(o.platform_revenue);
+  document.getElementById('a_pend').textContent=o.payouts_pending.count+' · '+money(o.payouts_pending.amount);
+}
+async function loadOps(){
+  var r=await api('/admin/ops');if(!r.ok)return;var o=r.body;
+  var m=o.marketplace||{},h=o.health||{},cl=o.clusters||{},d=o.disk||{},t=o.teams||{},v=o.vms||{};
+  document.getElementById('a_util').textContent=(m.utilization_pct||0)+'%';
+  document.getElementById('a_util_sub').textContent=(m.booked||0)+' booked · '+(m.available_units||0)+' free · '+(m.online||0)+' online';
+  document.getElementById('a_vms').textContent=v.active||0;
+  document.getElementById('a_vms_sub').textContent=(v.migrations_total||0)+' failovers total';
+  document.getElementById('a_clusters').textContent=cl.running||0;
+  document.getElementById('a_clusters_sub').textContent=(cl.complete||0)+' complete · '+(cl.failed||0)+' failed';
+  document.getElementById('a_escrow').textContent=money(o.in_escrow);
+  document.getElementById('a_escrow_sub').textContent='buyer money held';
+  document.getElementById('a_disk').textContent=d.nodes||0;
+  document.getElementById('a_disk_sub').textContent=(d.alloc_gb||0)+' GB pledged';
+  document.getElementById('a_teams').textContent=t.count||0;
+  document.getElementById('a_teams_sub').textContent=money(t.balance)+' pooled';
+  var lg=document.getElementById('a_ledger');
+  lg.textContent=h.ledger_balanced?'balanced':'IMBALANCE';
+  lg.className='n '+(h.ledger_balanced?'teal':'');
+  lg.style.color=h.ledger_balanced?'':'var(--bad)';
+  document.getElementById('a_ledger_sub').textContent=h.ledger_balanced?'debits = credits':((h.imbalanced_tx||0)+' broken tx');
+  document.getElementById('a_backlog').textContent=h.payout_backlog||0;
+  document.getElementById('a_backlog_sub').textContent=(h.payout_backlog?('oldest '+h.payout_backlog_age_hours+'h'):'clear');
+  var asof=document.getElementById('a_asof');if(asof)asof.textContent='updated '+new Date().toLocaleTimeString();
 }
 async function loadPayments(){
   var r=await api('/admin/payments');var tb=document.getElementById('payrows');
@@ -1317,6 +1665,11 @@ LOGIN_HTML = _page("Petabyte — sign in", """
     <label class="mini" style="display:block;margin:14px 0 6px">Password</label>
     <input id="p" type="password" placeholder="password (8+ characters)" style="width:100%" autocomplete="current-password"
            onkeydown="if(event.key==='Enter')go()"/>
+    <div id="otprow" style="display:none">
+      <label class="mini" style="display:block;margin:14px 0 6px">Authenticator code</label>
+      <input id="otp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code (or a backup code)" style="width:100%"
+             onkeydown="if(event.key==='Enter')go()"/>
+    </div>
     <button class="btn-amber" style="width:100%;justify-content:center;margin-top:18px" onclick="go()">
       <span id="btn">Sign in</span>
     </button>
@@ -1366,11 +1719,13 @@ async function forgot(){
   }catch(e){}
   info("If an account matches, we've emailed a password reset link. Check your inbox.");
 }
-async function login(u,p){
+async function login(u,p,otp){
+  var body='username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p);
+  if(otp)body+='&otp='+encodeURIComponent(otp);
   var r = await fetch('/login', {method:'POST',
-    headers:{'Content-Type':'application/x-www-form-urlencoded'},
-    body:'username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p)});
-  return r.ok ? (await r.json()).access_token : null;
+    headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:body});
+  var b={};try{b=await r.json()}catch(e){}
+  return {ok:r.ok, token:b.access_token, code:(b.error&&b.error.code)||null, status:r.status};
 }
 async function go(){
   var u=document.getElementById('u').value.trim(), p=document.getElementById('p').value;
@@ -1392,10 +1747,16 @@ async function go(){
         else{fail((typeof b.detail==='string'?b.detail:null)||"That username is taken — try another."); }
         return;}
     }
-    var t=await login(u,p);
-    if(!t){fail(mode==="register"?"Account created — but sign-in failed. Try signing in.":"Wrong username or password."); return;}
-    localStorage.setItem('pb_token', t);document.documentElement.setAttribute('data-auth','in');
-    location.href='/app';
+    var otp=(document.getElementById('otp')||{}).value;
+    var res=await login(u,p,otp);
+    if(!res.ok){
+      if(res.code==='TOTP_REQUIRED'){document.getElementById('otprow').style.display='';
+        info("Enter the 6-digit code from your authenticator app.");document.getElementById('otp').focus();return;}
+      if(res.code==='TOTP_INVALID'){document.getElementById('otprow').style.display='';
+        fail("That code is incorrect or expired — try again.");return;}
+      fail(mode==="register"?"Account created — but sign-in failed. Try signing in.":"Wrong username or password.");return;}
+    localStorage.setItem('pb_token', res.token);document.documentElement.setAttribute('data-auth','in');
+    location.href='/console';
   }catch(e){fail("Network error — check your connection and try again.");}
 }
 </script>""")
@@ -1458,6 +1819,7 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
 </div>
 
 <div id="hub" style="display:none">
+  <div class="wrap" style="padding:18px 22px 0"><div id="pbtestmode"></div></div>
   <!-- onboarding: what do I do next? -->
   <div class="wrap" id="onbsection" style="padding:22px 22px 0;display:none">
     <div class="card">
@@ -1544,7 +1906,7 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
         </div>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <a class="btn btn-teal" href="/app">Open dashboard</a>
+        <a class="btn btn-teal" href="/console">Open dashboard</a>
         <button class="btn-ghost" onclick="signout()">Sign out</button>
       </div>
     </div>
@@ -1561,7 +1923,7 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
     <div class="mini" style="margin-bottom:12px">Quick access</div>
     <div class="cols c4">
       <a class="card" href="/marketplace" style="text-decoration:none"><b class="teal" style="font-family:var(--disp)">Rent a GPU</b><p class="mut" style="font-size:12.5px;margin-top:5px">Browse live inventory &amp; book</p></a>
-      <a class="card" href="/app" style="text-decoration:none"><b class="teal" style="font-family:var(--disp)">Run a job</b><p class="mut" style="font-size:12.5px;margin-top:5px">Notebook, model, render, transcode</p></a>
+      <a class="card" href="/console" style="text-decoration:none"><b class="teal" style="font-family:var(--disp)">Run a job</b><p class="mut" style="font-size:12.5px;margin-top:5px">Notebook, model, render, transcode</p></a>
       <a class="card" href="/install" style="text-decoration:none"><b class="amber" style="font-family:var(--disp)">List your GPU</b><p class="mut" style="font-size:12.5px;margin-top:5px">Become a seller · node key</p></a>
       <a class="card" href="/developers" style="text-decoration:none"><b class="amber" style="font-family:var(--disp)">API &amp; docs</b><p class="mut" style="font-size:12.5px;margin-top:5px">Build on the exchange</p></a>
     </div>
@@ -1599,10 +1961,24 @@ ACCOUNT_HTML = _page("Petabyte — your account", """
           <input id="amt" type="number" value="50" min="1" size="5" style="width:90px"/>
           <button class="btn-amber" onclick="deposit()">Add funds</button>
           <button class="btn-ghost" onclick="withdraw()">Withdraw</button>
+          <label class="mut" style="font-size:12px;display:flex;align-items:center;gap:4px" data-ar="فوري (رسوم)"><input type="checkbox" id="instant"/> ⚡ instant (fee)</label>
         </div>
       </div>
       <p id="wmsg" class="mut" style="font-size:12.5px;margin-top:12px;display:none"></p>
       <div id="methods" class="mini" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- invite & earn (referrals) -->
+  <div class="wrap" style="padding:26px 22px 4px">
+    <div class="lbl" style="margin-bottom:12px" data-ar="ادعُ واكسب">Invite &amp; earn</div>
+    <div class="card" style="border-color:rgba(79,214,201,.25)">
+      <p class="mut" style="margin-bottom:10px" data-ar="شارك رابطك. عندما يبدأ من تدعوه باستئجار أو إدراج كرت رسومات، تحصلان كلاكما على رصيد.">Share your link. When someone you invite starts renting or listing a GPU, <b class="teal">you both get credit</b> (<span id="refreward">—</span> each).</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input id="reflink" readonly value="" size="34" style="flex:1;min-width:min(320px,80vw);font-family:ui-monospace,monospace"/>
+        <button class="btn-amber" onclick="copyRef(this)" data-ar="انسخ الرابط">Copy link</button>
+      </div>
+      <div class="mini" id="refstat" style="margin-top:12px"></div>
     </div>
   </div>
 
@@ -1686,7 +2062,7 @@ async function boot(){
   document.getElementById('wearn').textContent=money(u.earnings);
   if(new URLSearchParams(location.search).get('funded')==='1'){
     wmsg('Payment received — your balance updates as soon as Stripe confirms.');}
-  loadNodes();loadJobs();loadKeys();loadMethods();loadTemplates();loadVMs();loadEarnings();loadOnboarding();loadDiagnostics();loadBurn();loadEmail();loadNotifs();setInterval(loadBurn,20000);
+  loadNodes();loadJobs();loadKeys();loadMethods();loadTemplates();loadVMs();loadEarnings();loadOnboarding();loadDiagnostics();loadBurn();loadEmail();loadNotifs();loadReferral();setInterval(loadBurn,20000);
 }
 async function loadVMs(){var r=await api('/vm');if(!r.ok)return;var vms=r.body.vms||[];
   if(!vms.length)return; document.getElementById('vmsection').style.display='';
@@ -1769,12 +2145,27 @@ async function deposit(){var a=parseFloat(document.getElementById('amt').value||
   } else if(r.status===400){ wmsg((r.body&&r.body.detail)?r.body.detail:'Enter a valid amount.'); }
   else { wmsg('Could not start checkout — please try again.'); }}
 async function withdraw(){var a=parseFloat(document.getElementById('amt').value||'0');
-  var r=await api('/wallet/withdraw',{method:'POST',body:JSON.stringify({amount:a})});
-  wmsg(r.ok?('Withdrawal of '+money(a)+' requested.'):(r.body&&r.body.detail?r.body.detail:'Add a payout method first.'));loadMethods();}
+  var inst=!!(document.getElementById('instant')&&document.getElementById('instant').checked);
+  if(inst){var q=await api('/wallet/payout_quote?amount='+a);
+    if(q.ok&&q.body&&q.body.instant){ if(!q.body.instant.available){wmsg('Amount too small for an instant payout — use the free scheduled option.');return;}
+      if(!confirm('Instant payout: fee $'+q.body.instant.fee_usd.toFixed(2)+' — you receive $'+q.body.instant.net_usd.toFixed(2)+'.\\n\\nScheduled payouts are free. Continue instant?'))return; } }
+  var body={amount:a,instant:inst}; if(window._pmId)body.method_id=window._pmId;
+  var r=await api('/wallet/withdraw',{method:'POST',body:JSON.stringify(body)});
+  if(r.ok){var f=r.body.fee_usd||0; wmsg('Withdrawal of '+money(r.body.amount_usd)+' requested'+(f>0?(' (instant, fee '+money(f)+')'):' (free, scheduled)')+'.');}
+  else{wmsg(r.body&&r.body.detail?(r.body.detail.message||r.body.detail):'Add a payout method first.');}
+  loadMethods();}
 async function loadMethods(){var r=await api('/wallet/methods');var el=document.getElementById('methods');
-  if(r.ok&&r.body.methods&&r.body.methods.length){el.innerHTML='Payout methods: '+r.body.methods.map(function(m){return '<span class="badge ok">'+(m.kind||m.type||'method')+'</span>';}).join(' ');}
-  else{el.innerHTML='No payout method yet — add bank / USDC / gift card in the <a class="teal" href="/app">dashboard</a> to withdraw.';}}
+  if(r.ok&&r.body.methods&&r.body.methods.length){window._pmId=r.body.methods[0].id;
+    el.innerHTML='Payout methods: '+r.body.methods.map(function(m){return '<span class="badge ok">'+(m.kind||m.type||'method')+'</span>';}).join(' ')+' <span class="mut">· ⚡ instant costs a small fee; scheduled is free</span>';}
+  else{window._pmId=null;el.innerHTML='No payout method yet — add bank / USDC / gift card in the <a class="teal" href="/console">dashboard</a> to withdraw.';}}
 async function loadTemplates(){renderLaunch('launchgrid',['ai','render','art','game'],2);}
+async function loadReferral(){var r=await api('/referral');if(!r.ok)return;var b=r.body;
+  var el=document.getElementById('reflink');if(el)el.value=b.link;
+  var rw=document.getElementById('refreward');if(rw)rw.textContent='$'+Number(b.reward_usd).toFixed(2);
+  var st=document.getElementById('refstat');if(st)st.innerHTML='Invited <b class="teal">'+b.invited+'</b> · qualified <b class="teal">'+b.qualified+'</b> · pending '+b.pending+' · credit earned <b class="amber">$'+Number(b.credit_earned_usd).toFixed(2)+'</b>';}
+function copyRef(btn){var el=document.getElementById('reflink');if(!el)return;el.select();
+  try{navigator.clipboard.writeText(el.value);}catch(e){try{document.execCommand('copy');}catch(_){}}
+  if(btn){var o=btn.textContent;btn.textContent='copied';setTimeout(function(){btn.textContent=o;},1200);}}
 
 // --- ONBOARDING: what do I do next? Buyers and hosts get different funnels. ---
 async function loadOnboarding(){
@@ -2140,6 +2531,17 @@ PRICING_HTML = _page("Petabyte — pricing",
   <p class="mut" style="font-size:12.5px;margin-top:10px" data-ar="يحدّد كل مضيف أسعاره، وتتغيّر مع الطلب والتوفّر. «مرجع السحابة» هو سعر عند الطلب من مزوّد سحابي كبير لفئة كرت مماثلة، يُستخدم كمعيار للمقارنة — وليس عرض سعر من أي مزوّد بعينه.">Prices are set by individual hosts and change with demand and availability. "Cloud reference" is an on-demand hyperscaler rate for a comparable GPU class, used as a benchmark — not a quote from any specific provider.</p>
 </div>
 
+<div class="wrap" style="padding:26px 24px 8px">
+  <div class="lbl" data-ar="السعر المرجعي حسب الأداء">Reference price by GPU (benchmark-ordered)</div>
+  <p class="mut" style="font-size:13px;max-width:70ch;margin:6px 0 12px" data-ar="السعر المرجعي مشتقّ من معيار FP16 TFLOPS لكل كرت، لذا لا يكون الكرت الأبطأ أغلى من الأسرع أبداً. «متوسط مباشر» هو متوسط أسعار المضيفين المتصلين الآن لهذا الطراز.">Every GPU's <b>reference $/hr</b> is derived from its FP16 TFLOPS benchmark, so a slower card is <b>never priced above a faster one</b>. "Live avg" is the mean of hosts currently online for that model.</p>
+  <div class="panel" style="overflow:auto">
+    <table class="tbl">
+      <thead><tr><th data-ar="الكرت">GPU</th><th>FP16 TFLOPS</th><th data-ar="السعر المرجعي">Reference $/hr</th><th data-ar="متوسط مباشر">Live avg $/hr</th><th data-ar="مرجع السحابة">Cloud ref</th><th data-ar="توفيرك">Save</th></tr></thead>
+      <tbody id="crows"><tr><td colspan=6 class="mut mono" style="padding:22px;text-align:center">Loading catalog…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
 <div class="wrap" style="padding:34px 24px 8px"><div class="cols c3">
   <div class="card"><div class="lbl" data-ar="كيف تعمل الفوترة">How billing works</div>
     <h2 style="font-size:17px;margin-bottom:8px" data-ar="بالساعة، مع استرداد">Hourly, with refunds</h2>
@@ -2158,15 +2560,30 @@ async function prices(){
  tb.innerHTML=b.specs.map(function(s){
   var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
   return '<tr>'+
-   '<td style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
+   '<td data-l="GPU" style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
    '<td data-l="VRAM" class="mono mut">'+(s.vram_gb?s.vram_gb+' GB':'—')+'</td>'+
    '<td data-l="Petabyte" class="mono amber" style="font-weight:600">$'+Number(s.price_per_hour).toFixed(2)+'/hr</td>'+
    '<td data-l="Cloud" class="mono mut">'+(s.cloud_reference?'$'+Number(s.cloud_reference).toFixed(2)+'/hr':'<span class="mini">no comparable rate</span>')+'</td>'+
    '<td data-l="You save" class="mono" style="color:var(--pos)">'+(save>0?save+'%':'—')+'</td>'+
-   '<td class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
-   '<td><a class="btn btn-teal" style="padding:6px 14px;font-size:12px" href="/gpu/'+s.id+'">View</a></td></tr>';}).join('');
+   '<td data-l="Region" class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
+   '<td>'+'<a class="btn btn-teal" style="padding:6px 14px;font-size:12px" href="/gpu/'+s.id+'">View</a></td></tr>';}).join('');
 }
 prices();setInterval(prices,10000);
+// Benchmark-ordered reference catalog: reference $/hr is monotonic in the FP16 benchmark, so a
+// slower GPU is never priced above a faster one. Enriched with the live marketplace average.
+async function catalog(){
+ var r=await fetch('/pricing/catalog');if(!r.ok)return;var b=await r.json();var tb=document.getElementById('crows');
+ if(!b.count){tb.innerHTML='<tr><td colspan=6 class="mut mono" style="padding:18px;text-align:center">Catalog unavailable.</td></tr>';return;}
+ tb.innerHTML=b.catalog.map(function(g){
+  return '<tr>'+
+   '<td style="font-family:var(--disp);font-weight:600">'+esc(g.gpu_model)+'</td>'+
+   '<td data-l="FP16 TFLOPS" class="mono mut">'+Number(g.benchmark_tflops_fp16).toFixed(0)+'</td>'+
+   '<td data-l="Reference" class="mono amber" style="font-weight:600">$'+Number(g.reference_price_per_hour).toFixed(2)+'</td>'+
+   '<td data-l="Live avg" class="mono">'+(g.avg_price_per_hour!=null?('$'+Number(g.avg_price_per_hour).toFixed(2)+' <span class="mini mut">('+g.live_listings+')</span>'):'<span class="mini mut">none online</span>')+'</td>'+
+   '<td data-l="Cloud ref" class="mono mut">'+(g.cloud_reference!=null?'$'+Number(g.cloud_reference).toFixed(2):'—')+'</td>'+
+   '<td data-l="Save" class="mono" style="color:var(--pos)">'+(g.savings_vs_cloud_pct!=null?Math.round(g.savings_vs_cloud_pct)+'%':'—')+'</td></tr>';}).join('');
+}
+catalog();
 </script>""")
 
 
@@ -2207,19 +2624,19 @@ SECURITY_HTML = _page("Petabyte — security &amp; trust",
     <h2 style="font-size:18px;margin-bottom:10px" data-ar="ادّعاءات لا نطلقها بعد">Claims we are not making yet</h2>
     <p class="mut" style="font-size:13.5px" data-ar="نفضّل أن نكون موثوقين لا مبهرين. هذه في خارطة الطريق وهي ليست فعّالة اليوم:">We would rather be trusted than impressive. These are on the roadmap and are <b>not</b> live today:</p>
     <ul class="mut" style="font-size:13.5px;margin:10px 0 0 20px">
-      <li style="padding:3px 0" data-ar="إثبات مدعوم عتادياً (SEV-SNP / TDX). الإثبات اليوم موقّع برمجياً من الوكيل.">Hardware-backed attestation (SEV-SNP / TDX). Today's attestation is software-signed by the agent.</li>
-      <li style="padding:3px 0" data-ar="تحقّق مستقل من الأداء المُعلَن عبر قياسات معيارية.">Independent benchmark verification of advertised performance.</li>
+      <li style="padding:3px 0" data-ar="إثبات مدعوم عتادياً عبر مورّد حقيقي (SEV-SNP / TDX / NVIDIA CC). شارة «السرّية» اليوم فاشلة-الإغلاق: لا يمكن للنموذج البرمجي إصدارها في الإنتاج.">Hardware-backed attestation via a real vendor verifier (SEV-SNP / TDX / NVIDIA CC). The <b>confidential</b> badge today is <b>fail-closed</b> — the software stub cannot mint it in production, so it is never faked.</li>
+      <li style="padding:3px 0" data-ar="إعادة قياس الأداء بتوقيت الخادم على عيّنة من المهام الحقيقية (اليوم القياس مُبلّغ من العقدة وموقّع، ويُقارَن ببيانات عامة).">Server-timed benchmark <i>re-measurement</i> on a sample of real jobs. Today a signed benchmark is compared to public reference data (see <a class="teal" href="/trust">Trust</a>) — node-reported, not yet platform-timed.</li>
       <li style="padding:3px 0" data-ar="تدقيق أمني خارجي منشور أو تقرير SOC 2.">A published external security audit or SOC 2 report.</li>
       <li style="padding:3px 0" data-ar="ضمانات رسمية لموقع تخزين البيانات. المنطقة مُبلّغ عنها من المضيف ما لم تُوسم بأنها موثّقة.">Formal data-residency guarantees. Region is host-reported unless marked verified.</li>
     </ul>
-    <p class="mut" style="font-size:13px;margin-top:12px" data-ar="إن كان أي ادّعاء مهمّاً لعبء عملك، اسألنا قبل الحجز —">If a claim matters for your workload, ask us before you book — <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.</p>
+    <p class="mut" style="font-size:13px;margin-top:12px" data-ar="ما نتحقّق منه فعلاً اليوم، بأرقام حيّة:">What we <b>do</b> verify today, with live numbers and a receipt you can re-check yourself: <a class="teal" href="/trust">petabyte.market/trust</a>. If a claim matters for your workload, ask before you book — <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.</p>
   </div>
 </div>
 
 <div class="wrap" style="padding:22px 24px 8px"><div class="cols c3">
-  <a class="card" href="/privacy" style="display:block"><div class="lbl">Legal</div><h2 style="font-size:16px">Privacy policy</h2><p class="mut" style="font-size:13px">What we collect and why.</p></a>
+  <a class="card" href="/privacy" style="display:block"><div class="lbl">Legal</div><h2 style="font-size:16px">Privacy policy</h2><p class="mut" style="font-size:13px">What we collect, and your workload's data lifecycle.</p></a>
   <a class="card" href="/terms" style="display:block"><div class="lbl">Legal</div><h2 style="font-size:16px">Terms of service</h2><p class="mut" style="font-size:13px">The agreement for buyers and hosts.</p></a>
-  <a class="card" href="/acceptable-use" style="display:block"><div class="lbl">Legal</div><h2 style="font-size:16px">Acceptable use</h2><p class="mut" style="font-size:13px">What you may not run, and what hosts may not do.</p></a>
+  <a class="card" href="/refunds" style="display:block"><div class="lbl">Legal</div><h2 style="font-size:16px">Refunds &amp; disputes</h2><p class="mut" style="font-size:13px">Escrow protection, refunds, and the dispute SLA.</p></a>
 </div></div>""")
 
 
@@ -2249,6 +2666,8 @@ PRIVACY_HTML = _legal("Privacy policy", """
 <p class="mut">We do not read the contents of your workloads. We do not sell your data or share it with advertisers. We do not track you across other websites.</p>
 <h2 """ + _LEGAL_H + """>What hosts can see</h2>
 <p class="mut">A host runs your container on their machine. They can see that a job is running and its resource usage. Containers limit but do not eliminate what a determined host could observe — see our <a class="teal" href="/security">security page</a> for the honest boundary. Do not place data on shared infrastructure that you could not tolerate the host seeing.</p>
+<h2 """ + _LEGAL_H + """>Data lifecycle — your workload</h2>
+<p class="mut">Objects you upload for a job (scenes, inputs, outputs) are <b>client-side encrypted</b> before storage, and streamed to the node over TLS via one-time pre-signed URLs — the node holds no standing credentials to your storage. A job runs in a container on the host; when the rental ends the container and its working data are torn down. Backups a job takes are encrypted with a per-task key. We do <b>not</b> read the contents of your workloads, and we do not retain your input/output objects beyond what the job and your account need. The honest boundary is on the <a class="teal" href="/security">security page</a>: a container is not a hardware boundary, so for data you could not tolerate the host observing, use a <b>confidential</b> node or don't use shared infrastructure.</p>
 <h2 """ + _LEGAL_H + """>Retention and your rights</h2>
 <p class="mut">Financial records are kept as required for accounting. Other data is kept while your account is open. You can request a copy of your data or ask us to delete your account by emailing <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.</p>
 """)
@@ -2258,7 +2677,7 @@ TERMS_HTML = _legal("Terms of service", """
 <h2 """ + _LEGAL_H + """>What we are</h2>
 <p class="mut">We are an intermediary, not the owner of the hardware. Hosts are independent parties who set their own prices and availability. We verify what we can (see <a class="teal" href="/security">Security</a>) and show reputation earned from completed jobs, but we do not warrant any host's performance.</p>
 <h2 """ + _LEGAL_H + """>Money</h2>
-<p class="mut">Funds you deposit are held by Petabyte. When you book, the amount is moved into escrow for that rental. On completion we pay the host their share and take a 10% platform fee from the rental. If you stop early, you are billed for the hours you held the machine (minimum one hour) and the remainder is returned to your wallet. If a rental cannot be delivered, you are refunded.</p>
+<p class="mut">Funds you deposit are held by Petabyte. When you book, the amount is moved into escrow for that rental. On completion we pay the host their share and take a 10% platform fee from the rental. If you stop early, you are billed for the hours you held the machine (minimum one hour) and the remainder is returned to your wallet. If a rental cannot be delivered, you are refunded. Full details and the dispute process are in the <a class="teal" href="/refunds">Refunds &amp; disputes policy</a>.</p>
 <h2 """ + _LEGAL_H + """>Availability</h2>
 <p class="mut">We do not guarantee uptime. Hosts are consumer and datacenter machines that can go offline. When a host fails mid-rental we attempt to move your machine to another node at the same address, restoring from the most recent snapshot; recovery is from a checkpoint, not a live mirror. If we cannot, you are refunded.</p>
 <h2 """ + _LEGAL_H + """>Your responsibilities</h2>
@@ -2269,6 +2688,29 @@ TERMS_HTML = _legal("Terms of service", """
 <p class="mut">We may suspend accounts that breach these terms or the acceptable use policy. You can close your account at any time; hosts can uninstall the agent in one command.</p>
 <h2 """ + _LEGAL_H + """>Company</h2>
 <p class="mut">Petabyte is operated by <b>Petabyte, Inc.</b>, a C-corporation incorporated in the State of Delaware, United States, with operations in Riyadh, Saudi Arabia. For legal notices, contracts, or verification of the entity during due diligence, write to <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a>.</p>
+""")
+
+REFUNDS_HTML = _legal("Refunds &amp; disputes", """
+<p class="mut">You are renting a stranger's machine. Escrow and this policy exist so that if it doesn't deliver, you don't lose your money.</p>
+<h2 """ + _LEGAL_H + """>Your money is held in escrow</h2>
+<p class="mut">When you book, the amount moves from your wallet into escrow held by Petabyte for that rental — it is <b>not</b> paid to the host until the work is delivered. Every completed job carries a <a class="teal" href="/trust">verifiable receipt</a> (the node's signed result + the sha256 of the output), and payouts to hosts are held for a settlement window so fraud can be caught before money leaves.</p>
+<h2 """ + _LEGAL_H + """>When you are refunded automatically</h2>
+<ul class="mut" style="margin:8px 0 0 20px">
+  <li style="padding:3px 0"><b>The host can't deliver:</b> if a node goes offline mid-rental and we cannot fail your machine over to another eligible node, the rental is refunded.</li>
+  <li style="padding:3px 0"><b>The job never ran:</b> if we could not place your workload at all, you are refunded in full.</li>
+  <li style="padding:3px 0"><b>You stop early:</b> you are billed only for the hours you actually held the machine (minimum one hour). The unused prepay returns to your wallet.</li>
+</ul>
+<h2 """ + _LEGAL_H + """>Raising a dispute</h2>
+<p class="mut">If you believe you were charged for compute you did not receive — or a result is wrong — email <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a> with your <b>booking id</b> or <b>VM id</b> and what went wrong. We investigate using signals we already hold: the signed result receipt, the node's heartbeats, and — where the job is deterministic — cross-node re-verification of the output hash.</p>
+<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px">
+  <tr><td class="mut" style="padding:6px 0;border-bottom:1px solid var(--hair)">We acknowledge your dispute</td><td class="mono" style="text-align:right;border-bottom:1px solid var(--hair)">within 2 business days</td></tr>
+  <tr><td class="mut" style="padding:6px 0;border-bottom:1px solid var(--hair)">We resolve it (refund, partial, or explained)</td><td class="mono" style="text-align:right;border-bottom:1px solid var(--hair)">within 10 business days</td></tr>
+</table>
+<p class="mut">Outcomes are a full refund, a partial refund for the portion not delivered, or — if the evidence shows the compute <i>was</i> delivered — the charge upheld, with the receipt and signals we relied on shared with you so the decision is not a black box.</p>
+<h2 """ + _LEGAL_H + """>When a host is at fault</h2>
+<p class="mut">A host who takes a booking and fails to deliver, misrepresents hardware, or whose result diverges from independent re-verification has their <b>payouts frozen</b> pending review. Buyers are made whole from escrow <b>before</b> any payout to that host — your refund does not wait on us recovering from the host.</p>
+<h2 """ + _LEGAL_H + """>Card chargebacks</h2>
+<p class="mut">If you funded your wallet by card, please contact us before filing a card chargeback — we can almost always resolve a delivery dispute faster than your bank can, and a receipt makes it straightforward.</p>
 """)
 
 AUP_HTML = _legal("Acceptable use policy", """
@@ -2321,10 +2763,68 @@ stat();setInterval(stat,15000);
 </script>""")
 
 
+TRUST_HTML = _page("Petabyte — trust &amp; transparency",
+    desc="Live, honest transparency: GPUs by verification tier, jobs completed, cryptographically signed results, quorum checks, and a ledger that balances. Verify your own job.",
+    path="/trust", body="""
+<div class="hero"><div class="wrap" style="padding:60px 24px 18px">
+  <div class="eyebrow"><span class="dot"></span> trust &amp; transparency</div>
+  <h1 style="font-size:clamp(34px,5vw,54px);margin:16px 0 12px">Don't trust us. <span class="grad">Verify.</span></h1>
+  <p class="mut" style="font-size:16px;max-width:64ch">Every number below is a live database aggregate — zeros mean zero, nothing is invented. Each completed job carries a cryptographic receipt you can re-check yourself.</p>
+</div></div>
+
+<div class="wrap" style="padding:26px 24px 8px">
+  <div class="stats" id="trust_stats"><div class="mut mono" style="padding:12px 0">loading live numbers…</div></div>
+</div>
+
+<div class="wrap" style="padding:14px 24px 8px"><div class="cols c2">
+  <div class="card"><div class="lbl">the trust ladder</div>
+    <h2 style="font-size:18px;margin-bottom:8px">A tier is earned, never assumed</h2>
+    <p class="mut" style="font-size:13.5px"><b class="teal">self-reported</b> — registered via the API; nothing proven.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:6px"><b class="teal">agent-verified</b> — the node signed a hardware report with its on-device Ed25519 key.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:6px"><b class="teal">benchmark-consistent</b> — plus a signed benchmark that MATCHES public reference data for the claimed GPU (FP16 TFLOPS, Blender Open Data, Cinebench, PugetBench). A benchmark that contradicts the listing is flagged, not rewarded.</p>
+    <p class="mini" style="margin-top:10px">We do <b>not</b> claim hardware TEE attestation from the software stub — <a class="teal" href="/security">confidential computing</a> is a separate, fail-closed badge.</p>
+  </div>
+  <div class="card"><div class="lbl">verify your own job</div>
+    <h2 style="font-size:18px;margin-bottom:8px">A receipt you can re-check offline</h2>
+    <p class="mut" style="font-size:13.5px">Every completed job exposes a receipt at <span class="mono">/jobs/&lt;id&gt;/receipt</span> (signed in as the buyer). It contains the node's Ed25519 <b>signature</b> over the exact signed payload, the <b>sha256</b> of the real output bytes, and the node's attested <b>public key</b>.</p>
+    <p class="mut" style="font-size:13.5px;margin-top:8px">Reconstruct the message as canonical JSON of the payload and verify the signature against the public key — no need to take our word for it. Our server also re-verifies it live and shows you the result.</p>
+    <p class="mini" style="margin-top:10px">A forged or tampered result is rejected on submission and <b>freezes the seller's payouts</b> pending review.</p>
+  </div>
+</div></div>
+
+<div class="wrap" style="padding:14px 24px 30px"><div class="cols c3">
+  <a class="card" href="/security" style="display:block"><div class="lbl">security</div><h2 style="font-size:16px">What we verify — and don't</h2><p class="mut" style="font-size:13px">Isolation, escrow, attestation, honestly.</p></a>
+  <a class="card" href="/status" style="display:block"><div class="lbl">status</div><h2 style="font-size:16px">Live system status</h2><p class="mut" style="font-size:13px">API, marketplace, settlement health.</p></a>
+  <a class="card" href="/terms" style="display:block"><div class="lbl">legal</div><h2 style="font-size:16px">Terms &amp; escrow</h2><p class="mut" style="font-size:13px">How funds are held and refunded.</p></a>
+</div></div>
+
+<script>
+function tstat(label,val,sub){return '<div class="stat"><div class="stat-n mono">'+val+'</div><div class="stat-l">'+label+(sub?' <span class="mut" style="font-size:11px">'+sub+'</span>':'')+'</div></div>';}
+async function trustload(){
+ try{
+  var s=await (await fetch('/trust/summary')).json();
+  var t=s.trust_tiers||{};
+  var led=s.ledger_balanced===true?'balanced':(s.ledger_balanced===false?'IMBALANCED':'—');
+  document.getElementById('trust_stats').innerHTML=
+    tstat('attested GPUs',s.attested_gpus)+
+    tstat('benchmark-consistent',(t.benchmark_consistent||0))+
+    tstat('confidential nodes',(s.confidential_nodes_active||0))+
+    tstat('jobs completed',s.jobs_completed)+
+    tstat('verifiable receipts',s.verifiable_receipts)+
+    tstat('results bound to output bytes',s.results_content_bound)+
+    tstat('sellers frozen for fraud',s.sellers_fraud_flagged)+
+    tstat('double-entry ledger',led);
+ }catch(e){document.getElementById('trust_stats').innerHTML='<div class="mut mono" style="padding:12px 0">status unavailable</div>';}
+}
+trustload();setInterval(trustload,30000);
+</script>""")
+
+
 SELLER_EARNINGS_HTML = _page("Petabyte — seller earnings",
     desc="Connect your Stripe account to receive payouts, and track compute earnings, commission, transfers and bank payouts.",
     path="/seller/payouts", body="""
 <div class="wrap" style="padding:52px 24px 8px;max-width:900px">
+  <div id="pbtestmode"></div>
   <div class="eyebrow"><span class="dot"></span> seller earnings</div>
   <h1 style="font-size:clamp(28px,4.4vw,42px);margin:14px 0 8px">Get paid for your compute</h1>
   <p class="mut" id="signedout" style="display:none">Please <a class="teal" href="/login">sign in</a> to set up payouts.</p>
@@ -2335,6 +2835,18 @@ SELLER_EARNINGS_HTML = _page("Petabyte — seller earnings",
       <p class="mini" style="margin:6px 0 12px">A GPU earns once it is <b>online</b> and <b>verified</b> — then it is visible to buyers and can take paid jobs.</p>
       <div id="nodes_box"><div class="mut mono" style="padding:8px 0">loading…</div></div>
       <div id="nodes_blockers"></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="lbl">Rent your spare disk <span class="badge">extra earnings</span></div>
+      <p class="mini" style="margin:6px 0 12px">Rent unused disk to a web3 / BitTorrent storage network (Storj, BTFS, Sia). It's a <b>separate, always-on</b> earner — it runs even while a paid GPU job is on the box, and it's <b>not</b> tied to your GPU being idle. Pick a provider and a GB cap; earnings land in your Petabyte balance (minus a 10% fee). You can change the cap, pause, or delete at any time.</p>
+      <div id="disk_box"><div class="mut mono" style="padding:8px 0">loading…</div></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="lbl">Estimated earnings</div>
+      <p class="mini" style="margin:6px 0 10px">What you take home after Petabyte's 10% fee. The <b>net rate</b> is exact; daily/monthly are an <b>estimate</b> — actual earnings depend on demand.</p>
+      <div id="earn_forecast"><div class="mut mono" style="padding:8px 0">loading…</div></div>
     </div>
 
     <div class="card" style="margin-top:16px">
@@ -2399,6 +2911,17 @@ async function scRefresh(){await api('/payments/connect/refresh',{method:'POST',
 async function scNodes(){
   var r=await api('/seller/dashboard');if(!r.ok)return;var b=r.body;var box=document.getElementById('nodes_box');
   var ns=b.nodes||[];
+  // Estimated earnings — net of Petabyte's 10% fee. The net rate is exact; daily/monthly are
+  // an estimate at a few utilization levels (same honest math as the agent + /nodes/*/forecast).
+  (function(){
+    var fc=document.getElementById('earn_forecast');if(!fc)return;
+    function money(x){return '$'+Number(x).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+    if(!ns.length){fc.innerHTML='<p class="mut" style="font-size:13px">List a GPU to see your estimated earnings.</p>';return;}
+    var netHr=ns.reduce(function(a,n){return a+Number(n.price_per_hour||0)*0.9;},0);
+    var rows=[0.25,0.50,0.75].map(function(u){var d=netHr*24*u;return '<tr><td>'+Math.round(u*100)+'% utilized</td><td class="mono teal">'+money(d)+'/day</td><td class="mono">'+money(d*30)+'/mo</td></tr>';}).join('');
+    fc.innerHTML='<div class="mini" style="margin-bottom:8px">Net rate across your '+ns.length+' GPU'+(ns.length>1?'s':'')+': <b class="teal">'+money(netHr)+'/hr</b></div>'+
+      '<div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>If your GPUs are…</th><th>Estimated</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  })();
   if(!ns.length){box.innerHTML='<p class="mut" style="font-size:13px">No GPUs listed yet. <a class="teal" href="/install">List your hardware →</a></p>';}
   else{
     box.innerHTML=ns.map(function(n){
@@ -2416,11 +2939,80 @@ async function scNodes(){
         '<div class="mini" style="margin-top:8px">$'+Number(n.price_per_hour).toFixed(2)+'/hr · '+
           (n.utilization_pct||0)+'% utilized · '+n.jobs_completed+' jobs done'+
           (n.success_rate!=null?(' · '+n.success_rate+'% success'):'')+' · earned $'+Number(n.earned_total||0).toFixed(2)+'</div>'+
+        (n.suggested_price!=null?('<div class="mini" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">'+
+          '<b class="teal">Suggested $'+Number(n.suggested_price).toFixed(2)+'/hr</b>'+
+          (n.savings_vs_cloud_pct!=null?(' <span class="badge ok">~'+Math.round(n.savings_vs_cloud_pct)+'% below cloud</span>'):'')+
+          (n.auto_price?' <span class="badge">auto-price on</span>':'')+
+          '<span class="mut" style="display:block;margin-top:4px">'+esc(n.suggested_reason||'')+'</span></div>'):'')+
       '</div>';}).join('');
   }
   var bl=b.blockers||[];var wb=document.getElementById('nodes_blockers');
   wb.innerHTML=bl.length?('<div class="lbl" style="margin-top:6px">To start earning</div>'+bl.map(function(x){
     return '<p class="mini" style="color:var(--warn);margin-top:6px">• '+(x.issue||'')+' <span class="mut">'+(x.fix||'')+'</span></p>';}).join('')):'';
+  diskRender(ns);
+}
+
+// ---- Spare-disk rental: an explicit, always-on earner per node (provider + GB cap required) ----
+var DISK_PROVIDERS=[];
+async function diskProviders(){
+  if(DISK_PROVIDERS.length) return DISK_PROVIDERS;
+  var r=await api('/disk/providers');
+  DISK_PROVIDERS=(r.ok&&r.body&&r.body.providers)||[];
+  return DISK_PROVIDERS;
+}
+async function diskRender(ns){
+  var box=document.getElementById('disk_box');if(!box)return;
+  ns=(ns||[]).filter(function(n){return n.spec_id;});
+  if(!ns.length){box.innerHTML='<p class="mut" style="font-size:13px">List a GPU first — its spare disk can then be rented here.</p>';return;}
+  var provs=await diskProviders();
+  var opts=provs.map(function(p){return '<option value="'+p.id+'">'+esc(p.name)+' (~$'+Number(p.est_usd_per_tb_month||0).toFixed(2)+'/TB/mo)</option>';}).join('');
+  box.innerHTML=ns.map(function(n){var i=n.spec_id;return ''+
+    '<div class="panel" style="padding:12px;margin-bottom:10px">'+
+      '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">'+
+        '<b class="mono">'+esc(n.gpu_model||'GPU')+'</b>'+
+        '<span class="mono mut" style="font-size:11px" id="disk_stat_'+i+'">…</span>'+
+      '</div>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">'+
+        '<select id="disk_prov_'+i+'" style="padding:8px">'+opts+'</select>'+
+        '<input id="disk_gb_'+i+'" type="number" min="1" placeholder="GB cap" style="width:120px;padding:8px"/>'+
+        '<button class="btn btn-teal" data-act="diskSave" data-a1="'+i+'">Enable / update</button>'+
+        '<button class="btn btn-ghost" data-act="diskPause" data-a1="'+i+'">Pause</button>'+
+        '<button class="btn btn-ghost" data-act="diskDelete" data-a1="'+i+'">Delete</button>'+
+      '</div>'+
+    '</div>';}).join('');
+  ns.forEach(function(n){diskStatus(n.spec_id);});
+}
+async function diskStatus(i){
+  var el=document.getElementById('disk_stat_'+i);if(!el)return;
+  var r=await api('/nodes/'+i+'/disk');if(!r.ok){el.textContent='';return;}
+  var d=r.body;
+  if(d.enabled){
+    var pv=document.getElementById('disk_prov_'+i);if(pv&&d.provider)pv.value=d.provider;
+    var gb=document.getElementById('disk_gb_'+i);if(gb&&d.alloc_gb)gb.value=d.alloc_gb;
+    el.innerHTML='<span class="teal">renting</span> '+esc(d.provider||'')+' · '+(d.alloc_gb||0)+' GB cap · '+
+      Number(d.used_gb||0).toFixed(1)+' GB used · ~$'+Number(d.est_daily_usd||0).toFixed(3)+'/day · earned $'+Number(d.credited_total_usd||0).toFixed(2);
+  } else {
+    el.textContent='off · '+(n_diskNode(d)||'not renting');
+  }
+}
+function n_diskNode(d){return d&&d.node_name?('node '+d.node_name):'';}
+async function diskSave(i){
+  var prov=(document.getElementById('disk_prov_'+i)||{}).value;
+  var gb=Number((document.getElementById('disk_gb_'+i)||{}).value||0);
+  if(!prov){alert('Pick a storage provider.');return;}
+  if(!(gb>=1)){alert('Enter a GB cap (how much disk to rent).');return;}
+  var r=await api('/nodes/disk',{method:'POST',body:JSON.stringify({spec_id:Number(i),enabled:true,provider:prov,alloc_gb:gb})});
+  if(!r.ok){var m=(r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not enable disk rental.';alert(m);return;}
+  diskStatus(i);
+}
+async function diskPause(i){
+  var r=await api('/nodes/disk',{method:'POST',body:JSON.stringify({spec_id:Number(i),enabled:false})});
+  if(r.ok)diskStatus(i);
+}
+async function diskDelete(i){
+  if(!confirm('Delete this disk contribution? The node stops and its data is wiped.'))return;
+  var r=await api('/nodes/'+i+'/disk',{method:'DELETE'});
+  if(r.ok){var gb=document.getElementById('disk_gb_'+i);if(gb)gb.value='';diskStatus(i);}
 }
 scLoad();scNodes();
 </script>""")
@@ -2443,6 +3035,7 @@ BUY_HTML = _page("Petabyte — rent & run on a GPU",
     path="/buy", body="""
 <div class="wrap" style="padding:34px 24px 44px;max-width:960px">
   <a class="mini" href="/marketplace" style="color:var(--mut)">← Back to marketplace</a>
+  <div id="pbtestmode" style="margin-top:14px"></div>
   <p class="mut" id="buy_signedout" style="display:none;margin-top:18px">Please <a class="teal" href="/login">sign in</a> to rent a GPU.</p>
   <div id="buywrap" style="margin-top:14px"><div class="mut mono" style="padding:40px 0">Loading GPU…</div></div>
 </div>
@@ -2662,6 +3255,986 @@ async function buyCancel(){
 loadBuy();
 </script>""")
 
+
+CLUSTER_HTML = _page("Petabyte — distributed compute",
+    desc="Run one job across many GPUs on different machines, wired into a single cluster over the VPN — or bring your own scheduler (Slurm/MPI/Ray) and use Petabyte as another provider.",
+    path="/cluster", body="""
+<div class="wrap" style="padding:34px 24px 44px;max-width:1000px">
+  <div class="eyebrow"><span class="dot"></span> distributed compute</div>
+  <h1 style="font-size:clamp(26px,3.6vw,38px);margin:14px 0 6px">Run one job across <span class="grad-teal">many GPUs</span></h1>
+  <p class="mut" style="max-width:66ch">Split a single job across GPUs on <b>different machines</b>, wired into one cluster over the VPN (torchrun/NCCL). Gang-scheduled — one rank per machine — and escrowed all-or-nothing: a cluster that can't fully form is refused and refunded.</p>
+  <div id="pbtestmode" style="margin-top:12px"></div>
+  <p class="mut" id="cl_signedout" style="display:none;margin-top:10px">Please <a class="teal" href="/login">sign in</a> to launch a cluster.</p>
+  <div id="cl_avail" class="mono mut" style="margin-top:12px;font-size:13px">Checking available machines…</div>
+  <div class="cols" style="gap:18px;align-items:flex-start;margin-top:16px">
+    <div style="flex:1.2 1 360px;min-width:300px">
+      <div class="card">
+        <div class="lbl">Your cluster</div>
+        <label class="mini" style="display:block;margin-top:10px">GPUs — one per machine</label>
+        <input id="cl_n" type="number" min="2" value="4" oninput="clusterEst()" style="width:130px;padding:9px;margin-top:4px"/>
+        <label class="mini" style="display:block;margin-top:12px">Max runtime (hours)</label>
+        <input id="cl_hours" type="number" min="1" max="168" value="1" oninput="clusterEst()" style="width:130px;padding:9px;margin-top:4px"/>
+        <label class="mini" style="display:block;margin-top:12px">Collective backend</label>
+        <select id="cl_backend" style="padding:9px;margin-top:4px;width:160px"><option value="nccl">NCCL (GPU)</option><option value="gloo">Gloo (CPU/fallback)</option></select>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:14px;cursor:pointer">
+          <input id="cl_vpn" type="checkbox"/>
+          <span class="mini">Private network (VPN) — get a WireGuard tunnel into your cluster</span></label>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:10px;cursor:pointer">
+          <input id="cl_selftest" type="checkbox" onchange="clusterSelftest()"/>
+          <span class="mini">Cluster self-test first — every rank runs a real all-reduce to prove the cluster communicates and reduces correctly (no image needed)</span></label>
+        <label class="mini" style="display:block;margin-top:12px">Container image</label>
+        <input id="cl_image" value="pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime" style="width:100%;padding:9px;margin-top:4px" class="mono"/>
+        <label class="mini" style="display:block;margin-top:12px">Command (each node runs it under torchrun)</label>
+        <input id="cl_cmd" value="torchrun train.py --epochs 3" style="width:100%;padding:9px;margin-top:4px" class="mono"/>
+        <details style="margin-top:12px"><summary class="mini" style="cursor:pointer">Advanced — GPU class / region</summary>
+          <input id="cl_gpu" placeholder="gpu_class · e.g. RTX 4090" style="width:100%;padding:9px;margin-top:8px" class="mono"/>
+          <input id="cl_region" placeholder="region · e.g. us-east" style="width:100%;padding:9px;margin-top:8px" class="mono"/>
+        </details>
+        <div id="cl_est" class="mut" style="font-size:13px;margin-top:14px">Estimated cost shown once machines are available.</div>
+        <button class="btn btn-amber" id="cl_go" data-act="clusterLaunch" style="width:100%;margin-top:12px">Form the cluster →</button>
+        <p class="mini" style="margin-top:10px">You prepay all N GPUs into escrow up-front. If the full cluster can't be reserved, you're charged nothing.</p>
+      </div>
+    </div>
+    <div style="flex:1 1 340px;min-width:300px">
+      <div class="card" id="cl_result" style="display:none"><div class="lbl">Your cluster</div><div id="cl_result_body" style="margin-top:8px"></div></div>
+      <div class="card" id="cl_error" style="display:none;border-color:rgba(255,120,120,.3)"><div class="lbl" style="color:var(--warn)">Heads up</div><div id="cl_error_body" class="mut" style="font-size:13px;margin-top:6px"></div></div>
+      <div class="card" style="margin-top:16px">
+        <div class="lbl">Already on Slurm / MPI / Ray?</div>
+        <p class="mut" style="font-size:13px;margin:6px 0 8px">Don't change your stack — Petabyte is another provider. Every rank registers its VPN address, then the cluster exports as the artifacts your launcher already reads:</p>
+        <p class="mono" style="font-size:12px;line-height:1.9">
+        GET /jobs/{id}/hostfile <span class="mut">MPI / torchrun</span><br>
+        GET /jobs/{id}/cluster <span class="mut">nodes + launch cmds</span></p>
+        <p class="mini" style="margin-top:6px">Full recipes on the <a class="teal" href="/devs">Developer API</a>.</p>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+var AVAIL={available_nodes:0,max_cluster:0,est_price_per_hour:null};
+function clEl(id){return document.getElementById(id);}
+function clusterSelftest(){
+ // The self-test runs the built-in all-reduce, not a container — grey out image/command so it's
+ // clear they're ignored for this run (the server needs neither).
+ var on=!!(clEl('cl_selftest')&&clEl('cl_selftest').checked);
+ ['cl_image','cl_cmd'].forEach(function(id){var el=clEl(id);if(el){el.disabled=on;el.style.opacity=on?'.45':'';}});
+}
+async function clusterAvail(){
+ if(typeof authed==='function'&&!authed()){var so=clEl('cl_signedout');if(so)so.style.display='';}
+ try{var r=await fetch('/distributed/availability');if(r.ok)AVAIL=await r.json();}catch(e){}
+ var a=clEl('cl_avail');
+ if(a){a.textContent=AVAIL.available_nodes+' machines available now — you can form a cluster of up to '+AVAIL.max_cluster+' GPUs (cap '+AVAIL.max_nodes_cap+').';}
+ var n=clEl('cl_n');
+ if(n){n.max=Math.max(2,AVAIL.max_cluster||2);if(Number(n.value)>Number(n.max))n.value=n.max;}
+ clusterEst();
+}
+function clusterEst(){
+ var e=clEl('cl_est');if(!e)return;
+ var n=Number((clEl('cl_n')||{}).value||0),h=Number((clEl('cl_hours')||{}).value||0),p=AVAIL.est_price_per_hour;
+ if(p&&n>=2&&h>=1){e.innerHTML='&#8776; $'+(n*p*h).toFixed(2)+' &nbsp;<span class="mut">('+n+' GPUs &times; $'+Number(p).toFixed(2)+'/hr &times; '+h+'h, escrowed up-front)</span>';}
+ else{e.textContent='Estimated cost shown once machines are available.';}
+}
+async function clusterLaunch(){
+ if(typeof authed==='function'&&!authed()){location.href='/login';return;}
+ var go=clEl('cl_go');go.disabled=true;clEl('cl_error').style.display='none';
+ var body={image:clEl('cl_image').value.trim(),command:clEl('cl_cmd').value.trim(),
+  world_size:Number(clEl('cl_n').value),hours:Number(clEl('cl_hours').value),backend:clEl('cl_backend').value,
+  vpn:!!(clEl('cl_vpn')&&clEl('cl_vpn').checked)};
+ if(clEl('cl_selftest')&&clEl('cl_selftest').checked)body.selftest=true;  // built-in all-reduce, no container
+ var gc=(clEl('cl_gpu')||{}).value;if(gc)body.gpu_class=gc.trim();
+ var rg=(clEl('cl_region')||{}).value;if(rg)body.region=rg.trim();
+ var r=await api('/distributed',{method:'POST',body:JSON.stringify(body)});
+ go.disabled=false;
+ if(!r.ok){
+  var m=(r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not form the cluster.';
+  clEl('cl_error').style.display='';clEl('cl_error_body').textContent=m;return;
+ }
+ await clusterShow(r.body);
+}
+async function clusterShow(j){
+ var host=location.origin;
+ var cl=await api('/jobs/'+j.job_id+'/cluster');var L=(cl.ok&&cl.body&&cl.body.launch)||{};
+ window._PBCMDS['cl_hostfile']='curl -H "Authorization: Bearer $PB_TOKEN" '+host+'/jobs/'+j.job_id+'/hostfile > hostfile';
+ window._PBCMDS['cl_mpirun']=L.mpirun||'';
+ window._PBCMDS['cl_torchrun']=L.torchrun||'';
+ window._PBCMDS['cl_ray']=L.ray_worker||'';
+ var rows=(j.ranks||[]).map(function(rk){return '<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12.5px" class="mono"><span>rank '+rk.rank+(rk.is_master?' (master)':'')+'</span><span class="mut">node '+rk.spec_id+'</span></div>';}).join('');
+ function line(lbl,name){return '<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><code class="mono" style="flex:1;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(window._PBCMDS[name]||'—')+'</code><button class="copybtn" data-act="pbCopy" data-a1="'+name+'">copy</button></div>';}
+ clEl('cl_result_body').innerHTML=
+  '<div style="font-family:var(--disp);font-size:16px;margin-bottom:6px">Cluster forming: '+j.world_size+' GPUs across '+j.world_size+' machines</div>'+
+  '<p class="mut" style="font-size:12.5px;margin-bottom:8px">Escrowed &#8776; $'+Number(j.estimated_cost).toFixed(2)+' for '+j.hours+'h &middot; backend '+esc(j.backend)+' &middot; wired over the VPN.</p>'+
+  rows+
+  '<div class="lbl" style="margin-top:14px">Drive it from your own scheduler</div>'+
+  '<div class="mini" style="margin-top:4px">MPI hostfile</div>'+line('hostfile','cl_hostfile')+
+  '<div class="mini" style="margin-top:10px">torchrun</div>'+line('torchrun','cl_torchrun')+
+  '<div class="mini" style="margin-top:10px">Ray worker</div>'+line('ray','cl_ray')+
+  (j.vpn?('<div class="lbl" style="margin-top:14px">Private network (VPN)</div>'+
+    '<p class="mini" style="margin-top:4px">A private WireGuard tunnel into your cluster.</p>'+
+    '<button class="btn btn-teal" style="margin-top:8px" data-act="clVpnDownload" data-a1="'+j.job_id+'">Download VPN config</button>'):'')+
+  '<p class="mini" style="margin-top:12px"><a class="teal" data-act="clOpenManifest" data-a1="'+j.job_id+'" style="cursor:pointer">Live cluster status &rarr;</a> &middot; commands fill in as nodes register their VPN address.</p>';
+ clEl('cl_result').style.display='';
+}
+function clOpenManifest(id){location.href='/jobs/manifest/'+id;}
+async function clVpnDownload(id){
+ try{var r=await fetch('/jobs/'+id+'/vpn_config',{headers:{'Authorization':'Bearer '+tok()}});
+  if(!r.ok){alert('VPN config not available for this cluster.');return;}
+  var text=await r.text();var b=new Blob([text],{type:'text/plain'});
+  var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='petabyte-cluster-'+id+'.conf';
+  document.body.appendChild(a);a.click();a.remove();
+ }catch(e){alert('Could not download the VPN config.');}
+}
+document.addEventListener('DOMContentLoaded',clusterAvail);
+</script>""")
+
+
+CONSOLE_HTML = _page("Petabyte — console",
+    desc="Your Petabyte control plane: running compute, jobs, wallet and spend, available GPUs, clusters, API keys, teams and hosting — one operational view.",
+    path="/console", body="""
+<style>
+/* ---------- Console control-plane shell (marketing chrome hidden here) ---------- */
+body > nav{display:none!important}
+footer{display:none!important}
+:root{--editor-bg:#0B1122;--editor-ink:#F2F6FF;--console-ink:#BFE9E2}
+html[data-theme=light]{--editor-bg:#F5F9FC;--editor-ink:#0E1A2E;--console-ink:#0E5C55}
+.cshell{display:grid;grid-template-columns:238px minmax(0,1fr);min-height:100vh}
+.csidebar{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;border-inline-end:1px solid var(--line);background:var(--depth);display:flex;flex-direction:column;padding:14px 12px}
+.cbrand{display:flex;align-items:center;gap:9px;padding:4px 8px 12px;font-family:var(--disp);font-weight:700;font-size:16px;letter-spacing:-.01em;cursor:pointer}
+.cbrand img{width:22px;height:22px}
+.cnav{display:flex;flex-direction:column;gap:1px;flex:1}
+.cnav-grp{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin:15px 8px 5px;font-weight:600}
+.cnav a{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--mut);font-size:13.5px;font-weight:500;cursor:pointer;transition:background-color .12s,color .12s}
+.cnav a:hover{background:rgba(255,255,255,.045);color:var(--ink)}
+.cnav a.on{background:rgba(53,224,208,.10);color:var(--teal)}
+.cnav a svg{width:16px;height:16px;flex:none;opacity:.85}
+.csidefoot{border-top:1px solid var(--line);padding-top:8px;margin-top:8px;display:flex;flex-direction:column;gap:1px}
+.csidefoot a{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--mut);font-size:13.5px;font-weight:500;cursor:pointer;text-decoration:none}
+.csidefoot a:hover{background:rgba(255,255,255,.045);color:var(--ink)}
+.csidefoot a svg{width:16px;height:16px;flex:none;opacity:.85}
+.cmain{display:flex;flex-direction:column;min-width:0}
+.ctopbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:9px 20px;border-bottom:1px solid var(--line);background:rgba(3,7,17,.82);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+html[data-theme=light] .ctopbar{background:rgba(255,255,255,.82)}
+.cham{display:none;background:transparent;border:1px solid var(--line2);border-radius:9px;color:var(--mut);padding:7px 10px;cursor:pointer}
+.cham svg{width:16px;height:16px;display:block}
+.cws{display:flex;align-items:center;gap:9px;min-width:0}
+.cws .av{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--teal),var(--deep));display:flex;align-items:center;justify-content:center;font-family:var(--disp);font-weight:700;font-size:13px;color:#04201e;flex:none}
+.cws b{font-family:var(--disp);font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px}
+.cenv{font-size:10px;font-family:var(--mono);letter-spacing:.06em;padding:3px 7px;border-radius:6px;border:1px solid var(--line2);color:var(--mut);white-space:nowrap}
+.cenv.test{color:var(--amber);border-color:rgba(255,178,36,.4);background:rgba(255,178,36,.08)}
+.cenv.live{color:var(--pos);border-color:rgba(74,222,156,.4);background:rgba(74,222,156,.08)}
+.csearch{margin-inline-start:auto;display:flex;align-items:center;gap:9px;min-width:190px;max-width:300px;background:var(--depth2);border:1px solid var(--line2);border-radius:9px;color:var(--dim);font-size:13px;padding:8px 11px;cursor:text}
+.csearch svg{width:15px;height:15px;flex:none}
+.csearch span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.csearch kbd{margin-inline-start:auto;font-family:var(--mono);font-size:10.5px;border:1px solid var(--line2);border-radius:5px;padding:1px 6px;color:var(--mut)}
+.citop{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:9px;border:1px solid var(--line2);background:transparent;color:var(--mut);cursor:pointer;flex:none}
+.citop:hover{color:var(--teal);border-color:var(--teal)}
+.citop svg{width:16px;height:16px;flex:none}
+.cbody{padding:22px 24px 44px;min-width:0;width:100%;max-width:1200px}
+.cpagehead{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+.cpagehead h1{font-family:var(--disp);font-weight:700;font-size:22px;letter-spacing:-.01em;margin:0}
+.cpagehead p{color:var(--mut);font-size:13.5px;margin-top:3px;max-width:60ch}
+.cpageact{display:flex;gap:8px;flex-wrap:wrap}
+.cmetrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:22px}
+.cmetric{border:1px solid var(--line);border-radius:12px;padding:14px 15px;background:var(--depth);min-width:0}
+.cmetric .k{font-size:12px;color:var(--mut)}
+.cmetric .v{font-family:var(--disp);font-weight:700;font-size:23px;letter-spacing:-.02em;margin-top:5px;line-height:1.12}
+.cmetric .c{font-size:11.5px;color:var(--dim);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cmetric .c.pos{color:var(--pos)}.cmetric .c.warn{color:var(--warn)}
+.cgrid{display:grid;grid-template-columns:1.5fr 1fr;gap:16px;align-items:start}
+.cgcol{display:flex;flex-direction:column;gap:16px;min-width:0}
+.csec{border:1px solid var(--line);border-radius:12px;background:var(--depth);overflow:hidden}
+.csec-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line)}
+.csec-h h2{font-family:var(--disp);font-size:14px;font-weight:600;margin:0}
+.csec-h a,.csec-h button{font-size:12.5px;color:var(--teal);background:transparent;border:0;cursor:pointer;padding:0}
+.csec-b{padding:4px 15px 10px}
+.crow{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+.crow:last-child{border-bottom:0}
+.crow .rt{font-family:var(--disp);font-weight:600;font-size:13.5px}
+.crow .rs{font-size:12px;color:var(--mut);font-weight:400}
+.crow .rr{margin-inline-start:auto;display:flex;gap:6px;align-items:center;flex:none}
+.cmoney{display:flex;justify-content:space-between;gap:12px;padding:7px 0;font-size:13px;border-bottom:1px solid var(--line)}
+.cmoney:last-child{border-bottom:0}
+.cmoney .mk{color:var(--mut)}.cmoney .mv{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.cbtn{font-family:var(--disp);font-weight:600;font-size:12.5px;border-radius:8px;padding:7px 13px;border:1px solid var(--line2);background:transparent;color:var(--ink);cursor:pointer;transition:border-color .12s,color .12s,filter .12s;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;text-decoration:none}
+.cbtn:hover{border-color:var(--teal);color:var(--teal)}
+.cbtn.pri{background:linear-gradient(180deg,var(--amber-br),var(--amber));color:#241802;border:0}
+.cbtn.pri:hover{filter:brightness(1.05);color:#241802}
+.cbtn.sm{padding:5px 10px;font-size:11.5px;border-radius:7px}
+.cempty{text-align:center;padding:18px 8px}
+.cempty .et{font-family:var(--disp);font-weight:600;font-size:13.5px}
+.cempty .es{color:var(--mut);font-size:12.5px;margin:4px 0 12px}
+/* keep the run editor + console output + tables from the original console */
+.ctab-btn{display:none}
+#c_code{width:100%;min-height:150px;background:var(--editor-bg);color:var(--editor-ink);border:1px solid var(--line2);border-radius:12px;padding:13px;font-family:var(--mono);font-size:12.5px;line-height:1.6;resize:vertical}
+.c_console{background:var(--editor-bg);color:var(--console-ink);border:1px solid var(--line);border-radius:12px;padding:14px;min-height:150px;font-family:var(--mono);font-size:12.5px;line-height:1.6;white-space:pre-wrap;overflow:auto}
+.c_console .sys{color:var(--mut)}.c_console .ok{color:var(--pos)}.c_console .amber{color:var(--amber)}
+html[dir="rtl"] #c_code,html[dir="rtl"] .c_console{direction:ltr;text-align:left}
+.crun{display:grid;grid-template-columns:1.1fr .9fr;gap:16px}
+.cscrim{display:none;position:fixed;inset:0;background:rgba(3,7,17,.55);z-index:55}
+.cscrim.on{display:block}
+@media(max-width:900px){
+ .cshell{grid-template-columns:minmax(0,1fr)}
+ .csidebar{position:fixed;inset:0 auto 0 0;width:250px;z-index:60;transform:translateX(-100%);transition:transform .2s ease}
+ .csidebar.open{transform:none;box-shadow:0 0 60px rgba(0,0,0,.6)}
+ .cham{display:inline-flex}
+ .cmetrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .cgrid{grid-template-columns:minmax(0,1fr)}
+ .crun{grid-template-columns:1fr}
+ .csearch{min-width:0}
+}
+@media(max-width:520px){.cmetrics{grid-template-columns:1fr 1fr}.csearch span,.csearch kbd{display:none}.csearch{min-width:0;max-width:44px;justify-content:center;padding:8px}.cws b{display:none}.cbody{padding:18px 16px 40px}}
+@media(prefers-reduced-motion:reduce){.csidebar{transition:none}}
+</style>
+<div class="cscrim" id="cscrim"></div>
+<div class="cshell" id="cshell">
+  <aside class="csidebar" id="csidebar">
+    <div class="cbrand" data-act="cGo" data-a1="overview"><img src="/static/petabyte-logo.png" alt=""/> Petabyte</div>
+    <nav class="cnav" aria-label="Console">
+      <div class="cnav-grp">Compute</div>
+      <a id="cnav-overview" data-act="cGo" data-a1="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg> Overview</a>
+      <a id="cnav-compute" data-act="cGo" data-a1="compute"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg> Compute</a>
+      <a id="cnav-jobs" data-act="cGo" data-a1="jobs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h10"/></svg> Jobs</a>
+      <a href="/catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v6H4zM4 15h10v4H4z"/></svg> Templates</a>
+      <a id="cnav-clusters" data-act="cGo" data-a1="clusters"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7.5 7.5 11 16M16.5 7.5 13 16"/></svg> Clusters</a>
+      <a id="cnav-storage" data-act="cGo" data-a1="storage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg> Storage</a>
+      <div class="cnav-grp">Account</div>
+      <a id="cnav-billing" data-act="cGo" data-a1="billing"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/></svg> Wallet &amp; billing</a>
+      <a id="cnav-access" data-act="cGo" data-a1="access"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="12" r="3.5"/><path d="M11 12h9M17 12v4"/></svg> API keys</a>
+      <a id="cnav-teams" data-act="cGo" data-a1="teams"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="9" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 6.5a3 3 0 0 1 0 5.5M21 20a5 5 0 0 0-4-4.9"/></svg> Teams</a>
+      <div class="cnav-grp" id="cnav-hostgrp" style="display:none">Hosting</div>
+      <a id="cnav-seller" data-act="cGo" data-a1="seller" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg> Nodes &amp; earnings</a>
+    </nav>
+    <div class="csidefoot">
+      <a href="/account"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg> Settings</a>
+      <a href="/developers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 8 5 12l4 4M15 8l4 4-4 4"/></svg> Docs</a>
+    </div>
+  </aside>
+  <div class="cmain">
+    <header class="ctopbar">
+      <button class="cham" id="cham" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+      <div class="cws"><span class="av" id="c_wsav">·</span><b id="c_wsname">Workspace</b><span class="cenv" id="c_env">…</span></div>
+      <div class="csearch" data-act="cPalette" role="button" tabindex="0" aria-label="Search and commands"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg><span>Search or run a command</span><kbd>⌘K</kbd></div>
+      <button class="citop" data-act="cGo" data-a1="access" title="Notifications" aria-label="Notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6M10 20a2 2 0 0 0 4 0"/></svg></button>
+      <button class="citop" onclick="try{toggleTheme()}catch(e){}" title="Theme" aria-label="Toggle theme"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M19 5l-1.4 1.4M6.4 17.6 5 19"/></svg></button>
+      <button class="citop" onclick="try{signout()}catch(e){location.href='/login'}" title="Sign out" aria-label="Sign out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/></svg></button>
+    </header>
+    <div class="cbody">
+      <p class="mut" id="c_signedout" style="display:none">Please <a class="teal" href="/login">sign in</a> to open your console.</p>
+      <div id="c_main" style="display:none">
+        <div class="cpagehead" id="c_pagehead"></div>
+
+        <section id="tab-overview" class="cpanel">
+          <div class="cmetrics" id="c_ov_metrics"></div>
+          <div class="cgrid">
+            <div class="cgcol">
+              <section class="csec"><div class="csec-h"><h2>Running compute</h2><button data-act="cGo" data-a1="compute">Manage</button></div><div class="csec-b" id="c_ov_running"><p class="mut" style="font-size:13px;padding:8px 0">Loading…</p></div></section>
+              <section class="csec"><div class="csec-h"><h2>Recent jobs</h2><button data-act="cGo" data-a1="jobs">View all</button></div><div class="csec-b" id="c_ov_jobs"><p class="mut" style="font-size:13px;padding:8px 0">Loading…</p></div></section>
+              <section class="csec"><div class="csec-h"><h2>Available compute</h2><a href="/marketplace">Marketplace →</a></div><div class="csec-b" id="c_ov_avail"><p class="mut" style="font-size:13px;padding:8px 0">Loading…</p></div></section>
+            </div>
+            <div class="cgcol">
+              <section class="csec"><div class="csec-h"><h2>Wallet &amp; spend</h2><button data-act="cGo" data-a1="billing">Billing</button></div><div class="csec-b" id="c_ov_wallet"><p class="mut" style="font-size:13px;padding:8px 0">Loading…</p></div></section>
+              <section class="csec" id="c_ov_seller_sect" style="display:none"><div class="csec-h"><h2>Hosting</h2><a href="/seller/payouts">Earnings →</a></div><div class="csec-b" id="c_ov_seller"></div></section>
+              <section class="csec"><div class="csec-h"><h2>Recent activity</h2></div><div class="csec-b" id="c_ov_activity"><p class="mut" style="font-size:13px;padding:8px 0">Loading…</p></div></section>
+            </div>
+          </div>
+        </section>
+
+        <section id="tab-compute" class="cpanel" style="display:none">
+          <div class="csec"><div class="csec-h"><h2>Run a job</h2></div><div class="csec-b">
+            <div class="crun">
+              <div>
+                <textarea id="c_code" spellcheck="false">print("hello from a petabyte gpu")
+print(6 * 7)</textarea>
+                <div style="margin-top:10px"><button class="cbtn pri" data-act="cRun">Run on cheapest GPU →</button></div>
+                <p class="mini" style="margin-top:8px">Books the cheapest matching GPU, escrows the hour, streams the result. Add funds in Billing first.</p>
+              </div>
+              <div class="c_console" id="c_out"><span class="sys">console idle — press Run.</span></div>
+            </div>
+          </div></div>
+          <section class="csec" style="margin-top:16px"><div class="csec-h"><h2>Available GPUs</h2><a href="/marketplace">Marketplace →</a></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>GPU</th><th>$/hr</th><th>vs cloud</th><th>Trust</th><th>Region</th><th></th></tr></thead><tbody id="c_specs"><tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+          </section>
+          <section class="csec" style="margin-top:16px"><div class="csec-h"><h2>Your VMs</h2><span class="mut" style="font-size:12px">stable address survives failover</span></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>Template</th><th>Status</th><th>Address</th><th>Failover</th><th>Left</th><th></th></tr></thead><tbody id="c_vms"><tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+          </section>
+        </section>
+
+        <section id="tab-jobs" class="cpanel" style="display:none">
+          <section class="csec"><div class="csec-h"><h2>Reservations</h2><button data-act="cGo" data-a1="compute">Run a job</button></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>When</th><th>GPU</th><th>Hours</th><th>Amount</th><th>Status</th></tr></thead><tbody id="c_jobs"><tr><td colspan=5 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+          </section>
+        </section>
+
+        <section id="tab-clusters" class="cpanel" style="display:none">
+          <section class="csec"><div class="csec-h"><h2>Distributed clusters</h2><a href="/cluster">Form a cluster →</a></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>Job</th><th>Status</th><th>Size</th><th>Rendezvous</th></tr></thead><tbody id="c_clusters"><tr><td colspan=4 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+            <p class="mini" style="margin:10px 15px 14px">torchrun / MPI / Ray across many machines, wired over a private VPN.</p>
+          </section>
+        </section>
+
+        <section id="tab-storage" class="cpanel" style="display:none">
+          <p class="mut" style="font-size:13.5px;max-width:74ch">Persistent volumes outlive any single VM — keep datasets, checkpoints and model weights between runs. Snapshots are <b class="teal">incremental</b>: only the content that actually changed is uploaded, identical files are stored once, and a restore ships just the delta. You pay for unique bytes, not for a full-disk mirror.</p>
+          <div class="cmetrics" id="c_stor_metrics" style="margin-top:14px"></div>
+          <section class="csec" style="margin-top:14px;max-width:520px"><div class="csec-h"><h2>Create a volume</h2></div><div class="csec-b">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><input id="c_volname" placeholder="volume name (e.g. checkpoints)" style="flex:1;min-width:160px"/><input id="c_volsize" type="number" min="1" placeholder="size cap GB (optional)" style="width:170px" title="optional hard cap on unique bytes held"/><button class="cbtn pri" data-act="cVolCreate">Create</button></div>
+            <p class="mini" id="c_volmsg" style="margin-top:8px;text-transform:none;letter-spacing:0"></p>
+          </div></section>
+          <div class="panel" style="overflow:auto;margin-top:14px"><table class="tbl"><thead><tr><th>Volume</th><th>Stored (deduped)</th><th>Snapshots</th><th>Saved by dedup</th><th>Created</th><th></th></tr></thead><tbody id="c_volumes"><tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+          <div id="c_vol_detail" style="display:none;margin-top:16px"></div>
+          <p class="mini" style="margin:12px 2px;text-transform:none;letter-spacing:0">Snapshots are taken from a VM with the agent or CLI — <code>petabyte volume snapshot &lt;name&gt;</code> uploads only the delta. See the <a class="teal" href="/developers">developer docs</a>.</p>
+        </section>
+
+        <section id="tab-billing" class="cpanel" style="display:none">
+          <div class="cmetrics" id="c_bill_wallet" style="margin-bottom:16px"></div>
+          <div style="display:flex;gap:16px;flex-wrap:wrap">
+            <section class="csec" style="flex:1 1 300px"><div class="csec-h"><h2>Add funds</h2></div><div class="csec-b">
+              <div style="display:flex;gap:8px;align-items:center;margin-top:6px"><input id="c_dep" type="number" value="50" min="1" style="width:120px"/><button class="cbtn pri" data-act="cDeposit">Add funds</button></div>
+              <p class="mini" style="margin-top:8px">In live mode, funds are added by card at checkout.</p>
+            </div></section>
+            <section class="csec" style="flex:1 1 300px"><div class="csec-h"><h2>Withdraw earnings</h2></div><div class="csec-b">
+              <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap"><select id="c_wmethod" style="flex:1;min-width:150px"></select><input id="c_wamt" type="number" placeholder="amount" min="1" style="width:110px"/><button class="cbtn" data-act="cWithdraw">Withdraw</button></div>
+              <p class="mini" id="c_wnomethod" style="margin-top:8px;display:none">No payout method yet — add bank / USDC / gift card on the <a class="teal" href="/seller/payouts">earnings page</a>.</p>
+            </div></section>
+          </div>
+          <section class="csec" style="margin-top:16px"><div class="csec-h"><h2>Payout history</h2></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>Amount</th><th>Kind</th><th>Status</th><th>When</th></tr></thead><tbody id="c_payouts"></tbody></table></div>
+          </section>
+          <section class="csec" style="margin-top:16px"><div class="csec-h"><h2>Receipts</h2></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>When</th><th>GPU</th><th>Hours</th><th>Amount</th><th>Status</th></tr></thead><tbody id="c_bookings"></tbody></table></div>
+          </section>
+          <section class="csec" style="margin-top:16px"><div class="csec-h"><h2>Refer &amp; earn</h2></div><div class="csec-b" id="c_referral" style="padding-top:10px"></div></section>
+        </section>
+
+        <section id="tab-teams" class="cpanel" style="display:none">
+          <p class="mut" style="font-size:13.5px;max-width:70ch">Share a wallet across a lab or company and set a hard budget cap so a runaway job can never overspend. Add people, give each a role, remove them when they leave.</p>
+          <p class="mini" style="margin-top:8px;text-transform:none;letter-spacing:0;font-size:12px">Roles — <b class="teal">admin</b>: manage members, funds &amp; budget, and run compute · <b class="teal">billing</b>: add funds &amp; set the budget, and run compute · <b class="teal">member</b>: run compute against the team wallet.</p>
+          <div class="panel" style="overflow:auto;margin-top:12px"><table class="tbl"><thead><tr><th>Team</th><th>Your role</th><th>Balance</th><th>Budget cap</th><th>Spent</th><th>Members</th><th></th></tr></thead><tbody id="c_orgs"><tr><td colspan=7 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+          <div id="c_team_detail" style="display:none;margin-top:16px"></div>
+          <section class="csec" style="margin-top:16px;max-width:460px"><div class="csec-h"><h2>Create a team</h2></div><div class="csec-b">
+            <div style="display:flex;gap:8px;align-items:center;margin-top:6px"><input id="c_orgname" placeholder="team / lab name" style="flex:1"/><button class="cbtn pri" data-act="cOrgCreate">Create</button></div>
+            <p class="mini" id="c_orgmsg" style="margin-top:8px"></p>
+          </div></section>
+        </section>
+
+        <section id="tab-access" class="cpanel" style="display:none">
+          <section class="csec" style="margin-top:12px"><div class="csec-h"><h2>Two-factor authentication</h2></div>
+            <div class="csec-b" style="padding-top:10px">
+              <p class="mut" style="font-size:13.5px;max-width:66ch">Protect sign-in with a one-time code from an authenticator app (Google Authenticator, Authy, 1Password). After a password, a 6-digit code is required to log in.</p>
+              <div class="card" id="c_2fa" style="margin-top:12px"><span class="mut">Loading…</span></div>
+            </div>
+          </section>
+          <p class="mut" style="font-size:13.5px;max-width:66ch">Programmatic access for CI, scripts and your own tools. Scope a key, set an expiry, revoke any time. The full key is shown once at creation.</p>
+          <section class="csec" style="margin-top:12px"><div class="csec-b" style="padding-top:14px">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input id="c_keylabel" placeholder="label (e.g. ci-runner)" style="flex:1;min-width:150px"/><input id="c_keydays" type="number" value="30" min="1" max="90" style="width:90px" title="days until expiry"/><input id="c_keyscopes" placeholder="scopes (comma-sep, optional)" style="flex:1;min-width:150px"/><button class="cbtn pri" data-act="cKeyCreate">Create key</button></div>
+            <div id="c_keyout" style="display:none;margin-top:12px"></div>
+          </div></section>
+          <div class="panel" style="overflow:auto;margin-top:12px"><table class="tbl"><thead><tr><th>Label</th><th>Scopes</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody id="c_keys"><tr><td colspan=5 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+          <p class="mini" style="margin:8px 2px">Full API reference at <a class="teal" href="/developers">/developers</a> and <a class="teal" href="/docs">/docs</a>.</p>
+          <section class="csec" style="margin-top:20px"><div class="csec-h"><h2>Notifications</h2></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>When</th><th>Event</th><th>Subject</th><th>Status</th></tr></thead><tbody id="c_notifs"></tbody></table></div>
+          </section>
+          <section class="csec" style="margin-top:20px"><div class="csec-h"><h2>Audit log <span class="mut" id="c_audit_integrity" style="font-weight:400;text-transform:none;letter-spacing:0"></span></h2></div>
+            <div class="csec-b" style="padding-top:10px"><p class="mut" style="font-size:13px;max-width:66ch">Immutable "who did what, when" — logins, key create/revoke, role and team changes, spend. Hash-chained so any edit or deletion is detectable (the security-team / SOC-2 trail).</p></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>When</th><th>Action</th><th>Target</th><th>Detail</th><th>IP</th></tr></thead><tbody id="c_audit"><tr><td colspan=5 class="mut mono" style="text-align:center;padding:14px">Loading…</td></tr></tbody></table></div>
+          </section>
+        </section>
+
+        <section id="tab-seller" class="cpanel" style="display:none">
+          <div id="c_seller" style="margin-top:2px"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+var CTABS=['overview','compute','jobs','clusters','storage','billing','teams','access','seller'];
+var CLOADED={};
+function cD2(x){return '$'+Number(x||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function cInt(x){return Number(x||0).toLocaleString();}
+function cBadge(s){var t=String(s==null?'':s);var ok=(t==='running'||t==='complete'||t==='completed'||t==='online'||t==='paid'||t==='ready'||t==='active'||t==='sent')?' ok':'';return '<span class="badge'+ok+'">'+esc(t)+'</span>';}
+function cStat(n,l,cls){return '<div class="stat"><div class="n '+(cls||'')+'">'+n+'</div><div class="l">'+esc(l)+'</div></div>';}
+function cTs(s){return esc(String(s==null?'':s).replace('T',' ').slice(0,16));}
+function cMetric(k,v,c,cls){return '<div class="cmetric"><div class="k">'+esc(k)+'</div><div class="v">'+v+'</div><div class="c '+(cls||'')+'">'+c+'</div></div>';}
+function cEmpty(t,s,arg,cta,href){var btn=href?('<a class="cbtn sm" href="'+href+'">'+cta+'</a>'):('<button class="cbtn sm" data-act="cGo" data-a1="'+arg+'">'+cta+'</button>');
+  return '<div class="cempty"><div class="et">'+esc(t)+'</div><div class="es">'+esc(s)+'</div>'+btn+'</div>';}
+function cGo(name){cNav(name);}
+function cPalette(){try{pbPalette();}catch(e){}}
+
+var PAGEMETA={
+ overview:{t:'Overview',s:'Your compute, jobs, spend and infrastructure at a glance.',a:[['Launch compute','pri','compute'],['Add funds','','billing']]},
+ compute:{t:'Compute',s:'Run a job on the cheapest matching GPU, or manage running VMs.',a:[['Marketplace','href','/marketplace']]},
+ jobs:{t:'Jobs',s:'Your reservations and their status.',a:[['Run a job','pri','compute']]},
+ clusters:{t:'Clusters',s:'Multi-GPU distributed jobs across many machines.',a:[['Form a cluster','href','/cluster']]},
+ storage:{t:'Storage',s:'Persistent volumes with incremental, deduplicated snapshots.',a:[]},
+ billing:{t:'Wallet & billing',s:'Balance, funding, payouts, receipts and referrals.',a:[]},
+ access:{t:'API keys',s:'Programmatic access for CI, scripts and tools.',a:[]},
+ teams:{t:'Teams',s:'Share a wallet and set budget caps.',a:[]},
+ seller:{t:'Hosting',s:'Your nodes, utilization and earnings.',a:[['List your PC','href','/install']]}
+};
+function cHead(name){
+  var m=PAGEMETA[name]||PAGEMETA.overview;
+  var acts=(m.a||[]).map(function(x){var label=x[0],kind=x[1],arg=x[2];
+    if(kind==='href')return '<a class="cbtn" href="'+arg+'">'+esc(label)+'</a>';
+    return '<button class="cbtn'+(kind==='pri'?' pri':'')+'" data-act="cGo" data-a1="'+arg+'">'+esc(label)+'</button>';}).join('');
+  var el=document.getElementById('c_pagehead');if(el)el.innerHTML='<div><h1>'+esc(m.t)+'</h1><p>'+esc(m.s)+'</p></div><div class="cpageact">'+acts+'</div>';
+}
+function cNav(name){
+  if(CTABS.indexOf(name)<0)name='overview';
+  CTABS.forEach(function(t){
+    var el=document.getElementById('tab-'+t);if(el)el.style.display=(t===name)?'':'none';
+    var a=document.getElementById('cnav-'+t);if(a)a.classList.toggle('on',t===name);
+  });
+  cHead(name);
+  try{history.replaceState(null,'','#'+name);}catch(e){}
+  if(!CLOADED[name]){CLOADED[name]=true;cLoadTab(name);}
+  var sb=document.getElementById('csidebar');if(sb)sb.classList.remove('open');
+  var sc=document.getElementById('cscrim');if(sc)sc.classList.remove('on');
+  try{document.querySelector('.cbody').scrollTop=0;window.scrollTo(0,0);}catch(e){}
+}
+var cTab=cNav;
+function cLoadTab(name){
+  if(name==='overview')cOverview();
+  else if(name==='compute')cCompute();
+  else if(name==='jobs')cJobs();
+  else if(name==='clusters')cClusters();
+  else if(name==='storage')cStorage();
+  else if(name==='billing')cBilling();
+  else if(name==='teams')cTeams();
+  else if(name==='access')cAccess();
+  else if(name==='seller')cSeller();
+}
+
+async function consoleLoad(){
+  if(typeof authed==='function' && !authed()){var so=document.getElementById('c_signedout');if(so)so.style.display='';return;}
+  document.getElementById('c_main').style.display='';
+  cEnvBadge();
+  await cWorkspace();
+  var start=(location.hash||'').replace('#','');
+  cNav(CTABS.indexOf(start)>=0?start:'overview');
+}
+async function cEnvBadge(){
+  var el=document.getElementById('c_env');if(!el)return;
+  try{var c=await (await fetch('/payments/config')).json();
+    if(c&&c.test_mode){el.className='cenv test';el.textContent='TEST';el.title='Sandbox — no real card is charged, no real money moves.';}
+    else{el.className='cenv live';el.textContent='LIVE';el.title='Live — real payments.';}
+  }catch(e){el.textContent='';}
+}
+async function cWorkspace(){
+  var me=((await api('/me'))||{}).body||{};window._CME=me;
+  var nm=document.getElementById('c_wsname');if(nm)nm.textContent=me.username||'Workspace';
+  var av=document.getElementById('c_wsav');if(av)av.textContent=((me.username||'?').slice(0,1)).toUpperCase();
+  var seller=(me.nodes>0)||me.role==='seller';
+  ['cnav-hostgrp','cnav-seller','c_ov_seller_sect'].forEach(function(id){var e=document.getElementById(id);if(e)e.style.display=seller?'':'none';});
+}
+async function cWalletStrip(){
+  var me=((await api('/me'))||{}).body||{};window._CME=me;
+  if(CLOADED['overview'])cLoadMetrics();
+}
+
+async function cOverview(){
+  cLoadMetrics();cRunning();cOvWallet();cOvJobs();cOvAvail();cOvActivity();cOvSeller();
+}
+async function cLoadMetrics(){
+  var me=((await api('/me'))||{}).body||{};window._CME=me;
+  var sp=((await api('/buyer/spend'))||{}).body||{};
+  var vms=(((await api('/vms'))||{}).body||{}).vms||[];
+  var run=vms.filter(function(v){return v.status==='running';}).length;
+  var start=vms.filter(function(v){return v.status==='starting'||v.status==='migrating';}).length;
+  var el=document.getElementById('c_ov_metrics');if(!el)return;
+  el.innerHTML=
+    cMetric('Wallet',cD2(me.balance),'earned '+cD2(me.earnings),'pos')+
+    cMetric('Running',(run+start)+' compute',run+' running · '+start+' starting')+
+    cMetric('Spend',cD2(sp.burn_rate_per_hour)+'/hr','~'+cD2(sp.projected_24h)+' next 24h','warn')+
+    cMetric('Jobs',cInt(me.bookings),(sp.active_instances||0)+' active now');
+}
+async function cRunning(){
+  var vms=(((await api('/vms'))||{}).body||{}).vms||[];
+  var el=document.getElementById('c_ov_running');if(!el)return;
+  var live=vms.filter(function(v){return ['running','starting','migrating'].indexOf(v.status)>=0;});
+  if(!live.length){el.innerHTML=cEmpty('Nothing running','Launch a workload and it shows up here.','compute','Launch compute');return;}
+  el.innerHTML=live.slice(0,5).map(function(v){var u=v.url||{};var isrun=(v.status==='running');
+    return '<div class="crow"><div style="min-width:0"><div class="rt">'+esc(v.template||'vm')+' '+cBadge(v.status)+'</div>'+
+      '<div class="rs mono" style="font-size:11.5px">'+esc(u.hostname||u.id||'')+(v.hours_left!=null?(' · '+v.hours_left+'h left'):'')+'</div></div>'+
+      '<div class="rr">'+(isrun?('<button class="cbtn sm" data-act="cVmExtend" data-a1="'+esc(v.vm_id)+'">+1h</button><button class="cbtn sm" data-act="cVmStop" data-a1="'+esc(v.vm_id)+'">Stop</button>'):'')+'</div></div>';
+  }).join('');
+}
+async function cOvWallet(){
+  var sp=((await api('/buyer/spend'))||{}).body||{};var me=window._CME||{};
+  var el=document.getElementById('c_ov_wallet');if(!el)return;
+  el.innerHTML=
+    '<div class="cmoney"><span class="mk">Available</span><span class="mv teal">'+cD2(me.balance)+'</span></div>'+
+    '<div class="cmoney"><span class="mk">Current spend</span><span class="mv amber">'+cD2(sp.burn_rate_per_hour)+'/hr</span></div>'+
+    '<div class="cmoney"><span class="mk">Projected 24h</span><span class="mv">'+cD2(sp.projected_24h)+'</span></div>'+
+    '<div class="cmoney"><span class="mk">In escrow</span><span class="mv">'+cD2(sp.in_escrow)+'</span></div>'+
+    '<div class="cmoney"><span class="mk">Est. runway</span><span class="mv">'+(sp.hours_of_runway!=null?sp.hours_of_runway+'h':'&#8734;')+'</span></div>'+
+    '<div style="margin-top:12px;display:flex;gap:8px"><button class="cbtn pri sm" data-act="cGo" data-a1="billing">Add funds</button><button class="cbtn sm" data-act="cGo" data-a1="billing">Billing</button></div>';
+}
+async function cOvJobs(){
+  var bk=(((await api('/account/bookings'))||{}).body||{}).bookings||[];
+  var el=document.getElementById('c_ov_jobs');if(!el)return;
+  if(!bk.length){el.innerHTML=cEmpty('No jobs yet','Run your first workload.','compute','Run a job');return;}
+  el.innerHTML=bk.slice(0,5).map(function(b){
+    return '<div class="crow"><div style="min-width:0"><div class="rt">'+esc(b.gpu_model||'GPU')+' '+cBadge(b.status)+'</div>'+
+      '<div class="rs">'+cTs(b.created_at)+' · '+esc(String(b.hours))+'h</div></div>'+
+      '<div class="rr mono" style="font-size:13px">'+cD2(b.gross_amount)+'</div></div>';
+  }).join('');
+}
+async function cOvAvail(){
+  var specs=(((await api('/specs'))||{}).body||{}).specs||[];
+  var el=document.getElementById('c_ov_avail');if(!el)return;
+  if(!specs.length){el.innerHTML='<p class="mut" style="font-size:13px;padding:8px 0">No GPUs online right now.</p>';return;}
+  var top=specs.slice().sort(function(a,b){return a.price_per_hour-b.price_per_hour;}).slice(0,4);
+  el.innerHTML=top.map(function(s){var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
+    return '<div class="crow"><div style="min-width:0"><div class="rt">'+esc(s.gpu_model||'CPU')+'</div><div class="rs">'+esc(s.region||'')+(save>0?(' · <span class="teal">-'+save+'% vs cloud</span>'):'')+'</div></div>'+
+      '<div class="rr"><span class="mono amber" style="font-size:13px">'+cD2(s.price_per_hour)+'/hr</span><button class="cbtn sm" data-act="cGo" data-a1="compute">Launch</button></div></div>';
+  }).join('');
+}
+async function cOvActivity(){
+  var ns=(((await api('/notifications'))||{}).body||{}).notifications||[];
+  var el=document.getElementById('c_ov_activity');if(!el)return;
+  if(!ns.length){el.innerHTML='<p class="mut" style="font-size:13px;padding:8px 0">No recent activity.</p>';return;}
+  el.innerHTML=ns.slice(0,6).map(function(n){
+    return '<div class="crow" style="gap:8px"><div style="min-width:0"><div class="rt" style="font-size:13px">'+esc(n.subject||n.event_type||'')+'</div><div class="rs" style="font-size:11.5px">'+cTs(n.created_at)+'</div></div><div class="rr">'+cBadge(n.status)+'</div></div>';
+  }).join('');
+}
+async function cOvSeller(){
+  var me=window._CME||{};var sect=document.getElementById('c_ov_seller_sect');
+  if(!((me.nodes>0)||me.role==='seller')){if(sect)sect.style.display='none';return;}
+  if(sect)sect.style.display='';
+  var r=await api('/seller/dashboard');var el=document.getElementById('c_ov_seller');if(!el)return;
+  var ns=((r.body||{}).nodes)||[];
+  if(!ns.length){el.innerHTML=cEmpty('No nodes yet','Connect a GPU and start earning.','','List your PC','/install');return;}
+  var online=ns.filter(function(n){return n.online;}).length;
+  var earned=ns.reduce(function(a,n){return a+Number(n.earned_total||0);},0);
+  el.innerHTML=
+    '<div class="cmoney"><span class="mk">Nodes</span><span class="mv">'+cInt(ns.length)+' ('+online+' online)</span></div>'+
+    '<div class="cmoney"><span class="mk">Earned to date</span><span class="mv teal">'+cD2(earned)+'</span></div>'+
+    '<div style="margin-top:12px"><a class="cbtn sm" href="/seller/payouts">Earnings &amp; payouts →</a></div>';
+}
+async function cJobs(){
+  var bs=(((await api('/account/bookings'))||{}).body||{}).bookings||[];
+  document.getElementById('c_jobs').innerHTML=bs.length?bs.map(function(b){
+    return '<tr><td data-l="When" class="mono" style="font-size:11px">'+cTs(b.created_at)+'</td><td data-l="GPU" class="mono">'+esc(b.gpu_model||'')+'</td><td data-l="Hours" class="mono">'+esc(String(b.hours))+'</td><td data-l="Amount" class="mono">'+cD2(b.gross_amount)+'</td><td data-l="Status">'+cBadge(b.status)+'</td></tr>';
+  }).join(''):'<tr><td colspan=5 class="mut mono" style="text-align:center;padding:16px">No reservations yet. <a class="teal" href="/marketplace">Rent a GPU →</a></td></tr>';
+}
+
+async function cCompute(){
+  var specs=(((await api('/specs'))||{}).body||{}).specs||[];
+  document.getElementById('c_specs').innerHTML=specs.length?specs.map(function(s){
+    var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
+    var trust=s.trust?('<span class="badge'+(s.trust.rank>=2?' ok':'')+'">'+esc(s.trust.label||'')+'</span>'):'<span class="mut mono">standard</span>';
+    return '<tr><td data-l="GPU" class="mono">'+esc(s.gpu_model||'CPU')+'</td>'+
+     '<td data-l="$/hr" class="mono amber">'+cD2(s.price_per_hour)+'</td>'+
+     '<td data-l="vs cloud" class="mono">'+(save>0?('<span class="teal">-'+save+'%</span>'):'—')+'</td>'+
+     '<td data-l="Trust">'+trust+'</td>'+
+     '<td data-l="Region" class="mono">'+esc(s.region||'—')+'</td>'+
+     '<td data-l=""><button class="cbtn sm" data-act="cRun" data-a1="'+s.spec_id+'">Run</button></td></tr>';
+    }).join(''):'<tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">No GPUs online right now.</td></tr>';
+  var vms=(((await api('/vms'))||{}).body||{}).vms||[];
+  document.getElementById('c_vms').innerHTML=cVmRows(vms);
+}
+function cVmRows(vms){
+  if(!vms.length)return '<tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">No VMs yet. <a class="teal" href="/marketplace">Rent a GPU →</a></td></tr>';
+  return vms.map(function(v){var u=v.url||{};var live=(v.status==='running');
+    return '<tr><td data-l="Template" class="mono">'+esc(v.template||'vm')+'</td>'+
+     '<td data-l="Status">'+cBadge(v.status)+'</td>'+
+     '<td data-l="Address" class="mono" style="font-size:11px">'+esc(u.hostname||u.id||'')+'</td>'+
+     '<td data-l="Failover" class="mono">'+(v.migrations?('moved '+v.migrations+'&times;'):'—')+'</td>'+
+     '<td data-l="Left" class="mono">'+(v.hours_left!=null?v.hours_left+'h':'—')+'</td>'+
+     '<td data-l="">'+(live?('<button class="cbtn sm" data-act="cVmExtend" data-a1="'+esc(v.vm_id)+'">+1h</button> <button class="cbtn sm" data-act="cVmStop" data-a1="'+esc(v.vm_id)+'">Stop</button>'):'—')+'</td></tr>';
+  }).join('');
+}
+async function cVmExtend(id){var r=await api('/vm/'+id+'/extend',{method:'POST',body:JSON.stringify({hours:1})});
+  if(!r.ok)alert((r.body&&(r.body.detail||r.body.message))||'Could not extend.');cCompute();cWalletStrip();}
+async function cVmStop(id){if(!confirm('Stop VM '+id+'? This releases the node.'))return;
+  var r=await api('/vm/'+id+'/stop',{method:'POST'});if(!r.ok)alert('Could not stop.');cCompute();if(CLOADED['overview'])cRunning();}
+
+function cOut(el,text,cls){var s=document.createElement('span');if(cls)s.className=cls;s.textContent=text;
+  el.appendChild(document.createElement('br'));el.appendChild(s);el.scrollTop=el.scrollHeight;}
+async function cRun(specId){
+  if(typeof authed==='function' && !authed()){location.href='/login';return;}
+  if(CTABS.indexOf('compute')>=0 && document.getElementById('tab-compute').style.display==='none')cNav('compute');
+  var out=document.getElementById('c_out');out.innerHTML='<span class="sys">booking a node…</span>';
+  var code=(document.getElementById('c_code')||{}).value||'';
+  var spec=specId;
+  if(!spec){var s=await api('/specs');var list=(s.body||{}).specs||[];
+    if(!list.length){out.innerHTML='<span class="amber">No GPUs available.</span>';return;}spec=list[0].spec_id;}
+  var bk=await api('/request_vm',{method:'POST',body:JSON.stringify({spec_id:Number(spec),hours:1})});
+  if(!bk.ok){out.innerHTML='<span class="amber">'+(bk.status===402?'Add funds before booking (Billing).':'Booking failed: '+esc(JSON.stringify(bk.body)))+'</span>';return;}
+  cOut(out,'booked #'+bk.body.booking_id+' · escrow '+cD2(bk.body.gross_amount)+' (fee '+cD2(bk.body.platform_fee)+', seller '+cD2(bk.body.seller_payout)+')','sys');
+  var tk=await api('/create_task',{method:'POST',body:JSON.stringify({booking_id:bk.body.booking_id,task_type:'notebook',code:code})});
+  if(!tk.ok){cOut(out,'task failed: '+JSON.stringify(tk.body),'amber');return;}
+  var tid=tk.body.task_id;cOut(out,'dispatched task #'+tid+' → waiting for a node…','sys');
+  var t0=Date.now();
+  var poll=setInterval(async function(){
+    var t=await api('/tasks/'+tid);var st=(t.body||{}).status;
+    if(st==='completed'||st==='failed'){clearInterval(poll);
+      cOut(out,'── '+String(st).toUpperCase()+' ──',st==='completed'?'ok':'amber');
+      cOut(out,t.body.result||'(no output)','');cWalletStrip();cCompute();}
+    else if(Date.now()-t0>60000){clearInterval(poll);cOut(out,'timed out.','amber');}
+  },1400);
+}
+
+async function cClusters(){
+  var cls=(((await api('/clusters'))||{}).body||{}).clusters||[];
+  document.getElementById('c_clusters').innerHTML=cls.length?cls.map(function(j){
+    return '<tr><td data-l="Job" class="mono">#'+j.job_id+'</td>'+
+     '<td data-l="Status">'+cBadge(j.status)+'</td>'+
+     '<td data-l="Size" class="mono">'+j.world_size+'&times; '+esc(j.backend||'')+'</td>'+
+     '<td data-l="Rendezvous">'+(j.rendezvous_ready?'<span class="badge ok">ready</span>':'<span class="badge">forming</span>')+'</td></tr>';
+    }).join(''):'<tr><td colspan=4 class="mut mono" style="text-align:center;padding:16px">No clusters yet. <a class="teal" href="/cluster">Form one →</a></td></tr>';
+}
+
+function cBytes(n){n=Number(n||0);if(n<1024)return n+' B';var u=['KB','MB','GB','TB','PB'],i=-1;do{n/=1024;i++;}while(n>=1024&&i<u.length-1);return n.toFixed(n<10?1:0)+' '+u[i];}
+async function cStorage(){
+  var vs=(((await api('/volumes'))||{}).body||{}).volumes||[];
+  var totStored=vs.reduce(function(a,v){return a+Number(v.bytes_stored||0);},0);
+  var totSnaps=vs.reduce(function(a,v){return a+Number(v.snapshots||0);},0);
+  var mel=document.getElementById('c_stor_metrics');
+  if(mel)mel.innerHTML=cMetric('Volumes',cInt(vs.length),'persistent')+cMetric('Stored',cBytes(totStored),'after dedup','pos')+cMetric('Snapshots',cInt(totSnaps),'point-in-time');
+  var el=document.getElementById('c_volumes');if(!el)return;
+  el.innerHTML=vs.length?vs.map(function(v){
+    return '<tr><td data-l="Volume" class="mono">'+esc(v.name)+(v.size_limit_gb?' <span class="mut" style="font-size:11px">cap '+v.size_limit_gb+' GB</span>':'')+'</td>'+
+     '<td data-l="Stored" class="mono">'+cBytes(v.bytes_stored)+'</td>'+
+     '<td data-l="Snapshots" class="mono">'+cInt(v.snapshots)+'</td>'+
+     '<td data-l="Saved" class="mono teal">'+(v.dedup_saved_bytes?cBytes(v.dedup_saved_bytes):'—')+'</td>'+
+     '<td data-l="Created" class="mono" style="font-size:11px">'+esc(String(v.created_at||'').slice(0,10))+'</td>'+
+     '<td data-l=""><button class="cbtn sm" data-act="cVolOpen" data-a1="'+v.id+'">Open</button> <button class="cbtn sm" data-act="cVolDelete" data-a1="'+v.id+'" data-a2="'+esc(v.name)+'">Delete</button></td></tr>';
+    }).join(''):'<tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">No volumes yet. Create one to keep datasets and checkpoints between runs.</td></tr>';
+}
+async function cVolCreate(){
+  var name=((document.getElementById('c_volname')||{}).value||'').trim();
+  var cap=((document.getElementById('c_volsize')||{}).value||'').trim();
+  var msg=document.getElementById('c_volmsg');
+  if(!name){if(msg)msg.textContent='Enter a volume name.';return;}
+  var body={name:name};if(cap)body.size_limit_gb=Number(cap);
+  var r=await api('/volumes',{method:'POST',body:JSON.stringify(body)});
+  if(r.ok){document.getElementById('c_volname').value='';document.getElementById('c_volsize').value='';if(msg)msg.textContent='Created "'+name+'".';cStorage();}
+  else{if(msg)msg.textContent=(r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not create volume.';}
+}
+async function cVolOpen(id){
+  var box=document.getElementById('c_vol_detail');if(!box)return;
+  var r=await api('/volumes/'+id);
+  if(!r.ok){box.style.display='';box.innerHTML='<div class="csec"><div class="csec-b"><p class="mut" style="padding:12px 0">Could not load this volume.</p></div></div>';return;}
+  var v=r.body||{};var snaps=v.snapshots||[];
+  var rows=snaps.length?snaps.map(function(s){
+    return '<tr><td data-l="#" class="mono">'+s.seq+'</td>'+
+     '<td data-l="Label" class="mono">'+esc(s.label||'—')+'</td>'+
+     '<td data-l="Files" class="mono">'+cInt(s.files)+'</td>'+
+     '<td data-l="Delta uploaded" class="mono teal">'+cBytes(s.delta_bytes)+'</td>'+
+     '<td data-l="Logical size" class="mono">'+cBytes(s.total_bytes)+'</td>'+
+     '<td data-l="When" class="mono" style="font-size:11px">'+cTs(s.created_at)+'</td></tr>';
+    }).join(''):'<tr><td colspan=6 class="mut mono" style="text-align:center;padding:14px">No snapshots yet — take one from a VM with <span class="mono">petabyte volume snapshot '+esc(v.name)+'</span>.</td></tr>';
+  box.style.display='';
+  box.innerHTML='<div class="csec"><div class="csec-h"><h2>Snapshots — '+esc(v.name)+'</h2>'+
+    '<span class="mini" style="text-transform:none;letter-spacing:0;color:var(--mut)">'+cBytes(v.bytes_stored)+' stored · '+cBytes(v.dedup_saved_bytes)+' saved by dedup</span></div>'+
+    '<div class="panel" style="overflow:auto;margin:12px 15px"><table class="tbl"><thead><tr><th>#</th><th>Label</th><th>Files</th><th>Delta uploaded</th><th>Logical size</th><th>When</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    '<p class="mini" style="margin:2px 15px 14px;text-transform:none;letter-spacing:0">Each snapshot only uploads content that changed since the last one. Restore ships just the delta.</p></div>';
+  try{box.scrollIntoView({behavior:'smooth',block:'nearest'});}catch(e){}
+}
+async function cVolDelete(id,name){
+  if(!confirm('Delete volume "'+name+'"? This removes every snapshot and all stored content. This cannot be undone.'))return;
+  var r=await api('/volumes/'+id,{method:'DELETE'});
+  if(!r.ok){alert((r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not delete volume.');return;}
+  var box=document.getElementById('c_vol_detail');if(box)box.style.display='none';
+  cStorage();
+}
+
+async function cBilling(){
+  var w=((await api('/wallet'))||{}).body||{};
+  document.getElementById('c_bill_wallet').innerHTML=
+    cMetric('Balance',cD2(w.balance),'available','pos')+cMetric('Withdrawable',cD2(w.withdrawable),'ready to pay out')+
+    cMetric('Clearing',cD2(w.clearing),'settling')+cMetric('Earnings',cD2(w.earnings),'to date');
+  var ms=(((await api('/wallet/methods'))||{}).body||{}).methods||[];
+  var payable=ms.filter(function(m){return m.payable;});
+  var sel=document.getElementById('c_wmethod');
+  sel.innerHTML=payable.length?payable.map(function(m){return '<option value="'+m.id+'">'+esc((m.label||m.kind)+' — '+m.destination)+'</option>';}).join(''):'<option value="">No payout method</option>';
+  var nomsg=document.getElementById('c_wnomethod');if(nomsg)nomsg.style.display=payable.length?'none':'';
+  var ps=(((await api('/wallet/payouts'))||{}).body||{}).payouts||[];
+  document.getElementById('c_payouts').innerHTML=ps.length?ps.map(function(p){
+    return '<tr><td data-l="Amount" class="mono">'+cD2(p.amount_usd)+'</td>'+
+     '<td data-l="Kind" class="mono">'+esc(p.kind||'')+'</td>'+
+     '<td data-l="Status">'+cBadge(p.status)+'</td>'+
+     '<td data-l="When" class="mono" style="font-size:11px">'+cTs(p.created_at)+'</td></tr>';
+    }).join(''):'<tr><td colspan=4 class="mut mono" style="text-align:center;padding:14px">No payouts yet.</td></tr>';
+  var bs=(((await api('/account/bookings'))||{}).body||{}).bookings||[];
+  document.getElementById('c_bookings').innerHTML=bs.length?bs.map(function(b){
+    return '<tr><td data-l="When" class="mono" style="font-size:11px">'+cTs(b.created_at)+'</td>'+
+     '<td data-l="GPU" class="mono">'+esc(b.gpu_model||'')+'</td>'+
+     '<td data-l="Hours" class="mono">'+esc(String(b.hours))+'</td>'+
+     '<td data-l="Amount" class="mono">'+cD2(b.gross_amount)+'</td>'+
+     '<td data-l="Status">'+cBadge(b.status)+'</td></tr>';
+    }).join(''):'<tr><td colspan=5 class="mut mono" style="text-align:center;padding:14px">No bookings yet.</td></tr>';
+  cReferral();
+}
+async function cDeposit(){
+  var amt=parseFloat((document.getElementById('c_dep')||{}).value);
+  if(!amt||amt<=0){alert('Enter an amount.');return;}
+  var r=await api('/deposit',{method:'POST',body:JSON.stringify({amount:amt})});
+  if(r.ok){cWalletStrip();cBilling();}
+  else if(r.status===403){alert('In live mode, funds are added at checkout — rent a GPU and pay by card.');}
+  else{alert('Could not add funds.');}
+}
+async function cWithdraw(){
+  var mid=(document.getElementById('c_wmethod')||{}).value;
+  var amt=parseFloat((document.getElementById('c_wamt')||{}).value);
+  if(!mid){alert('Add a payout method first (link below the box).');return;}
+  if(!amt||amt<=0){alert('Enter an amount.');return;}
+  var r=await api('/wallet/withdraw',{method:'POST',body:JSON.stringify({method_id:Number(mid),amount:amt})});
+  if(r.ok){alert('Payout requested: '+cD2(r.body.amount_usd));cWalletStrip();cBilling();}
+  else{alert((r.body&&(r.body.message||r.body.detail))||'Withdrawal failed.');}
+}
+async function cReferral(){
+  var r=((await api('/referral'))||{}).body||{};
+  var el=document.getElementById('c_referral');if(!el)return;
+  el.innerHTML='<div class="stats" style="margin-bottom:12px">'+
+    cStat(cD2(r.reward_usd),'You earn','amber')+cStat(cInt(r.invited),'Invited','')+
+    cStat(cInt(r.qualified),'Qualified','')+cStat(cD2(r.credit_earned_usd),'Credit earned','teal')+'</div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+    '<input id="c_reflink" readonly value="'+esc(r.link||'')+'" style="flex:1;min-width:220px"/>'+
+    '<button class="cbtn" data-act="cRefCopy">Copy link</button></div>'+
+    '<p class="mini" style="margin-top:8px">Both sides get spendable compute credit when someone you invite completes their first paid rental.</p>';
+}
+function cRefCopy(){var i=document.getElementById('c_reflink');if(!i||!i.value)return;i.select();
+  try{navigator.clipboard.writeText(i.value);}catch(e){try{document.execCommand('copy');}catch(_){}}}
+
+async function cTeams(){
+  var orgs=(((await api('/orgs'))||{}).body||{}).orgs||[];
+  document.getElementById('c_orgs').innerHTML=orgs.length?orgs.map(function(o){
+    return '<tr><td data-l="Team" class="mono">'+esc(o.name)+'</td>'+
+     '<td data-l="Your role">'+cBadge(o.your_role)+'</td>'+
+     '<td data-l="Balance" class="mono">'+cD2(o.balance)+'</td>'+
+     '<td data-l="Budget cap" class="mono">'+(o.budget_cap!=null?cD2(o.budget_cap):'&#8734;')+'</td>'+
+     '<td data-l="Spent" class="mono">'+cD2(o.spent)+'</td>'+
+     '<td data-l="Members" class="mono">'+cInt(o.members)+'</td>'+
+     '<td data-l=""><button class="cbtn sm" data-act="cTeamOpen" data-a1="'+o.org_id+'">Manage</button></td></tr>';
+    }).join(''):'<tr><td colspan=7 class="mut mono" style="text-align:center;padding:16px">No teams yet — create one to share a wallet and set a budget cap.</td></tr>';
+}
+async function cOrgCreate(){
+  var name=((document.getElementById('c_orgname')||{}).value||'').trim();
+  var msg=document.getElementById('c_orgmsg');
+  if(name.length<2){if(msg)msg.textContent='Team name must be at least 2 characters.';return;}
+  var r=await api('/orgs',{method:'POST',body:JSON.stringify({name:name})});
+  if(r.ok){document.getElementById('c_orgname').value='';if(msg)msg.textContent='Created "'+name+'" — you are the admin.';cTeams();cTeamOpen(r.body.org_id);}
+  else{if(msg)msg.textContent=(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not create team.';}
+}
+async function cTeamOpen(orgId){
+  var box=document.getElementById('c_team_detail');if(!box)return;
+  var r=await api('/orgs/'+orgId);
+  if(!r.ok){box.style.display='';box.innerHTML='<div class="csec"><div class="csec-b"><p class="mut" style="padding:12px 0">Could not load this team.</p></div></div>';return;}
+  var o=r.body||{};var isAdmin=(o.your_role==='admin');var mem=o.members||[];
+  var rows=mem.map(function(mm){
+    var roleCell=isAdmin
+      ? '<select data-role-select="1" data-org="'+orgId+'" data-user="'+esc(mm.username)+'">'+
+          ['admin','billing','member'].map(function(rn){return '<option value="'+rn+'"'+(mm.role===rn?' selected':'')+'>'+rn+'</option>';}).join('')+'</select>'
+      : cBadge(mm.role);
+    var rm=isAdmin?'<button class="cbtn sm" data-act="cMemberRemove" data-a1="'+orgId+'" data-a2="'+esc(mm.username)+'">Remove</button>':'';
+    return '<tr><td data-l="Member" class="mono">'+esc(mm.username)+'</td><td data-l="Role">'+roleCell+'</td><td data-l="">'+rm+'</td></tr>';
+  }).join('');
+  var invite=isAdmin
+    ? '<div class="csec-h" style="border:0;padding:14px 15px 6px"><h2>Add a member</h2></div>'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0 15px 14px">'+
+      '<input id="c_inv_user" placeholder="username" style="flex:1;min-width:150px"/>'+
+      '<select id="c_inv_role"><option value="member">member</option><option value="billing">billing</option><option value="admin">admin</option></select>'+
+      '<button class="cbtn pri" data-act="cMemberAdd" data-a1="'+orgId+'">Add</button>'+
+      '<p class="mini" id="c_inv_msg" style="width:100%;margin-top:4px;text-transform:none;letter-spacing:0"></p></div>'
+    : '<p class="mini" style="margin:12px 15px;text-transform:none;letter-spacing:0">Only a team admin can add or change members.</p>';
+  box.style.display='';
+  box.innerHTML='<div class="csec"><div class="csec-h"><h2>Members — '+esc(o.name)+'</h2>'+
+    '<span class="mini" style="text-transform:none;letter-spacing:0;color:var(--mut)">balance '+cD2(o.balance)+' · spent '+cD2(o.spent)+' · budget '+(o.budget_cap!=null?cD2(o.budget_cap):'&#8734;')+'</span></div>'+
+    '<div class="panel" style="overflow:auto;margin:12px 15px"><table class="tbl"><thead><tr><th>Member</th><th>Role</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    invite+(isAdmin?'<div id="c_team_audit" style="margin:6px 15px 14px"></div>':'')+'</div>';
+  if(isAdmin)cOrgAudit(orgId);
+}
+async function cMemberAdd(orgId){
+  var u=((document.getElementById('c_inv_user')||{}).value||'').trim();
+  var role=(document.getElementById('c_inv_role')||{}).value||'member';
+  var msg=document.getElementById('c_inv_msg');
+  if(!u){if(msg)msg.textContent='Enter a username.';return;}
+  var r=await api('/orgs/'+orgId+'/members',{method:'POST',body:JSON.stringify({username:u,role:role})});
+  if(r.ok){cTeamOpen(orgId);cTeams();}
+  else{if(msg)msg.textContent=(r.body&&typeof r.body.detail==='string'&&r.body.detail)||(r.status===404?'No user with that username.':'Could not add member.');}
+}
+async function cMemberRole(orgId,username,role){
+  var r=await api('/orgs/'+orgId+'/members/'+encodeURIComponent(username),{method:'PUT',body:JSON.stringify({role:role})});
+  if(!r.ok)alert((r.body&&(r.body.detail||r.body.message))||'Could not change role.');
+  cTeamOpen(orgId);cTeams();
+}
+async function cMemberRemove(orgId,username){
+  if(!confirm('Remove '+username+' from this team?'))return;
+  var r=await api('/orgs/'+orgId+'/members/'+encodeURIComponent(username),{method:'DELETE'});
+  if(!r.ok)alert((r.body&&(r.body.detail||r.body.message))||'Could not remove member.');
+  cTeamOpen(orgId);cTeams();
+}
+document.addEventListener('change',function(e){var s=e.target;
+  if(s&&s.getAttribute&&s.getAttribute('data-role-select')!=null){
+    cMemberRole(s.getAttribute('data-org'),s.getAttribute('data-user'),s.value);}});
+
+async function cAccess(){
+  var ks=(((await api('/account/keys'))||{}).body||{}).keys||[];
+  document.getElementById('c_keys').innerHTML=ks.length?ks.map(function(k){
+    var sc=Array.isArray(k.scopes)?k.scopes.join(' '):String(k.scopes||'');
+    return '<tr><td data-l="Label" class="mono">'+esc(k.label||'—')+'</td>'+
+     '<td data-l="Scopes" class="mono" style="font-size:11px">'+esc(sc)+'</td>'+
+     '<td data-l="Expires" class="mono" style="font-size:11px">'+esc(String(k.expires_at||'').slice(0,10))+'</td>'+
+     '<td data-l="Status">'+(k.revoked?'<span class="badge">revoked</span>':'<span class="badge ok">active</span>')+'</td>'+
+     '<td data-l="">'+(k.revoked?'':'<button class="cbtn sm" data-act="cKeyRevoke" data-a1="'+esc(k.jti)+'">Revoke</button>')+'</td></tr>';
+    }).join(''):'<tr><td colspan=5 class="mut mono" style="text-align:center;padding:14px">No API keys yet. Create one to drive Petabyte from code or CI.</td></tr>';
+  c2faLoad();cNotifs();cAudit();
+}
+async function c2faLoad(){
+  var el=document.getElementById('c_2fa');if(!el)return;
+  var s=((await api('/account/2fa'))||{}).body||{};
+  if(s.enabled){
+    el.innerHTML='<div><span class="badge ok">2FA is on</span> <span class="mut" style="font-size:13px">Sign-in requires a code from your authenticator app.</span></div>'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">'+
+      '<input id="c2fa_dis_pw" type="password" placeholder="password" style="min-width:150px"/>'+
+      '<input id="c2fa_dis_code" inputmode="numeric" placeholder="current code" style="width:130px"/>'+
+      '<button class="btn btn-ghost" data-act="c2faDisable">Turn off 2FA</button></div>'+
+      '<p class="mini" id="c2fa_msg" style="margin-top:8px;text-transform:none;letter-spacing:0"></p>';
+  } else {
+    el.innerHTML='<div><span class="badge">2FA is off</span></div>'+
+      '<button class="btn btn-amber" style="margin-top:12px" data-act="c2faSetup">Set up authenticator app</button>'+
+      '<p class="mini" id="c2fa_msg" style="margin-top:8px;text-transform:none;letter-spacing:0"></p>';
+  }
+}
+async function c2faSetup(){
+  var r=await api('/account/2fa/setup',{method:'POST'});
+  if(!r.ok){alert('Could not start 2FA setup.');return;}
+  var d=r.body||{};var el=document.getElementById('c_2fa');
+  var grouped=(d.secret||'').replace(/(.{4})/g,'$1 ').trim();
+  el.innerHTML='<div class="lbl">Add this account to your authenticator app</div>'+
+    '<p class="mut" style="font-size:13px;margin:6px 0">Scan the setup URI as a QR, or type the secret in manually, then enter the 6-digit code to confirm.</p>'+
+    '<div class="mini">Secret (manual entry)</div><input readonly value="'+esc(grouped)+'" class="mono" style="width:100%;margin-top:4px"/>'+
+    '<div class="mini" style="margin-top:10px">Setup URI (otpauth)</div><input readonly value="'+esc(d.otpauth_uri||'')+'" class="mono" style="width:100%;font-size:11px;margin-top:4px"/>'+
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">'+
+    '<input id="c2fa_code" inputmode="numeric" placeholder="6-digit code" style="width:130px"/>'+
+    '<input id="c2fa_pw" type="password" placeholder="password" style="min-width:150px"/>'+
+    '<button class="btn btn-amber" data-act="c2faEnable">Enable 2FA</button></div>'+
+    '<p class="mini" id="c2fa_msg" style="margin-top:8px;text-transform:none;letter-spacing:0"></p>';
+}
+async function c2faEnable(){
+  var code=(document.getElementById('c2fa_code')||{}).value||'';
+  var pw=(document.getElementById('c2fa_pw')||{}).value||'';
+  var msg=document.getElementById('c2fa_msg');
+  var r=await api('/account/2fa/enable',{method:'POST',body:JSON.stringify({code:code,password:pw})});
+  if(!r.ok){if(msg)msg.textContent=((r.body&&r.body.error&&r.body.error.message)||(r.body&&r.body.detail)||'Could not enable — check the code and password.');return;}
+  var codes=(r.body||{}).backup_codes||[];var el=document.getElementById('c_2fa');
+  el.innerHTML='<div><span class="badge ok">2FA is on</span></div>'+
+    '<div class="lbl" style="margin-top:12px">Recovery codes — save these now</div>'+
+    '<p class="mut" style="font-size:13px;margin:6px 0">Each works once if you lose your device. They are shown only this time.</p>'+
+    '<div class="panel" style="padding:12px;columns:2"><div class="mono" style="font-size:13px;line-height:1.9">'+
+    codes.map(function(x){return esc(x);}).join('<br>')+'</div></div>'+
+    '<button class="btn btn-ghost" style="margin-top:12px" data-act="cAccess">Done</button>';
+}
+async function c2faDisable(){
+  var pw=(document.getElementById('c2fa_dis_pw')||{}).value||'';
+  var code=(document.getElementById('c2fa_dis_code')||{}).value||'';
+  var msg=document.getElementById('c2fa_msg');
+  var r=await api('/account/2fa/disable',{method:'POST',body:JSON.stringify({password:pw,code:code})});
+  if(!r.ok){if(msg)msg.textContent=((r.body&&r.body.error&&r.body.error.message)||(r.body&&r.body.detail)||'Could not disable — check the password and code.');return;}
+  c2faLoad();
+}
+function cAuditBadge(el,integ){
+  if(!el)return;
+  if(integ&&integ.intact){el.innerHTML='<span class="badge ok">chain verified</span> '+integ.checked+' events, tamper-evident';}
+  else if(integ){el.innerHTML='<span class="badge" style="color:var(--bad);border-color:var(--bad)">chain broken</span> from #'+integ.first_broken_id;}
+  else{el.textContent='';}
+}
+function cAuditRows(events){
+  if(!events.length)return '<tr><td colspan=5 class="mut mono" style="text-align:center;padding:14px">No events yet.</td></tr>';
+  return events.map(function(e){
+    var d=e.detail; if(d&&typeof d==='object'){try{d=JSON.stringify(d);}catch(x){d='';}}
+    return '<tr><td data-l="When" class="mono" style="font-size:11px">'+cTs(e.at)+'</td>'+
+     '<td data-l="Action" class="mono">'+esc(e.action||'')+'</td>'+
+     '<td data-l="Target" class="mono" style="font-size:11px">'+esc(e.resource||e.target||'—')+'</td>'+
+     '<td data-l="Detail" class="mut" style="font-size:12px">'+esc(d||'')+'</td>'+
+     '<td data-l="IP" class="mono" style="font-size:11px">'+esc(e.ip||'—')+'</td></tr>';
+  }).join('');
+}
+async function cAudit(){
+  var r=((await api('/account/audit'))||{}).body||{};
+  document.getElementById('c_audit').innerHTML=cAuditRows(r.events||[]);
+  cAuditBadge(document.getElementById('c_audit_integrity'), r.integrity);
+}
+async function cOrgAudit(orgId){
+  var el=document.getElementById('c_team_audit');if(!el)return;
+  var r=((await api('/orgs/'+orgId+'/audit'))||{}).body||{};
+  el.innerHTML='<div class="lbl" style="margin-top:16px">Team audit log <span class="mut" id="c_team_audit_integ" style="font-weight:400;text-transform:none;letter-spacing:0"></span></div>'+
+    '<div class="panel" style="overflow:auto;margin-top:8px"><table class="tbl"><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead><tbody>'+
+    ((r.events||[]).length?(r.events||[]).map(function(e){
+      var d=e.detail; if(d&&typeof d==='object'){try{d=JSON.stringify(d);}catch(x){d='';}}
+      return '<tr><td data-l="When" class="mono" style="font-size:11px">'+cTs(e.at)+'</td>'+
+       '<td data-l="Actor" class="mono">'+esc(e.actor||'—')+'</td>'+
+       '<td data-l="Action" class="mono">'+esc(e.action||'')+'</td>'+
+       '<td data-l="Target" class="mono" style="font-size:11px">'+esc(e.resource||'—')+'</td>'+
+       '<td data-l="Detail" class="mut" style="font-size:12px">'+esc(d||'')+'</td></tr>';
+    }).join(''):'<tr><td colspan=5 class="mut mono" style="text-align:center;padding:14px">No events yet.</td></tr>')+
+    '</tbody></table></div>';
+  cAuditBadge(document.getElementById('c_team_audit_integ'), r.integrity);
+}
+async function cKeyCreate(){
+  var label=encodeURIComponent((document.getElementById('c_keylabel')||{}).value||'');
+  var days=Number((document.getElementById('c_keydays')||{}).value||7);
+  var scopes=encodeURIComponent((document.getElementById('c_keyscopes')||{}).value||'');
+  var q='days='+days+(label?'&label='+label:'')+(scopes?'&scopes='+scopes:'');
+  var r=await api('/create_api_key?'+q,{method:'POST'});
+  var out=document.getElementById('c_keyout');
+  if(r.ok){out.style.display='';out.innerHTML='<div class="lbl">New key — copy it now, it is shown once</div>'+
+    '<code class="mono" style="word-break:break-all;color:var(--teal)">'+esc(r.body.api_key)+'</code>';cAccess();}
+  else{alert('Could not create key.');}
+}
+async function cKeyRevoke(jti){
+  if(!confirm('Revoke this key? Any agent using it stops working.'))return;
+  var r=await api('/keys/'+jti+'/revoke',{method:'POST'});
+  if(r.ok)cAccess();else alert('Could not revoke.');
+}
+async function cNotifs(){
+  var ns=(((await api('/notifications'))||{}).body||{}).notifications||[];
+  document.getElementById('c_notifs').innerHTML=ns.length?ns.map(function(n){
+    return '<tr><td data-l="When" class="mono" style="font-size:11px">'+cTs(n.created_at)+'</td>'+
+     '<td data-l="Event" class="mono">'+esc(n.event_type||'')+'</td>'+
+     '<td data-l="Subject">'+esc(n.subject||'')+'</td>'+
+     '<td data-l="Status">'+cBadge(n.status)+'</td></tr>';
+    }).join(''):'<tr><td colspan=4 class="mut mono" style="text-align:center;padding:14px">No notifications.</td></tr>';
+}
+
+async function cSeller(){
+  var r=await api('/seller/dashboard');var el=document.getElementById('c_seller');if(!el)return;
+  if(!r.ok){el.innerHTML='<div class="csec"><div class="csec-b"><p class="mut" style="padding:12px 0">Could not load hosting data.</p></div></div>';return;}
+  var ns=(r.body||{}).nodes||[];
+  if(!ns.length){el.innerHTML='<div class="csec"><div class="csec-b" style="padding:16px"><div style="font-family:var(--disp);font-weight:600;color:var(--amber)">Become a host</div>'+
+    '<p class="mut" style="font-size:13.5px;margin:6px 0 12px">Turn an idle GPU into income — Petabyte rents it out, and you can also earn from spare disk. One agent per computer.</p>'+
+    '<a class="cbtn pri" href="/install">List your PC →</a></div></div>';return;}
+  var online=ns.filter(function(n){return n.online;}).length;
+  var earned=ns.reduce(function(a,n){return a+Number(n.earned_total||0);},0);
+  el.innerHTML='<div class="cmetrics">'+cMetric('Nodes',cInt(ns.length),online+' online')+cMetric('Online',cInt(online),'accepting jobs','pos')+cMetric('Earned',cD2(earned),'to date')+'</div>'+
+    '<section class="csec" style="margin-top:16px"><div class="csec-b" style="padding:14px"><p class="mut" style="font-size:13.5px">Manage nodes, spare-disk rental and payouts on your <a class="teal" href="/seller/payouts">earnings page →</a></p></div></section>';
+}
+
+// sidebar drawer (mobile) + command palette entries
+(function(){
+  var ham=document.getElementById('cham'),sb=document.getElementById('csidebar'),sc=document.getElementById('cscrim');
+  if(ham&&sb&&sc){
+    ham.addEventListener('click',function(){var open=!sb.classList.contains('open');sb.classList.toggle('open',open);sc.classList.toggle('on',open);});
+    sc.addEventListener('click',function(){sb.classList.remove('open');sc.classList.remove('on');});
+  }
+  var srch=document.querySelector('.csearch');
+  if(srch)srch.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();cPalette();}});
+  window.addEventListener('hashchange',function(){var h=(location.hash||'').replace('#','');if(CTABS.indexOf(h)>=0)cNav(h);});
+  try{if(window.PB_CMDS&&window.PB_CMDS.push){
+    PB_CMDS.push(
+      {t:'Console: Overview',h:'/console#overview',k:'dashboard home console'},
+      {t:'Launch compute',h:'/console#compute',k:'run job gpu launch new'},
+      {t:'Console: Jobs',h:'/console#jobs',k:'reservations bookings history'},
+      {t:'Console: Clusters',h:'/console#clusters',k:'distributed multi gpu torchrun'},
+      {t:'Wallet & billing',h:'/console#billing',k:'add funds deposit withdraw pay money'},
+      {t:'API keys',h:'/console#access',k:'token ci key developer'},
+      {t:'Teams',h:'/console#teams',k:'iam members org budget'},
+      {t:'Browse marketplace',h:'/marketplace',k:'gpu rent available'}
+    );
+  }}catch(e){}
+})();
+consoleLoad();
+</script>""")
 
 METRICS_HTML = _page("Petabyte — marketplace metrics",
     desc="Operations and investor metrics computed from real database queries: supply, utilization, GMV, take rate, buyer savings and job reliability. Demo data is clearly labelled.",
@@ -2935,9 +4508,12 @@ DEMO_HTML = _page("Petabyte — book a demo",
 (function(){var d=document.getElementById('d_date');if(d){var t=new Date();t.setMinutes(t.getMinutes()-t.getTimezoneOffset());d.min=t.toISOString().slice(0,10);}})();
 async function submitDemo(){
   var m=document.getElementById('d_msg');
+  var btn=document.querySelector('[data-act="submitDemo"]');
+  if(btn&&btn.disabled) return;                       // guard: no duplicate lead on double-click
   var name=(document.getElementById('d_name').value||'').trim();
   var email=(document.getElementById('d_email').value||'').trim();
   if(!name||!email){m.style.color='var(--warn)';m.textContent='Please add your name and email.';return;}
+  if(btn) btn.disabled=true;
   m.style.color='';m.textContent='Sending…';
   var payload={name:name,email:email,
     organization:(document.getElementById('d_org').value||'').trim(),
@@ -2948,13 +4524,218 @@ async function submitDemo(){
   try{
     var r=await fetch('/demo/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     var b=await r.json();
-    if(!r.ok){m.style.color='var(--warn)';m.textContent=(b.error&&b.error.message)||(b.detail)||'Could not send. Try emailing info@petabyte.market.';return;}
+    if(!r.ok){if(btn) btn.disabled=false;m.style.color='var(--warn)';
+      m.textContent=(b.error&&b.error.message)||(typeof b.detail==='string'?b.detail:'Please check your name and email, then try again.');return;}
     document.getElementById('demoform').innerHTML='<div style="text-align:center;padding:20px 10px">'+
       '<div class="mono" style="font-size:32px;color:var(--teal)">&#10003;</div>'+
       '<div style="font-family:var(--disp);font-weight:600;margin:8px 0 4px" data-ar="تم استلام الطلب">Request received</div>'+
       '<div class="mut" style="font-size:13.5px">'+b.message+'</div>'+
       (b.booking_url?('<a class="btn btn-amber" style="margin-top:14px" href="'+b.booking_url+'" target="_blank" rel="noopener" data-ar="اختر وقتاً يناسبك ←">Pick your time →</a>'):'')+
       '<div class="mini" style="margin-top:10px" data-ar="المرجع">Reference '+b.reference+'</div></div>';
-  }catch(e){m.style.color='var(--warn)';m.textContent='Network error. Try emailing info@petabyte.market.';}
+  }catch(e){if(btn) btn.disabled=false;m.style.color='var(--warn)';m.textContent='Network error. Try emailing info@petabyte.market.';}
 }
+</script>""")
+
+
+# ============================ MODELS — discover / download / manage (Hugging Face-grade UX) ============================
+_MODELS_CSS = """<style>
+.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-top:18px}
+.mcard{border:1px solid var(--hair);border-radius:12px;padding:15px 16px;background:var(--panel,#fff);cursor:pointer;transition:border-color .12s,transform .12s}
+.mcard:hover{border-color:var(--teal);transform:translateY(-1px)}
+.mcard h3{font-size:15px;margin:0 0 6px;word-break:break-word}
+.mrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.mtag{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--hair);color:var(--mut)}
+.mbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px}
+.mbar input,.mbar select{padding:9px 11px;border:1px solid var(--hair);border-radius:9px;background:transparent;color:inherit;font:inherit}
+.mfiles td{font-size:12.5px}
+.mprog{height:12px;border-radius:999px;background:var(--hair);overflow:hidden}
+.mprog>i{display:block;height:100%;background:linear-gradient(90deg,var(--teal),var(--amber));width:0}
+.cbar{display:inline-block;background:var(--code,#0b1020);color:#cfe;border-radius:8px;padding:10px 12px;font-family:var(--mono,monospace);font-size:12.5px}
+.gfit{color:var(--teal)}.gtight{color:var(--amber)}.gbad{color:#e5484d}
+</style>"""
+
+_MODELS_JS_HELPERS = """
+function mBytes(n){n=Number(n||0);if(!n)return '';var u=['B','KB','MB','GB','TB'],i=0;while(n>=1024&&i<u.length-1){n/=1024;i++;}return (n>=100||i===0?n.toFixed(0):n.toFixed(1))+' '+u[i];}
+function mParams(n){n=Number(n||0);if(!n)return '';if(n>=1e9)return (n%1e9?(n/1e9).toFixed(1):(n/1e9).toFixed(0))+'B';if(n>=1e6)return (n/1e6).toFixed(0)+'M';return ''+n;}
+function mCompat(level){var map={good:['✓ Runs','gfit'],tight:['~ Tight','gtight'],insufficient:['✗ Too big','gbad'],unknown:['? Unknown','gtight']};var x=map[level]||map.unknown;return '<span class="'+x[1]+'">'+x[0]+'</span>';}
+function mMachine(hw){if(!hw)return '';var g=hw.gpu_name||((hw.cpu_count||'?')+' CPU');var v=hw.vram_gb?(' · '+hw.vram_gb+' GB VRAM'):'';var r=hw.ram_gb?(' · '+hw.ram_gb+' GB RAM'):'';return 'This machine: '+esc(g)+v+r;}
+"""
+
+MODELS_HTML = _page("Petabyte — Models",
+    desc="Discover and install open AI models with one command or one click — Hugging Face-grade convenience, provider-independent, hardware-aware.",
+    path="/models", body=_MODELS_CSS + """
+<div class="wrap" style="padding:40px 24px 60px">
+  <div id="pbtestmode"></div>
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px">
+    <div>
+      <h1 style="margin:0">Models</h1>
+      <p class="mut" style="margin:6px 0 0;max-width:60ch">Discover open models and install them in one action. Petabyte figures out the compatible files, verifies checksums, resumes broken downloads, and caches everything locally — you never touch a storage URL.</p>
+    </div>
+    <a class="btn btn-teal" href="/models/installed">Installed models →</a>
+  </div>
+  <div id="m_machine" class="mut mini" style="margin-top:12px"></div>
+  <div class="mbar">
+    <input id="m_q" placeholder="Search models (e.g. llama, qwen, code 7b)" style="flex:1;min-width:220px"/>
+    <select id="m_license"><option value="">any license</option><option>apache-2.0</option><option>mit</option><option>llama3.1</option><option>gemma</option></select>
+    <input id="m_maxparams" type="number" min="1" placeholder="max params (B)" style="width:150px"/>
+    <label class="mini" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="m_fits"/> fits my machine</label>
+    <button class="btn btn-amber" id="m_go">Search</button>
+  </div>
+  <div id="m_grid" class="mgrid"><p class="mut" style="padding:20px 0">Loading models…</p></div>
+</div>
+<script>
+""" + _MODELS_JS_HELPERS + """
+var M_HW=null;
+async function mLoad(q){
+  var grid=document.getElementById('m_grid');grid.innerHTML='<p class="mut" style="padding:20px 0">Loading…</p>';
+  var qs='?q='+encodeURIComponent(q||'');
+  var lic=document.getElementById('m_license').value;if(lic)qs+='&license='+encodeURIComponent(lic);
+  var mp=document.getElementById('m_maxparams').value;if(mp)qs+='&max_params='+(Number(mp)*1e9);
+  var r=await api('/api/models/search'+qs);
+  if(!r.ok){grid.innerHTML='<p class="mut">Search is unavailable right now.</p>';return;}
+  M_HW=r.body.machine;document.getElementById('m_machine').textContent=mMachine(M_HW);
+  var rows=r.body.models||[];
+  var fits=document.getElementById('m_fits').checked;
+  if(fits)rows=rows.filter(function(x){return x.compatibility==='good'||x.compatibility==='tight';});
+  if(!rows.length){grid.innerHTML='<p class="mut" style="padding:20px 0">No models found.</p>';return;}
+  grid.innerHTML=rows.map(function(x){
+    var badges=(x.installed?'<span class="mtag" style="color:var(--teal);border-color:var(--teal)">Installed</span>':'')+
+      '<span class="mtag">'+mCompat(x.compatibility)+'</span>';
+    return '<div class="mcard" data-id="'+esc(x.id)+'" onclick="mOpen(this)">'+
+      '<h3>'+esc(x.id)+'</h3>'+
+      '<div class="mut mini">'+esc(x.architecture||x.pipeline||'model')+'</div>'+
+      '<div class="mrow">'+(x.parameters?'<span class="mtag">'+mParams(x.parameters)+' params</span>':'')+
+        (x.license?'<span class="mtag">'+esc(x.license)+'</span>':'')+
+        (x.downloads?'<span class="mtag">'+Number(x.downloads).toLocaleString()+' pulls</span>':'')+'</div>'+
+      '<div class="mrow">'+badges+'</div></div>';
+  }).join('');
+}
+function mOpen(el){location.href='/models/'+el.getAttribute('data-id');}
+document.getElementById('m_go').addEventListener('click',function(){mLoad(document.getElementById('m_q').value);});
+document.getElementById('m_q').addEventListener('keydown',function(e){if(e.key==='Enter')mLoad(this.value);});
+document.getElementById('m_fits').addEventListener('change',function(){mLoad(document.getElementById('m_q').value);});
+mLoad('');
+</script>""")
+
+
+MODEL_DETAIL_HTML = _page("Petabyte — Model",
+    desc="Model details, hardware compatibility, files and one-click install on Petabyte.",
+    path="/models", body=_MODELS_CSS + """
+<div class="wrap" style="padding:34px 24px 60px">
+  <div id="pbtestmode"></div>
+  <a class="mini teal" href="/models">← all models</a>
+  <div id="m_head" style="margin-top:10px"><p class="mut">Loading…</p></div>
+  <div id="m_prog" style="display:none;margin:18px 0">
+    <div class="mini" id="m_prog_label" style="margin-bottom:6px"></div>
+    <div class="mprog"><i id="m_prog_bar"></i></div>
+    <div class="mini mut" id="m_prog_sub" style="margin-top:6px"></div>
+  </div>
+  <div id="m_msg" class="mini" style="margin-top:10px"></div>
+  <div id="m_body"></div>
+</div>
+<script>
+""" + _MODELS_JS_HELPERS + """
+var MID=decodeURIComponent(location.pathname.replace(/^\\/models\\//,'').replace(/\\/$/,''));
+var M_JOB=null;
+function setMsg(t,cls){var m=document.getElementById('m_msg');m.textContent=t||'';m.className='mini '+(cls||'');}
+async function mInfo(){
+  var head=document.getElementById('m_head');
+  var r=await api('/api/models/'+MID);
+  if(!r.ok){head.innerHTML='<h1>'+esc(MID)+'</h1><p class="mut">'+esc((r.body&&r.body.error&&r.body.error.message)||'Could not load this model.')+'</p>';return;}
+  var m=r.body.manifest, comp=r.body.compatibility, installed=r.body.installed;
+  var hw=comp.machine||{};
+  var dl=installed
+    ? '<button class="btn btn-teal" id="m_rm" onclick="mRemove()">Remove</button> <span class="teal mini">✓ Installed</span>'
+    : '<button class="btn btn-amber" id="m_dl" onclick="mPull()">Download model</button>';
+  head.innerHTML='<h1 style="margin:6px 0 4px">'+esc(m.id)+'</h1>'+
+    '<div class="mut">'+[m.parameters?mParams(m.parameters)+' params':'',esc(m.architecture||''),esc(m.format||''),esc(m.license||''),m.total_size?mBytes(m.total_size):''].filter(Boolean).join(' · ')+'</div>'+
+    '<div style="margin:14px 0">'+dl+'</div>'+
+    '<div class="panel" style="padding:12px 14px;max-width:560px"><b>Compatibility</b> '+mCompat(comp.level)+
+      '<div class="mini mut" style="margin-top:4px">'+esc(mMachine(hw))+'</div>'+
+      (comp.reasons||[]).map(function(x){return '<div class="mini mut">• '+esc(x)+'</div>';}).join('')+
+      (comp.alternatives&&comp.alternatives.length?('<div class="mini" style="margin-top:6px">Lighter options: '+comp.alternatives.map(function(a){return esc(a.quantization)+' (~'+a.vram_gb+' GB)';}).join(' · ')+'</div>'):'')+
+    '</div>';
+  var reqs=m.requirements||{};
+  var files=(m.files||[]).map(function(f){return '<tr><td class="mono">'+esc(f.path)+'</td><td class="mono">'+mBytes(f.size)+'</td><td>'+(f.sha256?'<span class="teal">sha256</span>':'<span class="mut">—</span>')+'</td></tr>';}).join('');
+  var tr=m.trust||{};
+  document.getElementById('m_body').innerHTML=
+    '<h2 style="margin-top:22px">Hardware requirements</h2>'+
+    '<p class="mut">~'+(reqs.vram_gb||'?')+' GB VRAM · ~'+(reqs.ram_gb||'?')+' GB RAM · '+(reqs.disk_gb||'?')+' GB disk'+(m.context_length?(' · context '+m.context_length):'')+'</p>'+
+    '<h2 style="margin-top:22px">Files ('+(m.files||[]).length+')</h2>'+
+    '<div class="panel" style="overflow:auto"><table class="tbl mfiles"><thead><tr><th>File</th><th>Size</th><th>Verify</th></tr></thead><tbody>'+files+'</tbody></table></div>'+
+    '<h2 style="margin-top:22px">Source &amp; trust</h2>'+
+    '<p class="mut">source: '+esc(m.source||'')+' · '+(tr.source_verified?'<span class="teal">verified source</span>':'<span class="amber">unverified source</span>')+' · '+(tr.hashed?'<span class="teal">weights hash-verified</span>':'<span class="amber">weights not hash-verified</span>')+'</p>'+
+    '<p class="mini mut">Petabyte never runs downloaded repository code. Remote code (trust_remote_code) is off by default.</p>';
+}
+async function mPull(){
+  var btn=document.getElementById('m_dl');if(btn)btn.disabled=true;setMsg('');
+  var r=await api('/api/models/pull',{method:'POST',body:JSON.stringify({id:MID,force:true})});
+  if(r.status===401){setMsg('Please sign in to install a model on this node.','amber');if(btn)btn.disabled=false;return;}
+  if(r.status===503){showCli();if(btn)btn.disabled=false;return;}
+  if(!r.ok){setMsg((r.body&&r.body.error&&r.body.error.message)||'Could not start the download.','amber');if(btn)btn.disabled=false;return;}
+  M_JOB=r.body.job_id;document.getElementById('m_prog').style.display='';pollJob(M_JOB);
+}
+function showCli(){
+  setMsg('Server-side install is disabled on this node. Install locally with the CLI:','amber');
+  document.getElementById('m_prog').style.display='none';
+  document.getElementById('m_body').insertAdjacentHTML('afterbegin','<div class="cbar" style="margin:8px 0 4px">petabyte model pull '+esc(MID)+'</div>');
+}
+async function pollJob(jid){
+  var bar=document.getElementById('m_prog_bar'),lab=document.getElementById('m_prog_label'),sub=document.getElementById('m_prog_sub');
+  var t=setInterval(async function(){
+    var r=await api('/api/models/downloads/'+jid);
+    if(!r.ok){clearInterval(t);return;}
+    var j=r.body;
+    bar.style.width=(j.percent||0)+'%';
+    lab.textContent=(j.status==='done'?'✓ Ready':'Downloading '+(j.file||''))+' — '+(j.percent||0)+'%';
+    sub.textContent=mBytes(j.downloaded)+' / '+mBytes(j.total)+' · '+(j.files_done||0)+'/'+(j.files_total||0)+' files'+(j.cache_hits?(' · '+j.cache_hits+' cached'):'');
+    if(['done','error','gated','incompatible','busy'].indexOf(j.status)>=0){
+      clearInterval(t);
+      if(j.status==='done'){setMsg('✓ Installed and verified.','teal');mInfo();}
+      else{setMsg(j.error||j.message||'Download failed.','amber');}
+    }
+  },700);
+}
+async function mRemove(){
+  if(!confirm('Remove '+MID+' from this node?'))return;
+  var r=await api('/api/models/'+MID,{method:'DELETE'});
+  if(!r.ok){setMsg((r.body&&r.body.error&&r.body.error.message)||'Could not remove.','amber');return;}
+  setMsg('Removed.','teal');mInfo();
+}
+mInfo();
+</script>""")
+
+
+MODELS_INSTALLED_HTML = _page("Petabyte — Installed models",
+    desc="Models installed on this Petabyte node, with sizes, cache usage and removal.",
+    path="/models/installed", body=_MODELS_CSS + """
+<div class="wrap" style="padding:40px 24px 60px">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+    <h1 style="margin:0">Installed models</h1>
+    <a class="btn btn-amber" href="/models">＋ Discover models</a>
+  </div>
+  <div id="mi_cache" class="mut mini" style="margin-top:10px"></div>
+  <div class="panel" style="overflow:auto;margin-top:14px"><table class="tbl"><thead><tr><th>Model</th><th>Size</th><th>Format</th><th>Status</th><th></th></tr></thead><tbody id="mi_rows"><tr><td colspan=5 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+</div>
+<script>
+""" + _MODELS_JS_HELPERS + """
+async function miLoad(){
+  var r=await api('/api/models/installed');
+  var tb=document.getElementById('mi_rows');
+  if(!r.ok){tb.innerHTML='<tr><td colspan=5 class="mut">Could not load.</td></tr>';return;}
+  var rows=r.body.models||[];
+  if(!rows.length){tb.innerHTML='<tr><td colspan=5 class="mut mono" style="text-align:center;padding:16px">No models installed. <a class="teal" href="/models">Discover models →</a></td></tr>';}
+  else{tb.innerHTML=rows.map(function(x){
+    return '<tr><td class="mono">'+esc(x.id)+'</td><td class="mono">'+mBytes(x.total_size)+'</td><td class="mono">'+esc(x.format||'—')+'</td>'+
+      '<td>'+(x.installed?'<span class="teal">Ready</span>':'<span class="amber">incomplete</span>')+'</td>'+
+      '<td><button class="btn btn-teal" data-mid="'+esc(x.id)+'" onclick="miRemove(this)">Remove</button></td></tr>';
+  }).join('');}
+}
+async function miRemove(el){
+  var id=el.getAttribute('data-mid');
+  if(!confirm('Remove '+id+'?'))return;
+  var r=await api('/api/models/'+id,{method:'DELETE'});
+  miLoad();
+}
+miLoad();
 </script>""")

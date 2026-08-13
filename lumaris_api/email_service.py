@@ -16,7 +16,7 @@ Design goals
 Usage
 -----
     svc = get_email_service()
-    svc.send_welcome("user@example.com", name="Ada", dashboard_url="https://…/app")
+    svc.send_welcome("user@example.com", name="Ada", dashboard_url="https://…/console")
 """
 from __future__ import annotations
 

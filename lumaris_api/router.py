@@ -134,11 +134,24 @@ def select_plan(db, intent: dict, *, _with_caches: bool = False):
     redundancy = max(1, int(intent.get("redundancy", 1)))
     hours = max(1, int(intent.get("hours", 1)))
     ranked = score_candidates(gather_candidates(db, intent))
-    selected, used_owners = [], set()
+    # Anti-affinity — how we spread the N replicas/ranks:
+    #   "owner" (default): one node per PROVIDER (distinct user_id). This is real redundancy for
+    #     FAN-OUT jobs — replicas in different failure domains, so one seller going dark can't take
+    #     out the whole job.
+    #   "spec":  one node per MACHINE (distinct spec id). A single user can run MANY computers —
+    #     each computer runs its own agent with its own API key and its own spec — so a DISTRIBUTED
+    #     cluster only needs N distinct MACHINES; they may all belong to one account (a home lab)
+    #     or several. gather_candidates already yields one entry per spec, so distinct specs are
+    #     distinct machine registrations. (Two agents on one physical box are two specs and are
+    #     treated as two machines; running one agent per computer is the supported layout.)
+    anti = (intent.get("anti_affinity") or "owner").lower()
+    dedup_key = (lambda c: c["spec"].id) if anti == "spec" else (lambda c: c["owner_id"])
+    selected, used = [], set()
     for c in ranked:
-        if c["owner_id"] in used_owners:
-            continue                       # one replica per provider = true redundancy
-        selected.append(c); used_owners.add(c["owner_id"])
+        k = dedup_key(c)
+        if k in used:
+            continue
+        selected.append(c); used.add(k)
         if len(selected) >= redundancy:
             break
 

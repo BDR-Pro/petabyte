@@ -2,8 +2,15 @@ name: Release Desktop Agent (.exe)
 
 # Cut a release: bump VERSION in "desktop-app/version.py", then
 #   git tag v1.0.1 && git push origin v1.0.1
-# This builds the exe on Windows and attaches it to the GitHub Release for the tag.
-# Running installs auto-update from that release.
+# This builds the exe on Windows, SIGNS it, and attaches the exe + its signed manifest to the
+# GitHub Release for the tag. Running installs auto-update from that release ONLY when the
+# download verifies against the pinned release key.
+#
+# One-time setup to enable signed auto-update (see docs/RELEASE_SIGNING.md):
+#   1. Run the "Generate Release Signing Key" workflow (release-keygen.yml).
+#   2. Repo → Settings → Secrets → Actions → new secret   RELEASE_SIGNING_KEY   = the private PEM.
+#   3. Repo → Settings → Variables → Actions → new variable PETABYTE_RELEASE_PUBKEY = the public b64.
+# Until both are set the exe still builds and publishes, but auto-update is fail-closed (refused).
 
 on:
   push:
@@ -28,10 +35,41 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
+
+      # Bake the PUBLIC release key into the binary so the updater can verify auto-updates.
+      # PETABYTE_RELEASE_PUBKEY is a repo VARIABLE (a public key — safe to expose). If unset,
+      # the exe still builds but refuses auto-updates (fail-closed).
+      - name: Pin release public key
+        env:
+          PETABYTE_RELEASE_PUBKEY: ${{ vars.PETABYTE_RELEASE_PUBKEY }}
+        run: python pin_pubkey.py
+
       - name: Build executable
         run: python build_exe.py
+
+      # Sign the exe with the offline release PRIVATE key (a repo SECRET). Produces
+      # PetabyteAgent.exe.manifest.json, which the updater verifies before applying. If the
+      # secret is unset the step no-ops (no manifest -> auto-update stays fail-closed).
+      - name: Sign the release
+        shell: bash
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::warning::RELEASE_SIGNING_KEY not set — publishing an UNSIGNED exe; auto-update stays fail-closed."
+            exit 0
+          fi
+          umask 077
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > release_ed25519.pem
+          python ../scripts/sign_release.py --key release_ed25519.pem \
+            --version "${GITHUB_REF_NAME}" --exe dist/PetabyteAgent.exe --out-dir dist
+          rm -f release_ed25519.pem
+
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: "desktop-app/dist/PetabyteAgent.exe"
-          fail_on_unmatched_files: true
+          # The manifest is only present when signing ran; publish whatever exists.
+          files: |
+            desktop-app/dist/PetabyteAgent.exe
+            desktop-app/dist/PetabyteAgent.exe.manifest.json
+          fail_on_unmatched_files: false

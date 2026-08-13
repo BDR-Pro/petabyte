@@ -8,7 +8,7 @@ your account a seller). The key's account must already be a seller.
 
 Env:
   PETABYTE_API_URL, PETABYTE_API_KEY               (required)
-  PRICE_PER_HOUR (default 1.0), UNITS (1), MAX_HOURS (24)
+  PRICE_PER_HOUR (unset => auto-priced from this GPU's benchmark), UNITS (1), MAX_HOURS (24)
   GPU_MODEL/GPU_COUNT/VRAM_GB                       (override auto-detect)
   AGENT_ENV (default /etc/petabyte/agent.env), PETABYTE_AGENT_KEY
 """
@@ -47,6 +47,41 @@ def detect():
     return cpu, ram, gpu_model, gpu_count, vram
 
 
+def resolve_price(client, gpu_model):
+    """Decide the hourly listing price for this node.
+
+    The seller's explicit PRICE_PER_HOUR always wins. When it is unset — the common
+    case, because onboarding is meant to be one command — we do NOT guess a flat rate.
+    We ask the server for a fair, benchmark-anchored suggestion for the GPU we just
+    detected (the same number the /install page shows), so a 4090 never lists at the
+    same price as a 2060. Only if that call cannot be reached do we fall back to a
+    labelled placeholder, and we say so out loud.
+
+    Returns (price: float, basis: str).
+    """
+    raw = (os.getenv("PRICE_PER_HOUR") or "").strip()
+    if raw:
+        try:
+            v = float(raw)
+            if v > 0:
+                return v, "seller-set"
+        except ValueError:
+            pass
+        print(f"PRICE_PER_HOUR={raw!r} is not a positive number — ignoring it and auto-pricing.")
+    try:
+        r = client.get("/pricing/suggest", params={"gpu_model": gpu_model or ""})
+        if r.status_code == 200:
+            body = r.json()
+            p = float(body.get("suggested_price") or 0)
+            if p > 0:
+                return p, "auto: " + str(body.get("basis") or "benchmark-anchored")
+    except Exception as e:  # network/parse — never let pricing block onboarding
+        print(f"could not fetch a benchmark-anchored price ({e}); using a placeholder.")
+    print("WARNING: no price set and the pricing service was unreachable — listing at "
+          "$1.00/hr as a placeholder. Set PRICE_PER_HOUR or edit your listing to fix it.")
+    return 1.0, "fallback (pricing service unreachable)"
+
+
 def main():
     API = os.environ["PETABYTE_API_URL"]
     try:
@@ -57,9 +92,10 @@ def main():
     h = {"X-API-KEY": KEY}
     provider = os.getenv("PROVIDER", socket.gethostname() or "petabyte-node")
     with httpx.Client(base_url=API, timeout=20) as c:
+        price, price_basis = resolve_price(c, gpu)
         spec = c.post("/register_specs", headers=h, json={
             "cpu": cpu, "ram": ram, "duration": int(os.getenv("MAX_HOURS", "24")),
-            "price_per_hour": float(os.getenv("PRICE_PER_HOUR", "1.0")),
+            "price_per_hour": price,
             "provider": provider, "gpu_model": gpu, "gpu_count": gc, "vram_gb": vram,
             "units": int(os.getenv("UNITS", "1"))})
         if spec.status_code == 403:
@@ -85,7 +121,8 @@ def main():
                 f"PETABYTE_SPEC_ID={spec_id}\n"
                 f"PETABYTE_AGENT_KEY={key_path}\n")
     os.chmod(env_path, 0o600)
-    print(f"provisioned spec {spec_id} (gpu={gpu} x{gc}, {cpu}cpu/{ram}gb); env -> {env_path}")
+    print(f"provisioned spec {spec_id} (gpu={gpu} x{gc}, {cpu}cpu/{ram}gb) "
+          f"at ${price:.2f}/hr [{price_basis}]; env -> {env_path}")
 
 
 if __name__ == "__main__":

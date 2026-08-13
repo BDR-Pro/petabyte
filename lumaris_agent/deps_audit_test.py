@@ -33,8 +33,12 @@ EXCLUDE = {"build_exe.py", "setup.py"}
 # import-name -> pip distribution name, when they differ.
 ALIASES = {"dotenv": "python-dotenv"}
 # Optional imports that are guarded (try/except) so the agent runs without them; not required
-# in the runtime manifest. opentelemetry tracing is best-effort telemetry.
-OPTIONAL = {"opentelemetry"}
+# in the runtime manifest.
+#   * opentelemetry — best-effort tracing (agent_telemetry.py).
+#   * torch — the GPU FP16 authenticity benchmark (_measure_fp16_tflops) and NCCL distributed
+#     training run on the SELLER's GPU box, which ships torch itself; the agent detects its
+#     absence (returns None / falls back) and never lists it as a control-plane dependency.
+OPTIONAL = {"opentelemetry", "torch"}
 
 
 def _runtime_files():

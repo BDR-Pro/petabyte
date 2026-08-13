@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 import db as dbmod
 from marketplace_insight import _SETTLED, TX_FAILED
@@ -57,6 +57,19 @@ def _po_scope_filters(scope: str):
     if scope == "demo":
         return [PO.is_demo == True]                            # noqa: E712
     return []
+
+
+def _rd_scope_filters(db, scope: str):
+    """RoutingDecision scope. Routing is PRE-payment intent, so it carries no TEST/LIVE mode —
+    real vs test cannot be split on it. But demo-SEEDED decisions MUST be excluded from the real
+    and test scopes, or the investor view's demand / unfulfilled-demand / fill-rate would be
+    inflated by demo browsing. We scope by the deciding user's demo flag (anonymous = non-demo)."""
+    if scope == "all":
+        return []
+    demo_ids = [r[0] for r in db.query(U.id).filter(U.is_demo == True).all()]  # noqa: E712
+    if scope == "demo":
+        return [RD.user_id.in_(demo_ids)] if demo_ids else [RD.id == -1]   # none -> empty set
+    return [or_(RD.user_id.is_(None), RD.user_id.notin_(demo_ids))] if demo_ids else []
 
 
 def _rate(n, d):
@@ -125,13 +138,15 @@ def funding_snapshot(db, *, scope: str = "real", now=None) -> dict:
     avail_units = sum((s.available_units or 0) for s in online)
     total_units = sum((s.total_units or 0) for s in online)
     busy_units = max(0, total_units - avail_units)
-    gpu_hours_available = sum((s.available_units or 0) * (s.duration or 0) / 3600.0 for s in online)
+    # SellerSpec.duration is already in HOURS (max rentable hours), so do NOT divide by 3600.
+    gpu_hours_available = sum((s.available_units or 0) * (s.duration or 0) for s in online)
     active_gpus_online = len(online)
 
-    # ---- unfulfilled demand (RoutingDecision; global — no mode/demo split on this signal) ----
-    rd_total = int(db.query(func.count(RD.id)).scalar() or 0)
+    # ---- unfulfilled demand (RoutingDecision; demo excluded from real/test — see helper) ----
+    rd_filt = _rd_scope_filters(db, scope)
+    rd_total = int(db.query(func.count(RD.id)).filter(*rd_filt).scalar() or 0)
     rd_unfulfilled = int(db.query(func.count(RD.id))
-                         .filter(RD.fulfilled == False).scalar() or 0)  # noqa: E712
+                         .filter(RD.fulfilled == False, *rd_filt).scalar() or 0)  # noqa: E712
 
     # ---- retention / repeat (activity cohorts from captured-tx dates) ----
     repeat = _repeat_and_retention(db, filt, now)

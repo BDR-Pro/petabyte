@@ -1,0 +1,44 @@
+name: Generate Release Signing Key
+
+# One-time (or rotation) helper to create the Ed25519 key that signs desktop-agent releases —
+# from the GitHub UI, no terminal needed. Run it from the Actions tab (Run workflow).
+#
+# It prints the PUBLIC key to the log (safe) and uploads the PRIVATE key as a 1-day, access-
+# controlled artifact (NEVER printed). Then:
+#   1. Download the "release-signing-key" artifact, open release_ed25519.pem.
+#   2. Settings → Secrets and variables → Actions → Secrets → New: RELEASE_SIGNING_KEY = that PEM.
+#   3. Settings → Secrets and variables → Actions → Variables → New: PETABYTE_RELEASE_PUBKEY = the
+#      base64 public key printed in the log.
+#   4. DELETE the artifact (the private key must live only in the secret, offline).
+# See docs/RELEASE_SIGNING.md. Rotating the key invalidates auto-update for older installs until
+# they are reinstalled from a release signed by the new key.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keygen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install cryptography
+      - name: Generate Ed25519 release key
+        run: |
+          mkdir -p out
+          python scripts/sign_release.py --gen-key out/release_ed25519.pem | tee out/PUBKEY.txt
+          echo ""
+          echo "::notice::Copy the base64 PUBLIC key above into repo variable PETABYTE_RELEASE_PUBKEY,"
+          echo "::notice::download the artifact for the PRIVATE key -> secret RELEASE_SIGNING_KEY, then DELETE the artifact."
+      - name: Upload PRIVATE key (delete after copying into the secret)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-signing-key
+          path: out/release_ed25519.pem
+          retention-days: 1
+          if-no-files-found: error

@@ -9,6 +9,48 @@ variables:
     scope:
     - platform
     description: Comma-separated admin usernames/emails.
+  AFFILIATE_AMAZON_TAG:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  AFFILIATE_BACKBLAZE_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  AFFILIATE_COINBASE_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  AFFILIATE_ECOFLOW_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  AFFILIATE_NEWEGG_WRAP:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  AFFILIATE_PCPARTPICKER_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  AFFILIATE_WASABI_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   AGENT_TELEMETRY_ENABLED:
     required: false
     default: 'true'
@@ -19,6 +61,25 @@ variables:
     - 'true'
     - 'false'
     format: bool
+  AGENT_VPN_ADDR:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: This node's cluster-reachable (VPN) address advertised to peer ranks at rendezvous. Auto-detected
+      from the interface if unset.
+  AGENT_VPN_ENABLED:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: ''
+  AGENT_WG_DIR:
+    required: false
+    default: /etc/wireguard
+    scope:
+    - platform
+    description: ''
   ALLOWED_ORIGINS:
     required: false
     default: null
@@ -49,9 +110,33 @@ variables:
     scope:
     - platform
     description: ''
+  BACKUP_DUMP_TIMEOUT_S:
+    required: false
+    default: '1800'
+    scope:
+    - platform
+    description: ''
+  BACKUP_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
   BACKUP_RESCHEDULE_GRACE_S:
     required: false
     default: '900'
+    scope:
+    - platform
+    description: ''
+  BACKUP_RETENTION:
+    required: false
+    default: '30'
+    scope:
+    - platform
+    description: ''
+  BACKUP_S3_PREFIX:
+    required: false
+    default: db-backups
     scope:
     - platform
     description: ''
@@ -81,6 +166,12 @@ variables:
     scope:
     - platform
     description: ''
+  CIRCLE_PAYOUTS_ENABLED:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: ''
   CONNECT_REFRESH_URL:
     required: false
     default: null
@@ -95,6 +186,30 @@ variables:
     - platform
     description: Absolute Stripe Connect onboarding return URL; falls back to PUBLIC_BASE_URL when unset.
     format: url_or_empty
+  DATA_API_FREE_CALLS_MONTH:
+    required: false
+    default: '100'
+    scope:
+    - platform
+    description: ''
+  DATA_API_PRICE_PER_1K:
+    required: false
+    default: '0.50'
+    scope:
+    - platform
+    description: ''
+  DATA_API_SANDBOX_KEY:
+    required: false
+    default: pk_sandbox_petabyte_dev
+    scope:
+    - platform
+    description: ''
+  DATA_SNAPSHOT_INTERVAL_S:
+    required: false
+    default: '3600'
+    scope:
+    - platform
+    description: ''
   DEFAULT_LANDING_VIDEO_ID:
     required: false
     default: UUSWYaxboDA
@@ -108,6 +223,68 @@ variables:
     - deployment
     description: Rollout gate. When 'true' the deploy generates the server env from GitHub config and
       pushes it; until then deploys stay code-only. Flip to true after entering all Secrets.
+  DISK_DATA_DIR:
+    required: false
+    default: /var/lib/petabyte/disk
+    scope:
+    - gpu
+    description: Host dir where a storage node keeps its data (per-node subdir).
+  DISK_PAYOUT_WALLET:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: "Petabyte's platform storage wallet set on every disk node (earnings pool centrally,\
+      \ credited per node \u2014 no per-seller wallet)."
+  DISK_PROVIDER:
+    required: false
+    default: storj
+    scope:
+    - platform
+    description: Default storage-network adapter for disk-rental reconciliation (storj|btfs|sia).
+    format: string
+  DISK_REFERENCE_USD_PER_TB_MONTH:
+    required: false
+    default: '1.5'
+    scope:
+    - platform
+    description: Net $/TB/month reference for the pre-commit disk-rental earnings estimate.
+    format: float
+  DISK_RENTAL_ENABLED:
+    required: false
+    default: 'false'
+    scope:
+    - gpu
+    description: 'Operator opt-in: allow this machine to rent spare disk to a storage network.'
+    format: bool
+  DIST_RENDEZVOUS_PORT:
+    required: false
+    default: '29500'
+    scope:
+    - gpu
+    description: Port this rank advertises/binds for cluster rendezvous (torchrun master port).
+    format: int
+  DIST_RENDEZVOUS_TIMEOUT:
+    required: false
+    default: '300'
+    scope:
+    - gpu
+    description: Seconds a joining rank waits for the master to appear before failing (gang).
+    format: int
+  DIST_SELFTEST_DIM:
+    required: false
+    default: '8'
+    scope:
+    - gpu
+    description: Vector length for the built-in cluster all-reduce self-test.
+    format: int
+  DIST_SELFTEST_TIMEOUT:
+    required: false
+    default: '180'
+    scope:
+    - gpu
+    description: Seconds the built-in all-reduce self-test waits for all ranks.
+    format: int
   DROPLET_HOST:
     required: true
     default: null
@@ -126,6 +303,56 @@ variables:
     scope:
     - deployment
     description: 'Deploy SSH user (shared by platform + observability deploys). Non-secret: lives in ENV_VARS.'
+  E2E_ADMIN_USERNAME:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e admin login (TEST account).
+  E2E_BASE_URL:
+    required: false
+    default: https://test.petabyte.market
+    scope:
+    - ci
+    description: Target site for the browser-e2e workflow (TEST only; the suite aborts if it detects LIVE
+      mode).
+    format: url
+  E2E_BUYER_B_USERNAME:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e second buyer (cross-user isolation, TEST).
+  E2E_BUYER_USERNAME:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e funded-buyer login (TEST account).
+  E2E_BUYER_ZERO_USERNAME:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e zero-balance-buyer login (TEST).
+  E2E_SELLER_B_USERNAME:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e second seller (isolation, TEST).
+  E2E_SELLER_USERNAME:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e seller login (TEST account).
+  EARNINGS_HOLD_HOURS:
+    required: false
+    default: '24'
+    scope:
+    - platform
+    description: ''
   EMAIL_FROM:
     required: false
     default: no-reply@petabyte.market
@@ -318,6 +545,12 @@ variables:
     - platform
     description: Seconds before a silent node is reaped.
     format: int
+  HF_ENDPOINT:
+    required: false
+    default: https://huggingface.co
+    scope:
+    - platform
+    description: ''
   IDLE_MINING:
     required: false
     default: 'false'
@@ -325,6 +558,18 @@ variables:
     - gpu
     description: Enable idle NiceHash mining when no paid job is running.
     format: bool
+  INSTANT_PAYOUT_FEE_MIN:
+    required: false
+    default: '0.50'
+    scope:
+    - platform
+    description: ''
+  INSTANT_PAYOUT_FEE_PCT:
+    required: false
+    default: '0.015'
+    scope:
+    - platform
+    description: ''
   JOB_POLL_INTERVAL:
     required: false
     default: '5'
@@ -416,6 +661,19 @@ variables:
     description: 'Max concurrent paid jobs per GPU node (must stay bounded). (reserved: standardized in
       GitHub config).'
     format: int
+  MAX_DISK_ALLOC_GB:
+    required: false
+    default: '100000'
+    scope:
+    - platform
+    description: Hard ceiling on how much disk one node may pledge (safety bound).
+    format: int
+  MAX_DISTRIBUTED_NODES:
+    required: false
+    default: '100'
+    scope:
+    - platform
+    description: ''
   MAX_HOURS:
     required: false
     default: '24'
@@ -430,6 +688,18 @@ variables:
     - platform
     description: ''
     format: int
+  MODEL_MAX_PULL_GB:
+    required: false
+    default: '200'
+    scope:
+    - platform
+    description: ''
+  MODEL_PULL_ENABLED:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: ''
   NB_CELL_TIMEOUT:
     required: false
     default: '120'
@@ -568,6 +838,12 @@ variables:
     scope:
     - observability
     description: Observability server host (private IP/DNS).
+  OFAC_SDN_ADDRESSES_FILE:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   OTEL_ENABLED:
     required: false
     default: 'true'
@@ -685,6 +961,12 @@ variables:
     - 'true'
     - 'false'
     format: bool
+  PAYOUT_MATURITY_MIN_JOBS:
+    required: false
+    default: '3'
+    scope:
+    - platform
+    description: ''
   PAYOUT_READINESS_MAX_AGE_S:
     required: false
     default: '2592000'
@@ -710,6 +992,12 @@ variables:
     - gpu
     description: Public Petabyte API base URL the agent talks to.
     format: url
+  PETABYTE_HOME:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   PETABYTE_HOST_ROLE:
     required: false
     default: null
@@ -730,6 +1018,21 @@ variables:
     - 'true'
     - 'false'
     production_notes: Must be unset/0 in production.
+  PETABYTE_REGISTRY_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  PETABYTE_RELEASE_PUBKEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    - deployment
+    description: Base64 Ed25519 PUBLIC release key (not a secret). The release workflow pins it into the
+      exe at build time; the API reads it to pin the key into the served install.sh for Linux/WSL signed
+      auto-update. Pairs with RELEASE_SIGNING_KEY.
   PETABYTE_SPEC_ID:
     required: true
     default: null
@@ -750,6 +1053,18 @@ variables:
     scope:
     - gpu
     description: Agent self-update source repo (optional).
+  PETABYTE_VPN_ADDR:
+    required: false
+    default: null
+    scope:
+    - gpu
+    description: Alias for AGENT_VPN_ADDR (the node's VPN address for peer ranks).
+  PG_DUMP_BIN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   PLATFORM_AUTH_MARGIN_BPS:
     required: false
     default: '2000'
@@ -800,6 +1115,12 @@ variables:
     - platform
     description: ''
     format: float
+  POSTHOG_HOST:
+    required: false
+    default: https://us.i.posthog.com
+    scope:
+    - platform
+    description: ''
   PRICE_PER_HOUR:
     required: false
     default: null
@@ -807,6 +1128,36 @@ variables:
     - gpu
     description: Seller's offered price per GPU-hour (USD).
     format: float
+  PRICING_CLOUD_DISCOUNT:
+    required: false
+    default: '0.60'
+    scope:
+    - platform
+    description: ''
+  PRICING_DEMAND_SENSITIVITY:
+    required: false
+    default: '0.50'
+    scope:
+    - platform
+    description: ''
+  PRICING_PERF_BASE:
+    required: false
+    default: '0.02'
+    scope:
+    - platform
+    description: ''
+  PRICING_PERF_PER_TFLOP:
+    required: false
+    default: '0.00205'
+    scope:
+    - platform
+    description: ''
+  PRODUCT_ANALYTICS_ENABLED:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
   PROMETHEUS_ENABLED:
     required: false
     default: 'true'
@@ -898,6 +1249,12 @@ variables:
     description: How long (s) a compute-tx may sit stuck pre-capture before the reaper reclaims its reserved
       GPU unit (default 26h).
     format: int
+  REVERIFY_SAMPLE_RATE:
+    required: false
+    default: '0.0'
+    scope:
+    - platform
+    description: ''
   S3_BUCKET:
     required: false
     default: null
@@ -932,6 +1289,12 @@ variables:
     - 'true'
     - 'false'
     format: bool
+  SANCTIONS_EXTRA_COUNTRIES:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   SANCTIONS_SCREEN_PROVIDER:
     required: false
     default: null
@@ -1009,6 +1372,27 @@ variables:
     - platform
     description: ''
     format: float
+  STORAGE_STUB:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: Offline stub for storage earnings (tests). Real path needs provider creds.
+    format: bool
+  STORAGE_STUB_EARNINGS:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: 'Test-only JSON {node_id: usd} for the storage-earnings stub.'
+    format: string
+  STORAGE_TAKE_RATE:
+    required: false
+    default: '0.10'
+    scope:
+    - platform
+    description: Platform commission on storage-network (disk-rental) earnings.
+    format: float
   STRIPE_ALLOW_LIVE:
     required: false
     default: 'false'
@@ -1027,13 +1411,13 @@ variables:
     description: ''
   STRIPE_FEE_BPS:
     required: false
-    default: '290            # 2.9%'
+    default: '290'
     scope:
     - platform
     description: ''
   STRIPE_FEE_FIXED_MINOR:
     required: false
-    default: "30     # $0.30 \u2014 the fixed part that makes tiny jobs unprofitable"
+    default: '30'
     scope:
     - platform
     description: ''
@@ -1055,7 +1439,25 @@ variables:
     allowed:
     - test
     - live
+  TEE_ATTESTATION_TTL_S:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   TEE_MEASUREMENT_ALLOWLIST:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  TEE_REQUIRE_HARDWARE:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  TEE_VERIFIER:
     required: false
     default: null
     scope:
@@ -1100,6 +1502,20 @@ variables:
   USDC_CHAIN:
     required: false
     default: MATIC
+    scope:
+    - platform
+    description: ''
+  VM_DNS_ZONE:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: Per-VM subdomain zone for the hostname-routed VM address (root@<id>.<zone>). Defaults
+      to BASE_DOMAIN; set to e.g. vm.petabyte.market to put every VM under one wildcard record. See docs/dynamic_dns.md.
+    format: hostname
+  VOLUME_MAX_BLOB_MB:
+    required: false
+    default: '1024'
     scope:
     - platform
     description: ''
@@ -1221,6 +1637,42 @@ secrets:
     description: Pinned SSH host key(s) for the observability VM. REQUIRED by deploy-observability.yml,
       which fails closed without it (no trust-on-first-use). Generate with `ssh-keyscan -t ed25519,rsa
       <observ-host>` and verify the fingerprint out-of-band (provider console) before pinning.
+  E2E_ADMIN_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e admin password (TEST account).
+  E2E_BUYER_B_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e second-buyer password (TEST).
+  E2E_BUYER_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e funded-buyer password (TEST account).
+  E2E_BUYER_ZERO_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e zero-balance-buyer password (TEST).
+  E2E_SELLER_B_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e second-seller password (TEST).
+  E2E_SELLER_PASSWORD:
+    required: false
+    default: null
+    scope:
+    - ci
+    description: browser-e2e seller password (TEST account).
   GATEWAY_TOKEN:
     required: false
     default: null
@@ -1245,6 +1697,24 @@ secrets:
     scope:
     - observability
     description: Grafana service-account token (provisioning/smoke).
+  HF_TOKEN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  HUGGINGFACE_TOKEN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  HUGGING_FACE_HUB_TOKEN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   LOKI_PASSWORD:
     required: false
     default: null
@@ -1317,6 +1787,12 @@ secrets:
     scope:
     - gpu
     description: Encrypted node API key (X-API-KEY) minted at /create_api_key.
+  POSTHOG_API_KEY:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   POSTMARK_TOKEN:
     required: false
     default: null
@@ -1353,6 +1829,14 @@ secrets:
     scope:
     - platform
     description: ''
+  RELEASE_SIGNING_KEY:
+    required: false
+    default: null
+    scope:
+    - deployment
+    description: Ed25519 PEM PRIVATE key that signs desktop-agent releases (release-desktop.yml -> scripts/sign_release.py).
+      Offline key; generate via the release-keygen workflow. Unset -> the exe publishes UNSIGNED and auto-update
+      is fail-closed.
   SECRET_KEY:
     required: true
     default: null

@@ -4,7 +4,7 @@ attest it (Ed25519), mint an API key, and write the agent env file.
 
 Env:
   PETABYTE_API_URL, PETABYTE_USER, PETABYTE_PASS   (required)
-  PRICE_PER_HOUR (default 1.0), UNITS (1), MAX_HOURS (24)
+  PRICE_PER_HOUR (unset => auto-priced from this GPU's benchmark), UNITS (1), MAX_HOURS (24)
   GPU_MODEL/GPU_COUNT/VRAM_GB                       (override auto-detect)
   AGENT_ENV (default /etc/petabyte/agent.env), PETABYTE_AGENT_KEY
 """
@@ -41,6 +41,37 @@ def detect():
     return cpu, ram, gpu_model, gpu_count, vram
 
 
+def resolve_price(client, gpu_model):
+    """Decide the hourly listing price. The seller's explicit PRICE_PER_HOUR wins;
+    when unset we ask the server for a fair, benchmark-anchored price for the detected
+    GPU (the same number the /install page shows) instead of guessing a flat rate, and
+    only fall back to a labelled placeholder if the pricing service is unreachable.
+
+    Returns (price: float, basis: str).
+    """
+    raw = (os.getenv("PRICE_PER_HOUR") or "").strip()
+    if raw:
+        try:
+            v = float(raw)
+            if v > 0:
+                return v, "seller-set"
+        except ValueError:
+            pass
+        print(f"PRICE_PER_HOUR={raw!r} is not a positive number — ignoring it and auto-pricing.")
+    try:
+        r = client.get("/pricing/suggest", params={"gpu_model": gpu_model or ""})
+        if r.status_code == 200:
+            body = r.json()
+            p = float(body.get("suggested_price") or 0)
+            if p > 0:
+                return p, "auto: " + str(body.get("basis") or "benchmark-anchored")
+    except Exception as e:
+        print(f"could not fetch a benchmark-anchored price ({e}); using a placeholder.")
+    print("WARNING: no price set and the pricing service was unreachable — listing at "
+          "$1.00/hr as a placeholder. Set PRICE_PER_HOUR or edit your listing to fix it.")
+    return 1.0, "fallback (pricing service unreachable)"
+
+
 def main():
     API = os.environ["PETABYTE_API_URL"]
     USER = os.environ["PETABYTE_USER"]
@@ -52,9 +83,10 @@ def main():
         r.raise_for_status()
         h = {"Authorization": f"Bearer {r.json()['access_token']}"}
         c.post("/change_role", headers=h, json={"role": "seller"})
+        price, price_basis = resolve_price(c, gpu)
         spec = c.post("/register_specs", headers=h, json={
             "cpu": cpu, "ram": ram, "duration": int(os.getenv("MAX_HOURS", "24")),
-            "price_per_hour": float(os.getenv("PRICE_PER_HOUR", "1.0")),
+            "price_per_hour": price,
             "provider": USER, "gpu_model": gpu, "gpu_count": gc, "vram_gb": vram,
             "units": int(os.getenv("UNITS", "1"))}).json()
         spec_id = spec["spec_id"]
@@ -75,7 +107,8 @@ def main():
                 f"PETABYTE_SPEC_ID={spec_id}\n"
                 f"PETABYTE_AGENT_KEY={key_path}\n")
     os.chmod(env_path, 0o600)
-    print(f"provisioned spec {spec_id} (gpu={gpu} x{gc}, {cpu}cpu/{ram}gb); env -> {env_path}")
+    print(f"provisioned spec {spec_id} (gpu={gpu} x{gc}, {cpu}cpu/{ram}gb) "
+          f"at ${price:.2f}/hr [{price_basis}]; env -> {env_path}")
 
 
 if __name__ == "__main__":

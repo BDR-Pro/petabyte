@@ -9,6 +9,7 @@ Talks to the hardened API:
 Auth is the real encrypted API key (X-API-KEY). Heartbeat runs on its own thread
 so a long-running job never makes the node look offline (which would get it reaped).
 """
+import hashlib
 import logging
 import os
 import threading
@@ -57,7 +58,10 @@ def heartbeat_loop():
             r = httpx.post(f"{API_URL}/heartbeat", json={"spec_id": int(SPEC_ID)},
                            headers=HEADERS, timeout=10)
             if r.status_code == 200:
-                _platform_idle["enabled"] = bool(r.json().get("idle_fallback"))
+                _body = r.json()
+                _platform_idle["enabled"] = bool(_body.get("idle_fallback"))
+                # Spare-disk rental runs ALONGSIDE paid jobs (disk != GPU) — driven from the heartbeat.
+                _apply_disk_cfg(_body.get("disk"))
                 logging.debug("heartbeat ok")
             else:
                 logging.warning(f"heartbeat {r.status_code}: {r.text[:200]}")
@@ -204,6 +208,46 @@ def _start_backup_thread(task):
     return stop
 
 
+def _isolation_flags(task):
+    """Hardening flags for EVERY buyer container — protects the SELLER's machine.
+    Kept in parity with the Linux agent (lumaris_agent/task_fetcher.py): drop ALL Linux
+    capabilities (so a job can't reconfigure networking, load modules, or escalate),
+    no-new-privileges, a pids cap, and memory/CPU caps when the server sends them.
+    GPU device access is unaffected (the NVIDIA runtime injects it via cgroups)."""
+    import subprocess
+    flags = ["--cap-drop", "ALL",
+             "--security-opt", "no-new-privileges",
+             "--pids-limit", str(task.get("pids") or 1024)]
+    mem = task.get("memory")
+    if mem:
+        flags += ["--memory", str(mem), "--memory-swap", str(mem)]
+    cpus = task.get("cpus")
+    if cpus:
+        flags += ["--cpus", str(cpus)]
+    try:
+        info = subprocess.check_output(["docker", "info", "--format", "{{.Runtimes}}"],
+                                       text=True, timeout=5)
+        if "runsc" in info:
+            flags = ["--runtime", "runsc"] + flags
+    except Exception:
+        pass
+    return flags
+
+
+def _egress_flags(task):
+    """Template egress policy. Default closed; 'limited'/'open' rely on the host egress
+    firewall (install.sh) to block cloud-metadata + LAN. See docs/egress.md."""
+    policy = (task.get("egress") or "none").lower()
+    if policy == "cluster":
+        # A distributed rank reaches the OTHER ranks over the WireGuard mesh (and must be reachable
+        # on the rendezvous/master port), so it shares the host network. Trade-off + hardening
+        # roadmap documented in lumaris_agent/task_fetcher and docs/DISTRIBUTED_PROVIDER.md.
+        return ["--network", "host"]
+    if policy in ("limited", "open"):
+        return []
+    return ["--network", "none"]
+
+
 def _run_template(task):
     """Launch a one-click stack (Ollama/vLLM/ComfyUI/game server/...) and report it."""
     tid = task["task_id"]
@@ -219,7 +263,11 @@ def _run_template(task):
                                    "status": "failed"})
         return
     name = f"pb-{task.get('template')}-{_uuid.uuid4().hex[:8]}"
-    cmd = ["docker", "run", "-d", "--name", name, "-p", f"{port}:{port}"]
+    # Publish to 127.0.0.1 ONLY (was 0.0.0.0 — exposed the buyer's service to the
+    # seller's whole LAN / the internet). Inbound reaches it only via the tunnel.
+    cmd = ["docker", "run", "-d", "--name", name, "-p", f"127.0.0.1:{port}:{port}"]
+    cmd += _isolation_flags(task)              # cap-drop ALL etc. (protect the host)
+    cmd += _egress_flags(task)                 # protect the host's home internet
     if task.get("gpu"):
         cmd += ["--gpus", "all"]
     if task.get("cache"):
@@ -283,12 +331,13 @@ def _run_render(task):
         open(scene, "wb").write(httpx.get(g["download_url"], timeout=300).content)
         report_progress(tid, 15, f"scene fetched; rendering {fs}-{fe} in {image}")
         # 2) render inside the container (GPU via NVIDIA Container Toolkit)
-        cmd = ["docker", "run", "--rm", "--network", "none",
-               "-v", f"{scene}:/scene.blend:ro", "-v", f"{out_dir}:/out"]
+        cmd = ["docker", "run", "--rm", "--network", "none"]
+        cmd += _isolation_flags(task)
+        cmd += ["-v", f"{scene}:/scene.blend:ro", "-v", f"{out_dir}:/out"]
         if task.get("gpu"):
             cmd += ["--gpus", "all"]
-        cmd += [image, "blender", "-b", "/scene.blend", "-o", "/out/frame_",
-                "-s", str(fs), "-e", str(fe), "-a"]
+        cmd += [image, "blender", "-b", "/scene.blend", "--disable-autoexec",
+                "-o", "/out/frame_", "-s", str(fs), "-e", str(fe), "-a"]
         subprocess.check_call(cmd)
         report_progress(tid, 85, "uploading frames")
         # 3) tar the frames and upload via a one-object pre-signed PUT
@@ -298,10 +347,12 @@ def _run_render(task):
         grant = httpx.post(f"{API_URL}/jobs/backup_url", headers=HEADERS, timeout=15,
                            json={"task_id": tid, "filename": f"frames_{fs}_{fe}.tar"}).json()
         from cryptography.fernet import Fernet
-        enc = Fernet(grant["enc_key"].encode()).encrypt(open(bundle, "rb").read())
+        raw = open(bundle, "rb").read()
+        enc = Fernet(grant["enc_key"].encode()).encrypt(raw)
         httpx.put(grant["upload_url"], content=enc, timeout=600)
         _post("/jobs/result", _signed_result(tid, status="completed",
-                                             result=f"frames {fs}-{fe} -> {grant['snapshot_ref']}"))
+                                             result=f"frames {fs}-{fe} -> {grant['snapshot_ref']}",
+                                             content_hash=hashlib.sha256(raw).hexdigest()))
         _set_ui(status="idle", task=None, ok=True)
     except Exception as e:                              # noqa: BLE001
         report_log(tid, f"render failed: {e}")
@@ -331,8 +382,9 @@ def _run_transcode(task):
         report_progress(tid, 20, "transcoding")
         vcodec = {"h264": "h264_nvenc", "h265": "hevc_nvenc", "av1": "av1_nvenc"} \
             if task.get("gpu") else {"h264": "libx264", "h265": "libx265", "av1": "libaom-av1"}
-        args = ["docker", "run", "--rm", "--network", "none",
-                "-v", f"{src}:/in:ro", "-v", f"{work}:/work"]
+        args = ["docker", "run", "--rm", "--network", "none"]
+        args += _isolation_flags(task)
+        args += ["-v", f"{src}:/in:ro", "-v", f"{work}:/work"]
         if task.get("gpu"):
             args += ["--gpus", "all"]
         ff = [image, "-y"]
@@ -352,9 +404,11 @@ def _run_transcode(task):
         grant = httpx.post(f"{API_URL}/jobs/backup_url", headers=HEADERS, timeout=15,
                            json={"task_id": tid, "filename": _os.path.basename(dst)}).json()
         from cryptography.fernet import Fernet
-        enc = Fernet(grant["enc_key"].encode()).encrypt(open(dst, "rb").read())
+        raw = open(dst, "rb").read()
+        enc = Fernet(grant["enc_key"].encode()).encrypt(raw)
         httpx.put(grant["upload_url"], content=enc, timeout=600)
-        _post("/jobs/result", _signed_result(tid, status="completed", result=grant["snapshot_ref"]))
+        _post("/jobs/result", _signed_result(tid, status="completed", result=grant["snapshot_ref"],
+                                             content_hash=hashlib.sha256(raw).hexdigest()))
         _set_ui(status="idle", task=None, ok=True)
     except Exception as e:                              # noqa: BLE001
         report_log(tid, f"transcode failed: {e}")
@@ -387,12 +441,13 @@ def _run_stitch(task):
                 lf.write(f"file '{p}'\n")
         out = _os.path.join(work, f"final.{task.get('container','mp4')}")
         if task.get("kind") == "transcode":
-            subprocess.check_call([image, "-y", "-f", "concat", "-safe", "0",
-                                   "-i", listfile, "-c", "copy", out]) \
-                if False else subprocess.check_call(
-                ["docker", "run", "--rm", "-v", f"{work}:/work", image, "-y",
-                 "-f", "concat", "-safe", "0", "-i", "/work/list.txt", "-c", "copy",
-                 f"/work/{_os.path.basename(out)}"])
+            # segments already fetched to /work -> no network needed; drop caps too
+            concat = ["docker", "run", "--rm", "--network", "none"]
+            concat += _isolation_flags(task)
+            concat += ["-v", f"{work}:/work", image, "-y",
+                       "-f", "concat", "-safe", "0", "-i", "/work/list.txt", "-c", "copy",
+                       f"/work/{_os.path.basename(out)}"]
+            subprocess.check_call(concat)
         else:   # render: tar the collected frames
             import tarfile
             with tarfile.open(out, "w") as tf:
@@ -400,9 +455,11 @@ def _run_stitch(task):
         grant = httpx.post(f"{API_URL}/jobs/backup_url", headers=HEADERS, timeout=15,
                            json={"task_id": tid, "filename": _os.path.basename(out)}).json()
         from cryptography.fernet import Fernet
-        enc = Fernet(grant["enc_key"].encode()).encrypt(open(out, "rb").read())
+        raw = open(out, "rb").read()
+        enc = Fernet(grant["enc_key"].encode()).encrypt(raw)
         httpx.put(grant["upload_url"], content=enc, timeout=600)
-        _post("/jobs/result", _signed_result(tid, status="completed", result=grant["snapshot_ref"]))
+        _post("/jobs/result", _signed_result(tid, status="completed", result=grant["snapshot_ref"],
+                                             content_hash=hashlib.sha256(raw).hexdigest()))
         _set_ui(status="idle", task=None, ok=True)
     except Exception as e:                              # noqa: BLE001
         report_log(tid, f"assemble failed: {e}")
@@ -411,8 +468,12 @@ def _run_stitch(task):
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _signed_result(tid, status="completed", result=None):
+def _signed_result(tid, status="completed", result=None, content_hash=None):
+    # content_hash = sha256 of the PLAINTEXT output bytes, carried in the SIGNED proof so the
+    # seller commits to the actual output (quorum-comparable), not just the object ref string.
     proof = {"task_id": tid, "output_hash": (result or status)[:32], "ts": int(_t.time())}
+    if content_hash:
+        proof["content_hash"] = content_hash
     return {"task_id": tid, "status": status, "result": result,
             "proof": proof, "signature": crypto.sign_proof(proof)}
 
@@ -469,6 +530,152 @@ def stop_idle_miner():
         logging.info("idle miner stopped (paid work / disabled)")
 
 
+def _run_distributed(task):
+    """Run ONE rank of a distributed cluster: register this rank, resolve the master, execute
+    (built-in all-reduce self-test OR the buyer container under torchrun), report a signed result.
+    Mirror of lumaris_agent/task_fetcher._run_distributed. See docs/DISTRIBUTED_PROVIDER.md."""
+    import distributed_run as _dist
+    tid = task["task_id"]
+    dist = task.get("distributed") or {}
+    rank = int(dist.get("rank", 0)); world = int(dist.get("world_size", 1))
+    backend = dist.get("backend", "nccl"); job_id = dist.get("job_id")
+    _set_ui(status="running", task=f"Distributed rank {rank}/{world} #{tid}")
+    host = _dist.local_vpn_addr()
+    port = int(os.getenv("DIST_RENDEZVOUS_PORT", str(_dist.DEFAULT_RENDEZVOUS_PORT)))
+    try:
+        reg = httpx.post(f"{API_URL}{dist.get('register_url', '/jobs/rendezvous')}",
+                         headers=HEADERS, timeout=15,
+                         json={"task_id": tid, "host": host, "port": port, "slots": 1}).json()
+        report_progress(tid, 15, f"rank {rank}/{world} registered at {host}:{port}")
+        rdzv_url = dist.get("rendezvous_url") or f"/jobs/rendezvous/{job_id}"
+
+        def _fetch():
+            return httpx.get(f"{API_URL}{rdzv_url}", headers=HEADERS, timeout=15,
+                             params={"task_id": tid}).json()
+
+        master = _dist.resolve_master(
+            dist, my_host=host, my_port=port, current=reg, fetch=_fetch, sleep=time.sleep,
+            timeout_s=int(os.getenv("DIST_RENDEZVOUS_TIMEOUT", "300")))
+        maddr, mport = master["master_addr"], int(master["master_port"])
+        report_progress(tid, 30, f"cluster formed; master={maddr}:{mport} backend={backend}")
+
+        if _dist.is_selftest(task):
+            out = _dist.run_allreduce_rank(
+                rank, world, maddr, mport, dim=int(os.getenv("DIST_SELFTEST_DIM", "8")),
+                seed=int(job_id or 0), bind_host=("0.0.0.0" if rank == 0 else None),
+                timeout_s=int(os.getenv("DIST_SELFTEST_TIMEOUT", "180")))
+            ch = crypto.sha256_hex(out["result"])
+            report_progress(tid, 95, f"all-reduce ok across {out['contributors']} ranks")
+            _post("/jobs/result", _signed_result(
+                tid, status="completed",
+                result=f"allreduce rank {rank}/{world}: sum={out['result']}", content_hash=ch))
+            _set_ui(status="idle", task=None, ok=True)
+            return
+
+        import shutil, subprocess
+        if not shutil.which("docker"):
+            report_log(tid, "docker not installed; cannot run distributed rank")
+            _post("/jobs/result", _signed_result(tid, status="failed"))
+            _set_ui(status="idle", task=None, fail=True)
+            return
+        argv = _dist.build_torchrun_cmd(
+            image=task.get("image"), command=task.get("command"), rank=rank, world_size=world,
+            master_addr=maddr, master_port=mport, backend=backend, gpu=bool(task.get("gpu")),
+            env=task.get("env") or {}, isolation_flags=_isolation_flags(task),
+            egress_flags=_egress_flags(task))
+        report_progress(tid, 45, f"launching torchrun rank {rank}/{world}")
+        subprocess.check_call(argv)
+        report_progress(tid, 100, f"rank {rank}/{world} finished")
+        _post("/jobs/result", _signed_result(
+            tid, status="completed", result=f"distributed rank {rank}/{world} complete"))
+        _set_ui(status="idle", task=None, ok=True)
+    except Exception as e:                              # noqa: BLE001
+        report_log(tid, f"distributed rank {rank}/{world} failed: {e}")
+        _post("/jobs/result", _signed_result(tid, status="failed"))
+        _set_ui(status="idle", task=None, fail=True)
+
+
+# ---- Spare-disk rental: rent unused disk to a web3/BitTorrent storage network (explicit, always-on) ----
+# NOT an idle/fallback mode — an EXPLICIT contribution (provider + GB cap required) that runs
+# independently of GPU work. Operator allows it with DISK_RENTAL_ENABLED=true; the seller configures
+# it via the API (delivered on the heartbeat). Mirror of lumaris_agent; see docs/DISK_RENTAL.md.
+_disk_running = {"on": False, "node": None, "alloc": 0, "provider": None}
+
+
+def _disk_rental_enabled() -> bool:
+    return os.getenv("DISK_RENTAL_ENABLED", "").lower() == "true"
+
+
+def start_disk_node(provider, node_name, alloc_gb):
+    import shutil, subprocess
+    import disk_node as _dn
+    if not shutil.which("docker") or not _dn.provider_supported(provider) or int(alloc_gb) < 1:
+        return
+    if (_disk_running["on"] and _disk_running["node"] == node_name
+            and _disk_running["alloc"] == int(alloc_gb)
+            and _disk_running["provider"] == provider):
+        return
+    data_dir = _dn.data_dir_for(node_name)
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        subprocess.run(["docker", "rm", "-f", _dn.container_name(node_name)], capture_output=True)
+        subprocess.check_call(_dn.build_disk_cmd(
+            provider=provider, node_name=node_name, alloc_gb=int(alloc_gb),
+            data_dir=data_dir, wallet=os.getenv("DISK_PAYOUT_WALLET", "")))
+        _disk_running.update({"on": True, "node": node_name, "alloc": int(alloc_gb),
+                              "provider": provider})
+        logging.info(f"disk rental: {alloc_gb} GB to {provider} as {node_name}")
+        _report_disk(provider, node_name, int(alloc_gb))
+    except Exception as e:                              # noqa: BLE001
+        logging.error(f"disk node start failed: {e}")
+
+
+def stop_disk_node(node_name):
+    if not node_name:
+        return
+    import subprocess
+    import disk_node as _dn
+    try:
+        subprocess.run(["docker", "rm", "-f", _dn.container_name(node_name)], capture_output=True)
+    finally:
+        if _disk_running["node"] == node_name:
+            _disk_running.update({"on": False})
+
+
+def remove_disk_node(node_name):
+    if not node_name:
+        return
+    import shutil
+    import disk_node as _dn
+    stop_disk_node(node_name)
+    try:
+        shutil.rmtree(_dn.data_dir_for(node_name), ignore_errors=True)
+    except Exception as e:                              # noqa: BLE001
+        logging.error(f"disk node remove failed: {e}")
+
+
+def _report_disk(provider, node_name, alloc_gb):
+    import disk_node as _dn
+    used = _dn.data_dir_bytes_gb(_dn.data_dir_for(node_name))
+    ref = float(os.getenv("DISK_REFERENCE_USD_PER_TB_MONTH", "1.5"))
+    _post("/nodes/disk_report", {"spec_id": int(SPEC_ID), "provider": provider,
+                                 "used_gb": used, "est_daily_usd": _dn.est_daily_usd(alloc_gb, ref)})
+
+
+def _apply_disk_cfg(cfg):
+    if not isinstance(cfg, dict) or not _disk_rental_enabled():
+        return
+    node = cfg.get("node_name")
+    if cfg.get("enabled"):
+        provider = cfg.get("provider"); alloc = int(cfg.get("alloc_gb") or 0)
+        if provider and alloc >= 1:
+            start_disk_node(provider, node, alloc)
+    elif cfg.get("provider"):
+        stop_disk_node(node)      # pause, keep data
+    else:
+        remove_disk_node(node)    # deleted -> wipe
+
+
 def job_loop():
     while True:
         try:
@@ -494,6 +701,8 @@ def job_loop():
                     _run_transcode(task)
                 elif tt == "stitch":
                     _run_stitch(task)
+                elif tt == "distributed":
+                    _run_distributed(task)
                 else:
                     _run_vm(task)
                 continue  # immediately poll again after finishing

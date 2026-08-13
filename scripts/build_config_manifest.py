@@ -56,6 +56,10 @@ def is_secret(name: str) -> bool:
 TEST_ONLY = {
     "BUYER_USER", "BUYER_PASS", "STRIPE_TEST_SECRET_KEY", "PAYOUT_TEST_ALLOW_DROP",
     "MAILGUN_TEST_RECIPIENT", "NO_COLOR", "INTERVAL", "BENCH_TOKENS_SEC",
+    # agent benchmark-harness tuning knobs (matmul size / iteration count, Blender Open
+    # Data CLI path + scenes) — same class as BENCH_TOKENS_SEC: local measurement tuning,
+    # never deployment config.
+    "BENCH_MATMUL_N", "BENCH_MATMUL_ITERS", "BLENDER_BENCH_CLI", "BLENDER_BENCH_SCENES",
     "DEMO_API_URL", "FASTAPI_SERVER_URL", "API_BASE", "API_KEY", "SPEC_ID", "AGENT_ENV",
 }
 
@@ -112,6 +116,28 @@ AGENT_VARS = {
                        "description": "Docker image for the idle NiceHash miner."},
     "NICEHASH_TAKE_RATE": {"required": False, "default": "0.10", "scope": ["platform"], "format": "float",
                            "description": "Platform commission on idle-mining revenue (idle_reconcile tool)."},
+    # spare-disk rental — agent side (platform-side vars live in template.env; see docs/DISK_RENTAL.md)
+    "DISK_RENTAL_ENABLED": {"required": False, "default": "false", "scope": ["gpu"], "format": "bool",
+                            "description": "Operator opt-in: allow this machine to rent spare disk to a storage network."},
+    "DISK_PAYOUT_WALLET": {"required": False, "default": None, "scope": ["gpu"],
+                           "description": "Petabyte's platform storage wallet set on every disk node "
+                                          "(earnings pool centrally, credited per node — no per-seller wallet)."},
+    "DISK_DATA_DIR": {"required": False, "default": "/var/lib/petabyte/disk", "scope": ["gpu"],
+                      "description": "Host dir where a storage node keeps its data (per-node subdir)."},
+    # distributed compute (one rank of a multi-node cluster; see lumaris_agent/distributed_run.py)
+    "AGENT_VPN_ADDR": {"required": False, "default": None, "scope": ["gpu"],
+                       "description": "This node's cluster-reachable (VPN) address advertised to peer "
+                                      "ranks at rendezvous. Auto-detected from the interface if unset."},
+    "PETABYTE_VPN_ADDR": {"required": False, "default": None, "scope": ["gpu"],
+                          "description": "Alias for AGENT_VPN_ADDR (the node's VPN address for peer ranks)."},
+    "DIST_RENDEZVOUS_PORT": {"required": False, "default": "29500", "scope": ["gpu"], "format": "int",
+                             "description": "Port this rank advertises/binds for cluster rendezvous (torchrun master port)."},
+    "DIST_RENDEZVOUS_TIMEOUT": {"required": False, "default": "300", "scope": ["gpu"], "format": "int",
+                                "description": "Seconds a joining rank waits for the master to appear before failing (gang)."},
+    "DIST_SELFTEST_DIM": {"required": False, "default": "8", "scope": ["gpu"], "format": "int",
+                          "description": "Vector length for the built-in cluster all-reduce self-test."},
+    "DIST_SELFTEST_TIMEOUT": {"required": False, "default": "180", "scope": ["gpu"], "format": "int",
+                              "description": "Seconds the built-in all-reduce self-test waits for all ranks."},
     # deployment (GitHub Actions -> server) — all SECRETS
     "DEPLOY_SSH_KEY": {"required": True, "default": None, "secret": True, "scope": ["deployment"],
                        "description": "Private SSH key GitHub Actions uses to deploy to the server."},
@@ -148,6 +174,50 @@ AGENT_VARS = {
                                                       "`ssh-keyscan -t ed25519,rsa <observ-host>` "
                                                       "and verify the fingerprint out-of-band "
                                                       "(provider console) before pinning."},
+    # desktop-agent release signing (GitHub Actions). See docs/RELEASE_SIGNING.md.
+    "RELEASE_SIGNING_KEY": {"required": False, "default": None, "secret": True,
+                            "scope": ["deployment"],
+                            "description": "Ed25519 PEM PRIVATE key that signs desktop-agent "
+                                           "releases (release-desktop.yml -> scripts/sign_release.py). "
+                                           "Offline key; generate via the release-keygen workflow. "
+                                           "Unset -> the exe publishes UNSIGNED and auto-update is "
+                                           "fail-closed."},
+    "PETABYTE_RELEASE_PUBKEY": {"required": False, "default": None, "secret": False,
+                                "scope": ["platform", "deployment"],
+                                "description": "Base64 Ed25519 PUBLIC release key (not a secret). "
+                                               "The release workflow pins it into the exe at build "
+                                               "time; the API reads it to pin the key into the served "
+                                               "install.sh for Linux/WSL signed auto-update. Pairs "
+                                               "with RELEASE_SIGNING_KEY."},
+    # browser E2E (GitHub Actions -> test.petabyte.market). Optional: absent personas skip.
+    "E2E_BASE_URL": {"required": False, "default": "https://test.petabyte.market",
+                     "secret": False, "scope": ["ci"], "format": "url",
+                     "description": "Target site for the browser-e2e workflow (TEST only; the "
+                                    "suite aborts if it detects LIVE mode)."},
+    "E2E_BUYER_USERNAME": {"required": False, "default": None, "secret": False, "scope": ["ci"],
+                           "description": "browser-e2e funded-buyer login (TEST account)."},
+    "E2E_BUYER_PASSWORD": {"required": False, "default": None, "secret": True, "scope": ["ci"],
+                           "description": "browser-e2e funded-buyer password (TEST account)."},
+    "E2E_BUYER_ZERO_USERNAME": {"required": False, "default": None, "secret": False, "scope": ["ci"],
+                                "description": "browser-e2e zero-balance-buyer login (TEST)."},
+    "E2E_BUYER_ZERO_PASSWORD": {"required": False, "default": None, "secret": True, "scope": ["ci"],
+                                "description": "browser-e2e zero-balance-buyer password (TEST)."},
+    "E2E_BUYER_B_USERNAME": {"required": False, "default": None, "secret": False, "scope": ["ci"],
+                             "description": "browser-e2e second buyer (cross-user isolation, TEST)."},
+    "E2E_BUYER_B_PASSWORD": {"required": False, "default": None, "secret": True, "scope": ["ci"],
+                             "description": "browser-e2e second-buyer password (TEST)."},
+    "E2E_SELLER_USERNAME": {"required": False, "default": None, "secret": False, "scope": ["ci"],
+                            "description": "browser-e2e seller login (TEST account)."},
+    "E2E_SELLER_PASSWORD": {"required": False, "default": None, "secret": True, "scope": ["ci"],
+                            "description": "browser-e2e seller password (TEST account)."},
+    "E2E_SELLER_B_USERNAME": {"required": False, "default": None, "secret": False, "scope": ["ci"],
+                              "description": "browser-e2e second seller (isolation, TEST)."},
+    "E2E_SELLER_B_PASSWORD": {"required": False, "default": None, "secret": True, "scope": ["ci"],
+                              "description": "browser-e2e second-seller password (TEST)."},
+    "E2E_ADMIN_USERNAME": {"required": False, "default": None, "secret": False, "scope": ["ci"],
+                           "description": "browser-e2e admin login (TEST account)."},
+    "E2E_ADMIN_PASSWORD": {"required": False, "default": None, "secret": True, "scope": ["ci"],
+                           "description": "browser-e2e admin password (TEST account)."},
 }
 
 # ---- Curated metadata for important platform vars (allowed values / validation / notes) --
@@ -158,6 +228,23 @@ CURATED = {
                     "prod_notes": "Must be 'production' in prod; never leave stubs enabled."},
     "BASE_DOMAIN": {"aka": "APP_DOMAIN", "format": "hostname",
                     "description": "Public application domain."},
+    "VM_DNS_ZONE": {"format": "hostname", "required": False,
+                    "description": "Per-VM subdomain zone for the hostname-routed VM address "
+                                   "(root@<id>.<zone>). Defaults to BASE_DOMAIN; set to e.g. "
+                                   "vm.petabyte.market to put every VM under one wildcard record. "
+                                   "See docs/dynamic_dns.md."},
+    "DISK_PROVIDER": {"required": False, "format": "string",
+                      "description": "Default storage-network adapter for disk-rental reconciliation (storj|btfs|sia)."},
+    "DISK_REFERENCE_USD_PER_TB_MONTH": {"required": False, "format": "float",
+                                        "description": "Net $/TB/month reference for the pre-commit disk-rental earnings estimate."},
+    "STORAGE_TAKE_RATE": {"required": False, "format": "float",
+                          "description": "Platform commission on storage-network (disk-rental) earnings."},
+    "MAX_DISK_ALLOC_GB": {"required": False, "format": "int",
+                          "description": "Hard ceiling on how much disk one node may pledge (safety bound)."},
+    "STORAGE_STUB": {"required": False, "format": "bool",
+                     "description": "Offline stub for storage earnings (tests). Real path needs provider creds."},
+    "STORAGE_STUB_EARNINGS": {"required": False, "format": "string",
+                              "description": "Test-only JSON {node_id: usd} for the storage-earnings stub."},
     "PUBLIC_BASE_URL": {"aka": "APP_URL", "format": "url_or_empty",
                         "description": "Public base URL for building share/reset links."},
     "CONNECT_RETURN_URL": {"format": "url_or_empty",
