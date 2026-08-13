@@ -111,6 +111,7 @@ from db import (
     set_idle_fallback, record_idle_report, idle_credited_total,
     set_disk_rental, delete_disk_rental, record_disk_report, disk_credited_total,
     disk_node_name, DISK_PROVIDERS,
+    set_spec_cached_models, spec_cached_models, specs_with_model_cached, rank_specs_for_model,
     add_payout_method, list_payout_methods, get_payout_method,
     request_payout, set_payout_status, list_payouts,
     withdrawable_earnings, is_payout_matured, EARNINGS_HOLD_HOURS, PAYOUT_MATURITY_MIN_JOBS,
@@ -132,6 +133,7 @@ from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML)
 from web_routes import router as web_router     # static public pages (extracted router)
 from trust_routes import router as trust_router  # trust/transparency API (extracted router)
+from models_routes import router as models_router  # model hub: discover/pull/manage (extracted router)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -1442,6 +1444,9 @@ def account_page():
 # Static public web surface (marketing / legal / trust / status / info) lives in web_routes.py
 # as the first slice of the staged main.py -> domain-routers extraction. Zero DB/auth coupling.
 app.include_router(web_router)
+# Model hub: discover / download / manage open models (pages + /api/models/*). Backed by the
+# provider-independent `modelhub` library — the same code the `petabyte model` CLI uses.
+app.include_router(models_router)
 
 def _find_installer(name: str):
     """Locate a bundled installer script across dev + deployed layouts.
@@ -4584,6 +4589,29 @@ def disk_report(data: DiskReportModel, agent=Depends(api_key_user),
         raise HTTPException(status_code=404, detail="Spec not found or not yours")
     record_disk_report(db, spec, data.provider, data.used_gb, data.est_daily_usd)
     return {"status": "ok", "spec_id": spec.id, "node_name": disk_node_name(spec)}
+
+
+@app.post("/nodes/models", tags=["seller"])
+def report_cached_models(data: dict, agent=Depends(api_key_user), db: Session = Depends(get_db)):
+    """Agent reports which model ids this node holds locally (from its ~/.petabyte cache). Feeds the
+    scheduler's cache-locality signal so a job prefers a node that already has the model — avoiding a
+    re-download of tens of GB. Body: {spec_id, models:[...]}."""
+    spec = _get_spec(db, (data or {}).get("spec_id"))
+    if not spec or spec.user_id != agent.id:
+        raise HTTPException(status_code=404, detail="Spec not found or not yours")
+    n = set_spec_cached_models(db, spec, (data or {}).get("models") or [])
+    return {"status": "ok", "spec_id": spec.id, "cached_models": n}
+
+
+@app.get("/nodes/{spec_id}/models", tags=["seller"])
+def node_cached_models(spec_id: int, user: dict = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    spec = _get_spec(db, spec_id)
+    if not spec or not me or spec.user_id != me.id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    return {"spec_id": spec.id, "models": spec_cached_models(spec),
+            "reported_at": str(spec.cached_models_at) if spec.cached_models_at else None}
 
 
 @app.get("/nodes/{spec_id}/disk", tags=["seller"])

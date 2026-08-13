@@ -545,6 +545,12 @@ variables:
     - platform
     description: Seconds before a silent node is reaped.
     format: int
+  HF_ENDPOINT:
+    required: false
+    default: https://huggingface.co
+    scope:
+    - platform
+    description: ''
   IDLE_MINING:
     required: false
     default: 'false'
@@ -682,6 +688,18 @@ variables:
     - platform
     description: ''
     format: int
+  MODEL_MAX_PULL_GB:
+    required: false
+    default: '200'
+    scope:
+    - platform
+    description: ''
+  MODEL_PULL_ENABLED:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: ''
   NB_CELL_TIMEOUT:
     required: false
     default: '120'
@@ -974,6 +992,12 @@ variables:
     - gpu
     description: Public Petabyte API base URL the agent talks to.
     format: url
+  PETABYTE_HOME:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   PETABYTE_HOST_ROLE:
     required: false
     default: null
@@ -994,6 +1018,12 @@ variables:
     - 'true'
     - 'false'
     production_notes: Must be unset/0 in production.
+  PETABYTE_REGISTRY_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   PETABYTE_RELEASE_PUBKEY:
     required: false
     default: null
@@ -1667,6 +1697,24 @@ secrets:
     scope:
     - observability
     description: Grafana service-account token (provisioning/smoke).
+  HF_TOKEN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  HUGGINGFACE_TOKEN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  HUGGING_FACE_HUB_TOKEN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   LOKI_PASSWORD:
     required: false
     default: null

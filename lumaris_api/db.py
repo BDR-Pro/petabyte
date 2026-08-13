@@ -234,6 +234,11 @@ class SellerSpec(Base):
     disk_used_gb = Column(Float, nullable=True)      # last reported used GB
     disk_est_daily_usd = Column(Float, nullable=True)
     disk_reported_at = Column(DateTime, nullable=True)
+    # model cache-locality: which model ids this node already holds locally (JSON list). The
+    # scheduler favours a node that already has the requested model, so a 20-100 GB weight file
+    # isn't re-downloaded when an equally-good node already has it.
+    cached_models = Column(Text, nullable=True)
+    cached_models_at = Column(DateTime, nullable=True)
     # capacity
     total_units = Column(Integer, default=1, nullable=False)
     available_units = Column(Integer, default=1, nullable=False)
@@ -2096,7 +2101,8 @@ def _ensure_columns():
                   ("disk_enabled", "BOOLEAN DEFAULT false"),
                   ("disk_provider", "VARCHAR"), ("disk_alloc_gb", "INTEGER"),
                   ("disk_used_gb", "FLOAT"), ("disk_est_daily_usd", "FLOAT"),
-                  ("disk_reported_at", "TIMESTAMP")],
+                  ("disk_reported_at", "TIMESTAMP"),
+                  ("cached_models", "TEXT"), ("cached_models_at", "TIMESTAMP")],
         "users": [("referral_code", "VARCHAR"), ("referred_by", "INTEGER"),
                   ("referral_rewarded", "BOOLEAN DEFAULT false"),
                   ("referral_signup_meta", "VARCHAR"),("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
@@ -4391,6 +4397,64 @@ def record_disk_report(db: Session, spec: "SellerSpec", provider: str,
     spec.disk_est_daily_usd = est_daily_usd
     spec.disk_reported_at = _utcnow()
     db.add(spec); db.commit()
+
+
+# ------------------ Model cache-locality (scheduler signal) ------------------
+
+MAX_CACHED_MODELS = 2000
+
+
+def set_spec_cached_models(db: Session, spec: "SellerSpec", model_ids) -> int:
+    """Record which model ids a node holds locally (reported by the agent). Deduped, bounded, and
+    charset-checked so a compromised agent can't inject junk. Returns the stored count."""
+    import re
+    clean, seen = [], set()
+    for m in (model_ids or []):
+        s = str(m or "").strip()
+        # a model id is publisher/name or a bare alias — same safe charset as ids.py
+        if not s or len(s) > 200 or s in seen:
+            continue
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$", s) or ".." in s:
+            continue
+        seen.add(s)
+        clean.append(s)
+        if len(clean) >= MAX_CACHED_MODELS:
+            break
+    spec.cached_models = json.dumps(clean)
+    spec.cached_models_at = _utcnow()
+    db.add(spec); db.commit()
+    return len(clean)
+
+
+def spec_cached_models(spec: "SellerSpec") -> list:
+    try:
+        v = json.loads(spec.cached_models) if spec.cached_models else []
+        return v if isinstance(v, list) else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def node_has_model_cached(spec: "SellerSpec", model_id: str) -> bool:
+    return model_id in spec_cached_models(spec)
+
+
+def specs_with_model_cached(db: Session, model_id: str):
+    """Online specs that already hold `model_id` locally (the cache-locality candidates)."""
+    rows = (db.query(SellerSpec)
+            .filter(SellerSpec.cached_models.isnot(None), SellerSpec.status == "online").all())
+    return [s for s in rows if node_has_model_cached(s, model_id)]
+
+
+def rank_specs_for_model(specs, model_id: str):
+    """Stable-partition candidate specs so those that already hold `model_id` come first (all other
+    scheduling constraints being equal). Pure — the scheduler calls this as a final tiebreaker so a
+    20-100 GB weight file isn't re-downloaded when an equally-good node already has it."""
+    if not model_id:
+        return list(specs)
+    cached, rest = [], []
+    for s in specs:
+        (cached if node_has_model_cached(s, model_id) else rest).append(s)
+    return cached + rest
 
 
 def reconcile_disk_earnings(db: Session, earnings: dict, take_rate: float) -> dict:

@@ -17,6 +17,14 @@ import time
 import httpx
 import os as _os
 
+# The model hub (discover/pull/manage models) lives in the sibling `modelhub` package. Make it
+# importable whether the CLI is run as `python cli/petabyte.py` or installed as `petabyte`.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from modelhub import cli as mh_cli
+except Exception:  # noqa: BLE001 — model commands are optional; the compute CLI still works without
+    mh_cli = None
+
 _TTY = hasattr(__import__("sys").stdout, "isatty") and __import__("sys").stdout.isatty() and not _os.getenv("NO_COLOR")
 def _c(txt, code):
     return f"\033[{code}m{txt}\033[0m" if _TTY else txt
@@ -190,20 +198,46 @@ def main():
     s = sub.add_parser("deposit");  s.add_argument("amount", type=float)
     sub.add_parser("wallet")
     sub.add_parser("specs")
-    s = sub.add_parser("run")
-    s.add_argument("file"); s.add_argument("--spec", type=int); s.add_argument("--gpu")
+    s = sub.add_parser("run", help="run a notebook/.py on a rented GPU, OR start a model runtime")
+    s.add_argument("file", help="a .ipynb/.py file (compute job) OR a model id like Qwen/Qwen3-8B")
+    s.add_argument("--spec", type=int); s.add_argument("--gpu")
     s.add_argument("--hours", type=int, default=1); s.add_argument("--timeout", type=int, default=120)
     s.add_argument("--vpn", action="store_true",
                    help="rent on a private WireGuard VPN and save the client config")
+    s.add_argument("--revision"); s.add_argument("--format"); s.add_argument("--quantization")
+    s.add_argument("--force", action="store_true")
     s = sub.add_parser("vpn", help="download the WireGuard config for a VPN booking")
     s.add_argument("booking_id", type=int); s.add_argument("-o", "--out")
+
+    # model hub: discover/pull/manage AI models (Hugging Face-grade UX). Owns `model`, `pull`, `auth`;
+    # `run` is shared with the compute flow above and dispatched smartly below.
+    if mh_cli is not None:
+        mh_cli.register(sub, include=("model", "pull", "auth"))
 
     a = p.parse_args()
     cfg = _cfg()
     if a.api:
         cfg["api_url"] = a.api
+
+    if mh_cli is not None and a.cmd in ("model", "pull", "auth"):
+        sys.exit(mh_cli.handle(a) or 0)
+    if a.cmd == "run" and _is_model_ref(a.file):
+        if mh_cli is None:
+            _die("model runtime unavailable (modelhub not importable)")
+        ns = __import__("argparse").Namespace(
+            id=a.file, format=a.format, quantization=a.quantization, revision=a.revision,
+            force=a.force, home=None)
+        sys.exit(mh_cli.cmd_run(ns) or 0)
     {"register": cmd_register, "login": cmd_login, "deposit": cmd_deposit,
      "wallet": cmd_wallet, "specs": cmd_specs, "run": cmd_run, "vpn": cmd_vpn}[a.cmd](a, cfg)
+
+
+def _is_model_ref(arg):
+    """`run` overloads a file path and a model id. A model id has a source/slug shape and is NOT an
+    existing local file or a notebook/script."""
+    if os.path.exists(arg) or arg.endswith((".ipynb", ".py")):
+        return False
+    return ("/" in arg) or (":" in arg) or arg.startswith(("hf:", "pt:", "http://", "https://"))
 
 
 if __name__ == "__main__":

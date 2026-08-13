@@ -289,7 +289,7 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
 </button>
 <div class="collapse navbar-collapse" id="pbnav">
 <div class="navlinks">
-  <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/cluster" data-ar="الحوسبة الموزعة">Distributed</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
+  <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/models" data-ar="النماذج">Models</a><a href="/cluster" data-ar="الحوسبة الموزعة">Distributed</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
   <a href="/metrics" data-ar="المقاييس">Metrics</a><a href="/install" data-ar="لمالكي كروت الرسومات">For GPU owners</a><a href="/security" data-ar="الأمان">Security</a><a href="/developers" data-ar="المطورون">Developers</a>
 </div>
 <div class="navcta">
@@ -4534,4 +4534,208 @@ async function submitDemo(){
       '<div class="mini" style="margin-top:10px" data-ar="المرجع">Reference '+b.reference+'</div></div>';
   }catch(e){if(btn) btn.disabled=false;m.style.color='var(--warn)';m.textContent='Network error. Try emailing info@petabyte.market.';}
 }
+</script>""")
+
+
+# ============================ MODELS — discover / download / manage (Hugging Face-grade UX) ============================
+_MODELS_CSS = """<style>
+.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-top:18px}
+.mcard{border:1px solid var(--hair);border-radius:12px;padding:15px 16px;background:var(--panel,#fff);cursor:pointer;transition:border-color .12s,transform .12s}
+.mcard:hover{border-color:var(--teal);transform:translateY(-1px)}
+.mcard h3{font-size:15px;margin:0 0 6px;word-break:break-word}
+.mrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.mtag{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--hair);color:var(--mut)}
+.mbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px}
+.mbar input,.mbar select{padding:9px 11px;border:1px solid var(--hair);border-radius:9px;background:transparent;color:inherit;font:inherit}
+.mfiles td{font-size:12.5px}
+.mprog{height:12px;border-radius:999px;background:var(--hair);overflow:hidden}
+.mprog>i{display:block;height:100%;background:linear-gradient(90deg,var(--teal),var(--amber));width:0}
+.cbar{display:inline-block;background:var(--code,#0b1020);color:#cfe;border-radius:8px;padding:10px 12px;font-family:var(--mono,monospace);font-size:12.5px}
+.gfit{color:var(--teal)}.gtight{color:var(--amber)}.gbad{color:#e5484d}
+</style>"""
+
+_MODELS_JS_HELPERS = """
+function mBytes(n){n=Number(n||0);if(!n)return '';var u=['B','KB','MB','GB','TB'],i=0;while(n>=1024&&i<u.length-1){n/=1024;i++;}return (n>=100||i===0?n.toFixed(0):n.toFixed(1))+' '+u[i];}
+function mParams(n){n=Number(n||0);if(!n)return '';if(n>=1e9)return (n%1e9?(n/1e9).toFixed(1):(n/1e9).toFixed(0))+'B';if(n>=1e6)return (n/1e6).toFixed(0)+'M';return ''+n;}
+function mCompat(level){var map={good:['✓ Runs','gfit'],tight:['~ Tight','gtight'],insufficient:['✗ Too big','gbad'],unknown:['? Unknown','gtight']};var x=map[level]||map.unknown;return '<span class="'+x[1]+'">'+x[0]+'</span>';}
+function mMachine(hw){if(!hw)return '';var g=hw.gpu_name||((hw.cpu_count||'?')+' CPU');var v=hw.vram_gb?(' · '+hw.vram_gb+' GB VRAM'):'';var r=hw.ram_gb?(' · '+hw.ram_gb+' GB RAM'):'';return 'This machine: '+esc(g)+v+r;}
+"""
+
+MODELS_HTML = _page("Petabyte — Models",
+    desc="Discover and install open AI models with one command or one click — Hugging Face-grade convenience, provider-independent, hardware-aware.",
+    path="/models", body=_MODELS_CSS + """
+<div class="wrap" style="padding:40px 24px 60px">
+  <div id="pbtestmode"></div>
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px">
+    <div>
+      <h1 style="margin:0">Models</h1>
+      <p class="mut" style="margin:6px 0 0;max-width:60ch">Discover open models and install them in one action. Petabyte figures out the compatible files, verifies checksums, resumes broken downloads, and caches everything locally — you never touch a storage URL.</p>
+    </div>
+    <a class="btn btn-teal" href="/models/installed">Installed models →</a>
+  </div>
+  <div id="m_machine" class="mut mini" style="margin-top:12px"></div>
+  <div class="mbar">
+    <input id="m_q" placeholder="Search models (e.g. llama, qwen, code 7b)" style="flex:1;min-width:220px"/>
+    <select id="m_license"><option value="">any license</option><option>apache-2.0</option><option>mit</option><option>llama3.1</option><option>gemma</option></select>
+    <input id="m_maxparams" type="number" min="1" placeholder="max params (B)" style="width:150px"/>
+    <label class="mini" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="m_fits"/> fits my machine</label>
+    <button class="btn btn-amber" id="m_go">Search</button>
+  </div>
+  <div id="m_grid" class="mgrid"><p class="mut" style="padding:20px 0">Loading models…</p></div>
+</div>
+<script>
+""" + _MODELS_JS_HELPERS + """
+var M_HW=null;
+async function mLoad(q){
+  var grid=document.getElementById('m_grid');grid.innerHTML='<p class="mut" style="padding:20px 0">Loading…</p>';
+  var qs='?q='+encodeURIComponent(q||'');
+  var lic=document.getElementById('m_license').value;if(lic)qs+='&license='+encodeURIComponent(lic);
+  var mp=document.getElementById('m_maxparams').value;if(mp)qs+='&max_params='+(Number(mp)*1e9);
+  var r=await api('/api/models/search'+qs);
+  if(!r.ok){grid.innerHTML='<p class="mut">Search is unavailable right now.</p>';return;}
+  M_HW=r.body.machine;document.getElementById('m_machine').textContent=mMachine(M_HW);
+  var rows=r.body.models||[];
+  var fits=document.getElementById('m_fits').checked;
+  if(fits)rows=rows.filter(function(x){return x.compatibility==='good'||x.compatibility==='tight';});
+  if(!rows.length){grid.innerHTML='<p class="mut" style="padding:20px 0">No models found.</p>';return;}
+  grid.innerHTML=rows.map(function(x){
+    var badges=(x.installed?'<span class="mtag" style="color:var(--teal);border-color:var(--teal)">Installed</span>':'')+
+      '<span class="mtag">'+mCompat(x.compatibility)+'</span>';
+    return '<div class="mcard" data-id="'+esc(x.id)+'" onclick="mOpen(this)">'+
+      '<h3>'+esc(x.id)+'</h3>'+
+      '<div class="mut mini">'+esc(x.architecture||x.pipeline||'model')+'</div>'+
+      '<div class="mrow">'+(x.parameters?'<span class="mtag">'+mParams(x.parameters)+' params</span>':'')+
+        (x.license?'<span class="mtag">'+esc(x.license)+'</span>':'')+
+        (x.downloads?'<span class="mtag">'+Number(x.downloads).toLocaleString()+' pulls</span>':'')+'</div>'+
+      '<div class="mrow">'+badges+'</div></div>';
+  }).join('');
+}
+function mOpen(el){location.href='/models/'+el.getAttribute('data-id');}
+document.getElementById('m_go').addEventListener('click',function(){mLoad(document.getElementById('m_q').value);});
+document.getElementById('m_q').addEventListener('keydown',function(e){if(e.key==='Enter')mLoad(this.value);});
+document.getElementById('m_fits').addEventListener('change',function(){mLoad(document.getElementById('m_q').value);});
+mLoad('');
+</script>""")
+
+
+MODEL_DETAIL_HTML = _page("Petabyte — Model",
+    desc="Model details, hardware compatibility, files and one-click install on Petabyte.",
+    path="/models", body=_MODELS_CSS + """
+<div class="wrap" style="padding:34px 24px 60px">
+  <div id="pbtestmode"></div>
+  <a class="mini teal" href="/models">← all models</a>
+  <div id="m_head" style="margin-top:10px"><p class="mut">Loading…</p></div>
+  <div id="m_prog" style="display:none;margin:18px 0">
+    <div class="mini" id="m_prog_label" style="margin-bottom:6px"></div>
+    <div class="mprog"><i id="m_prog_bar"></i></div>
+    <div class="mini mut" id="m_prog_sub" style="margin-top:6px"></div>
+  </div>
+  <div id="m_msg" class="mini" style="margin-top:10px"></div>
+  <div id="m_body"></div>
+</div>
+<script>
+""" + _MODELS_JS_HELPERS + """
+var MID=decodeURIComponent(location.pathname.replace(/^\\/models\\//,'').replace(/\\/$/,''));
+var M_JOB=null;
+function setMsg(t,cls){var m=document.getElementById('m_msg');m.textContent=t||'';m.className='mini '+(cls||'');}
+async function mInfo(){
+  var head=document.getElementById('m_head');
+  var r=await api('/api/models/'+MID);
+  if(!r.ok){head.innerHTML='<h1>'+esc(MID)+'</h1><p class="mut">'+esc((r.body&&r.body.error&&r.body.error.message)||'Could not load this model.')+'</p>';return;}
+  var m=r.body.manifest, comp=r.body.compatibility, installed=r.body.installed;
+  var hw=comp.machine||{};
+  var dl=installed
+    ? '<button class="btn btn-teal" id="m_rm" onclick="mRemove()">Remove</button> <span class="teal mini">✓ Installed</span>'
+    : '<button class="btn btn-amber" id="m_dl" onclick="mPull()">Download model</button>';
+  head.innerHTML='<h1 style="margin:6px 0 4px">'+esc(m.id)+'</h1>'+
+    '<div class="mut">'+[m.parameters?mParams(m.parameters)+' params':'',esc(m.architecture||''),esc(m.format||''),esc(m.license||''),m.total_size?mBytes(m.total_size):''].filter(Boolean).join(' · ')+'</div>'+
+    '<div style="margin:14px 0">'+dl+'</div>'+
+    '<div class="panel" style="padding:12px 14px;max-width:560px"><b>Compatibility</b> '+mCompat(comp.level)+
+      '<div class="mini mut" style="margin-top:4px">'+esc(mMachine(hw))+'</div>'+
+      (comp.reasons||[]).map(function(x){return '<div class="mini mut">• '+esc(x)+'</div>';}).join('')+
+      (comp.alternatives&&comp.alternatives.length?('<div class="mini" style="margin-top:6px">Lighter options: '+comp.alternatives.map(function(a){return esc(a.quantization)+' (~'+a.vram_gb+' GB)';}).join(' · ')+'</div>'):'')+
+    '</div>';
+  var reqs=m.requirements||{};
+  var files=(m.files||[]).map(function(f){return '<tr><td class="mono">'+esc(f.path)+'</td><td class="mono">'+mBytes(f.size)+'</td><td>'+(f.sha256?'<span class="teal">sha256</span>':'<span class="mut">—</span>')+'</td></tr>';}).join('');
+  var tr=m.trust||{};
+  document.getElementById('m_body').innerHTML=
+    '<h2 style="margin-top:22px">Hardware requirements</h2>'+
+    '<p class="mut">~'+(reqs.vram_gb||'?')+' GB VRAM · ~'+(reqs.ram_gb||'?')+' GB RAM · '+(reqs.disk_gb||'?')+' GB disk'+(m.context_length?(' · context '+m.context_length):'')+'</p>'+
+    '<h2 style="margin-top:22px">Files ('+(m.files||[]).length+')</h2>'+
+    '<div class="panel" style="overflow:auto"><table class="tbl mfiles"><thead><tr><th>File</th><th>Size</th><th>Verify</th></tr></thead><tbody>'+files+'</tbody></table></div>'+
+    '<h2 style="margin-top:22px">Source &amp; trust</h2>'+
+    '<p class="mut">source: '+esc(m.source||'')+' · '+(tr.source_verified?'<span class="teal">verified source</span>':'<span class="amber">unverified source</span>')+' · '+(tr.hashed?'<span class="teal">weights hash-verified</span>':'<span class="amber">weights not hash-verified</span>')+'</p>'+
+    '<p class="mini mut">Petabyte never runs downloaded repository code. Remote code (trust_remote_code) is off by default.</p>';
+}
+async function mPull(){
+  var btn=document.getElementById('m_dl');if(btn)btn.disabled=true;setMsg('');
+  var r=await api('/api/models/pull',{method:'POST',body:JSON.stringify({id:MID,force:true})});
+  if(r.status===401){setMsg('Please sign in to install a model on this node.','amber');if(btn)btn.disabled=false;return;}
+  if(r.status===503){showCli();if(btn)btn.disabled=false;return;}
+  if(!r.ok){setMsg((r.body&&r.body.error&&r.body.error.message)||'Could not start the download.','amber');if(btn)btn.disabled=false;return;}
+  M_JOB=r.body.job_id;document.getElementById('m_prog').style.display='';pollJob(M_JOB);
+}
+function showCli(){
+  setMsg('Server-side install is disabled on this node. Install locally with the CLI:','amber');
+  document.getElementById('m_prog').style.display='none';
+  document.getElementById('m_body').insertAdjacentHTML('afterbegin','<div class="cbar" style="margin:8px 0 4px">petabyte model pull '+esc(MID)+'</div>');
+}
+async function pollJob(jid){
+  var bar=document.getElementById('m_prog_bar'),lab=document.getElementById('m_prog_label'),sub=document.getElementById('m_prog_sub');
+  var t=setInterval(async function(){
+    var r=await api('/api/models/downloads/'+jid);
+    if(!r.ok){clearInterval(t);return;}
+    var j=r.body;
+    bar.style.width=(j.percent||0)+'%';
+    lab.textContent=(j.status==='done'?'✓ Ready':'Downloading '+(j.file||''))+' — '+(j.percent||0)+'%';
+    sub.textContent=mBytes(j.downloaded)+' / '+mBytes(j.total)+' · '+(j.files_done||0)+'/'+(j.files_total||0)+' files'+(j.cache_hits?(' · '+j.cache_hits+' cached'):'');
+    if(['done','error','gated','incompatible','busy'].indexOf(j.status)>=0){
+      clearInterval(t);
+      if(j.status==='done'){setMsg('✓ Installed and verified.','teal');mInfo();}
+      else{setMsg(j.error||j.message||'Download failed.','amber');}
+    }
+  },700);
+}
+async function mRemove(){
+  if(!confirm('Remove '+MID+' from this node?'))return;
+  var r=await api('/api/models/'+MID,{method:'DELETE'});
+  if(!r.ok){setMsg((r.body&&r.body.error&&r.body.error.message)||'Could not remove.','amber');return;}
+  setMsg('Removed.','teal');mInfo();
+}
+mInfo();
+</script>""")
+
+
+MODELS_INSTALLED_HTML = _page("Petabyte — Installed models",
+    desc="Models installed on this Petabyte node, with sizes, cache usage and removal.",
+    path="/models/installed", body=_MODELS_CSS + """
+<div class="wrap" style="padding:40px 24px 60px">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+    <h1 style="margin:0">Installed models</h1>
+    <a class="btn btn-amber" href="/models">＋ Discover models</a>
+  </div>
+  <div id="mi_cache" class="mut mini" style="margin-top:10px"></div>
+  <div class="panel" style="overflow:auto;margin-top:14px"><table class="tbl"><thead><tr><th>Model</th><th>Size</th><th>Format</th><th>Status</th><th></th></tr></thead><tbody id="mi_rows"><tr><td colspan=5 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+</div>
+<script>
+""" + _MODELS_JS_HELPERS + """
+async function miLoad(){
+  var r=await api('/api/models/installed');
+  var tb=document.getElementById('mi_rows');
+  if(!r.ok){tb.innerHTML='<tr><td colspan=5 class="mut">Could not load.</td></tr>';return;}
+  var rows=r.body.models||[];
+  if(!rows.length){tb.innerHTML='<tr><td colspan=5 class="mut mono" style="text-align:center;padding:16px">No models installed. <a class="teal" href="/models">Discover models →</a></td></tr>';}
+  else{tb.innerHTML=rows.map(function(x){
+    return '<tr><td class="mono">'+esc(x.id)+'</td><td class="mono">'+mBytes(x.total_size)+'</td><td class="mono">'+esc(x.format||'—')+'</td>'+
+      '<td>'+(x.installed?'<span class="teal">Ready</span>':'<span class="amber">incomplete</span>')+'</td>'+
+      '<td><button class="btn btn-teal" data-mid="'+esc(x.id)+'" onclick="miRemove(this)">Remove</button></td></tr>';
+  }).join('');}
+}
+async function miRemove(el){
+  var id=el.getAttribute('data-mid');
+  if(!confirm('Remove '+id+'?'))return;
+  var r=await api('/api/models/'+id,{method:'DELETE'});
+  miLoad();
+}
+miLoad();
 </script>""")

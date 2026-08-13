@@ -2525,4 +2525,21 @@ ok("org booking extends from org wallet", dbmod.extend_booking(dbmod.SessionLoca
 _obk=dbmod.SessionLocal().query(dbmod.Booking).filter(dbmod.Booking.id==_ob["booking_id"]).first()
 ok("org extend grew escrow to 3h", _obk.hours==3)
 
+# --- model cache-locality signal (scheduler prefers a node that already holds the model) ---
+_ml = c.post("/nodes/models", headers={"X-API-KEY": seller_key},
+             json={"spec_id": spec_id, "models": ["Qwen/Qwen3-8B", "meta-llama/Llama-3.1-8B", "../evil"]})
+ok("agent reports cached models (bad ids rejected, valid kept)",
+   _ml.status_code == 200 and _ml.json()["cached_models"] == 2)
+_mv = c.get(f"/nodes/{spec_id}/models", headers=sh).json()
+ok("owner sees the node's cached model list", "Qwen/Qwen3-8B" in _mv["models"] and "../evil" not in _mv["models"])
+ok("a foreign user cannot read another node's cached models",
+   c.get(f"/nodes/{spec_id}/models", headers=bh).status_code == 404)
+_av = c.get("/api/models/availability", params={"id": "Qwen/Qwen3-8B"}).json()
+ok("availability reports how many online nodes hold the model", _av["nodes_cached"] >= 1)
+ok("availability is zero for a model no node holds",
+   c.get("/api/models/availability", params={"id": "nobody/x"}).json()["nodes_cached"] == 0)
+_ranked = dbmod.rank_specs_for_model(dbmod.SessionLocal().query(dbmod.SellerSpec).all(), "Qwen/Qwen3-8B")
+ok("scheduler ranking puts a cache-holding node first",
+   _ranked and dbmod.node_has_model_cached(_ranked[0], "Qwen/Qwen3-8B"))
+
 print("\nALL CHECKS PASSED")
