@@ -3509,6 +3509,9 @@ print(6 * 7)</textarea>
       <p class="mini" style="margin-top:8px">Full API reference at <a class="teal" href="/developers">/developers</a> and <a class="teal" href="/docs">/docs</a>.</p>
       <div class="lbl" style="margin-top:24px">Notifications</div>
       <div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>When</th><th>Event</th><th>Subject</th><th>Status</th></tr></thead><tbody id="c_notifs"></tbody></table></div>
+      <div class="lbl" style="margin-top:24px">Audit log <span class="mut" id="c_audit_integrity" style="font-weight:400;text-transform:none;letter-spacing:0"></span></div>
+      <p class="mut" style="font-size:13px;max-width:66ch">Immutable "who did what, when" — logins, key create/revoke, role and team changes, spend. Hash-chained so any edit or deletion is detectable (the security-team / SOC-2 trail).</p>
+      <div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>When</th><th>Action</th><th>Target</th><th>Detail</th><th>IP</th></tr></thead><tbody id="c_audit"><tr><td colspan=5 class="mut mono" style="text-align:center;padding:14px">Loading…</td></tr></tbody></table></div>
     </div>
 
     <div id="tab-seller" style="display:none">
@@ -3766,7 +3769,8 @@ async function cTeamOpen(orgId){
     '<div class="lbl" style="margin:0">Members — '+esc(o.name)+'</div>'+
     '<span class="mini" style="text-transform:none;letter-spacing:0">balance '+cD2(o.balance)+' · spent '+cD2(o.spent)+' · budget '+(o.budget_cap!=null?cD2(o.budget_cap):'&#8734;')+'</span></div>'+
     '<div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>Member</th><th>Role</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
-    invite+'</div>';
+    invite+(isAdmin?'<div id="c_team_audit" style="margin-top:6px"></div>':'')+'</div>';
+  if(isAdmin)cOrgAudit(orgId);
 }
 async function cMemberAdd(orgId){
   var u=((document.getElementById('c_inv_user')||{}).value||'').trim();
@@ -3802,7 +3806,45 @@ async function cAccess(){
      '<td data-l="Status">'+(k.revoked?'<span class="badge">revoked</span>':'<span class="badge ok">active</span>')+'</td>'+
      '<td data-l="">'+(k.revoked?'':'<button class="btn-ghost" style="padding:4px 10px;font-size:11px" data-act="cKeyRevoke" data-a1="'+esc(k.jti)+'">Revoke</button>')+'</td></tr>';
     }).join(''):'<tr><td colspan=5 class="mut mono" style="text-align:center;padding:14px">No API keys yet. Create one to drive Petabyte from code or CI.</td></tr>';
-  cNotifs();
+  cNotifs();cAudit();
+}
+function cAuditBadge(el,integ){
+  if(!el)return;
+  if(integ&&integ.intact){el.innerHTML='<span class="badge ok">chain verified</span> '+integ.checked+' events, tamper-evident';}
+  else if(integ){el.innerHTML='<span class="badge" style="color:var(--bad);border-color:var(--bad)">chain broken</span> from #'+integ.first_broken_id;}
+  else{el.textContent='';}
+}
+function cAuditRows(events){
+  if(!events.length)return '<tr><td colspan=5 class="mut mono" style="text-align:center;padding:14px">No events yet.</td></tr>';
+  return events.map(function(e){
+    var d=e.detail; if(d&&typeof d==='object'){try{d=JSON.stringify(d);}catch(x){d='';}}
+    return '<tr><td data-l="When" class="mono" style="font-size:11px">'+cTs(e.at)+'</td>'+
+     '<td data-l="Action" class="mono">'+esc(e.action||'')+'</td>'+
+     '<td data-l="Target" class="mono" style="font-size:11px">'+esc(e.resource||e.target||'—')+'</td>'+
+     '<td data-l="Detail" class="mut" style="font-size:12px">'+esc(d||'')+'</td>'+
+     '<td data-l="IP" class="mono" style="font-size:11px">'+esc(e.ip||'—')+'</td></tr>';
+  }).join('');
+}
+async function cAudit(){
+  var r=((await api('/account/audit'))||{}).body||{};
+  document.getElementById('c_audit').innerHTML=cAuditRows(r.events||[]);
+  cAuditBadge(document.getElementById('c_audit_integrity'), r.integrity);
+}
+async function cOrgAudit(orgId){
+  var el=document.getElementById('c_team_audit');if(!el)return;
+  var r=((await api('/orgs/'+orgId+'/audit'))||{}).body||{};
+  el.innerHTML='<div class="lbl" style="margin-top:16px">Team audit log <span class="mut" id="c_team_audit_integ" style="font-weight:400;text-transform:none;letter-spacing:0"></span></div>'+
+    '<div class="panel" style="overflow:auto;margin-top:8px"><table class="tbl"><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead><tbody>'+
+    ((r.events||[]).length?(r.events||[]).map(function(e){
+      var d=e.detail; if(d&&typeof d==='object'){try{d=JSON.stringify(d);}catch(x){d='';}}
+      return '<tr><td data-l="When" class="mono" style="font-size:11px">'+cTs(e.at)+'</td>'+
+       '<td data-l="Actor" class="mono">'+esc(e.actor||'—')+'</td>'+
+       '<td data-l="Action" class="mono">'+esc(e.action||'')+'</td>'+
+       '<td data-l="Target" class="mono" style="font-size:11px">'+esc(e.resource||'—')+'</td>'+
+       '<td data-l="Detail" class="mut" style="font-size:12px">'+esc(d||'')+'</td></tr>';
+    }).join(''):'<tr><td colspan=5 class="mut mono" style="text-align:center;padding:14px">No events yet.</td></tr>')+
+    '</tbody></table></div>';
+  cAuditBadge(document.getElementById('c_team_audit_integ'), r.integrity);
 }
 async function cKeyCreate(){
   var label=encodeURIComponent((document.getElementById('c_keylabel')||{}).value||'');

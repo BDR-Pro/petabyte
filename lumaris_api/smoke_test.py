@@ -424,6 +424,32 @@ ok("admin adds then removes a member",
 ok("a non-admin cannot remove members",
    c.delete(f"/orgs/{org_id}/members/orgmember", headers=memberh).status_code==403)
 
+# ---- Tenant-facing audit log (immutable, hash-chained) ----
+_oaud=c.get(f"/orgs/{org_id}/audit", headers=adminh)
+ok("org audit is admin-only (non-admin blocked)",
+   c.get(f"/orgs/{org_id}/audit", headers=memberh).status_code==403 and _oaud.status_code==200)
+_oaudb=_oaud.json()
+_oactions={e["action"] for e in _oaudb["events"]}
+ok("org audit records member changes (add / role / create)",
+   {"team.create","team.member.add","team.member.role"} <= _oactions)
+ok("the audit chain verifies (tamper-evident) — intact over the recorded events",
+   _oaudb["integrity"]["intact"] is True and _oaudb["integrity"]["checked"] >= 1)
+_aaud=c.get("/account/audit", headers=adminh).json()
+ok("personal audit trail lists the caller's own actions",
+   any(e["action"]=="team.create" for e in _aaud["events"]) and _aaud["integrity"]["intact"] is True)
+ok("personal audit requires auth", c.get("/account/audit").status_code==401)
+# tamper-evidence: editing a stored row breaks the chain (deletion/edit is detectable)
+import db as _auditdb
+_asess=_auditdb.SessionLocal()
+try:
+    _arow=(_asess.query(_auditdb.AuditEvent)
+           .filter(_auditdb.AuditEvent.action=="team.member.add").first())
+    _arow.detail='{"role":"admin"}'; _asess.add(_arow); _asess.commit()
+    ok("editing an audit row is detected by verify_audit_chain (immutability is enforced by evidence)",
+       _auditdb.verify_audit_chain(_asess)["intact"] is False)
+finally:
+    _asess.close()
+
 # org wallet + budget cap
 c.post("/orgs/{}/deposit".format(org_id), headers=adminh, json={"amount":100.0,"budget_cap":15.0})
 ok("org balance funded", c.get(f"/orgs/{org_id}", headers=adminh).json()["balance"]==100.0)

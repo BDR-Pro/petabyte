@@ -92,6 +92,7 @@ from db import (
     create_challenge, consume_challenge, set_spec_confidential, spec_confidential_active,
     create_org, get_org, get_membership, org_members, add_org_member, list_orgs_for_user,
     set_org_member_role, remove_org_member,
+    list_audit_for_actor, list_audit_for_org, verify_audit_chain,
     org_deposit, try_org_debit, org_refund, org_usage,
     retry_task, set_task_progress, add_task_log, get_task_logs,
     set_benchmark, create_benchmark_task, org_analytics,
@@ -2598,10 +2599,13 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(),
                           environment=obsmod.ENVIRONMENT)
         obsmod.inc_metric("petabyte_auth_failures_total", reason="bad_credentials",
                           environment=obsmod.ENVIRONMENT)
+        audit(db, "auth.login_failed", actor=form_data.username, ip=ip,
+              detail={"username": form_data.username})
         raise HTTPException(status_code=400, detail="Invalid credentials")
     _RL_BUCKETS.pop(key, None)      # a success clears the slate for this account
     obsmod.inc_metric("petabyte_logins_total", outcome="success",
                       environment=obsmod.ENVIRONMENT)
+    audit(db, "auth.login", actor=user, ip=ip)
     token = create_access_token({"sub": user.username, "role": user.role})
     return {"access_token": token, "token_type": "bearer"}
 
@@ -2613,6 +2617,8 @@ def change_role(data: RoleModel, user: dict = Depends(get_current_user),
         new_role = set_role(db, _username(user), data.role)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    audit(db, "account.role_change", actor=_username(user), resource_type="user",
+          resource_id=_username(user), detail={"role": new_role})
     return {"status": "ok", "msg": f"Role changed to {new_role}"}
 
 
@@ -5282,6 +5288,8 @@ def create_org_endpoint(data: OrgCreateModel, user: dict = Depends(get_current_u
     org = create_org(db, data.name, me)
     if not org:
         raise HTTPException(status_code=400, detail="Org name already taken")
+    audit(db, "team.create", actor=me, resource_type="org", resource_id=org.id,
+          org_id=org.id, detail={"name": org.name})
     return {"status": "ok", "org_id": org.id, "name": org.name, "your_role": "admin"}
 
 
@@ -5310,6 +5318,8 @@ def add_member_endpoint(org_id: int, data: OrgMemberModel,
             raise HTTPException(status_code=404, detail="User not found")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    audit(db, "team.member.add", actor=me, resource_type="org_member", resource_id=data.username,
+          org_id=org_id, detail={"role": data.role})
     return {"status": "ok", "members": org_members(db, org_id)}
 
 
@@ -5330,6 +5340,8 @@ def set_member_role_endpoint(org_id: int, username: str, data: OrgRoleModel,
         raise HTTPException(status_code=404, detail="Not a member of this team")
     if res == "last_admin":
         raise HTTPException(status_code=409, detail="A team must keep at least one admin")
+    audit(db, "team.member.role", actor=me, resource_type="org_member", resource_id=username,
+          org_id=org_id, detail={"role": data.role})
     return {"status": "ok", "members": org_members(db, org_id)}
 
 
@@ -5347,6 +5359,8 @@ def remove_member_endpoint(org_id: int, username: str,
         raise HTTPException(status_code=404, detail="Not a member of this team")
     if res == "last_admin":
         raise HTTPException(status_code=409, detail="A team must keep at least one admin")
+    audit(db, "team.member.remove", actor=me, resource_type="org_member", resource_id=username,
+          org_id=org_id)
     return {"status": "ok", "members": org_members(db, org_id)}
 
 
@@ -5363,7 +5377,23 @@ def org_deposit_endpoint(org_id: int, data: OrgDepositModel,
     if data.budget_cap is not None:
         org.budget_cap = data.budget_cap; db.add(org); db.commit()
     bal = org_deposit(db, org, data.amount)
+    audit(db, "team.deposit", actor=me, resource_type="org", resource_id=org_id, org_id=org_id,
+          detail={"amount": float(data.amount), "budget_cap": (float(data.budget_cap)
+                  if data.budget_cap is not None else None)})
     return {"status": "ok", "balance": bal, "budget_cap": org.budget_cap}
+
+
+@app.get("/orgs/{org_id}/audit", tags=["account"])
+def org_audit_endpoint(org_id: int, limit: int = Query(200, ge=1, le=500),
+                       user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Tenant-facing audit trail for a team — every member change, deposit and spend scoped to it.
+    Admin-only (the security-team / SOC-2 view). Includes a tamper-evidence check over the chain."""
+    me = get_user_by_username(db, _username(user))
+    m = get_membership(db, org_id, me.id)
+    if not m or m.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    return {"org_id": org_id, "events": list_audit_for_org(db, org_id, limit=limit),
+            "integrity": verify_audit_chain(db)}
 
 
 @app.get("/orgs/{org_id}/usage")
@@ -7887,6 +7917,8 @@ def create_api_key(days: int = Query(7, ge=1, le=90),
     api_key, jti = gen_secure_api_key(_username(user), days, scope_list)
     me = get_user_by_username(db, _username(user))
     record_issued_key(db, me.id, jti, label, scope_list, days)
+    audit(db, "apikey.create", actor=me, resource_type="api_key", resource_id=jti,
+          detail={"scopes": scope_list, "days": days, "label": label})
     return {"status": "ok", "api_key": api_key, "jti": jti, "scopes": scope_list}
 
 
@@ -7894,6 +7926,17 @@ def create_api_key(days: int = Query(7, ge=1, le=90),
 def list_keys(user: dict = Security(get_current_user), db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
     return {"keys": list_issued_keys(db, me.id)}
+
+
+@app.get("/account/audit", tags=["account"])
+def account_audit_endpoint(limit: int = Query(100, ge=1, le=500),
+                           user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The signed-in user's own audit trail — every security-relevant action they took (logins,
+    key create/revoke, role & team changes, withdrawals), newest first. Immutable and
+    hash-chained; `integrity` reports whether the chain still verifies (tamper-evidence)."""
+    me = get_user_by_username(db, _username(user))
+    return {"events": list_audit_for_actor(db, me.id, limit=limit),
+            "integrity": verify_audit_chain(db)}
 
 
 @app.post("/keys/{jti}/revoke")
@@ -7904,6 +7947,7 @@ def revoke_key_by_jti(jti: str, user: dict = Security(get_current_user),
     if jti not in owned:
         raise HTTPException(status_code=404, detail="Key not found")
     revoke_jti(db, jti)
+    audit(db, "apikey.revoke", actor=me, resource_type="api_key", resource_id=jti)
     return {"status": "ok", "jti": jti, "revoked": True}
 
 

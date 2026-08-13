@@ -879,24 +879,122 @@ class AuditEvent(Base):
     ip_address = Column(String, nullable=True)
     request_id = Column(String, nullable=True)
     detail = Column(Text, nullable=True)                         # JSON, never secrets
+    org_id = Column(Integer, ForeignKey("orgs.id"), index=True, nullable=True)  # team scope, if any
+    # Tamper-evidence: each row commits to its own canonical fields (content_hash) and links to the
+    # previous row (chain_hash = sha256(prev.chain_hash + content_hash)). A silent edit or a deletion
+    # is then detectable by verify_audit_chain(). Nullable so pre-existing rows (written before the
+    # chain landed) don't block startup — verify() treats a null-hash row as the chain's genesis.
+    content_hash = Column(String, nullable=True)
+    chain_hash = Column(String, nullable=True)
     created_at = Column(DateTime, default=_utcnow, index=True)
 
 
+def _audit_content(actor_username, actor_type, action, resource_type, resource_id,
+                   org_id, detail, ts) -> str:
+    """Deterministic serialization of the fields the tamper-evidence hash commits to. Order-stable
+    so the same row hashes identically on write and on verify. The timestamp is normalized to a
+    NAIVE-UTC isoformat because an aware datetime on write round-trips to a naive one on read (the
+    DB DateTime column drops tzinfo) — normalizing both sides keeps the hash stable."""
+    tsx = None
+    if ts is not None:
+        tsx = (ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts).isoformat()
+    return json.dumps({"actor": actor_username, "actor_type": actor_type, "action": action,
+                       "resource_type": resource_type, "resource_id": resource_id,
+                       "org_id": org_id, "detail": detail, "ts": tsx},
+                      sort_keys=True, separators=(",", ":"))
+
+
 def audit(db: Session, action: str, actor=None, actor_type="user", resource_type=None,
-          resource_id=None, ip=None, request_id=None, detail=None, commit=True):
-    """Write an audit event. Never log secrets, tokens, or full payout destinations."""
+          resource_id=None, ip=None, request_id=None, detail=None, org_id=None, commit=True):
+    """Write a tamper-evident audit event. Never log secrets, tokens, or full payout destinations.
+
+    `actor` may be a User (its id + username are captured) or a plain username string. `org_id`
+    scopes the event to a team so an org admin can read its own trail. Each row is hash-chained to
+    the previous one (content_hash of its own fields + chain_hash = sha256(prev.chain_hash +
+    content_hash)), so a later edit or deletion is detectable by verify_audit_chain(). Chaining is
+    best-effort — a failure to read the previous hash never blocks the action being audited."""
+    actor_username = getattr(actor, "username", None)
+    if actor_username is None and isinstance(actor, str):
+        actor_username = actor
+    det = json.dumps(detail) if isinstance(detail, dict) else detail
+    rid = str(resource_id) if resource_id is not None else None
+    ts = _utcnow()
     ev = AuditEvent(
         actor_user_id=getattr(actor, "id", None),
-        actor_username=getattr(actor, "username", None),
+        actor_username=actor_username,
         actor_type=actor_type, action=action,
-        resource_type=resource_type,
-        resource_id=str(resource_id) if resource_id is not None else None,
-        ip_address=ip, request_id=request_id,
-        detail=json.dumps(detail) if isinstance(detail, dict) else detail)
+        resource_type=resource_type, resource_id=rid,
+        ip_address=ip, request_id=request_id, detail=det, org_id=org_id, created_at=ts)
+    try:
+        prev = db.query(AuditEvent).order_by(AuditEvent.id.desc()).first()
+        prev_chain = (prev.chain_hash if prev and prev.chain_hash else "")
+        content = _audit_content(actor_username, actor_type, action, resource_type, rid,
+                                 org_id, det, ts)
+        ev.content_hash = hashlib.sha256(content.encode()).hexdigest()
+        ev.chain_hash = hashlib.sha256((prev_chain + ev.content_hash).encode()).hexdigest()
+    except Exception:  # noqa: BLE001 — chaining is best-effort; never block the audited action
+        pass
     db.add(ev)
     if commit:
         db.commit()
     return ev
+
+
+def _audit_row(e: "AuditEvent") -> dict:
+    det = e.detail
+    if det and isinstance(det, str) and det.strip().startswith("{"):
+        try:
+            det = json.loads(det)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"id": e.id, "at": e.created_at.isoformat() if e.created_at else None,
+            "actor": e.actor_username, "actor_type": e.actor_type, "action": e.action,
+            "resource": (f"{e.resource_type}:{e.resource_id}" if e.resource_type else e.resource_id),
+            "org_id": e.org_id, "ip": e.ip_address, "detail": det,
+            "content_hash": e.content_hash}
+
+
+def list_audit_for_actor(db: Session, user_id: int, limit: int = 100):
+    """Audit events performed BY this user — their own "who did what" trail."""
+    rows = (db.query(AuditEvent).filter(AuditEvent.actor_user_id == user_id)
+            .order_by(AuditEvent.id.desc()).limit(limit).all())
+    return [_audit_row(e) for e in rows]
+
+
+def list_audit_for_org(db: Session, org_id: int, limit: int = 200):
+    """Every audit event scoped to a team (member changes, deposits, spend) — for org admins."""
+    rows = (db.query(AuditEvent).filter(AuditEvent.org_id == org_id)
+            .order_by(AuditEvent.id.desc()).limit(limit).all())
+    return [_audit_row(e) for e in rows]
+
+
+def verify_audit_chain(db: Session, limit: int = 10000) -> dict:
+    """Recompute the hash chain over the most recent rows (ascending id) and report the first break
+    — a break means a row was edited or deleted after the fact. Rows written before chaining existed
+    (content_hash NULL) are skipped but still carry the chain forward, mirroring audit()'s logic."""
+    recent = db.query(AuditEvent).order_by(AuditEvent.id.desc()).limit(limit).all()
+    rows = recent[::-1]
+    prev_chain = ""
+    if rows:
+        before = (db.query(AuditEvent).filter(AuditEvent.id < rows[0].id)
+                  .order_by(AuditEvent.id.desc()).first())
+        prev_chain = (before.chain_hash or "") if before else ""
+    broken = None
+    checked = 0
+    for e in rows:
+        if not e.content_hash:                        # legacy row — not chained, not verifiable
+            prev_chain = e.chain_hash or ""
+            continue
+        content = _audit_content(e.actor_username, e.actor_type, e.action, e.resource_type,
+                                 e.resource_id, e.org_id, e.detail, e.created_at)
+        ch = hashlib.sha256(content.encode()).hexdigest()
+        expect = hashlib.sha256((prev_chain + ch).encode()).hexdigest()
+        if ch != e.content_hash or expect != e.chain_hash:
+            broken = e.id
+            break
+        checked += 1
+        prev_chain = e.chain_hash
+    return {"checked": checked, "intact": broken is None, "first_broken_id": broken}
 
 
 class BookingsPaused(Exception):
@@ -1973,6 +2071,8 @@ def _ensure_columns():
                            ("master_port", "INTEGER"), ("rendezvous_at", "TIMESTAMP")],
         "job_segments": [("peer_host", "VARCHAR"), ("peer_port", "INTEGER"),
                          ("slots", "INTEGER")],
+        "audit_events": [("org_id", "INTEGER"), ("content_hash", "VARCHAR"),
+                         ("chain_hash", "VARCHAR")],
     }
     try:
         insp = _inspect(engine)
