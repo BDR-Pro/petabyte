@@ -897,28 +897,7 @@ async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await 
    '<td data-l="Region" class="mut mono" style="font-size:12px">'+esc(s.region||'—')+'</td>'+
    '<td data-l="rep" class="mono" style="color:'+rc+'">'+rep+'</td>'+
    '<td data-l="free" class="mono" style="color:var(--teal)">'+s.available_units+'</td>'+
-   '<td data-l="" class="tbl-action"><a class="btn btn-teal" style="padding:6px 13px;font-size:12px" href="/launch?spec='+s.id+'">Launch →</a></td></tr>';}).join('');
- updateSavingsBanner(b.specs);}
-// Lead with the headline the buyer cares about: how much cheaper than the hyperscalers.
-function updateSavingsBanner(specs){
- var banner=document.getElementById('savingsbanner');
- if(!banner){return;}
- var maxSave=0,cheaper=0;
- (specs||[]).forEach(function(s){
-  if(s.cloud_reference && s.price_per_hour < s.cloud_reference){
-   cheaper++;
-   var pc=Math.round((1-s.price_per_hour/s.cloud_reference)*100);
-   if(pc>maxSave){maxSave=pc;}
-  }
- });
- if(maxSave>0){
-  banner.innerHTML='<span>Up to <b>'+maxSave+'% cheaper</b> than AWS, GCP &amp; Azure on-demand</span>'+
-   '<span class="sub">'+cheaper+' GPU'+(cheaper===1?'':'s')+' below the on-demand cloud reference for the same class — a benchmark, not a quote.</span>';
-  banner.style.display='';
- }else{
-  banner.style.display='none';
- }
-}
+   '<td data-l="" class="tbl-action"><a class="btn btn-teal" style="padding:6px 13px;font-size:12px" href="/launch?spec='+s.id+'">Launch →</a></td></tr>';}).join('');}
 load();setInterval(load,8000);
 </script>""")
 
