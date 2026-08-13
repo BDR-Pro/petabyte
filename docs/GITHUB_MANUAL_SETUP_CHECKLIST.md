@@ -61,6 +61,7 @@ GOOGLE_REDIRECT_URI=https://petabyte.market/auth/google/callback;
 GRAFANA_ENABLED=true;
 GRAFANA_URL=;
 HEARTBEAT_TIMEOUT_S=60;
+HF_ENDPOINT=https://huggingface.co;
 INSTANT_PAYOUT_FEE_MIN=0.50;
 INSTANT_PAYOUT_FEE_PCT=0.015;
 LEGACY_KEYS_FULL_ACCESS=false;
@@ -74,6 +75,8 @@ MAILGUN_DOMAIN=petabyte.market;
 MAX_DISK_ALLOC_GB=100000;
 MAX_DISTRIBUTED_NODES=100;
 MIN_REPUTATION=50;
+MODEL_MAX_PULL_GB=200;
+MODEL_PULL_ENABLED=false;
 NEWSLETTER_LIST_ADDRESS=newsletter@news.petabyte.market;
 NEWSLETTER_PROVIDER=mailgun;
 NICEHASH_API=https://api2.nicehash.com;
@@ -105,8 +108,10 @@ PAYOUT_HOLD_ON_REPORT=true;
 PAYOUT_MATURITY_MIN_JOBS=3;
 PAYOUT_READINESS_MAX_AGE_S=2592000;
 PAYOUT_STUB=true;
+PETABYTE_HOME=;
 PETABYTE_HOST_ROLE=;
 PETABYTE_OFFLINE_TEST=;
+PETABYTE_REGISTRY_URL=;
 PETABYTE_RELEASE_PUBKEY=;
 PG_DUMP_BIN=;
 PLATFORM_AUTH_MARGIN_BPS=2000;
@@ -170,6 +175,7 @@ TREMENDOUS_API=https://api.tremendous.com/api/v2;
 TRUSTED_PROXIES=127.0.0.1,::1;
 USDC_CHAIN=MATIC;
 VM_DNS_ZONE=;
+VOLUME_MAX_BLOB_MB=1024;
 WALLET_MAX_TOPUP_MINOR=500000;
 WALLET_MIN_TOPUP_MINOR=500;
 WEB_CONCURRENCY=2;
@@ -200,6 +206,9 @@ Create each under **Secrets**. Required ones (🔴) must exist before the first 
 - **`GATEWAY_TOKEN`** — ⚪ optional. Generate: `openssl rand -hex 16` (VM gateway route resolution).
 - **`GOOGLE_CLIENT_ID`** — ⚪ optional. Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 client.
 - **`GOOGLE_CLIENT_SECRET`** — ⚪ optional. Google Cloud Console → the same OAuth client's secret.
+- **`HF_TOKEN`** — ⚪ optional. See the reference doc.
+- **`HUGGINGFACE_TOKEN`** — ⚪ optional. See the reference doc.
+- **`HUGGING_FACE_HUB_TOKEN`** — ⚪ optional. See the reference doc.
 - **`MAILCHIMP_API_KEY`** — ⚪ optional. Mailchimp → Account → Extras → API keys (only if NEWSLETTER_PROVIDER=mailchimp).
 - **`MAILGUN_API_KEY`** — ⚪ optional. Mailgun → Settings → API Keys (a Sending API key). Also powers the newsletter.
 - **`NICEHASH_API_KEY`** — ⚪ optional. NiceHash → API keys (only if using idle-mining fallback pricing).

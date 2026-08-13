@@ -34,7 +34,7 @@ def _green(t): return _c(t, "38;5;42")
 def _dim(t): return _c(t, "2")
 def _bold(t): return _c(t, "1")
 
-CONFIG = os.path.expanduser("~/.petabyte/cli.json")
+CONFIG = os.getenv("PETABYTE_CONFIG") or os.path.expanduser("~/.petabyte/cli.json")
 DEFAULT_API = os.getenv("PETABYTE_API_URL", "http://localhost:8000")
 
 
@@ -46,7 +46,9 @@ def _cfg():
 
 
 def _save(cfg):
-    os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+    d = os.path.dirname(CONFIG)
+    if d:                                   # a bare filename (e.g. PETABYTE_CONFIG=cli.json) has no dir
+        os.makedirs(d, exist_ok=True)
     json.dump(cfg, open(CONFIG, "w"))
 
 
@@ -130,7 +132,10 @@ def cmd_run(a, cfg):
         # pick a spec
         spec_id = a.spec
         if not spec_id:
-            specs = c.get("/specs").json()["specs"]
+            sr = c.get("/specs")
+            if sr.status_code != 200:       # e.g. 401/5xx — don't .json() a non-OK body
+                _die("could not list GPUs", sr)
+            specs = sr.json().get("specs", [])
             if a.gpu:
                 specs = [s for s in specs if (s["gpu_model"] or "").lower() == a.gpu.lower()]
             if not specs:

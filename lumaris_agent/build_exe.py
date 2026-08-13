@@ -16,6 +16,10 @@ def build_exe():
         '--onefile',
         '--windowed',  # No console window
         '--add-data=templates;templates',  # Include templates
+        '--hidden-import=cli_ui',
+        '--hidden-import=agent_cli',
+        '--hidden-import=provision',
+        '--hidden-import=crypto',
         '--hidden-import=flask',
         '--hidden-import=httpx',
         '--hidden-import=nbformat',

@@ -38,7 +38,10 @@ ALIASES = {"dotenv": "python-dotenv"}
 #   * torch — the GPU FP16 authenticity benchmark (_measure_fp16_tflops) and NCCL distributed
 #     training run on the SELLER's GPU box, which ships torch itself; the agent detects its
 #     absence (returns None / falls back) and never lists it as a control-plane dependency.
-OPTIONAL = {"opentelemetry", "torch"}
+#   * version — a packaging-only module baked into the frozen desktop-app bundle (desktop-app/
+#     version.py); agent_cli.py imports it under try/except with a hardcoded fallback, so the
+#     control-plane runtime never needs it declared as a dependency.
+OPTIONAL = {"opentelemetry", "torch", "version"}
 
 
 def _runtime_files():

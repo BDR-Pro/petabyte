@@ -23,17 +23,24 @@ try:
 except Exception:
     pass
 
+import cli_ui
+import agent_cli
+
+agent_cli.PRODUCT = "Petabyte Desktop Agent"
+
 # Sensible default so an un-configured launch still points at the right API.
 os.environ.setdefault("PETABYTE_API_URL", "https://petabyte.market")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] %(levelname)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout),
-              logging.FileHandler("petabyte_agent.log")],
-)
 
-from ui import run_ui, agent_status, configured  # safe: ui never imports task_fetcher
+def _configure_logging():
+    """Set up logging when the app actually runs — NOT at import, so `doctor --json`
+    and `--version` keep stdout clean (no stray httpx 'HTTP Request' log lines)."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(levelname)s: %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout),
+                  logging.FileHandler("petabyte_agent.log")],
+    )
 
 _started = threading.Event()
 
@@ -68,6 +75,22 @@ def _supervisor():
 
 
 def main():
+    # --help / --version / doctor run before the dashboard launches (and before any
+    # config is required), so the packaged .exe answers them cleanly.
+    if agent_cli.handle_cli(sys.argv[1:]):
+        return
+
+    # ui is safe to import unconfigured (it never imports task_fetcher at load time);
+    # done here so the CLI paths above stay fast and dependency-light.
+    _configure_logging()
+    global run_ui, agent_status, configured
+    from ui import run_ui, agent_status, configured
+
+    out = cli_ui.out
+    agent_cli.banner(out, product="Petabyte Desktop Agent", url=os.getenv("PETABYTE_API_URL"))
+    out.line(out.dim("  dashboard  ") + "http://127.0.0.1:5000")
+    out.blank()
+
     # Best-effort self-update (only active in the packaged Windows .exe).
     try:
         import updater
@@ -78,7 +101,7 @@ def main():
     threading.Thread(target=_supervisor, daemon=True).start()
     logging.info("Petabyte Desktop Agent — dashboard at http://127.0.0.1:5000")
     if not configured():
-        logging.info("Not configured yet — open the dashboard to add your API key + Spec ID.")
+        out.warn("Not configured yet — open the dashboard to add your API key + Spec ID.")
     try:
         webbrowser.open("http://127.0.0.1:5000")
     except Exception:

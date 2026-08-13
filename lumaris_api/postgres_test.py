@@ -188,5 +188,55 @@ except Exception:
 ok("Postgres ledger also REFUSES an unbalanced transaction", refused)
 s.close()
 
+print("\n=== 5. schema init is idempotent + race-safe (multi-worker boot) ===")
+# init_db runs at import in every gunicorn worker; create_all(checkfirst) is not atomic across
+# connections, so a naive setup races on CREATE TABLE (the 'relation <t>_id_seq already exists'
+# UniqueViolation on pg_class). These assertions only mean something on a real Postgres.
+
+# (a) idempotent: a second init_db must be a clean no-op
+_reinit_ok = True
+try:
+    dbmod.init_db()
+except Exception as e:  # noqa: BLE001
+    _reinit_ok = False
+    print("   reinit error:", e)
+ok("init_db() is idempotent (safe to call again)", _reinit_ok)
+
+# (b) heal a half-applied earlier deploy: table dropped but its SERIAL sequence left behind
+with dbmod.engine.begin() as c:
+    c.exec_driver_sql("DROP TABLE IF EXISTS benchmark_samples CASCADE")
+    c.exec_driver_sql("CREATE SEQUENCE IF NOT EXISTS benchmark_samples_id_seq")  # the orphan
+_heal_ok = True
+try:
+    dbmod.init_db()   # plain create_all would fail here; init_db must recover
+except Exception as e:  # noqa: BLE001
+    _heal_ok = False
+    print("   heal error:", e)
+ok("init_db() heals an orphaned <table>_id_seq (recreates the table)",
+   _heal_ok and inspect(dbmod.engine).has_table("benchmark_samples"))
+
+# (c) concurrent boot: many workers calling init_db at once must not race on DDL
+with dbmod.engine.begin() as c:
+    c.exec_driver_sql("DROP TABLE IF EXISTS benchmark_samples CASCADE")
+_boot_errs = []
+
+
+def _boot():
+    try:
+        dbmod.init_db()
+    except Exception as e:  # noqa: BLE001
+        _boot_errs.append(repr(e))
+
+
+_threads = [threading.Thread(target=_boot) for _ in range(8)]
+for _t in _threads:
+    _t.start()
+for _t in _threads:
+    _t.join()
+ok(f"8 concurrent init_db() calls never race on CREATE TABLE (errors: {len(_boot_errs)})",
+   not _boot_errs and inspect(dbmod.engine).has_table("benchmark_samples"))
+if _boot_errs:
+    print("   ", _boot_errs[0])
+
 print(f"\n=== postgres: {PASS} passed, {FAIL} failed ===", flush=True)
 sys.exit(1 if FAIL else 0)

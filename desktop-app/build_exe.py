@@ -43,6 +43,9 @@ def build_exe():
         "--hidden-import=nbclient",
         "--hidden-import=requests",
         # local modules bundled explicitly (imported lazily/by string)
+        "--hidden-import=cli_ui",
+        "--hidden-import=agent_cli",
+        "--hidden-import=ui",              # imported inside main() after the CLI dispatch
         "--hidden-import=task_fetcher",
         "--hidden-import=crypto",
         "--hidden-import=vm",

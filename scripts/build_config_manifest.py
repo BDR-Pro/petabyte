@@ -61,6 +61,11 @@ TEST_ONLY = {
     # never deployment config.
     "BENCH_MATMUL_N", "BENCH_MATMUL_ITERS", "BLENDER_BENCH_CLI", "BLENDER_BENCH_SCENES",
     "DEMO_API_URL", "FASTAPI_SERVER_URL", "API_BASE", "API_KEY", "SPEC_ID", "AGENT_ENV",
+    # client-side CLI presentation / local config — per-invocation user preferences read by the
+    # buyer+seller CLIs (cli_ui.py, cli/petabyte.py), never platform deployment config. Same class
+    # as NO_COLOR above: PETABYTE_COLOR toggles ANSI colour, TERM is the OS terminal type, and
+    # PETABYTE_CONFIG points the CLI at its local config file (~/.petabyte/cli.json).
+    "PETABYTE_COLOR", "TERM", "PETABYTE_CONFIG",
 }
 
 # ---- GPU-agent + deployment vars (not in the platform template.env) --------------------

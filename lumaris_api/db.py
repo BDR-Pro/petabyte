@@ -2188,12 +2188,74 @@ def _ensure_check_constraints():
             pass
 
 
+# Distinct from main._MAINTENANCE_LOCK_ID; stable so every worker contends on the same key.
+_SCHEMA_LOCK_ID = 918273646
+
+
 def init_db():
-    Base.metadata.create_all(bind=engine)
+    """Bring the schema up to date, idempotently AND safely under concurrency.
+
+    `create_all(checkfirst=True)` and the ALTER/CREATE-INDEX passes are each non-atomic across
+    connections, so on a multi-worker boot (gunicorn) two processes can race — e.g. both issue
+    CREATE TABLE and the loser fails with 'relation <table>_id_seq already exists' (the pg_class
+    UniqueViolation we saw). On Postgres we serialize the WHOLE setup behind a session advisory
+    lock: one worker does the work while the rest block, then run the same idempotent passes and
+    no-op. SQLite (dev/tests) has no cross-process concurrency, so it runs the passes directly."""
+    if not engine.dialect.name.startswith("postgres"):
+        _schema_setup()
+        return
+    conn = engine.connect()
+    try:
+        conn.exec_driver_sql("SELECT pg_advisory_lock(%s)", (_SCHEMA_LOCK_ID,))
+        _schema_setup()
+    finally:
+        try:
+            conn.exec_driver_sql("SELECT pg_advisory_unlock(%s)", (_SCHEMA_LOCK_ID,))
+        finally:
+            conn.close()
+
+
+def _schema_setup():
+    _create_all_safe()
     _ensure_columns()
     _ensure_check_constraints()
     _ensure_indexes()
     _backfill_public_ids()
+
+
+def _create_all_safe():
+    """create_all, healing a half-applied earlier deploy (orphaned SERIAL sequence) if needed."""
+    try:
+        Base.metadata.create_all(bind=engine, checkfirst=True)
+    except Exception:  # noqa: BLE001
+        _create_all_resilient()
+
+
+def _create_all_resilient():
+    """Last resort: create tables one at a time, tolerating one that already exists and clearing an
+    ORPHANED SERIAL sequence (sequence present but its table absent — a prior create that failed
+    mid-way) before retrying that single table. Never blocks startup on a benign 'already exists'."""
+    import logging as _logging
+    from sqlalchemy import inspect as _inspect, text as _text
+    from sqlalchemy.exc import ProgrammingError, IntegrityError, OperationalError
+    log = _logging.getLogger("petabyte")
+    existing = set(_inspect(engine).get_table_names())
+    for table in Base.metadata.sorted_tables:
+        if table.name in existing:
+            continue
+        try:
+            table.create(bind=engine, checkfirst=True)
+        except (ProgrammingError, IntegrityError, OperationalError) as e:
+            if "already exists" not in str(e).lower():
+                raise
+            # Drop the orphaned sequence ONLY when the table itself is genuinely absent, then retry.
+            try:
+                with engine.begin() as conn:
+                    if not _inspect(conn).has_table(table.name):
+                        conn.execute(_text(f'DROP SEQUENCE IF EXISTS "{table.name}_id_seq" CASCADE'))
+                table.create(bind=engine, checkfirst=True)
+            except Exception:  # noqa: BLE001
+                log.warning("schema: could not create table %s (continuing): %s", table.name, e)
 
 
 def _backfill_public_ids():

@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (211)
+## Variables (non-sensitive) (217)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -80,14 +80,15 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `GEOIP_STUB` | no | platform | `true` | `true` | api/utils.py | format: bool; one of: true / false | GeoIP stub. |
 | `GOOGLE_OAUTH_STUB` | no | platform | `false` | `false` | api/main.py | format: bool; one of: true / false | Google sign-in stub — MUST be false in production. |
 | `GOOGLE_REDIRECT_URI` | no | platform | `https://petabyte.market/auth/google/callback` | `https://petabyte.market/auth/google/callback` | api/main.py | format: url | Google OAuth redirect URI. |
-| `GPU_COUNT` | no | gpu | `1` | `1` | agent/provision.py | format: int | Manual GPU count override. |
+| `GPU_COUNT` | no | gpu | `1` | `1` | agent/agent_cli.py, agent/provision.py | format: int | Manual GPU count override. |
 | `GPU_METRICS_ENABLED` | no | gpu | `true` | `true` | GPU node agent | format: bool; one of: true / false | Collect GPU metrics on the seller node (DCGM/NVML). |
 | `GPU_METRICS_INTERVAL` | no | gpu | `10` | `10` | GPU node agent | format: int | Seconds between GPU metrics samples (agent/telemetry). (reserved: standardized in GitHub config). |
-| `GPU_MODEL` | no | gpu | *(empty)* | `…` | agent/provision.py | — | Manual GPU model override when nvidia-smi is absent. |
+| `GPU_MODEL` | no | gpu | *(empty)* | `…` | agent/agent_cli.py, agent/provision.py | — | Manual GPU model override when nvidia-smi is absent. |
 | `GRAFANA_ENABLED` | no | platform | `true` | `true` | — | format: bool; one of: true / false | — |
 | `GRAFANA_URL` | no | observability | *(empty)* | `https://…` | — | format: url | Grafana base URL. |
 | `HEARTBEAT_INTERVAL` | no | gpu | `15` | `15` | agent/task_fetcher.py | format: int | Seconds between node heartbeats (a.k.a. GPU_HEARTBEAT_INTERVAL). |
 | `HEARTBEAT_TIMEOUT_S` | no | platform | `60` | `60` | api/db.py | format: int | Seconds before a silent node is reaped. |
+| `HF_ENDPOINT` | no | platform | `https://huggingface.co` | `https://huggingface.co` | api/modelhub/providers/huggingface.py | — | — |
 | `IDLE_MINING` | no | gpu | `false` | `false` | agent/task_fetcher.py | format: bool | Enable idle NiceHash mining when no paid job is running. |
 | `INSTANT_PAYOUT_FEE_MIN` | no | platform | `0.50` | `0.50` | api/db.py | — | — |
 | `INSTANT_PAYOUT_FEE_PCT` | no | platform | `0.015` | `0.015` | api/db.py | — | — |
@@ -105,6 +106,8 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `MAX_DISTRIBUTED_NODES` | no | platform | `100` | `100` | api/main.py | — | — |
 | `MAX_HOURS` | no | gpu | `24` | `24` | agent/provision.py | format: int | Max rentable hours offered. |
 | `MIN_REPUTATION` | no | platform | `50` | `50` | api/db.py | format: int | — |
+| `MODEL_MAX_PULL_GB` | no | platform | `200` | `200` | api/models_routes.py | — | — |
+| `MODEL_PULL_ENABLED` | no | platform | `false` | `false` | api/models_routes.py | — | — |
 | `NB_CELL_TIMEOUT` | no | gpu | `120` | `120` | agent/notebook.py | format: int | Per-cell notebook timeout (s). |
 | `NB_MAX_OUTPUT` | no | gpu | `1000000` | `1000000` | agent/notebook.py | format: int | Max notebook output bytes. |
 | `NB_TIMEOUT` | no | gpu | `600` | `600` | agent/notebook.py | format: int | Notebook job hard timeout (s) — must stay bounded. |
@@ -141,11 +144,13 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `PAYOUT_MATURITY_MIN_JOBS` | no | platform | `3` | `3` | api/db.py | — | — |
 | `PAYOUT_READINESS_MAX_AGE_S` | no | platform | `2592000` | `2592000` | api/payout_readiness.py | format: int | Max age (s) of provider-synced payout readiness before it fails closed at paid-job authorization (default 30d). |
 | `PAYOUT_STUB` | no | platform | `true` | `true` | api/main.py, api/payout_providers.py | format: bool; one of: true / false | Payout provider stub. |
-| `PETABYTE_API_URL` | **yes** | gpu | `https://petabyte.market` | `https://petabyte.market` | agent/attest_node.py, agent/provision.py, agent/task_fetcher.py, agent/ui.py, api/cli/petabyte.py, gateway/gateway.py | format: url | Public Petabyte API base URL the agent talks to. |
+| `PETABYTE_API_URL` | **yes** | gpu | `https://petabyte.market` | `https://petabyte.market` | agent/agent_cli.py, agent/attest_node.py, agent/main.py, agent/provision.py, agent/task_fetcher.py, agent/ui.py, api/cli/petabyte.py, gateway/gateway.py | format: url | Public Petabyte API base URL the agent talks to. |
+| `PETABYTE_HOME` | no | platform | *(empty)* | `…` | api/modelhub/cache.py, api/modelhub/cli.py, api/models_routes.py | — | — |
 | `PETABYTE_HOST_ROLE` | no | platform | *(empty)* | `…` | — | — | OTel resource attribute petabyte.host_role (e.g. api, worker). |
 | `PETABYTE_OFFLINE_TEST` | no | platform | *(empty)* | `` | api/main.py | one of:  / 0 / 1 / true / false | Must be unset/0 in production. |
+| `PETABYTE_REGISTRY_URL` | no | platform | *(empty)* | `…` | api/modelhub/providers/registry.py | — | — |
 | `PETABYTE_RELEASE_PUBKEY` | no | platform/deployment | *(empty)* | `…` | api/main.py | — | Base64 Ed25519 PUBLIC release key (not a secret). The release workflow pins it into the exe at build time; the API reads it to pin the key into the served install.sh for Linux/WSL signed auto-update. Pairs with RELEASE_SIGNING_KEY. |
-| `PETABYTE_SPEC_ID` | **yes** | gpu | *(empty)* | `60` | agent/task_fetcher.py, agent/ui.py | format: int | The spec id this node serves. |
+| `PETABYTE_SPEC_ID` | **yes** | gpu | *(empty)* | `60` | agent/agent_cli.py, agent/task_fetcher.py, agent/ui.py | format: int | The spec id this node serves. |
 | `PETABYTE_UPDATE_INTERVAL_S` | no | gpu | `3600` | `3600` | GPU node agent | format: int | Agent self-update check interval (s). |
 | `PETABYTE_UPDATE_REPO` | no | gpu | *(empty)* | `…` | GPU node agent | — | Agent self-update source repo (optional). |
 | `PETABYTE_VPN_ADDR` | no | gpu | *(empty)* | `…` | agent/distributed_run.py | — | Alias for AGENT_VPN_ADDR (the node's VPN address for peer ranks). |
@@ -178,7 +183,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `REFERRAL_REWARD_USD` | no | platform | `20` | `20` | api/db.py | — | — |
 | `RESERVATION_RECLAIM_STUCK_S` | no | platform | `93600` | `93600` | api/stripe_connect.py | format: int | How long (s) a compute-tx may sit stuck pre-capture before the reaper reclaims its reserved GPU unit (default 26h). |
 | `REVERIFY_SAMPLE_RATE` | no | platform | `0.0` | `0.0` | api/reverify.py | — | — |
-| `S3_BUCKET` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
+| `S3_BUCKET` | no | platform | *(empty)* | `…` | api/main.py, api/utils.py | — | — |
 | `S3_ENDPOINT` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 | `S3_REGION` | no | platform | `us-east-1` | `us-east-1` | api/utils.py | — | — |
 | `S3_SSE` | no | platform | `AES256` | `AES256` | api/utils.py | — | — |
@@ -215,7 +220,8 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `UNITS` | no | gpu | `1` | `1` | agent/provision.py | format: int | Identical rentable units on this node. |
 | `USDC_CHAIN` | no | platform | `MATIC` | `MATIC` | api/payout_providers.py | — | — |
 | `VM_DNS_ZONE` | no | platform | *(empty)* | `petabyte.market` | api/main.py | format: hostname | Per-VM subdomain zone for the hostname-routed VM address (root@<id>.<zone>). Defaults to BASE_DOMAIN; set to e.g. vm.petabyte.market to put every VM under one wildcard record. See docs/dynamic_dns.md. |
-| `VRAM_GB` | no | gpu | *(empty)* | `60` | agent/provision.py | format: int | Manual VRAM override (GB). |
+| `VOLUME_MAX_BLOB_MB` | no | platform | `1024` | `1024` | api/main.py | — | — |
+| `VRAM_GB` | no | gpu | *(empty)* | `60` | agent/agent_cli.py, agent/provision.py | format: int | Manual VRAM override (GB). |
 | `WALLET_MAX_TOPUP_MINOR` | no | platform | `500000` | `500000` | api/wallet_funding.py | format: int | — |
 | `WALLET_MIN_TOPUP_MINOR` | no | platform | `500` | `500` | api/wallet_funding.py | format: int | — |
 | `WEB_CONCURRENCY` | no | platform | `2` | `2` | api/deploy/gunicorn_conf.py | — | — |
@@ -224,7 +230,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `WG_INTERFACE` | no | platform | `wg0` | `wg0` | api/utils.py | — | — |
 | `WG_PUBLIC_KEY` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 
-## Secrets (credentials — never printed, no defaults) (52)
+## Secrets (credentials — never printed, no defaults) (55)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -247,6 +253,9 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `GOOGLE_CLIENT_ID` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
 | `GOOGLE_CLIENT_SECRET` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
 | `GRAFANA_SERVICE_ACCOUNT_TOKEN` | no | observability | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | Grafana service-account token (provisioning/smoke). |
+| `HF_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/modelhub/cli.py, api/modelhub/providers/huggingface.py | — | — |
+| `HUGGINGFACE_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/modelhub/providers/huggingface.py | — | — |
+| `HUGGING_FACE_HUB_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/modelhub/providers/huggingface.py | — | — |
 | `LOKI_PASSWORD` | no | observability | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | Loki push auth password. |
 | `LOKI_USERNAME` | no | observability | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | Loki push auth user. |
 | `MAILCHIMP_API_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
@@ -258,7 +267,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `PAYMENT_WEBHOOK_SECRET` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
 | `PETABYTE_AGENT_KEY` | no | gpu | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | agent/crypto.py, agent/provision.py | — | Path to the node's Ed25519 signing key (attestation + signed results). |
 | `PETABYTE_API_JWT` | no | gpu | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | agent/attest_node.py | — | Seller JWT (owner of the spec) used during node attestation/enrollment. |
-| `PETABYTE_API_KEY` | **yes** | gpu | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | agent/provision.py, agent/task_fetcher.py, agent/ui.py | — | Encrypted node API key (X-API-KEY) minted at /create_api_key. |
+| `PETABYTE_API_KEY` | **yes** | gpu | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | agent/agent_cli.py, agent/provision.py, agent/task_fetcher.py, agent/ui.py | — | Encrypted node API key (X-API-KEY) minted at /create_api_key. |
 | `POSTHOG_API_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/product_analytics.py | — | — |
 | `POSTMARK_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/notify_providers.py | — | — |
 | `PROMETHEUS_METRICS_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
