@@ -281,7 +281,7 @@ def _print_info(summary):
     print("  PETABYTE INVESTOR DEMO — ready.  (all data is labelled 'Demo data')")
     print("=" * 68)
     print(f"  Marketplace ....... {base}/marketplace")
-    print(f"  Buyer dashboard ... {base}/app")
+    print(f"  Buyer console   ... {base}/console")
     print(f"  Metrics/ops ....... {base}/metrics")
     print(f"  Admin console ..... {base}/admin   (admin user: {admin})")
     print(f"  API reference ..... {base}/docs")

@@ -90,7 +90,7 @@ from db import (
     release_booking, refund_booking, settle_dead_specs, get_or_create_platform,
     webhook_already_processed, credit_user_by_username,
     create_challenge, consume_challenge, set_spec_confidential, spec_confidential_active,
-    create_org, get_org, get_membership, org_members, add_org_member,
+    create_org, get_org, get_membership, org_members, add_org_member, list_orgs_for_user,
     org_deposit, try_org_debit, org_refund, org_usage,
     retry_task, set_task_progress, add_task_log, get_task_logs,
     set_benchmark, create_benchmark_task, org_analytics,
@@ -117,7 +117,6 @@ from auth import create_access_token, verify_token
 # Shared FastAPI dependencies (auth + DB session) live in deps.py so domain routers can use
 # them without importing main. Every Depends(...) below resolves to these same callables.
 from deps import oauth2_scheme, get_current_user, _username, api_key_user  # noqa: F401
-from static_dashboard import DASHBOARD_HTML
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
                    NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML)
@@ -1315,9 +1314,11 @@ def require_scope(user, scope: str):
 def landing():
     return LANDING_HTML
 
-@app.get("/app", response_class=HTMLResponse)
-def dashboard():
-    return DASHBOARD_HTML.replace("__AWS_REF__", AWS_REFERENCE_PRICE)
+@app.get("/app", include_in_schema=False)
+def dashboard_redirect():
+    # The old standalone buyer dashboard was folded into the unified console. Keep /app as a
+    # permanent redirect so existing links, emails and OAuth bookmarks land on /console.
+    return RedirectResponse(url="/console", status_code=308)
 
 @app.get("/investors", response_class=HTMLResponse)
 def investors_page():
@@ -2497,7 +2498,7 @@ def google_callback(code: str = Query(...), email: Optional[str] = Query(None),
         email_verified = bool(info.get("email_verified"))
     u = get_or_create_oauth_user(db, user_email, "google", email_verified=email_verified)
     token = create_access_token({"sub": u.username, "role": u.role})
-    return RedirectResponse(url="/app#t=" + token)
+    return RedirectResponse(url="/console#t=" + token)
 
 @app.post("/login", tags=["account"])
 def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(),
@@ -5138,6 +5139,15 @@ def get_schedule(user: dict = Depends(get_current_user), db: Session = Depends(g
 
 
 # ------------------- ORGANIZATIONS -------------------
+
+@app.get("/orgs", tags=["account"])
+def list_orgs_endpoint(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Teams the signed-in user belongs to — shared-wallet enterprise/lab accounts with an
+    optional budget cap. There is no public org directory, so this is how the console lets a
+    user find the orgs they can act on (create one with POST /orgs)."""
+    me = get_user_by_username(db, _username(user))
+    return {"orgs": list_orgs_for_user(db, me.id)}
+
 
 @app.post("/orgs")
 def create_org_endpoint(data: OrgCreateModel, user: dict = Depends(get_current_user),

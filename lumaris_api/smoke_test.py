@@ -392,6 +392,12 @@ ok("org created (creator is admin)", c.get(f"/orgs/{org_id}", headers=adminh).js
 ok("non-member blocked from org", c.get(f"/orgs/{org_id}", headers=outsiderh).status_code==403)
 ok("admin adds member", c.post(f"/orgs/{org_id}/members", headers=adminh, json={"username":"orgmember","role":"member"}).status_code==200)
 ok("member cannot add members", c.post(f"/orgs/{org_id}/members", headers=memberh, json={"username":"outsider","role":"member"}).status_code==403)
+# console Teams panel: GET /orgs lists the caller's memberships (no public org directory)
+_myorgs=c.get("/orgs", headers=adminh).json().get("orgs", [])
+ok("GET /orgs lists the caller's teams for the console Teams panel",
+   any(o["org_id"]==org_id and o["your_role"]=="admin" for o in _myorgs))
+ok("a non-member does not see that org in their team list",
+   all(o["org_id"]!=org_id for o in c.get("/orgs", headers=outsiderh).json().get("orgs", [])))
 
 # org wallet + budget cap
 c.post("/orgs/{}/deposit".format(org_id), headers=adminh, json={"amount":100.0,"budget_cap":15.0})
@@ -1123,7 +1129,7 @@ ok("idle credited_total + worker_id exposed", round(_idle["credited_total_usd"],
 # ==== WEBSITE PAGES + GOOGLE OAUTH + KEYS UI + PUBLIC SPECS ====
 os.environ["GOOGLE_OAUTH_STUB"]="true"
 import importlib, main as _m; importlib.reload(_m)  # not needed; env read at call time
-for path in ["/","/app","/investors","/developers","/install","/keys","/marketplace","/admin","/gamers","/artists"]:
+for path in ["/","/console","/investors","/developers","/install","/keys","/marketplace","/admin","/gamers","/artists"]:
     r=c.get(path); ok(f"page {path} serves", r.status_code==200 and "Petabyte" in r.text)
 ok("gamers page has one-click launch grid", "renderLaunch(" in c.get("/gamers").text and "launchgrid" in c.get("/gamers").text)
 ok("artists page has one-click launch grid", "renderLaunch(" in c.get("/artists").text and "launchgrid" in c.get("/artists").text)
@@ -1592,8 +1598,8 @@ ok("the 'Deep Ocean Compute' brand is fully removed from the site",
    "deep ocean" not in _all_pages.lower())
 ok("no role-specific legacy addresses remain", "legal@petabyte.market" not in _all_pages and "hello@petabyte.market" not in _all_pages)
 
-# --- /app console: same nav + readable editor in both themes (screenshot bugs) ---
-_app = c.get("/app").text
+# --- /console: same nav + readable editor in both themes (screenshot bugs) ---
+_app = c.get("/console").text
 ok("the console nav carries the same site links as every other page",
    "/marketplace" in _app and "/catalog" in _app and "/security" in _app
    and "/pricing" in _app)
@@ -1601,6 +1607,12 @@ ok("the code editor is theme-aware, not hardcoded dark (was black-on-black in li
    "var(--editor-bg)" in _app and "var(--editor-ink)" in _app)
 ok("a light-mode editor background is actually defined",
    "--editor-bg:#F5F9FC" in _app)
+ok("the console unifies both sides of the marketplace in one tabbed surface",
+   all(t in _app for t in ['data-a1="compute"', 'data-a1="billing"', 'data-a1="teams"',
+       'data-a1="access"', 'data-a1="seller"']))
+ok("the old standalone /app dashboard now redirects into the console",
+   c.get("/app", follow_redirects=False).status_code in (301, 302, 307, 308)
+   and "/console" in c.get("/app", follow_redirects=False).headers.get("location", ""))
 
 # --- one email everywhere ---
 _home = c.get("/")
@@ -1634,7 +1646,7 @@ for _p,_label in [("/install","install"),("/marketplace","marketplace"),("/prici
                   ("/security","security"),("/contact","contact"),("/catalog","catalog")]:
     ok("Arabic copy present on "+_label, "data-ar=" in c.get(_p).text)
 ok("the code editor / console stay LTR under RTL (money and code must not flip)",
-   'dir="rtl"' in c.get("/app").text and "direction:ltr" in c.get("/app").text)
+   'dir="rtl"' in c.get("/console").text and "direction:ltr" in c.get("/console").text)
 
 # --- seller onboarding is one click: key + this-server URL + price pre-filled, nothing to hand-edit ---
 _inst = c.get("/install").text
@@ -2184,7 +2196,7 @@ lg=c.get("/auth/google/login", follow_redirects=False)
 ok("google login redirects", lg.status_code in (302,307) and "callback" in lg.headers.get("location",""))
 cb=c.get("/auth/google/callback?code=stub&email=gtest@example.com", follow_redirects=False)
 loc=cb.headers.get("location","")
-ok("google callback issues JWT redirect to /app", cb.status_code in (302,307) and "/app#t=" in loc)
+ok("google callback issues JWT redirect to /console", cb.status_code in (302,307) and "/console#t=" in loc)
 gjwt=loc.split("t=")[1]
 gw=c.get("/wallet", headers={"Authorization":f"Bearer {gjwt}"})
 ok("google-issued JWT authenticates", gw.status_code==200)
@@ -2255,13 +2267,14 @@ ok("landing page adapts the aspect ratio to orientation",
    "landingvideoratio" in c.get("/").text and "56.25%" in c.get("/").text)
 ok("admin panel exposes the orientation selector",
    "vid_orient" in c.get("/admin").text)
-_appjs=c.get("/app").text
-ok("the dashboard loads the referral card only after auth (not at parse time)",
-   _appjs.count("loadReferral()") >= 2 and "if(TOKEN){wallet();specs();loadReferral()" in _appjs)
-# guard the exact bug that shipped: loadReferral must be its OWN top-level function, not
-# nested inside login(). If login() closes right before it, the nesting is gone.
-ok("loadReferral is a top-level function (login() closes before it)",
-   "conReset('signed in — ready to run.','sys');}\n\nasync function loadReferral" in _appjs)
+_appjs=c.get("/console").text
+ok("the console only fetches user data after auth (consoleLoad guards on authed())",
+   "async function consoleLoad" in _appjs and "!authed()" in _appjs and "consoleLoad();" in _appjs)
+# guard the exact bug that shipped: the referral card must be its OWN top-level function,
+# lazily loaded when the billing tab opens — never at parse time.
+ok("the referral card is a top-level function loaded lazily (not at parse time)",
+   "async function cReferral" in _appjs and "cReferral();" in _appjs
+   and "async function cBilling" in _appjs)
 c.post("/admin/landing/video", headers=GAH, json={"video":"UUSWYaxboDA"})
 ok("the landing then serves the admin-set video",
    c.get("/landing/video").json().get("video_id")=="UUSWYaxboDA")

@@ -3240,6 +3240,27 @@ def get_membership(db: Session, org_id: int, user_id: int):
             .filter(OrgMember.org_id == org_id, OrgMember.user_id == user_id).first())
 
 
+def list_orgs_for_user(db: Session, user_id: int):
+    """Every org the user belongs to, with their role and the org's live wallet/budget.
+    Powers the console Teams panel — the user can't act on an org whose id they don't know,
+    so the console needs a way to enumerate their memberships (there is no public org directory)."""
+    rows = (db.query(OrgMember, Organization)
+            .join(Organization, Organization.id == OrgMember.org_id)
+            .filter(OrgMember.user_id == user_id)
+            .order_by(Organization.id.asc()).all())
+    out = []
+    for m, org in rows:
+        cap = float(org.budget_cap or 0)
+        out.append({
+            "org_id": org.id, "name": org.name, "your_role": m.role,
+            "balance": round(float(org.balance or 0), 2),
+            "budget_cap": (round(cap, 2) if cap else None),
+            "spent": round(float(org.spent or 0), 2),
+            "members": db.query(OrgMember).filter(OrgMember.org_id == org.id).count(),
+        })
+    return out
+
+
 def org_members(db: Session, org_id: int):
     rows = db.query(OrgMember).filter(OrgMember.org_id == org_id).all()
     out = []

@@ -56,7 +56,7 @@ except EmailConfigError:
 # ---------------- 2) successful send ----------------
 es.httpx.post = _post_ok
 try:
-    res = svc.send_welcome("ada@example.com", name="Ada", dashboard_url="https://petabyte.market/app")
+    res = svc.send_welcome("ada@example.com", name="Ada", dashboard_url="https://petabyte.market/console")
     ok("successful send returns ok + provider message id",
        res.ok and res.provider_message_id and res.status_code == 200)
     _url, _kw = _calls[-1]
@@ -123,7 +123,7 @@ finally:
 
 # ---------------- 7) template rendering (all six) ----------------
 _templates = [
-    ("welcome", {"name": "Ada", "cta_url": "https://petabyte.market/app"}),
+    ("welcome", {"name": "Ada", "cta_url": "https://petabyte.market/console"}),
     ("verification", {"cta_url": "https://petabyte.market/verify?t=abc", "ttl_minutes": 15}),
     ("password_reset", {"cta_url": "https://petabyte.market/reset?t=abc", "ttl_minutes": 30}),
     ("login_otp", {"code": "482913", "ttl_minutes": 10}),
