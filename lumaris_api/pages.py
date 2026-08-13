@@ -172,7 +172,11 @@ button:active,.btn:active{transform:translateY(1px)}
 .lbl{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--teal);display:inline-flex;align-items:center;gap:8px;margin-bottom:10px}
 .lbl::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor}
 .lbl.am{color:var(--amber)}
-.mini{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+/* small helper / caption text — readable body copy, NOT a label. Uppercase micro-labels
+   are .eyebrow / .lbl; .mini is for full sentences of secondary guidance so they read as
+   prose, not terminal output. */
+.mini{font-size:12px;line-height:1.55;color:var(--mut)}
+.mini.cap{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);line-height:1.4}
 .divider{height:1px;background:linear-gradient(90deg,transparent,var(--line2),transparent);margin:2px 0}
 .pill{font-family:var(--mono);font-size:10px;border:1px solid rgba(53,224,208,.35);color:var(--teal);padding:3px 11px;border-radius:999px;background:rgba(53,224,208,.06)}
 /* ---------- surfaces ---------- */
@@ -230,6 +234,19 @@ select{appearance:none;-webkit-appearance:none;background-image:linear-gradient(
 .empty .et{font-family:var(--disp);font-weight:600;font-size:15px;color:var(--ink);margin-bottom:4px}
 .empty .es{font-size:12.5px;margin-bottom:16px}
 .stepchip{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:7px;background:rgba(53,224,208,.12);border:1px solid rgba(53,224,208,.35);color:var(--teal);font-family:var(--mono);font-size:11px;font-weight:600;margin-inline-end:8px;flex:none}
+/* ---------- loading skeletons (reusable; respect reduced-motion) ---------- */
+.skel{position:relative;overflow:hidden;background:linear-gradient(180deg,var(--depth2),var(--panel2));border:1px solid var(--line);border-radius:var(--r);padding:22px}
+.skel-b{display:block;background:linear-gradient(90deg,var(--line) 25%,var(--line2) 37%,var(--line) 63%);background-size:400% 100%;border-radius:8px;animation:skel 1.4s ease infinite}
+@keyframes skel{0%{background-position:100% 50%}100%{background-position:0 50%}}
+@media(prefers-reduced-motion:reduce){.skel-b{animation:none}}
+/* ---------- key/value summary rows (cost breakdowns, receipts, specs) ---------- */
+.sumrow{display:flex;justify-content:space-between;gap:16px;padding:8px 0;border-bottom:1px solid var(--hair);font-size:13px}
+.sumrow:last-child{border-bottom:0}
+.sumrow .k{color:var(--mut)}
+.sumrow .v{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:end;color:var(--ink)}
+.sumrow.total{border-top:1px solid var(--line2);border-bottom:0;margin-top:6px;padding-top:13px}
+.sumrow.total .k{color:var(--ink);font-family:var(--disp);font-weight:600;font-size:14.5px}
+.sumrow.total .v{color:var(--amber);font-family:var(--disp);font-weight:700;font-size:18px}
 /* ---------- sonar launch cards (signature) ---------- */
 .lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
 .lcard{position:relative;display:flex;flex-direction:column;padding:17px 17px 15px;border:1px solid var(--line);border-radius:var(--r);
@@ -2209,7 +2226,7 @@ GPU_DETAIL_HTML = _page("Petabyte — GPU", """
 <div class="wrap" style="padding:34px 24px 10px">
   <a class="mini" href="/marketplace" style="color:var(--mut)">← Back to marketplace</a>
   <div id="gpuwrap" style="margin-top:14px">
-    <div class="mut mono" style="padding:40px 0">Loading GPU…</div>
+    <div class="skel" aria-busy="true" aria-label="Loading GPU"><span class="skel-b" style="height:38px;width:45%"></span><span class="skel-b" style="height:14px;width:30%;margin-top:14px"></span><div class="cols" style="gap:18px;margin-top:20px"><span class="skel-b" style="height:220px;flex:1.6 1 380px"></span><span class="skel-b" style="height:220px;flex:1 1 280px"></span></div></div>
   </div>
 </div>
 <script>
@@ -2258,7 +2275,7 @@ async function loadGpu(){
     '<div class="card">'+
      '<div style="display:flex;align-items:baseline;gap:8px">'+
       '<span class="mono amber" style="font-size:34px;font-weight:700">$'+Number(s.price_per_hour).toFixed(2)+'</span><span class="mut">/hour</span></div>'+
-     (s.savings_pct?'<div class="mini" style="color:var(--pos);margin-top:4px">'+s.savings_pct+'% below the on-demand cloud rate for this GPU class ($'+Number(s.cloud_reference).toFixed(2)+'/hr)</div>':'<div class="mini" style="margin-top:4px">No comparable public cloud rate for this GPU — we don\'t quote a saving we can\'t back up.</div>')+
+     (s.savings_pct?'<div class="mini" style="color:var(--pos);margin-top:4px">'+s.savings_pct+'% below the on-demand cloud rate for this GPU class ($'+Number(s.cloud_reference).toFixed(2)+'/hr)</div>':'<div class="mini" style="margin-top:4px">No comparable public cloud rate for this GPU — we don\\'t quote a saving we can\\'t back up.</div>')+
      (s.auto_price?'<div class="mini" style="margin-top:6px"><span class="badge cc">auto-priced</span> moves with demand, within the host\\'s limits</div>':'')+
      '<div style="margin-top:16px">'+
       (bookable?'<button class="btn btn-amber" style="width:100%;justify-content:center" data-act="pbBuy" data-a1="'+SPEC_ID+'">Rent &amp; run on this GPU →</button>':'<button class="btn btn-ghost" style="width:100%;justify-content:center" disabled>Not bookable right now</button>')+
@@ -2603,7 +2620,7 @@ BUY_HTML = _page("Petabyte — rent & run on a GPU",
 <div class="wrap" style="padding:34px 24px 44px;max-width:960px">
   <a class="mini" href="/marketplace" style="color:var(--mut)">← Back to marketplace</a>
   <p class="mut" id="buy_signedout" style="display:none;margin-top:18px">Please <a class="teal" href="/login">sign in</a> to rent a GPU.</p>
-  <div id="buywrap" style="margin-top:14px"><div class="mut mono" style="padding:40px 0">Loading GPU…</div></div>
+  <div id="buywrap" style="margin-top:14px"><div class="skel" aria-busy="true" aria-label="Loading GPU"><span class="skel-b" style="height:30px;width:40%"></span><span class="skel-b" style="height:14px;width:72%;margin-top:16px"></span><span class="skel-b" style="height:14px;width:55%;margin-top:10px"></span><span class="skel-b" style="height:180px;width:100%;margin-top:18px"></span></div></div>
 </div>
 <script>
 var SPEC_ID=location.pathname.split('/').pop();
@@ -2667,12 +2684,12 @@ function renderShell(s){
     '</div>'+
     '<div class="card" style="margin-top:16px">'+
      '<div class="lbl">Your workload</div>'+
-     '<label class="mini" style="display:block;margin-top:10px">Max runtime (hours)</label>'+
-     '<input id="buy_hours" type="number" min="1" max="24" value="1" style="width:120px;padding:9px;margin-top:4px"/>'+
-     '<label class="mini" style="display:block;margin-top:12px">Code to run on the GPU</label>'+
+     '<label class="mini" for="buy_hours" style="display:block;margin-top:10px">Max runtime (hours)</label>'+
+     '<input id="buy_hours" type="number" min="1" max="24" value="1" oninput="renderCost()" style="width:120px;padding:9px;margin-top:4px"/>'+
+     '<label class="mini" for="buy_code" style="display:block;margin-top:12px">Code to run on the GPU</label>'+
      '<textarea id="buy_code" rows="9" class="mono" style="width:100%;margin-top:4px;padding:10px;font-size:12.5px">'+esc(DEFAULT_CODE)+'</textarea>'+
      '<div id="card-row" style="display:none;margin-top:14px">'+
-       '<label class="mini" style="display:block">Card details</label>'+
+       '<label class="mini" for="card-element" style="display:block">Card details</label>'+
        '<div id="card-element" style="padding:12px;border:1px solid var(--line);border-radius:8px;margin-top:4px"></div>'+
        '<div id="card-errors" class="mini" style="color:var(--warn);margin-top:6px"></div>'+
      '</div>'+
@@ -2681,8 +2698,12 @@ function renderShell(s){
      '<p class="mini" id="buy_note" style="margin-top:10px">'+mode+'</p>'+
     '</div>'+
    '</div>'+
-   '<div style="flex:1 1 320px;min-width:280px">'+
-    '<div class="card" id="buy_progress" style="display:none">'+
+   '<div style="flex:1 1 320px;min-width:280px;position:sticky;top:88px">'+
+    '<div class="card" id="buy_cost">'+
+     '<div class="lbl">Estimated cost</div>'+
+     '<div id="buy_cost_body" style="margin-top:6px"></div>'+
+    '</div>'+
+    '<div class="card" id="buy_progress" style="display:none;margin-top:16px">'+
      '<div class="lbl">Progress</div>'+
      '<div id="buy_msg" style="font-family:var(--disp);font-size:16px;margin:10px 0">Starting…</div>'+
      '<div id="buy_steps" class="mini"></div>'+
@@ -2697,6 +2718,26 @@ function renderShell(s){
     '</div>'+
    '</div>'+
   '</div>';
+ renderCost();
+}
+
+// Live cost summary — never let the buyer commit without seeing what it costs. Estimate is
+// rate x max-hours; the server re-prices authoritatively at authorize time. The 10% fee is a
+// split OF the rental (captured = fee + seller_net), not an add-on, so it is not in the total.
+function renderCost(){
+ var b=el('buy_cost_body');if(!b||!GPU)return;
+ var hi=el('buy_hours');
+ var hours=Math.max(1,Math.min(24,parseInt((hi&&hi.value)||'1',10)||1));
+ var rate=Number(GPU.price_per_hour)||0;
+ var est=rate*hours;
+ b.innerHTML=
+  '<div class="sumrow"><span class="k">Machine</span><span class="v">'+(GPU.gpu_count>1?GPU.gpu_count+'× ':'')+esc(GPU.gpu_model)+(GPU.vram_gb?' · '+GPU.vram_gb+'GB':'')+'</span></div>'+
+  '<div class="sumrow"><span class="k">Price per hour</span><span class="v">$'+rate.toFixed(2)+'</span></div>'+
+  '<div class="sumrow"><span class="k">Max runtime</span><span class="v">'+hours+' h</span></div>'+
+  '<div class="sumrow"><span class="k">Estimated compute cost</span><span class="v">$'+est.toFixed(2)+'</span></div>'+
+  '<div class="sumrow"><span class="k">Platform fee (10%)</span><span class="v" style="color:var(--mut)">taken from host</span></div>'+
+  '<div class="sumrow total"><span class="k">Estimated total</span><span class="v">$'+est.toFixed(2)+'</span></div>'+
+  '<p class="mini" style="margin-top:10px">The 10% platform fee is taken from the rental — the host keeps 90%, nothing is added on top of your bill. You authorize a small headroom buffer and pay only for the GPU time you actually use; the rest of the hold is released.</p>';
 }
 
 function showError(msg){el('buy_error').style.display='';el('buy_error_body').textContent=msg;}
