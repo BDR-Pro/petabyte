@@ -3647,7 +3647,10 @@ LAUNCH_HTML = _page("Petabyte — launch compute",
  }
 
  // ---------- cost panel (server-authoritative /estimate) ----------
- function canEstimate(){if(S.type==='code')return !!S.spec;return S.type==='app';}
+ // In "Browse hosts" mode the buyer is pinning a specific host, so we can't price (or launch)
+ // until one is actually selected — otherwise a missing pick would silently auto-place. Auto
+ // mode needs no host up front.
+ function canEstimate(){if(S.type==='code')return !!S.spec;if(S.type==='app')return S.place!=='pick'||!!S.spec;return false;}
  async function refreshCost(){
   var cb=el('costbody');
   if(!canEstimate()){cb.innerHTML='<p class="mut" style="font-size:13px">'+(S.type?'Choose a host to price this run.':'Pick a workload to see pricing.')+'</p>';el('reviewactions').style.display='none';return;}
