@@ -3926,10 +3926,12 @@ def estimate_cost(data: EstimateModel, db: Session = Depends(get_db)):
                 cands = [s for s in cands if s.gpu_model]
             # Price the host placement will actually use: a template with a VRAM
             # recommendation is only ever placed on a host that meets it, so a
-            # cheaper-but-too-small GPU must not set the quoted price.
+            # known-too-small GPU must not set the quoted price. Hosts that never
+            # reported VRAM are left in (we can't prove them too small — same as
+            # before this gate existed) to stay consistent with /launch.
             mv = template_min_vram(data.template)
             if mv:
-                cands = [s for s in cands if (s.vram_gb or 0) >= mv]
+                cands = [s for s in cands if (not s.vram_gb) or s.vram_gb >= mv]
         spec = min(cands, key=lambda s: D(s.price_per_hour)) if cands else None
 
     if not spec:
@@ -7510,11 +7512,12 @@ def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
             continue
         if needs_gpu and not spec.gpu_model:
             continue
-        # Never place a memory-hungry template (vLLM, TensorRT-LLM, …) on a GPU that
-        # would exhaust its memory. This gates both auto-placement and an explicitly
-        # pinned host: a pinned host that fails here is simply absent from candidates,
-        # producing a clear 409 before any funds are reserved.
-        if min_vram and (spec.vram_gb or 0) < min_vram:
+        # Never place a memory-hungry template (vLLM, TensorRT-LLM, …) on a GPU we KNOW
+        # is too small. This gates both auto-placement and an explicitly pinned host: a
+        # pinned host that fails here is simply absent from candidates, producing a clear
+        # 409 before any funds are reserved. A host that never reported vram_gb is left in
+        # (we can't prove it too small — same as before this gate existed).
+        if min_vram and spec.vram_gb and spec.vram_gb < min_vram:
             continue
         if data.region and ((spec.region or "") != data.region):
             continue
