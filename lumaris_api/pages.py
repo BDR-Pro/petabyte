@@ -3374,173 +3374,293 @@ document.addEventListener('DOMContentLoaded',clusterAvail);
 
 
 CONSOLE_HTML = _page("Petabyte — console",
-    desc="Your cloud console: rent GPUs, run jobs, form distributed clusters, manage billing, API keys and teams, and track everything you host — one place for both sides of the marketplace.",
+    desc="Your Petabyte control plane: running compute, jobs, wallet and spend, available GPUs, clusters, API keys, teams and hosting — one operational view.",
     path="/console", body="""
 <style>
+/* ---------- Console control-plane shell (marketing chrome hidden here) ---------- */
+body > nav{display:none!important}
+footer{display:none!important}
 :root{--editor-bg:#0B1122;--editor-ink:#F2F6FF;--console-ink:#BFE9E2}
 html[data-theme=light]{--editor-bg:#F5F9FC;--editor-ink:#0E1A2E;--console-ink:#0E5C55}
-/* pill tabs — match the site's nav-pill / badge language instead of a one-off folder-tab look */
-.ctabbar{display:flex;gap:7px;flex-wrap:wrap;margin:22px 0 4px}
-.ctab-btn{background:transparent;border:1px solid var(--line2);color:var(--mut);border-radius:999px;padding:8px 16px;font-family:var(--disp);font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap;transition:color .15s,background-color .15s,border-color .15s}
-.ctab-btn:hover{color:var(--ink);border-color:var(--line2)}
-.ctab-btn:focus-visible{outline:none;border-color:var(--teal);box-shadow:0 0 0 4px rgba(53,224,208,.16)}
-.ctab-btn.on{color:var(--teal);background:rgba(53,224,208,.10);border-color:rgba(53,224,208,.4)}
+.cshell{display:grid;grid-template-columns:238px minmax(0,1fr);min-height:100vh}
+.csidebar{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;border-inline-end:1px solid var(--line);background:var(--depth);display:flex;flex-direction:column;padding:14px 12px}
+.cbrand{display:flex;align-items:center;gap:9px;padding:4px 8px 12px;font-family:var(--disp);font-weight:700;font-size:16px;letter-spacing:-.01em;cursor:pointer}
+.cbrand img{width:22px;height:22px}
+.cnav{display:flex;flex-direction:column;gap:1px;flex:1}
+.cnav-grp{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin:15px 8px 5px;font-weight:600}
+.cnav a{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--mut);font-size:13.5px;font-weight:500;cursor:pointer;transition:background-color .12s,color .12s}
+.cnav a:hover{background:rgba(255,255,255,.045);color:var(--ink)}
+.cnav a.on{background:rgba(53,224,208,.10);color:var(--teal)}
+.cnav a svg{width:16px;height:16px;flex:none;opacity:.85}
+.csidefoot{border-top:1px solid var(--line);padding-top:8px;margin-top:8px;display:flex;flex-direction:column;gap:1px}
+.csidefoot a{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--mut);font-size:13.5px;font-weight:500;cursor:pointer;text-decoration:none}
+.csidefoot a:hover{background:rgba(255,255,255,.045);color:var(--ink)}
+.csidefoot a svg{width:16px;height:16px;flex:none;opacity:.85}
+.cmain{display:flex;flex-direction:column;min-width:0}
+.ctopbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:9px 20px;border-bottom:1px solid var(--line);background:rgba(3,7,17,.82);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+html[data-theme=light] .ctopbar{background:rgba(255,255,255,.82)}
+.cham{display:none;background:transparent;border:1px solid var(--line2);border-radius:9px;color:var(--mut);padding:7px 10px;cursor:pointer}
+.cham svg{width:16px;height:16px;display:block}
+.cws{display:flex;align-items:center;gap:9px;min-width:0}
+.cws .av{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--teal),var(--deep));display:flex;align-items:center;justify-content:center;font-family:var(--disp);font-weight:700;font-size:13px;color:#04201e;flex:none}
+.cws b{font-family:var(--disp);font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px}
+.cenv{font-size:10px;font-family:var(--mono);letter-spacing:.06em;padding:3px 7px;border-radius:6px;border:1px solid var(--line2);color:var(--mut);white-space:nowrap}
+.cenv.test{color:var(--amber);border-color:rgba(255,178,36,.4);background:rgba(255,178,36,.08)}
+.cenv.live{color:var(--pos);border-color:rgba(74,222,156,.4);background:rgba(74,222,156,.08)}
+.csearch{margin-inline-start:auto;display:flex;align-items:center;gap:9px;min-width:190px;max-width:300px;background:var(--depth2);border:1px solid var(--line2);border-radius:9px;color:var(--dim);font-size:13px;padding:8px 11px;cursor:text}
+.csearch svg{width:15px;height:15px;flex:none}
+.csearch span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.csearch kbd{margin-inline-start:auto;font-family:var(--mono);font-size:10.5px;border:1px solid var(--line2);border-radius:5px;padding:1px 6px;color:var(--mut)}
+.citop{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:9px;border:1px solid var(--line2);background:transparent;color:var(--mut);cursor:pointer;flex:none}
+.citop:hover{color:var(--teal);border-color:var(--teal)}
+.citop svg{width:16px;height:16px;flex:none}
+.cbody{padding:22px 24px 44px;min-width:0;width:100%;max-width:1200px}
+.cpagehead{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+.cpagehead h1{font-family:var(--disp);font-weight:700;font-size:22px;letter-spacing:-.01em;margin:0}
+.cpagehead p{color:var(--mut);font-size:13.5px;margin-top:3px;max-width:60ch}
+.cpageact{display:flex;gap:8px;flex-wrap:wrap}
+.cmetrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:22px}
+.cmetric{border:1px solid var(--line);border-radius:12px;padding:14px 15px;background:var(--depth);min-width:0}
+.cmetric .k{font-size:12px;color:var(--mut)}
+.cmetric .v{font-family:var(--disp);font-weight:700;font-size:23px;letter-spacing:-.02em;margin-top:5px;line-height:1.12}
+.cmetric .c{font-size:11.5px;color:var(--dim);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cmetric .c.pos{color:var(--pos)}.cmetric .c.warn{color:var(--warn)}
+.cgrid{display:grid;grid-template-columns:1.5fr 1fr;gap:16px;align-items:start}
+.cgcol{display:flex;flex-direction:column;gap:16px;min-width:0}
+.csec{border:1px solid var(--line);border-radius:12px;background:var(--depth);overflow:hidden}
+.csec-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line)}
+.csec-h h2{font-family:var(--disp);font-size:14px;font-weight:600;margin:0}
+.csec-h a,.csec-h button{font-size:12.5px;color:var(--teal);background:transparent;border:0;cursor:pointer;padding:0}
+.csec-b{padding:4px 15px 10px}
+.crow{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+.crow:last-child{border-bottom:0}
+.crow .rt{font-family:var(--disp);font-weight:600;font-size:13.5px}
+.crow .rs{font-size:12px;color:var(--mut);font-weight:400}
+.crow .rr{margin-inline-start:auto;display:flex;gap:6px;align-items:center;flex:none}
+.cmoney{display:flex;justify-content:space-between;gap:12px;padding:7px 0;font-size:13px;border-bottom:1px solid var(--line)}
+.cmoney:last-child{border-bottom:0}
+.cmoney .mk{color:var(--mut)}.cmoney .mv{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.cbtn{font-family:var(--disp);font-weight:600;font-size:12.5px;border-radius:8px;padding:7px 13px;border:1px solid var(--line2);background:transparent;color:var(--ink);cursor:pointer;transition:border-color .12s,color .12s,filter .12s;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;text-decoration:none}
+.cbtn:hover{border-color:var(--teal);color:var(--teal)}
+.cbtn.pri{background:linear-gradient(180deg,var(--amber-br),var(--amber));color:#241802;border:0}
+.cbtn.pri:hover{filter:brightness(1.05);color:#241802}
+.cbtn.sm{padding:5px 10px;font-size:11.5px;border-radius:7px}
+.cempty{text-align:center;padding:18px 8px}
+.cempty .et{font-family:var(--disp);font-weight:600;font-size:13.5px}
+.cempty .es{color:var(--mut);font-size:12.5px;margin:4px 0 12px}
+/* keep the run editor + console output + tables from the original console */
+.ctab-btn{display:none}
 #c_code{width:100%;min-height:150px;background:var(--editor-bg);color:var(--editor-ink);border:1px solid var(--line2);border-radius:12px;padding:13px;font-family:var(--mono);font-size:12.5px;line-height:1.6;resize:vertical}
 .c_console{background:var(--editor-bg);color:var(--console-ink);border:1px solid var(--line);border-radius:12px;padding:14px;min-height:150px;font-family:var(--mono);font-size:12.5px;line-height:1.6;white-space:pre-wrap;overflow:auto}
 .c_console .sys{color:var(--mut)}.c_console .ok{color:var(--pos)}.c_console .amber{color:var(--amber)}
 html[dir="rtl"] #c_code,html[dir="rtl"] .c_console{direction:ltr;text-align:left}
 .crun{display:grid;grid-template-columns:1.1fr .9fr;gap:16px}
-@media(max-width:820px){.crun{grid-template-columns:1fr}}
+.cscrim{display:none;position:fixed;inset:0;background:rgba(3,7,17,.55);z-index:55}
+.cscrim.on{display:block}
+@media(max-width:900px){
+ .cshell{grid-template-columns:minmax(0,1fr)}
+ .csidebar{position:fixed;inset:0 auto 0 0;width:250px;z-index:60;transform:translateX(-100%);transition:transform .2s ease}
+ .csidebar.open{transform:none;box-shadow:0 0 60px rgba(0,0,0,.6)}
+ .cham{display:inline-flex}
+ .cmetrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .cgrid{grid-template-columns:minmax(0,1fr)}
+ .crun{grid-template-columns:1fr}
+ .csearch{min-width:0}
+}
+@media(max-width:520px){.cmetrics{grid-template-columns:1fr 1fr}.csearch span,.csearch kbd{display:none}.csearch{min-width:0;max-width:44px;justify-content:center;padding:8px}.cws b{display:none}.cbody{padding:18px 16px 40px}}
+@media(prefers-reduced-motion:reduce){.csidebar{transition:none}}
 </style>
-<div class="wrap" style="padding:34px 24px 48px;max-width:1120px">
-  <div id="pbtestmode"></div>
-  <div class="eyebrow"><span class="dot"></span> console</div>
-  <h1 style="font-size:clamp(26px,3.6vw,40px);margin:12px 0 4px">Your <span class="grad-teal">cloud console</span></h1>
-  <p class="mut" style="max-width:66ch">Rent GPUs, run jobs, form clusters, manage billing, API keys and teams — one place for everything you launch and everything you host.</p>
-  <p class="mut" id="c_signedout" style="display:none;margin-top:16px">Please <a class="teal" href="/login">sign in</a> to open your console.</p>
-
-  <div id="c_main" style="display:none">
-    <div class="stats" id="c_wallet" style="margin-top:18px"></div>
-
-    <div class="ctabbar" id="ctabbar">
-      <button class="ctab-btn on" id="ctab-overview" data-act="cTab" data-a1="overview">Overview</button>
-      <button class="ctab-btn" id="ctab-compute" data-act="cTab" data-a1="compute">Compute</button>
-      <button class="ctab-btn" id="ctab-clusters" data-act="cTab" data-a1="clusters">Clusters</button>
-      <button class="ctab-btn" id="ctab-billing" data-act="cTab" data-a1="billing">Billing</button>
-      <button class="ctab-btn" id="ctab-teams" data-act="cTab" data-a1="teams">Teams</button>
-      <button class="ctab-btn" id="ctab-access" data-act="cTab" data-a1="access">Access</button>
-      <button class="ctab-btn" id="ctab-seller" data-act="cTab" data-a1="seller">Hosting</button>
+<div class="cscrim" id="cscrim"></div>
+<div class="cshell" id="cshell">
+  <aside class="csidebar" id="csidebar">
+    <div class="cbrand" data-act="cGo" data-a1="overview"><img src="/static/petabyte-logo.png" alt=""/> Petabyte</div>
+    <nav class="cnav" aria-label="Console">
+      <div class="cnav-grp">Compute</div>
+      <a id="cnav-overview" data-act="cGo" data-a1="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg> Overview</a>
+      <a id="cnav-compute" data-act="cGo" data-a1="compute"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg> Compute</a>
+      <a id="cnav-jobs" data-act="cGo" data-a1="jobs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h10"/></svg> Jobs</a>
+      <a href="/catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v6H4zM4 15h10v4H4z"/></svg> Templates</a>
+      <a id="cnav-clusters" data-act="cGo" data-a1="clusters"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7.5 7.5 11 16M16.5 7.5 13 16"/></svg> Clusters</a>
+      <div class="cnav-grp">Account</div>
+      <a id="cnav-billing" data-act="cGo" data-a1="billing"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/></svg> Wallet &amp; billing</a>
+      <a id="cnav-access" data-act="cGo" data-a1="access"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="12" r="3.5"/><path d="M11 12h9M17 12v4"/></svg> API keys</a>
+      <a id="cnav-teams" data-act="cGo" data-a1="teams"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="9" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 6.5a3 3 0 0 1 0 5.5M21 20a5 5 0 0 0-4-4.9"/></svg> Teams</a>
+      <div class="cnav-grp" id="cnav-hostgrp" style="display:none">Hosting</div>
+      <a id="cnav-seller" data-act="cGo" data-a1="seller" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg> Nodes &amp; earnings</a>
+    </nav>
+    <div class="csidefoot">
+      <a href="/account"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg> Settings</a>
+      <a href="/developers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 8 5 12l4 4M15 8l4 4-4 4"/></svg> Docs</a>
     </div>
+  </aside>
+  <div class="cmain">
+    <header class="ctopbar">
+      <button class="cham" id="cham" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+      <div class="cws"><span class="av" id="c_wsav">·</span><b id="c_wsname">Workspace</b><span class="cenv" id="c_env">…</span></div>
+      <div class="csearch" data-act="cPalette" role="button" tabindex="0" aria-label="Search and commands"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg><span>Search or run a command</span><kbd>⌘K</kbd></div>
+      <button class="citop" data-act="cGo" data-a1="access" title="Notifications" aria-label="Notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6M10 20a2 2 0 0 0 4 0"/></svg></button>
+      <button class="citop" onclick="try{toggleTheme()}catch(e){}" title="Theme" aria-label="Toggle theme"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M19 5l-1.4 1.4M6.4 17.6 5 19"/></svg></button>
+      <button class="citop" onclick="try{signout()}catch(e){location.href='/login'}" title="Sign out" aria-label="Sign out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/></svg></button>
+    </header>
+    <div class="cbody">
+      <p class="mut" id="c_signedout" style="display:none">Please <a class="teal" href="/login">sign in</a> to open your console.</p>
+      <div id="c_main" style="display:none">
+        <div class="cpagehead" id="c_pagehead"></div>
 
-    <div id="tab-overview">
-      <div class="lbl" style="margin-top:20px">Live marketplace</div>
-      <div class="stats" id="c_stats"></div>
-      <div class="lbl" style="margin-top:22px">Your spending</div>
-      <div class="stats" id="c_spend"></div>
-      <div class="card" style="margin-top:20px"><div class="lbl">Petabyte vs public cloud</div><div id="c_savings" style="margin-top:8px"></div></div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px">
-        <a class="btn btn-amber" href="/marketplace">Browse GPUs</a>
-        <button class="btn btn-teal" data-act="cTab" data-a1="compute">Run a job</button>
-        <a class="btn btn-teal" href="/cluster">Form a cluster</a>
-      </div>
-    </div>
+        <section id="tab-overview" class="cpanel">
+          <div class="cmetrics" id="c_ov_metrics"></div>
+          <div class="cgrid">
+            <div class="cgcol">
+              <section class="csec"><div class="csec-h"><h2>Running compute</h2><button data-act="cGo" data-a1="compute">Manage</button></div><div class="csec-b" id="c_ov_running"><p class="mut" style="font-size:13px;padding:8px 0">Loading…</p></div></section>
+              <section class="csec"><div class="csec-h"><h2>Recent jobs</h2><button data-act="cGo" data-a1="jobs">View all</button></div><div class="csec-b" id="c_ov_jobs"><p class="mut" style="font-size:13px;padding:8px 0">Loading…</p></div></section>
+              <section class="csec"><div class="csec-h"><h2>Available compute</h2><a href="/marketplace">Marketplace →</a></div><div class="csec-b" id="c_ov_avail"><p class="mut" style="font-size:13px;padding:8px 0">Loading…</p></div></section>
+            </div>
+            <div class="cgcol">
+              <section class="csec"><div class="csec-h"><h2>Wallet &amp; spend</h2><button data-act="cGo" data-a1="billing">Billing</button></div><div class="csec-b" id="c_ov_wallet"><p class="mut" style="font-size:13px;padding:8px 0">Loading…</p></div></section>
+              <section class="csec" id="c_ov_seller_sect" style="display:none"><div class="csec-h"><h2>Hosting</h2><a href="/seller/payouts">Earnings →</a></div><div class="csec-b" id="c_ov_seller"></div></section>
+              <section class="csec"><div class="csec-h"><h2>Recent activity</h2></div><div class="csec-b" id="c_ov_activity"><p class="mut" style="font-size:13px;padding:8px 0">Loading…</p></div></section>
+            </div>
+          </div>
+        </section>
 
-    <div id="tab-compute" style="display:none">
-      <div class="lbl" style="margin-top:20px">Run a job</div>
-      <div class="crun">
-        <div>
-          <textarea id="c_code" spellcheck="false">print("hello from a petabyte gpu")
+        <section id="tab-compute" class="cpanel" style="display:none">
+          <div class="csec"><div class="csec-h"><h2>Run a job</h2></div><div class="csec-b">
+            <div class="crun">
+              <div>
+                <textarea id="c_code" spellcheck="false">print("hello from a petabyte gpu")
 print(6 * 7)</textarea>
-          <div style="margin-top:10px"><button class="btn btn-amber" data-act="cRun">Run on cheapest GPU &rarr;</button></div>
-          <p class="mini" style="margin-top:8px">Books the cheapest matching GPU, escrows the hour, streams the result. Add funds in Billing first.</p>
-        </div>
-        <div class="c_console" id="c_out"><span class="sys">console idle — press Run.</span></div>
-      </div>
-      <div class="lbl" style="margin-top:24px">Available GPUs</div>
-      <div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>GPU</th><th>$/hr</th><th>vs cloud</th><th>Trust</th><th>Region</th><th></th></tr></thead><tbody id="c_specs"><tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
-      <div class="lbl" style="margin-top:24px">Your VMs <span class="mut" style="font-weight:400;text-transform:none;letter-spacing:0">— stable address survives failover</span></div>
-      <div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>Template</th><th>Status</th><th>Address</th><th>Failover</th><th>Left</th><th></th></tr></thead><tbody id="c_vms"><tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
-    </div>
+                <div style="margin-top:10px"><button class="cbtn pri" data-act="cRun">Run on cheapest GPU →</button></div>
+                <p class="mini" style="margin-top:8px">Books the cheapest matching GPU, escrows the hour, streams the result. Add funds in Billing first.</p>
+              </div>
+              <div class="c_console" id="c_out"><span class="sys">console idle — press Run.</span></div>
+            </div>
+          </div></div>
+          <section class="csec" style="margin-top:16px"><div class="csec-h"><h2>Available GPUs</h2><a href="/marketplace">Marketplace →</a></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>GPU</th><th>$/hr</th><th>vs cloud</th><th>Trust</th><th>Region</th><th></th></tr></thead><tbody id="c_specs"><tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+          </section>
+          <section class="csec" style="margin-top:16px"><div class="csec-h"><h2>Your VMs</h2><span class="mut" style="font-size:12px">stable address survives failover</span></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>Template</th><th>Status</th><th>Address</th><th>Failover</th><th>Left</th><th></th></tr></thead><tbody id="c_vms"><tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+          </section>
+        </section>
 
-    <div id="tab-clusters" style="display:none">
-      <div class="lbl" style="margin-top:20px">Distributed clusters</div>
-      <div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>Job</th><th>Status</th><th>Size</th><th>Rendezvous</th></tr></thead><tbody id="c_clusters"><tr><td colspan=4 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
-      <p class="mini" style="margin-top:10px"><a class="teal" href="/cluster">Launch a multi-GPU cluster &rarr;</a> — torchrun / MPI / Ray across many machines, wired over a private VPN.</p>
-    </div>
+        <section id="tab-jobs" class="cpanel" style="display:none">
+          <section class="csec"><div class="csec-h"><h2>Reservations</h2><button data-act="cGo" data-a1="compute">Run a job</button></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>When</th><th>GPU</th><th>Hours</th><th>Amount</th><th>Status</th></tr></thead><tbody id="c_jobs"><tr><td colspan=5 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+          </section>
+        </section>
 
-    <div id="tab-billing" style="display:none">
-      <div class="lbl" style="margin-top:20px">Wallet</div>
-      <div class="stats" id="c_bill_wallet"></div>
-      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:16px">
-        <div class="card" style="flex:1 1 300px">
-          <div class="lbl">Add funds</div>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-            <input id="c_dep" type="number" value="50" min="1" style="width:120px"/>
-            <button class="btn btn-amber" data-act="cDeposit">Add funds</button>
+        <section id="tab-clusters" class="cpanel" style="display:none">
+          <section class="csec"><div class="csec-h"><h2>Distributed clusters</h2><a href="/cluster">Form a cluster →</a></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>Job</th><th>Status</th><th>Size</th><th>Rendezvous</th></tr></thead><tbody id="c_clusters"><tr><td colspan=4 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+            <p class="mini" style="margin:10px 15px 14px">torchrun / MPI / Ray across many machines, wired over a private VPN.</p>
+          </section>
+        </section>
+
+        <section id="tab-billing" class="cpanel" style="display:none">
+          <div class="cmetrics" id="c_bill_wallet" style="margin-bottom:16px"></div>
+          <div style="display:flex;gap:16px;flex-wrap:wrap">
+            <section class="csec" style="flex:1 1 300px"><div class="csec-h"><h2>Add funds</h2></div><div class="csec-b">
+              <div style="display:flex;gap:8px;align-items:center;margin-top:6px"><input id="c_dep" type="number" value="50" min="1" style="width:120px"/><button class="cbtn pri" data-act="cDeposit">Add funds</button></div>
+              <p class="mini" style="margin-top:8px">In live mode, funds are added by card at checkout.</p>
+            </div></section>
+            <section class="csec" style="flex:1 1 300px"><div class="csec-h"><h2>Withdraw earnings</h2></div><div class="csec-b">
+              <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap"><select id="c_wmethod" style="flex:1;min-width:150px"></select><input id="c_wamt" type="number" placeholder="amount" min="1" style="width:110px"/><button class="cbtn" data-act="cWithdraw">Withdraw</button></div>
+              <p class="mini" id="c_wnomethod" style="margin-top:8px;display:none">No payout method yet — add bank / USDC / gift card on the <a class="teal" href="/seller/payouts">earnings page</a>.</p>
+            </div></section>
           </div>
-          <p class="mini" style="margin-top:8px">In live mode, funds are added by card at checkout.</p>
-        </div>
-        <div class="card" style="flex:1 1 300px">
-          <div class="lbl">Withdraw earnings</div>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
-            <select id="c_wmethod" style="flex:1;min-width:150px"></select>
-            <input id="c_wamt" type="number" placeholder="amount" min="1" style="width:110px"/>
-            <button class="btn btn-teal" data-act="cWithdraw">Withdraw</button>
-          </div>
-          <p class="mini" id="c_wnomethod" style="margin-top:8px;display:none">No payout method yet — add bank / USDC / gift card on the <a class="teal" href="/seller/payouts">earnings page</a>.</p>
-        </div>
-      </div>
-      <div class="lbl" style="margin-top:22px">Payout history</div>
-      <div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>Amount</th><th>Kind</th><th>Status</th><th>When</th></tr></thead><tbody id="c_payouts"></tbody></table></div>
-      <div class="lbl" style="margin-top:22px">Receipts</div>
-      <div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>When</th><th>GPU</th><th>Hours</th><th>Amount</th><th>Status</th></tr></thead><tbody id="c_bookings"></tbody></table></div>
-      <div class="card" style="margin-top:22px"><div class="lbl am">Refer &amp; earn</div><div id="c_referral" style="margin-top:8px"></div></div>
-    </div>
+          <section class="csec" style="margin-top:16px"><div class="csec-h"><h2>Payout history</h2></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>Amount</th><th>Kind</th><th>Status</th><th>When</th></tr></thead><tbody id="c_payouts"></tbody></table></div>
+          </section>
+          <section class="csec" style="margin-top:16px"><div class="csec-h"><h2>Receipts</h2></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>When</th><th>GPU</th><th>Hours</th><th>Amount</th><th>Status</th></tr></thead><tbody id="c_bookings"></tbody></table></div>
+          </section>
+          <section class="csec" style="margin-top:16px"><div class="csec-h"><h2>Refer &amp; earn</h2></div><div class="csec-b" id="c_referral" style="padding-top:10px"></div></section>
+        </section>
 
-    <div id="tab-teams" style="display:none">
-      <div class="lbl" style="margin-top:20px">Teams &amp; access (IAM)</div>
-      <p class="mut" style="font-size:13.5px;max-width:70ch">Share a wallet across a lab or company and set a hard budget cap so a runaway job can never overspend. Add people to the team, give each a role, and remove them when they leave. Members bill to the team's balance.</p>
-      <p class="mini" style="margin-top:8px;text-transform:none;letter-spacing:0;font-size:12px">Roles — <b class="teal">admin</b>: manage members, funds &amp; budget, and run compute · <b class="teal">billing</b>: add funds &amp; set the budget, and run compute · <b class="teal">member</b>: run compute against the team wallet.</p>
-      <div class="panel" style="overflow:auto;margin-top:12px"><table class="tbl"><thead><tr><th>Team</th><th>Your role</th><th>Balance</th><th>Budget cap</th><th>Spent</th><th>Members</th><th></th></tr></thead><tbody id="c_orgs"><tr><td colspan=7 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
-      <div id="c_team_detail" style="display:none;margin-top:16px"></div>
-      <div class="card" style="margin-top:16px;max-width:460px">
-        <div class="lbl">Create a team</div>
-        <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-          <input id="c_orgname" placeholder="team / lab name" style="flex:1"/>
-          <button class="btn btn-amber" data-act="cOrgCreate">Create</button>
-        </div>
-        <p class="mini" id="c_orgmsg" style="margin-top:8px"></p>
-      </div>
-    </div>
+        <section id="tab-teams" class="cpanel" style="display:none">
+          <p class="mut" style="font-size:13.5px;max-width:70ch">Share a wallet across a lab or company and set a hard budget cap so a runaway job can never overspend. Add people, give each a role, remove them when they leave.</p>
+          <p class="mini" style="margin-top:8px;text-transform:none;letter-spacing:0;font-size:12px">Roles — <b class="teal">admin</b>: manage members, funds &amp; budget, and run compute · <b class="teal">billing</b>: add funds &amp; set the budget, and run compute · <b class="teal">member</b>: run compute against the team wallet.</p>
+          <div class="panel" style="overflow:auto;margin-top:12px"><table class="tbl"><thead><tr><th>Team</th><th>Your role</th><th>Balance</th><th>Budget cap</th><th>Spent</th><th>Members</th><th></th></tr></thead><tbody id="c_orgs"><tr><td colspan=7 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+          <div id="c_team_detail" style="display:none;margin-top:16px"></div>
+          <section class="csec" style="margin-top:16px;max-width:460px"><div class="csec-h"><h2>Create a team</h2></div><div class="csec-b">
+            <div style="display:flex;gap:8px;align-items:center;margin-top:6px"><input id="c_orgname" placeholder="team / lab name" style="flex:1"/><button class="cbtn pri" data-act="cOrgCreate">Create</button></div>
+            <p class="mini" id="c_orgmsg" style="margin-top:8px"></p>
+          </div></section>
+        </section>
 
-    <div id="tab-access" style="display:none">
-      <div class="lbl" style="margin-top:20px">API keys</div>
-      <p class="mut" style="font-size:13.5px;max-width:66ch">Programmatic access for CI, scripts and your own tools. Scope a key, set an expiry, revoke any time. The full key is shown once at creation.</p>
-      <div class="card" style="margin-top:12px">
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <input id="c_keylabel" placeholder="label (e.g. ci-runner)" style="flex:1;min-width:150px"/>
-          <input id="c_keydays" type="number" value="30" min="1" max="90" style="width:90px" title="days until expiry"/>
-          <input id="c_keyscopes" placeholder="scopes (comma-sep, optional)" style="flex:1;min-width:150px"/>
-          <button class="btn btn-amber" data-act="cKeyCreate">Create key</button>
-        </div>
-        <div id="c_keyout" style="display:none;margin-top:12px"></div>
-      </div>
-      <div class="panel" style="overflow:auto;margin-top:12px"><table class="tbl"><thead><tr><th>Label</th><th>Scopes</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody id="c_keys"><tr><td colspan=5 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
-      <p class="mini" style="margin-top:8px">Full API reference at <a class="teal" href="/developers">/developers</a> and <a class="teal" href="/docs">/docs</a>.</p>
-      <div class="lbl" style="margin-top:24px">Notifications</div>
-      <div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>When</th><th>Event</th><th>Subject</th><th>Status</th></tr></thead><tbody id="c_notifs"></tbody></table></div>
-      <div class="lbl" style="margin-top:24px">Audit log <span class="mut" id="c_audit_integrity" style="font-weight:400;text-transform:none;letter-spacing:0"></span></div>
-      <p class="mut" style="font-size:13px;max-width:66ch">Immutable "who did what, when" — logins, key create/revoke, role and team changes, spend. Hash-chained so any edit or deletion is detectable (the security-team / SOC-2 trail).</p>
-      <div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>When</th><th>Action</th><th>Target</th><th>Detail</th><th>IP</th></tr></thead><tbody id="c_audit"><tr><td colspan=5 class="mut mono" style="text-align:center;padding:14px">Loading…</td></tr></tbody></table></div>
-    </div>
+        <section id="tab-access" class="cpanel" style="display:none">
+          <p class="mut" style="font-size:13.5px;max-width:66ch">Programmatic access for CI, scripts and your own tools. Scope a key, set an expiry, revoke any time. The full key is shown once at creation.</p>
+          <section class="csec" style="margin-top:12px"><div class="csec-b" style="padding-top:14px">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input id="c_keylabel" placeholder="label (e.g. ci-runner)" style="flex:1;min-width:150px"/><input id="c_keydays" type="number" value="30" min="1" max="90" style="width:90px" title="days until expiry"/><input id="c_keyscopes" placeholder="scopes (comma-sep, optional)" style="flex:1;min-width:150px"/><button class="cbtn pri" data-act="cKeyCreate">Create key</button></div>
+            <div id="c_keyout" style="display:none;margin-top:12px"></div>
+          </div></section>
+          <div class="panel" style="overflow:auto;margin-top:12px"><table class="tbl"><thead><tr><th>Label</th><th>Scopes</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody id="c_keys"><tr><td colspan=5 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+          <p class="mini" style="margin:8px 2px">Full API reference at <a class="teal" href="/developers">/developers</a> and <a class="teal" href="/docs">/docs</a>.</p>
+          <section class="csec" style="margin-top:20px"><div class="csec-h"><h2>Notifications</h2></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>When</th><th>Event</th><th>Subject</th><th>Status</th></tr></thead><tbody id="c_notifs"></tbody></table></div>
+          </section>
+          <section class="csec" style="margin-top:20px"><div class="csec-h"><h2>Audit log <span class="mut" id="c_audit_integrity" style="font-weight:400;text-transform:none;letter-spacing:0"></span></h2></div>
+            <div class="csec-b" style="padding-top:10px"><p class="mut" style="font-size:13px;max-width:66ch">Immutable "who did what, when" — logins, key create/revoke, role and team changes, spend. Hash-chained so any edit or deletion is detectable (the security-team / SOC-2 trail).</p></div>
+            <div class="panel" style="overflow:auto"><table class="tbl"><thead><tr><th>When</th><th>Action</th><th>Target</th><th>Detail</th><th>IP</th></tr></thead><tbody id="c_audit"><tr><td colspan=5 class="mut mono" style="text-align:center;padding:14px">Loading…</td></tr></tbody></table></div>
+          </section>
+        </section>
 
-    <div id="tab-seller" style="display:none">
-      <div class="lbl" style="margin-top:20px">Hosting &amp; earnings</div>
-      <div id="c_seller" style="margin-top:8px"></div>
+        <section id="tab-seller" class="cpanel" style="display:none">
+          <div id="c_seller" style="margin-top:2px"></div>
+        </section>
+      </div>
     </div>
   </div>
 </div>
 <script>
-var CTABS=['overview','compute','clusters','billing','teams','access','seller'];
+var CTABS=['overview','compute','jobs','clusters','billing','teams','access','seller'];
 var CLOADED={};
 function cD2(x){return '$'+Number(x||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
 function cInt(x){return Number(x||0).toLocaleString();}
 function cBadge(s){var t=String(s==null?'':s);var ok=(t==='running'||t==='complete'||t==='completed'||t==='online'||t==='paid'||t==='ready'||t==='active'||t==='sent')?' ok':'';return '<span class="badge'+ok+'">'+esc(t)+'</span>';}
 function cStat(n,l,cls){return '<div class="stat"><div class="n '+(cls||'')+'">'+n+'</div><div class="l">'+esc(l)+'</div></div>';}
 function cTs(s){return esc(String(s==null?'':s).replace('T',' ').slice(0,16));}
+function cMetric(k,v,c,cls){return '<div class="cmetric"><div class="k">'+esc(k)+'</div><div class="v">'+v+'</div><div class="c '+(cls||'')+'">'+c+'</div></div>';}
+function cEmpty(t,s,arg,cta,href){var btn=href?('<a class="cbtn sm" href="'+href+'">'+cta+'</a>'):('<button class="cbtn sm" data-act="cGo" data-a1="'+arg+'">'+cta+'</button>');
+  return '<div class="cempty"><div class="et">'+esc(t)+'</div><div class="es">'+esc(s)+'</div>'+btn+'</div>';}
+function cGo(name){cNav(name);}
+function cPalette(){try{pbPalette();}catch(e){}}
 
-function cTab(name){
+var PAGEMETA={
+ overview:{t:'Overview',s:'Your compute, jobs, spend and infrastructure at a glance.',a:[['Launch compute','pri','compute'],['Add funds','','billing']]},
+ compute:{t:'Compute',s:'Run a job on the cheapest matching GPU, or manage running VMs.',a:[['Marketplace','href','/marketplace']]},
+ jobs:{t:'Jobs',s:'Your reservations and their status.',a:[['Run a job','pri','compute']]},
+ clusters:{t:'Clusters',s:'Multi-GPU distributed jobs across many machines.',a:[['Form a cluster','href','/cluster']]},
+ billing:{t:'Wallet & billing',s:'Balance, funding, payouts, receipts and referrals.',a:[]},
+ access:{t:'API keys',s:'Programmatic access for CI, scripts and tools.',a:[]},
+ teams:{t:'Teams',s:'Share a wallet and set budget caps.',a:[]},
+ seller:{t:'Hosting',s:'Your nodes, utilization and earnings.',a:[['List your PC','href','/install']]}
+};
+function cHead(name){
+  var m=PAGEMETA[name]||PAGEMETA.overview;
+  var acts=(m.a||[]).map(function(x){var label=x[0],kind=x[1],arg=x[2];
+    if(kind==='href')return '<a class="cbtn" href="'+arg+'">'+esc(label)+'</a>';
+    return '<button class="cbtn'+(kind==='pri'?' pri':'')+'" data-act="cGo" data-a1="'+arg+'">'+esc(label)+'</button>';}).join('');
+  var el=document.getElementById('c_pagehead');if(el)el.innerHTML='<div><h1>'+esc(m.t)+'</h1><p>'+esc(m.s)+'</p></div><div class="cpageact">'+acts+'</div>';
+}
+function cNav(name){
   if(CTABS.indexOf(name)<0)name='overview';
   CTABS.forEach(function(t){
     var el=document.getElementById('tab-'+t);if(el)el.style.display=(t===name)?'':'none';
-    var b=document.getElementById('ctab-'+t);if(b)b.className='ctab-btn'+(t===name?' on':'');
+    var a=document.getElementById('cnav-'+t);if(a)a.classList.toggle('on',t===name);
   });
+  cHead(name);
   try{history.replaceState(null,'','#'+name);}catch(e){}
   if(!CLOADED[name]){CLOADED[name]=true;cLoadTab(name);}
+  var sb=document.getElementById('csidebar');if(sb)sb.classList.remove('open');
+  var sc=document.getElementById('cscrim');if(sc)sc.classList.remove('on');
+  try{document.querySelector('.cbody').scrollTop=0;window.scrollTo(0,0);}catch(e){}
 }
+var cTab=cNav;
 function cLoadTab(name){
   if(name==='overview')cOverview();
   else if(name==='compute')cCompute();
+  else if(name==='jobs')cJobs();
   else if(name==='clusters')cClusters();
   else if(name==='billing')cBilling();
   else if(name==='teams')cTeams();
@@ -3551,51 +3671,115 @@ function cLoadTab(name){
 async function consoleLoad(){
   if(typeof authed==='function' && !authed()){var so=document.getElementById('c_signedout');if(so)so.style.display='';return;}
   document.getElementById('c_main').style.display='';
-  await cWalletStrip();
+  cEnvBadge();
+  await cWorkspace();
   var start=(location.hash||'').replace('#','');
-  cTab(CTABS.indexOf(start)>=0?start:'overview');
+  cNav(CTABS.indexOf(start)>=0?start:'overview');
+}
+async function cEnvBadge(){
+  var el=document.getElementById('c_env');if(!el)return;
+  try{var c=await (await fetch('/payments/config')).json();
+    if(c&&c.test_mode){el.className='cenv test';el.textContent='TEST';el.title='Sandbox — no real card is charged, no real money moves.';}
+    else{el.className='cenv live';el.textContent='LIVE';el.title='Live — real payments.';}
+  }catch(e){el.textContent='';}
+}
+async function cWorkspace(){
+  var me=((await api('/me'))||{}).body||{};window._CME=me;
+  var nm=document.getElementById('c_wsname');if(nm)nm.textContent=me.username||'Workspace';
+  var av=document.getElementById('c_wsav');if(av)av.textContent=((me.username||'?').slice(0,1)).toUpperCase();
+  var seller=(me.nodes>0)||me.role==='seller';
+  ['cnav-hostgrp','cnav-seller','c_ov_seller_sect'].forEach(function(id){var e=document.getElementById(id);if(e)e.style.display=seller?'':'none';});
 }
 async function cWalletStrip(){
   var me=((await api('/me'))||{}).body||{};window._CME=me;
-  var el=document.getElementById('c_wallet');if(!el)return;
-  el.innerHTML=cStat(cD2(me.balance),'Wallet balance','teal')+cStat(cD2(me.earnings),'Earnings','')+
-    cStat(cInt(me.nodes),'Your nodes','')+cStat(cInt(me.bookings),'Bookings','');
+  if(CLOADED['overview'])cLoadMetrics();
 }
 
 async function cOverview(){
-  var s=((await api('/marketplace/stats'))||{}).body||{};
-  document.getElementById('c_stats').innerHTML=
-    cStat(cInt(s.nodes_online),'Nodes online','teal')+cStat(cInt(s.specs_listed),'GPUs listed','')+
-    cStat(cInt(s.jobs_completed),'Jobs settled','')+cStat(cD2(s.gmv),'GMV to date','amber');
-  var sp=((await api('/buyer/spend'))||{}).body||{};
-  document.getElementById('c_spend').innerHTML=
-    cStat(cD2(sp.burn_rate_per_hour)+'/hr','Burn rate','amber')+cStat(cInt(sp.active_instances),'Active VMs','')+
-    cStat(cD2(sp.in_escrow),'In escrow','')+cStat((sp.hours_of_runway!=null?sp.hours_of_runway+'h':'&#8734;'),'Runway','');
-  cSavings();
+  cLoadMetrics();cRunning();cOvWallet();cOvJobs();cOvAvail();cOvActivity();cOvSeller();
 }
-async function cSavings(){
-  var el=document.getElementById('c_savings');if(!el)return;
+async function cLoadMetrics(){
+  var me=((await api('/me'))||{}).body||{};window._CME=me;
+  var sp=((await api('/buyer/spend'))||{}).body||{};
+  var vms=(((await api('/vms'))||{}).body||{}).vms||[];
+  var run=vms.filter(function(v){return v.status==='running';}).length;
+  var start=vms.filter(function(v){return v.status==='starting'||v.status==='migrating';}).length;
+  var el=document.getElementById('c_ov_metrics');if(!el)return;
+  el.innerHTML=
+    cMetric('Wallet',cD2(me.balance),'earned '+cD2(me.earnings),'pos')+
+    cMetric('Running',(run+start)+' compute',run+' running · '+start+' starting')+
+    cMetric('Spend',cD2(sp.burn_rate_per_hour)+'/hr','~'+cD2(sp.projected_24h)+' next 24h','warn')+
+    cMetric('Jobs',cInt(me.bookings),(sp.active_instances||0)+' active now');
+}
+async function cRunning(){
+  var vms=(((await api('/vms'))||{}).body||{}).vms||[];
+  var el=document.getElementById('c_ov_running');if(!el)return;
+  var live=vms.filter(function(v){return ['running','starting','migrating'].indexOf(v.status)>=0;});
+  if(!live.length){el.innerHTML=cEmpty('Nothing running','Launch a workload and it shows up here.','compute','Launch compute');return;}
+  el.innerHTML=live.slice(0,5).map(function(v){var u=v.url||{};var isrun=(v.status==='running');
+    return '<div class="crow"><div style="min-width:0"><div class="rt">'+esc(v.template||'vm')+' '+cBadge(v.status)+'</div>'+
+      '<div class="rs mono" style="font-size:11.5px">'+esc(u.hostname||u.id||'')+(v.hours_left!=null?(' · '+v.hours_left+'h left'):'')+'</div></div>'+
+      '<div class="rr">'+(isrun?('<button class="cbtn sm" data-act="cVmExtend" data-a1="'+esc(v.vm_id)+'">+1h</button><button class="cbtn sm" data-act="cVmStop" data-a1="'+esc(v.vm_id)+'">Stop</button>'):'')+'</div></div>';
+  }).join('');
+}
+async function cOvWallet(){
+  var sp=((await api('/buyer/spend'))||{}).body||{};var me=window._CME||{};
+  var el=document.getElementById('c_ov_wallet');if(!el)return;
+  el.innerHTML=
+    '<div class="cmoney"><span class="mk">Available</span><span class="mv teal">'+cD2(me.balance)+'</span></div>'+
+    '<div class="cmoney"><span class="mk">Current spend</span><span class="mv amber">'+cD2(sp.burn_rate_per_hour)+'/hr</span></div>'+
+    '<div class="cmoney"><span class="mk">Projected 24h</span><span class="mv">'+cD2(sp.projected_24h)+'</span></div>'+
+    '<div class="cmoney"><span class="mk">In escrow</span><span class="mv">'+cD2(sp.in_escrow)+'</span></div>'+
+    '<div class="cmoney"><span class="mk">Est. runway</span><span class="mv">'+(sp.hours_of_runway!=null?sp.hours_of_runway+'h':'&#8734;')+'</span></div>'+
+    '<div style="margin-top:12px;display:flex;gap:8px"><button class="cbtn pri sm" data-act="cGo" data-a1="billing">Add funds</button><button class="cbtn sm" data-act="cGo" data-a1="billing">Billing</button></div>';
+}
+async function cOvJobs(){
+  var bk=(((await api('/account/bookings'))||{}).body||{}).bookings||[];
+  var el=document.getElementById('c_ov_jobs');if(!el)return;
+  if(!bk.length){el.innerHTML=cEmpty('No jobs yet','Run your first workload.','compute','Run a job');return;}
+  el.innerHTML=bk.slice(0,5).map(function(b){
+    return '<div class="crow"><div style="min-width:0"><div class="rt">'+esc(b.gpu_model||'GPU')+' '+cBadge(b.status)+'</div>'+
+      '<div class="rs">'+cTs(b.created_at)+' · '+esc(String(b.hours))+'h</div></div>'+
+      '<div class="rr mono" style="font-size:13px">'+cD2(b.gross_amount)+'</div></div>';
+  }).join('');
+}
+async function cOvAvail(){
   var specs=(((await api('/specs'))||{}).body||{}).specs||[];
-  var best={};
-  specs.forEach(function(s){
-    if(!s.cloud_reference||!(s.price_per_hour<s.cloud_reference))return;
-    var k=s.gpu_model||'GPU';
-    if(!best[k]||s.price_per_hour<best[k].p)best[k]={p:s.price_per_hour,c:s.cloud_reference};
-  });
-  var keys=Object.keys(best);
-  if(!keys.length){el.innerHTML='<p class="mut" style="font-size:13px">Live GPUs will show their savings vs public-cloud on-demand here.</p>';return;}
-  var savs=keys.map(function(k){return Math.round((1-best[k].p/best[k].c)*100);});
-  var avg=Math.round(savs.reduce(function(a,b){return a+b;},0)/savs.length);
-  var rows=keys.sort(function(a,b){return (best[b].c-best[b].p)-(best[a].c-best[a].p);}).slice(0,6).map(function(k){
-    var sv=Math.round((1-best[k].p/best[k].c)*100);
-    return '<tr><td data-l="GPU" class="mono">'+esc(k)+'</td>'+
-      '<td data-l="Petabyte" class="mono amber">'+cD2(best[k].p)+'/hr</td>'+
-      '<td data-l="Public cloud" class="mono mut">'+cD2(best[k].c)+'/hr</td>'+
-      '<td data-l="You save" class="mono teal">-'+sv+'%</td></tr>';}).join('');
-  el.innerHTML='<div style="font-family:var(--disp);font-size:26px;font-weight:700;letter-spacing:-.02em">Up to '+Math.max.apply(null,savs)+'% cheaper'+
-    '<span class="mut" style="font-size:14px;font-weight:400"> than public-cloud on-demand (avg '+avg+'%)</span></div>'+
-    '<div class="panel" style="overflow:auto;margin-top:12px"><table class="tbl"><thead><tr><th>GPU</th><th>Petabyte</th><th>Public cloud</th><th>You save</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
-    '<p class="mini" style="margin-top:8px">Same GPU class, public-cloud on-demand reference rates. No egress fees, per-hour billing, bring any container.</p>';
+  var el=document.getElementById('c_ov_avail');if(!el)return;
+  if(!specs.length){el.innerHTML='<p class="mut" style="font-size:13px;padding:8px 0">No GPUs online right now.</p>';return;}
+  var top=specs.slice().sort(function(a,b){return a.price_per_hour-b.price_per_hour;}).slice(0,4);
+  el.innerHTML=top.map(function(s){var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
+    return '<div class="crow"><div style="min-width:0"><div class="rt">'+esc(s.gpu_model||'CPU')+'</div><div class="rs">'+esc(s.region||'')+(save>0?(' · <span class="teal">-'+save+'% vs cloud</span>'):'')+'</div></div>'+
+      '<div class="rr"><span class="mono amber" style="font-size:13px">'+cD2(s.price_per_hour)+'/hr</span><button class="cbtn sm" data-act="cGo" data-a1="compute">Launch</button></div></div>';
+  }).join('');
+}
+async function cOvActivity(){
+  var ns=(((await api('/notifications'))||{}).body||{}).notifications||[];
+  var el=document.getElementById('c_ov_activity');if(!el)return;
+  if(!ns.length){el.innerHTML='<p class="mut" style="font-size:13px;padding:8px 0">No recent activity.</p>';return;}
+  el.innerHTML=ns.slice(0,6).map(function(n){
+    return '<div class="crow" style="gap:8px"><div style="min-width:0"><div class="rt" style="font-size:13px">'+esc(n.subject||n.event_type||'')+'</div><div class="rs" style="font-size:11.5px">'+cTs(n.created_at)+'</div></div><div class="rr">'+cBadge(n.status)+'</div></div>';
+  }).join('');
+}
+async function cOvSeller(){
+  var me=window._CME||{};var sect=document.getElementById('c_ov_seller_sect');
+  if(!((me.nodes>0)||me.role==='seller')){if(sect)sect.style.display='none';return;}
+  if(sect)sect.style.display='';
+  var r=await api('/seller/dashboard');var el=document.getElementById('c_ov_seller');if(!el)return;
+  var ns=((r.body||{}).nodes)||[];
+  if(!ns.length){el.innerHTML=cEmpty('No nodes yet','Connect a GPU and start earning.','','List your PC','/install');return;}
+  var online=ns.filter(function(n){return n.online;}).length;
+  var earned=ns.reduce(function(a,n){return a+Number(n.earned_total||0);},0);
+  el.innerHTML=
+    '<div class="cmoney"><span class="mk">Nodes</span><span class="mv">'+cInt(ns.length)+' ('+online+' online)</span></div>'+
+    '<div class="cmoney"><span class="mk">Earned to date</span><span class="mv teal">'+cD2(earned)+'</span></div>'+
+    '<div style="margin-top:12px"><a class="cbtn sm" href="/seller/payouts">Earnings &amp; payouts →</a></div>';
+}
+async function cJobs(){
+  var bs=(((await api('/account/bookings'))||{}).body||{}).bookings||[];
+  document.getElementById('c_jobs').innerHTML=bs.length?bs.map(function(b){
+    return '<tr><td data-l="When" class="mono" style="font-size:11px">'+cTs(b.created_at)+'</td><td data-l="GPU" class="mono">'+esc(b.gpu_model||'')+'</td><td data-l="Hours" class="mono">'+esc(String(b.hours))+'</td><td data-l="Amount" class="mono">'+cD2(b.gross_amount)+'</td><td data-l="Status">'+cBadge(b.status)+'</td></tr>';
+  }).join(''):'<tr><td colspan=5 class="mut mono" style="text-align:center;padding:16px">No reservations yet. <a class="teal" href="/marketplace">Rent a GPU →</a></td></tr>';
 }
 
 async function cCompute(){
@@ -3608,7 +3792,7 @@ async function cCompute(){
      '<td data-l="vs cloud" class="mono">'+(save>0?('<span class="teal">-'+save+'%</span>'):'—')+'</td>'+
      '<td data-l="Trust">'+trust+'</td>'+
      '<td data-l="Region" class="mono">'+esc(s.region||'—')+'</td>'+
-     '<td data-l=""><button class="btn-ghost" style="padding:5px 12px;font-size:12px" data-act="cRun" data-a1="'+s.spec_id+'">Run</button></td></tr>';
+     '<td data-l=""><button class="cbtn sm" data-act="cRun" data-a1="'+s.spec_id+'">Run</button></td></tr>';
     }).join(''):'<tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">No GPUs online right now.</td></tr>';
   var vms=(((await api('/vms'))||{}).body||{}).vms||[];
   document.getElementById('c_vms').innerHTML=cVmRows(vms);
@@ -3621,25 +3805,26 @@ function cVmRows(vms){
      '<td data-l="Address" class="mono" style="font-size:11px">'+esc(u.hostname||u.id||'')+'</td>'+
      '<td data-l="Failover" class="mono">'+(v.migrations?('moved '+v.migrations+'&times;'):'—')+'</td>'+
      '<td data-l="Left" class="mono">'+(v.hours_left!=null?v.hours_left+'h':'—')+'</td>'+
-     '<td data-l="">'+(live?('<button class="btn-ghost" style="padding:4px 10px;font-size:11px" data-act="cVmExtend" data-a1="'+esc(v.vm_id)+'">+1h</button> <button class="btn-ghost" style="padding:4px 10px;font-size:11px" data-act="cVmStop" data-a1="'+esc(v.vm_id)+'">Stop</button>'):'—')+'</td></tr>';
+     '<td data-l="">'+(live?('<button class="cbtn sm" data-act="cVmExtend" data-a1="'+esc(v.vm_id)+'">+1h</button> <button class="cbtn sm" data-act="cVmStop" data-a1="'+esc(v.vm_id)+'">Stop</button>'):'—')+'</td></tr>';
   }).join('');
 }
 async function cVmExtend(id){var r=await api('/vm/'+id+'/extend',{method:'POST',body:JSON.stringify({hours:1})});
   if(!r.ok)alert((r.body&&(r.body.detail||r.body.message))||'Could not extend.');cCompute();cWalletStrip();}
 async function cVmStop(id){if(!confirm('Stop VM '+id+'? This releases the node.'))return;
-  var r=await api('/vm/'+id+'/stop',{method:'POST'});if(!r.ok)alert('Could not stop.');cCompute();}
+  var r=await api('/vm/'+id+'/stop',{method:'POST'});if(!r.ok)alert('Could not stop.');cCompute();if(CLOADED['overview'])cRunning();}
 
 function cOut(el,text,cls){var s=document.createElement('span');if(cls)s.className=cls;s.textContent=text;
   el.appendChild(document.createElement('br'));el.appendChild(s);el.scrollTop=el.scrollHeight;}
 async function cRun(specId){
   if(typeof authed==='function' && !authed()){location.href='/login';return;}
+  if(CTABS.indexOf('compute')>=0 && document.getElementById('tab-compute').style.display==='none')cNav('compute');
   var out=document.getElementById('c_out');out.innerHTML='<span class="sys">booking a node…</span>';
   var code=(document.getElementById('c_code')||{}).value||'';
   var spec=specId;
   if(!spec){var s=await api('/specs');var list=(s.body||{}).specs||[];
     if(!list.length){out.innerHTML='<span class="amber">No GPUs available.</span>';return;}spec=list[0].spec_id;}
   var bk=await api('/request_vm',{method:'POST',body:JSON.stringify({spec_id:Number(spec),hours:1})});
-  if(!bk.ok){out.innerHTML='<span class="amber">'+(bk.status===402?'Add funds before booking (Billing tab).':'Booking failed: '+esc(JSON.stringify(bk.body)))+'</span>';return;}
+  if(!bk.ok){out.innerHTML='<span class="amber">'+(bk.status===402?'Add funds before booking (Billing).':'Booking failed: '+esc(JSON.stringify(bk.body)))+'</span>';return;}
   cOut(out,'booked #'+bk.body.booking_id+' · escrow '+cD2(bk.body.gross_amount)+' (fee '+cD2(bk.body.platform_fee)+', seller '+cD2(bk.body.seller_payout)+')','sys');
   var tk=await api('/create_task',{method:'POST',body:JSON.stringify({booking_id:bk.body.booking_id,task_type:'notebook',code:code})});
   if(!tk.ok){cOut(out,'task failed: '+JSON.stringify(tk.body),'amber');return;}
@@ -3667,8 +3852,8 @@ async function cClusters(){
 async function cBilling(){
   var w=((await api('/wallet'))||{}).body||{};
   document.getElementById('c_bill_wallet').innerHTML=
-    cStat(cD2(w.balance),'Balance','teal')+cStat(cD2(w.withdrawable),'Withdrawable','')+
-    cStat(cD2(w.clearing),'Clearing','')+cStat(cD2(w.earnings),'Earnings','');
+    cMetric('Balance',cD2(w.balance),'available','pos')+cMetric('Withdrawable',cD2(w.withdrawable),'ready to pay out')+
+    cMetric('Clearing',cD2(w.clearing),'settling')+cMetric('Earnings',cD2(w.earnings),'to date');
   var ms=(((await api('/wallet/methods'))||{}).body||{}).methods||[];
   var payable=ms.filter(function(m){return m.payable;});
   var sel=document.getElementById('c_wmethod');
@@ -3716,7 +3901,7 @@ async function cReferral(){
     cStat(cInt(r.qualified),'Qualified','')+cStat(cD2(r.credit_earned_usd),'Credit earned','teal')+'</div>'+
     '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
     '<input id="c_reflink" readonly value="'+esc(r.link||'')+'" style="flex:1;min-width:220px"/>'+
-    '<button class="btn btn-teal" data-act="cRefCopy">Copy link</button></div>'+
+    '<button class="cbtn" data-act="cRefCopy">Copy link</button></div>'+
     '<p class="mini" style="margin-top:8px">Both sides get spendable compute credit when someone you invite completes their first paid rental.</p>';
 }
 function cRefCopy(){var i=document.getElementById('c_reflink');if(!i||!i.value)return;i.select();
@@ -3731,7 +3916,7 @@ async function cTeams(){
      '<td data-l="Budget cap" class="mono">'+(o.budget_cap!=null?cD2(o.budget_cap):'&#8734;')+'</td>'+
      '<td data-l="Spent" class="mono">'+cD2(o.spent)+'</td>'+
      '<td data-l="Members" class="mono">'+cInt(o.members)+'</td>'+
-     '<td data-l=""><button class="btn-ghost" style="padding:4px 12px;font-size:12px" data-act="cTeamOpen" data-a1="'+o.org_id+'">Manage</button></td></tr>';
+     '<td data-l=""><button class="cbtn sm" data-act="cTeamOpen" data-a1="'+o.org_id+'">Manage</button></td></tr>';
     }).join(''):'<tr><td colspan=7 class="mut mono" style="text-align:center;padding:16px">No teams yet — create one to share a wallet and set a budget cap.</td></tr>';
 }
 async function cOrgCreate(){
@@ -3742,34 +3927,32 @@ async function cOrgCreate(){
   if(r.ok){document.getElementById('c_orgname').value='';if(msg)msg.textContent='Created "'+name+'" — you are the admin.';cTeams();cTeamOpen(r.body.org_id);}
   else{if(msg)msg.textContent=(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not create team.';}
 }
-// ---- IAM: team members management (admins add/remove members and set roles) ----
 async function cTeamOpen(orgId){
   var box=document.getElementById('c_team_detail');if(!box)return;
   var r=await api('/orgs/'+orgId);
-  if(!r.ok){box.style.display='';box.innerHTML='<div class="card"><p class="mut">Could not load this team.</p></div>';return;}
+  if(!r.ok){box.style.display='';box.innerHTML='<div class="csec"><div class="csec-b"><p class="mut" style="padding:12px 0">Could not load this team.</p></div></div>';return;}
   var o=r.body||{};var isAdmin=(o.your_role==='admin');var mem=o.members||[];
   var rows=mem.map(function(mm){
     var roleCell=isAdmin
       ? '<select data-role-select="1" data-org="'+orgId+'" data-user="'+esc(mm.username)+'">'+
           ['admin','billing','member'].map(function(rn){return '<option value="'+rn+'"'+(mm.role===rn?' selected':'')+'>'+rn+'</option>';}).join('')+'</select>'
       : cBadge(mm.role);
-    var rm=isAdmin?'<button class="btn-ghost" style="padding:4px 10px;font-size:11px" data-act="cMemberRemove" data-a1="'+orgId+'" data-a2="'+esc(mm.username)+'">Remove</button>':'';
+    var rm=isAdmin?'<button class="cbtn sm" data-act="cMemberRemove" data-a1="'+orgId+'" data-a2="'+esc(mm.username)+'">Remove</button>':'';
     return '<tr><td data-l="Member" class="mono">'+esc(mm.username)+'</td><td data-l="Role">'+roleCell+'</td><td data-l="">'+rm+'</td></tr>';
   }).join('');
   var invite=isAdmin
-    ? '<div class="lbl" style="margin-top:16px">Add a member</div>'+
-      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">'+
+    ? '<div class="csec-h" style="border:0;padding:14px 15px 6px"><h2>Add a member</h2></div>'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0 15px 14px">'+
       '<input id="c_inv_user" placeholder="username" style="flex:1;min-width:150px"/>'+
       '<select id="c_inv_role"><option value="member">member</option><option value="billing">billing</option><option value="admin">admin</option></select>'+
-      '<button class="btn btn-amber" data-act="cMemberAdd" data-a1="'+orgId+'">Add</button></div>'+
-      '<p class="mini" id="c_inv_msg" style="margin-top:8px;text-transform:none;letter-spacing:0"></p>'
-    : '<p class="mini" style="margin-top:12px;text-transform:none;letter-spacing:0">Only a team admin can add or change members.</p>';
+      '<button class="cbtn pri" data-act="cMemberAdd" data-a1="'+orgId+'">Add</button>'+
+      '<p class="mini" id="c_inv_msg" style="width:100%;margin-top:4px;text-transform:none;letter-spacing:0"></p></div>'
+    : '<p class="mini" style="margin:12px 15px;text-transform:none;letter-spacing:0">Only a team admin can add or change members.</p>';
   box.style.display='';
-  box.innerHTML='<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">'+
-    '<div class="lbl" style="margin:0">Members — '+esc(o.name)+'</div>'+
-    '<span class="mini" style="text-transform:none;letter-spacing:0">balance '+cD2(o.balance)+' · spent '+cD2(o.spent)+' · budget '+(o.budget_cap!=null?cD2(o.budget_cap):'&#8734;')+'</span></div>'+
-    '<div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>Member</th><th>Role</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
-    invite+(isAdmin?'<div id="c_team_audit" style="margin-top:6px"></div>':'')+'</div>';
+  box.innerHTML='<div class="csec"><div class="csec-h"><h2>Members — '+esc(o.name)+'</h2>'+
+    '<span class="mini" style="text-transform:none;letter-spacing:0;color:var(--mut)">balance '+cD2(o.balance)+' · spent '+cD2(o.spent)+' · budget '+(o.budget_cap!=null?cD2(o.budget_cap):'&#8734;')+'</span></div>'+
+    '<div class="panel" style="overflow:auto;margin:12px 15px"><table class="tbl"><thead><tr><th>Member</th><th>Role</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    invite+(isAdmin?'<div id="c_team_audit" style="margin:6px 15px 14px"></div>':'')+'</div>';
   if(isAdmin)cOrgAudit(orgId);
 }
 async function cMemberAdd(orgId){
@@ -3804,7 +3987,7 @@ async function cAccess(){
      '<td data-l="Scopes" class="mono" style="font-size:11px">'+esc(sc)+'</td>'+
      '<td data-l="Expires" class="mono" style="font-size:11px">'+esc(String(k.expires_at||'').slice(0,10))+'</td>'+
      '<td data-l="Status">'+(k.revoked?'<span class="badge">revoked</span>':'<span class="badge ok">active</span>')+'</td>'+
-     '<td data-l="">'+(k.revoked?'':'<button class="btn-ghost" style="padding:4px 10px;font-size:11px" data-act="cKeyRevoke" data-a1="'+esc(k.jti)+'">Revoke</button>')+'</td></tr>';
+     '<td data-l="">'+(k.revoked?'':'<button class="cbtn sm" data-act="cKeyRevoke" data-a1="'+esc(k.jti)+'">Revoke</button>')+'</td></tr>';
     }).join(''):'<tr><td colspan=5 class="mut mono" style="text-align:center;padding:14px">No API keys yet. Create one to drive Petabyte from code or CI.</td></tr>';
   cNotifs();cAudit();
 }
@@ -3874,19 +4057,42 @@ async function cNotifs(){
 
 async function cSeller(){
   var r=await api('/seller/dashboard');var el=document.getElementById('c_seller');if(!el)return;
-  if(!r.ok){el.innerHTML='<div class="card"><p class="mut">Could not load hosting data.</p></div>';return;}
+  if(!r.ok){el.innerHTML='<div class="csec"><div class="csec-b"><p class="mut" style="padding:12px 0">Could not load hosting data.</p></div></div>';return;}
   var ns=(r.body||{}).nodes||[];
-  if(!ns.length){el.innerHTML='<div class="card"><div class="lbl am">Become a host</div>'+
+  if(!ns.length){el.innerHTML='<div class="csec"><div class="csec-b" style="padding:16px"><div style="font-family:var(--disp);font-weight:600;color:var(--amber)">Become a host</div>'+
     '<p class="mut" style="font-size:13.5px;margin:6px 0 12px">Turn an idle GPU into income — Petabyte rents it out, and you can also earn from spare disk. One agent per computer.</p>'+
-    '<a class="btn btn-amber" href="/install">List your PC →</a></div>';return;}
+    '<a class="cbtn pri" href="/install">List your PC →</a></div></div>';return;}
   var online=ns.filter(function(n){return n.online;}).length;
   var earned=ns.reduce(function(a,n){return a+Number(n.earned_total||0);},0);
-  el.innerHTML='<div class="stats">'+cStat(cInt(ns.length),'Nodes','')+cStat(cInt(online),'Online','teal')+cStat(cD2(earned),'Earned','')+'</div>'+
-    '<div class="card" style="margin-top:16px"><p class="mut" style="font-size:13.5px">Manage nodes, spare-disk rental and payouts on your <a class="teal" href="/seller/payouts">earnings page →</a></p></div>';
+  el.innerHTML='<div class="cmetrics">'+cMetric('Nodes',cInt(ns.length),online+' online')+cMetric('Online',cInt(online),'accepting jobs','pos')+cMetric('Earned',cD2(earned),'to date')+'</div>'+
+    '<section class="csec" style="margin-top:16px"><div class="csec-b" style="padding:14px"><p class="mut" style="font-size:13.5px">Manage nodes, spare-disk rental and payouts on your <a class="teal" href="/seller/payouts">earnings page →</a></p></div></section>';
 }
+
+// sidebar drawer (mobile) + command palette entries
+(function(){
+  var ham=document.getElementById('cham'),sb=document.getElementById('csidebar'),sc=document.getElementById('cscrim');
+  if(ham&&sb&&sc){
+    ham.addEventListener('click',function(){var open=!sb.classList.contains('open');sb.classList.toggle('open',open);sc.classList.toggle('on',open);});
+    sc.addEventListener('click',function(){sb.classList.remove('open');sc.classList.remove('on');});
+  }
+  var srch=document.querySelector('.csearch');
+  if(srch)srch.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();cPalette();}});
+  window.addEventListener('hashchange',function(){var h=(location.hash||'').replace('#','');if(CTABS.indexOf(h)>=0)cNav(h);});
+  try{if(window.PB_CMDS&&window.PB_CMDS.push){
+    PB_CMDS.push(
+      {t:'Console: Overview',h:'/console#overview',k:'dashboard home console'},
+      {t:'Launch compute',h:'/console#compute',k:'run job gpu launch new'},
+      {t:'Console: Jobs',h:'/console#jobs',k:'reservations bookings history'},
+      {t:'Console: Clusters',h:'/console#clusters',k:'distributed multi gpu torchrun'},
+      {t:'Wallet & billing',h:'/console#billing',k:'add funds deposit withdraw pay money'},
+      {t:'API keys',h:'/console#access',k:'token ci key developer'},
+      {t:'Teams',h:'/console#teams',k:'iam members org budget'},
+      {t:'Browse marketplace',h:'/marketplace',k:'gpu rent available'}
+    );
+  }}catch(e){}
+})();
 consoleLoad();
 </script>""")
-
 
 METRICS_HTML = _page("Petabyte — marketplace metrics",
     desc="Operations and investor metrics computed from real database queries: supply, utilization, GMV, take rate, buyer savings and job reliability. Demo data is clearly labelled.",
