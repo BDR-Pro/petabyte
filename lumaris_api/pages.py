@@ -220,9 +220,14 @@ select{appearance:none;-webkit-appearance:none;background-image:linear-gradient(
  background:linear-gradient(180deg,var(--depth2),var(--panel2));transition:border-color .18s,transform .15s,box-shadow .18s;overflow:hidden}
 .lcard:hover{border-color:rgba(53,224,208,.5);transform:translateY(-2px);box-shadow:0 18px 44px -24px rgba(53,224,208,.5)}
 .lhead{display:flex;align-items:center;gap:13px}
-.licon{position:relative;width:46px;height:46px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--teal);
- background:radial-gradient(circle at 30% 25%,rgba(53,224,208,.18),rgba(53,224,208,.04));border:1px solid rgba(53,224,208,.3);border-radius:13px}
-.licon svg{width:25px;height:25px}
+.licon{position:relative;width:50px;height:50px;flex:none;display:flex;align-items:center;justify-content:center;overflow:hidden;
+ background:linear-gradient(160deg,#fbfcfe,#eceff5);border:1px solid rgba(15,23,42,.10);border-radius:13px;
+ box-shadow:0 1px 2px rgba(2,6,20,.18),inset 0 1px 0 rgba(255,255,255,.7)}
+.licon svg{width:34px;height:34px;display:block}
+.gpuemb{width:34px;height:26px;flex:none;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;
+ background:linear-gradient(160deg,#10192b,#0a1120);border:1px solid var(--line2);border-radius:7px}
+.gpuemb svg{width:30px;height:22px;display:block}
+.gcell{display:inline-flex;align-items:center;gap:10px;min-width:0}
 .lcard:hover .licon::after{content:"";position:absolute;inset:-1px;border-radius:13px;border:1px solid rgba(53,224,208,.6);animation:ping 1s ease-out}
 @keyframes ping{0%{transform:scale(1);opacity:.8}100%{transform:scale(1.7);opacity:0}}
 .lmeta{flex:1;min-width:0}
@@ -406,19 +411,30 @@ function signout(){try{localStorage.removeItem('pb_token');}catch(e){}location.h
 (async function(){try{if(authed()){var r=await api('/me');if(r.ok){var m=document.getElementById('mename');if(m){m.textContent='● '+r.body.username;m.style.display='';}
  if(r.body.is_admin){var a=document.getElementById('adminlink');if(a)a.style.display='';}}}}catch(e){}})();
 window.PBICONS={
- blender:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>',
- comfyui:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="5" cy="6" r="2.2"/><circle cx="19" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/><path d="M7 7l3.5 9M17 7l-3.5 9"/></svg>',
- "sd-webui":'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.6"/><path d="m3 17 5-4 4 3 3-3 6 5"/></svg>',
- "tensorrt-llm":'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>',
- ollama:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 5h16v10H8l-4 4z"/></svg>',
- vllm:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',
- ffmpeg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg>',
- minecraft:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20 13 11M3 8c3-3 7-4 10-3M22 11c1-4-1-8-4-9"/><path d="m11 9 4 4"/></svg>',
- valheim:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 21 13 13M13 3c5 0 8 3 8 8-4 0-6-1-8-4-2 3-4 4-8 4 0-5 3-8 8-8z"/></svg>',
- factorio:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2.1 2.1M16.9 16.9 19 19M19 5l-2.1 2.1M7.1 16.9 5 19"/></svg>',
- _default:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/></svg>'};
-PBICONS["jupyter"]='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="4" r="1.4"/><path d="M4 9c2.6 3 13.4 3 16 0M4 15c2.6 3 13.4 3 16 0"/></svg>';
-PBICONS["pytorch"]='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 6 9a8.5 8.5 0 1 0 12 0z"/><circle cx="15" cy="7.5" r="1.1" fill="currentColor"/></svg>';
+ jupyter:'<svg viewBox="0 0 48 48" aria-hidden="true"><g fill="#F37726"><circle cx="24" cy="8" r="2.6"/><circle cx="15.5" cy="10.6" r="2"/><circle cx="32.5" cy="10.6" r="2"/><path d="M24 15c-8.3 0-15.2 3.6-17 8.6 3 4.3 9.4 7.1 17 7.1s14-2.8 17-7.1c-1.8-5-8.7-8.6-17-8.6zm0 3.6c6.6 0 12.2 2.3 14.6 5.4-2.4 3.1-8 5.4-14.6 5.4S11.8 27.1 9.4 24c2.4-3.1 8-5.4 14.6-5.4z"/><path d="M24 33c-7.6 0-14 2.8-17 7.1 3 4.3 9.4 7.1 17 7.1s14-2.8 17-7.1c-3-4.3-9.4-7.1-17-7.1z" opacity=".5"/></g></svg>',
+ pytorch:'<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EE4C2C" d="M25 5.5 15.9 14.6a12.8 12.8 0 1 0 18.1 0L29.5 19a6.5 6.5 0 1 1-9.2 0L25 14.3z"/><circle cx="30.4" cy="13.3" r="2.4" fill="#EE4C2C"/></svg>',
+ ollama:'<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#0b0b10" d="M17.5 12.5c0-2.3 1.3-4.2 3-4.2s3 1.9 3 4.2v2.8h1v-2.8c0-2.3 1.3-4.2 3-4.2s3 1.9 3 4.2l.9 5.7c1.7 1.1 2.8 3.1 2.8 5.6 0 3.1-1.5 12.6-2.8 17.9H16.8C15.5 36.4 14 26.9 14 23.8c0-2.5 1.1-4.5 2.8-5.6z"/><ellipse cx="20.7" cy="26" rx="1.7" ry="2.3" fill="#fff"/><ellipse cx="27.3" cy="26" rx="1.7" ry="2.3" fill="#fff"/></svg>',
+ vllm:'<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#5B4FE9" d="M9 11h7.4l7.6 19.3L31.6 11H39L28 40h-8z"/><path fill="#FFC400" d="M34.5 7.5l1.5 3.2 3.2 1.5-3.2 1.5-1.5 3.2-1.5-3.2L29.8 12l3.2-1.5z"/></svg>',
+ comfyui:'<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M14 14 34 24M14 34 34 24" stroke="#8892a6" stroke-width="2.4" fill="none"/><circle cx="13" cy="14" r="5" fill="#22D3EE"/><circle cx="13" cy="34" r="5" fill="#A78BFA"/><circle cx="35" cy="24" r="5.6" fill="#F59E0B"/></svg>',
+ blender:'<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#2a5b84" d="M22.5 12c6.9 0 12.8 3.9 15 9.7.8 2 .2 4-1.3 5.1-8-1.3-16.2 2.6-22.3 8.7-2-1.2-3.7-3.1-4.6-5.6-2.3-7 4.6-15.4 12.2-17.7.3-.1.7-.2 1-.2z"/><circle cx="30" cy="22" r="6.6" fill="#f5792a"/><circle cx="30" cy="22" r="2.5" fill="#fff"/></svg>',
+ "sd-webui":'<svg viewBox="0 0 48 48" aria-hidden="true"><rect x="7" y="7" width="34" height="34" rx="9" fill="#7C3AED"/><path fill="#F0ABFC" d="M24 13.5l2.7 7 7 2.7-7 2.7-2.7 7-2.7-7-7-2.7 7-2.7z"/><circle cx="33" cy="15" r="2" fill="#FDE68A"/></svg>',
+ minecraft:'<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#7cbb5b" d="M24 6 40 14 24 22 8 14z"/><path fill="#8a5a2b" d="M8 14 24 22v20L8 34z"/><path fill="#6b4423" d="M40 14 24 22v20l16-8z"/><path d="M11 15.6l3 1.5-3 1.5zM34 15.6l3 1.5-3 1.5z" fill="#5f9142" opacity=".6"/></svg>',
+ valheim:'<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="16" fill="#1f3a34"/><g stroke="#c79a4b" stroke-width="2.5" fill="none" stroke-linecap="round"><path d="M24 37V17"/><path d="M24 23l-6-5M24 23l6-5M24 29l-7-6M24 29l7-6"/></g><circle cx="24" cy="14" r="3.2" fill="none" stroke="#c79a4b" stroke-width="2.5"/></svg>',
+ factorio:'<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#e7a33e" d="M24 3l2.4 3.9 4.5-1 1 4.5 4.5 1-1 4.5L43 24l-3.1 2.6 1 4.5-4.5 1-1 4.5-4.5-1L24 45l-2.4-3.9-4.5 1-1-4.5-4.5-1 1-4.5L5 24l3.1-2.6-1-4.5 4.5-1 1-4.5 4.5 1z"/><circle cx="24" cy="24" r="6.6" fill="#1c1712"/></svg>',
+ "tensorrt-llm":'<svg viewBox="0 0 48 48" aria-hidden="true"><rect x="8" y="8" width="32" height="32" rx="8" fill="#76B900"/><rect x="16" y="16" width="16" height="16" rx="3" fill="#0e1b06"/><rect x="20.5" y="20.5" width="7" height="7" rx="1.5" fill="#76B900"/><g stroke="#0e1b06" stroke-width="2" stroke-linecap="round"><path d="M18 12V9M24 12V9M30 12V9M18 39v-3M24 39v-3M30 39v-3M12 18H9M12 24H9M12 30H9M39 18h-3M39 24h-3M39 30h-3"/></g></svg>',
+ ffmpeg:'<svg viewBox="0 0 48 48" aria-hidden="true"><rect x="8.5" y="20" width="4.6" height="8" rx="2.3" fill="#22D3EE"/><rect x="15.6" y="14" width="4.6" height="20" rx="2.3" fill="#34D399"/><rect x="22.7" y="9" width="4.6" height="30" rx="2.3" fill="#FBBF24"/><rect x="29.8" y="15" width="4.6" height="18" rx="2.3" fill="#F472B6"/><rect x="36.9" y="21" width="4.6" height="6" rx="2.3" fill="#A78BFA"/></svg>',
+ _default:'<svg viewBox="0 0 48 48" aria-hidden="true"><rect x="8" y="8" width="32" height="32" rx="8" fill="#2496ED"/><g fill="#fff"><rect x="15" y="21" width="5" height="5" rx="1"/><rect x="21.5" y="21" width="5" height="5" rx="1"/><rect x="28" y="21" width="5" height="5" rx="1"/><rect x="21.5" y="14.5" width="5" height="5" rx="1"/><path d="M13 28.5c7.5 5.5 19 3.5 22-3 .8 3-1 8.5-8 9.5-5.5.7-11-2-14-6.5z"/></g></svg>'};
+function pbGpuVendor(m){m=(''+(m||'')).toUpperCase();
+ if(/MI\d|RADEON|INSTINCT|\bAMD\b/.test(m))return 'amd';
+ if(/H100|H200|A100|A800|A40|A30|A10\b|L4\b|L40|V100|T4|B200|GB200|GH200|RTX|GEFORCE|QUADRO|TITAN|GTX|\bNVIDIA\b/.test(m))return 'nvidia';
+ return 'cpu';}
+function pbGpuImg(m){var v=pbGpuVendor(m);
+ var c=v==='nvidia'?'#76B900':(v==='amd'?'#ED1C24':'#7C8AA3');
+ var d=v==='nvidia'?'#0e1b06':(v==='amd'?'#2a0708':'#141b26');
+ return '<svg viewBox="0 0 48 48" aria-hidden="true"><rect x="6" y="13" width="34" height="22" rx="3.5" fill="'+d+'"/>'+
+  '<circle cx="19" cy="24" r="7.5" fill="'+c+'"/><circle cx="19" cy="24" r="2.8" fill="'+d+'"/>'+
+  '<rect x="29" y="18.5" width="8" height="2.6" rx="1.3" fill="'+c+'"/><rect x="29" y="22.7" width="8" height="2.6" rx="1.3" fill="'+c+'"/><rect x="29" y="26.9" width="8" height="2.6" rx="1.3" fill="'+c+'"/>'+
+  '<rect x="11" y="35" width="3" height="4" rx="1" fill="'+d+'"/><rect x="32" y="35" width="3" height="4" rx="1" fill="'+d+'"/></svg>';}
 function pbIcon(n){return PBICONS[n]||PBICONS._default;}
 function pbEmpty(cols,title,sub,ctaHref,ctaText){
  return '<tr><td colspan='+cols+'><div class="empty">'+
@@ -752,6 +768,7 @@ async function heroPreview(){
     el.innerHTML=rows.map(function(s){
       var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
       return '<a href="/gpu/'+s.id+'" style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--hair)">'+
+       '<span class="gpuemb">'+pbGpuImg(s.gpu_model)+'</span>'+
        '<div style="flex:1;min-width:0">'+
         '<div style="font-family:var(--disp);font-weight:600;font-size:14px">'+esc(s.gpu_model||'CPU')+(s.vram_gb?' <span class="mut" style="font-weight:400">· '+s.vram_gb+'GB</span>':'')+'</div>'+
         '<div class="mini" style="margin-top:2px">'+esc(s.region||'unknown region')+' · '+(s.available_units>0?'<span class="teal">available now</span>':'busy')+'</div>'+
@@ -826,7 +843,7 @@ async function load(){var r=await fetch('/marketplace/specs?'+qs());var b=await 
   var rc=s.reputation_score>=80?'var(--pos)':s.reputation_score>=60?'var(--warn)':'var(--bad)';
   var rep=(s.reputation_score!=null?s.reputation_score:'—')+(s.success_rate!=null?' <span class="mut" style="font-size:10px">('+s.success_rate+'%)</span>':'');
   var vram=s.vram_gb?((s.gpu_count>1?s.gpu_count+'× ':'')+s.vram_gb+'GB'):'—';
-  return '<tr><td data-l="GPU" style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
+  return '<tr><td data-l="GPU"><span class="gcell"><span class="gpuemb">'+pbGpuImg(s.gpu_model)+'</span><span style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</span></span></td>'+
    '<td data-l="VRAM" class="mono mut" style="font-size:12px">'+vram+'</td>'+
    '<td data-l="$/hr" class="mono amber">$'+s.price_per_hour.toFixed(2)+(s.auto_price?' <span class="badge cc" title="demand-priced within seller bounds">auto</span>':'')+'</td>'+
    '<td data-l="vs cloud" class="mono" style="color:var(--pos)">'+(save>0?'−'+save+'%':'—')+'</td>'+
