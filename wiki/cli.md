@@ -27,6 +27,20 @@ Config + saved token live in `~/.petabyte/cli.json`. Set `NO_COLOR=1` for plain 
 | `petabyte run <file.ipynb\|.py> [--gpu H100] [--hours 1] [--vpn]` | book the cheapest matching GPU, escrow, run, print the result |
 | `petabyte vpn <booking_id> [-o file.conf]` | download the WireGuard config for a VPN booking |
 
+## Seller (read node & payout state, feed cache-locality)
+
+The heavy lifting is the [agent](sellers.md) daemon, but these read/curate your node from anywhere
+you're signed in:
+
+| Command | What it does |
+|---|---|
+| `petabyte earnings` | balance, withdrawable earnings, what's still clearing, recent payouts |
+| `petabyte node status <spec_id>` | online/attested, price + suggestion, utilization, jobs, reputation, earnings, cached models, blockers |
+| `petabyte node sync-models <spec_id>` | scan this machine's `~/.petabyte` cache and report it to the marketplace, so the scheduler prefers your node for jobs needing a model you already hold |
+
+`node sync-models` runs on the machine that has the cache (usually the node itself). The agent does
+this automatically over time; run it by hand to push updates immediately.
+
 ## Models (anyone — works locally, no account needed)
 
 | Command | What it does |

@@ -2532,8 +2532,15 @@ ok("agent reports cached models (bad ids rejected, valid kept)",
    _ml.status_code == 200 and _ml.json()["cached_models"] == 2)
 _mv = c.get(f"/nodes/{spec_id}/models", headers=sh).json()
 ok("owner sees the node's cached model list", "Qwen/Qwen3-8B" in _mv["models"] and "../evil" not in _mv["models"])
+_mlj = c.post("/nodes/models", headers=sh, json={"spec_id": spec_id, "models": ["Qwen/Qwen3-8B"]})
+ok("owner can also report via bearer token (petabyte node sync-models path)", _mlj.status_code == 200)
+ok("reporting cached models needs auth (no key/token -> 401)",
+   c.post("/nodes/models", json={"spec_id": spec_id, "models": []}).status_code == 401)
 ok("a foreign user cannot read another node's cached models",
    c.get(f"/nodes/{spec_id}/models", headers=bh).status_code == 404)
+# availability counts ONLINE nodes; refresh liveness so this doesn't depend on how long the
+# (long) smoke run has taken to reach here.
+c.post("/heartbeat", headers={"X-API-KEY": seller_key}, json={"spec_id": spec_id})
 _av = c.get("/api/models/availability", params={"id": "Qwen/Qwen3-8B"}).json()
 ok("availability reports how many online nodes hold the model", _av["nodes_cached"] >= 1)
 ok("availability is zero for a model no node holds",

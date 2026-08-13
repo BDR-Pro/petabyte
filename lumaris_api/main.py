@@ -4626,13 +4626,42 @@ def disk_report(data: DiskReportModel, agent=Depends(api_key_user),
     return {"status": "ok", "spec_id": spec.id, "node_name": disk_node_name(spec)}
 
 
+def _node_reporter(x_api_key: str = Header(None, alias="X-API-KEY"),
+                   authorization: str = Header(None), db: Session = Depends(get_db)):
+    """Resolve the caller for a node self-report from EITHER an agent API key (the daemon) OR the
+    owner's bearer token (a seller running `petabyte node sync-models`). Ownership is still checked
+    per-spec at the call site, so this only widens WHO may report, never WHICH node."""
+    if x_api_key:
+        try:
+            data = decode_api_key(x_api_key)
+        except ValueError as e:
+            raise HTTPException(status_code=401, detail=str(e))
+        if is_jti_revoked(db, data["jti"]):
+            raise HTTPException(status_code=401, detail="Key revoked")
+        u = get_user_by_username(db, data["u"])
+        if not u:
+            raise HTTPException(status_code=401, detail="Unknown user")
+        return u
+    if authorization and authorization.lower().startswith("bearer "):
+        try:
+            claims = verify_token(authorization.split(" ", 1)[1])
+        except ValueError:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        u = get_user_by_username(db, _username(claims))
+        if not u:
+            raise HTTPException(status_code=401, detail="Unknown user")
+        return u
+    raise HTTPException(status_code=401, detail="Authentication required (X-API-KEY or bearer token)")
+
+
 @app.post("/nodes/models", tags=["seller"])
-def report_cached_models(data: dict, agent=Depends(api_key_user), db: Session = Depends(get_db)):
-    """Agent reports which model ids this node holds locally (from its ~/.petabyte cache). Feeds the
+def report_cached_models(data: dict, actor=Depends(_node_reporter), db: Session = Depends(get_db)):
+    """Report which model ids a node holds locally (from its ~/.petabyte cache). Feeds the
     scheduler's cache-locality signal so a job prefers a node that already has the model — avoiding a
-    re-download of tens of GB. Body: {spec_id, models:[...]}."""
+    re-download of tens of GB. Body: {spec_id, models:[...]}. Callable by the agent (X-API-KEY) or
+    the node's owner (bearer, e.g. `petabyte node sync-models`)."""
     spec = _get_spec(db, (data or {}).get("spec_id"))
-    if not spec or spec.user_id != agent.id:
+    if not spec or spec.user_id != actor.id:
         raise HTTPException(status_code=404, detail="Spec not found or not yours")
     n = set_spec_cached_models(db, spec, (data or {}).get("models") or [])
     return {"status": "ok", "spec_id": spec.id, "cached_models": n}

@@ -65,6 +65,14 @@ request that model — so a 20–100 GB weight file isn't re-downloaded. A node 
 models to `POST /nodes/models`; availability is visible at `/api/models/availability`. See
 [Models](models.md).
 
+Push your cache to the marketplace yourself any time:
+
+```bash
+petabyte node status <spec_id>        # online/attested, utilization, jobs, earnings, cached models
+petabyte node sync-models <spec_id>   # scan ~/.petabyte and report it (feeds cache-locality)
+petabyte earnings                     # balance, withdrawable, recent payouts
+```
+
 ## Seller checklist
 
 1. Install the agent → 2. It attests + benchmarks + lists automatically → 3. Earn as jobs run

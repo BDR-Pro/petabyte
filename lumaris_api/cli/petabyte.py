@@ -188,6 +188,90 @@ def cmd_vpn(a, cfg):
         print(_dim(f"  connect:  sudo wg-quick up ./{path}      disconnect:  sudo wg-quick down ./{path}"))
 
 
+def cmd_earnings(a, cfg):
+    """Seller payout state: balance, withdrawable earnings, what's still clearing, recent payouts."""
+    with _client(cfg) as c:
+        w = c.get("/wallet")
+        if w.status_code != 200:
+            _die("wallet failed", w)
+        w = w.json()
+        pays = c.get("/wallet/payouts")
+    print(_bold("Earnings"))
+    print(f"  balance:      {_amber('$' + format(w['balance'], '.2f'))}")
+    print(f"  earnings:     ${format(w['earnings'], '.2f')}")
+    print(f"  withdrawable: {_green('$' + format(w['withdrawable'], '.2f'))}")
+    print(f"  clearing:     ${format(w['clearing'], '.2f')}  " + _dim(f"(held {w['hold_hours']}h)"))
+    print("  instant payout: " + (_green('eligible') if w.get('instant_eligible') else _dim('not yet')))
+    if pays.status_code == 200 and pays.json().get("payouts"):
+        print(_dim("\n  recent payouts:"))
+        print(_dim(f"    {'AMOUNT':>10}  {'KIND':<12} {'STATUS':<10} WHEN"))
+        for p in pays.json()["payouts"][:8]:
+            print(f"    {'$' + format(p['amount_usd'], '.2f'):>10}  {str(p['kind'])[:12]:<12} "
+                  f"{str(p['status'])[:10]:<10} {str(p['created_at'])[:10]}")
+    else:
+        print(_dim("\n  no payouts yet — add a payout method on the earnings page, then `withdraw`."))
+
+
+def _node_status(a, cfg):
+    sid = a.spec_id
+    with _client(cfg) as c:
+        dash = c.get("/seller/dashboard")
+        if dash.status_code != 200:
+            _die("dashboard failed", dash)
+        dash = dash.json()
+        models = c.get(f"/nodes/{sid}/models")
+        disk = c.get(f"/nodes/{sid}/disk")
+    node = next((n for n in dash.get("nodes", []) if n.get("spec_id") == sid), None)
+    if not node:
+        _die(f"node {sid} not found (is it one of yours?)")
+    on = _green("online") if node["online"] else _amber("offline")
+    att = _green("attested") if node["attested"] else _amber("unverified")
+    print(_bold(f"Node {sid}") + f"  {node.get('gpu_model') or 'CPU'}  [{on} · {att}]")
+    sug = _dim(f"  (suggested ${format(node['suggested_price'], '.2f')})") if node.get("suggested_price") else ""
+    print(f"  price:        ${format(node['price_per_hour'], '.2f')}/hr" + sug)
+    print(f"  units:        {node['units_busy']}/{node['units_total']} busy  ({node['utilization_pct']}% util)")
+    succ = f"  ({node['success_rate']}% success)" if node.get("success_rate") is not None else ""
+    print(f"  jobs:         {node['jobs_completed']} done · {node['jobs_failed']} failed" + succ)
+    print(f"  reputation:   {node['reputation']}")
+    print(f"  earned:       {_green('$' + format(node['earned_total'], '.2f'))}")
+    print(f"  last seen:    {node.get('last_seen') or 'never'}")
+    if models.status_code == 200:
+        ms = models.json().get("models", [])
+        if ms:
+            print(f"  models cached: {len(ms)}" + _dim("  " + ", ".join(ms[:6]) + (" …" if len(ms) > 6 else "")))
+        else:
+            print("  models cached: 0" + _dim(f"  (run: petabyte node sync-models {sid})"))
+    if disk.status_code == 200 and disk.json().get("enabled"):
+        d = disk.json()
+        print(f"  disk rental:  {d['provider']} up to {d['alloc_gb']} GB")
+    for b in [x for x in dash.get("blockers", []) if x.get("node") == node.get("id")]:
+        print(_amber("  ! " + b["issue"]) + _dim("  fix: " + b.get("fix", "")))
+
+
+def _node_sync_models(a, cfg):
+    """Scan the local ~/.petabyte model cache and report the ids to the marketplace, so the
+    scheduler prefers THIS node for jobs that need a model it already holds."""
+    try:
+        from modelhub import ModelManager
+    except Exception:  # noqa: BLE001
+        _die("model hub not available on this machine (cannot scan the local cache)")
+    ids = ModelManager().cached_model_ids()
+    with _client(cfg) as c:
+        r = c.post("/nodes/models", json={"spec_id": a.spec_id, "models": ids})
+    if r.status_code != 200:
+        _die("sync failed", r)
+    n = r.json().get("cached_models", 0)
+    print(_green(f"✓ reported {n} cached model(s)") + _dim(f" for node {a.spec_id}"))
+    for m in ids[:12]:
+        print(_dim("    " + m))
+    if not ids:
+        print(_dim("    (local cache is empty — pull a model first: petabyte model pull <id>)"))
+
+
+def cmd_node(a, cfg):
+    {"status": _node_status, "sync-models": _node_sync_models}[a.node_cmd](a, cfg)
+
+
 def main():
     p = argparse.ArgumentParser(prog="petabyte")
     p.add_argument("--api", help="API base URL (overrides saved config)")
@@ -209,6 +293,16 @@ def main():
     s = sub.add_parser("vpn", help="download the WireGuard config for a VPN booking")
     s.add_argument("booking_id", type=int); s.add_argument("-o", "--out")
 
+    # seller: read node/payout state, and feed the model cache-locality signal
+    sub.add_parser("earnings", help="your balance, withdrawable earnings and recent payouts")
+    n = sub.add_parser("node", help="inspect a node you host")
+    ns = n.add_subparsers(dest="node_cmd", required=True)
+    st = ns.add_parser("status", help="node status: online/attested, utilization, jobs, earnings")
+    st.add_argument("spec_id", type=int)
+    sm = ns.add_parser("sync-models",
+                       help="scan the local ~/.petabyte cache and report it to the marketplace")
+    sm.add_argument("spec_id", type=int)
+
     # model hub: discover/pull/manage AI models (Hugging Face-grade UX). Owns `model`, `pull`, `auth`;
     # `run` is shared with the compute flow above and dispatched smartly below.
     if mh_cli is not None:
@@ -229,7 +323,8 @@ def main():
             force=a.force, home=None)
         sys.exit(mh_cli.cmd_run(ns) or 0)
     {"register": cmd_register, "login": cmd_login, "deposit": cmd_deposit,
-     "wallet": cmd_wallet, "specs": cmd_specs, "run": cmd_run, "vpn": cmd_vpn}[a.cmd](a, cfg)
+     "wallet": cmd_wallet, "specs": cmd_specs, "run": cmd_run, "vpn": cmd_vpn,
+     "earnings": cmd_earnings, "node": cmd_node}[a.cmd](a, cfg)
 
 
 def _is_model_ref(arg):

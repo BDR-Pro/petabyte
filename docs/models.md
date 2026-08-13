@@ -188,10 +188,17 @@ The scheduler uses this as a tiebreaker (`db.rank_specs_for_model`): when two no
 comparable, the one that already has the model wins — so a 20–100 GB weight file isn't re-downloaded.
 `GET /api/models/availability?id=` reports how many online nodes already hold a model.
 
-> Agent wiring: on each heartbeat the agent can scan `~/.petabyte/models/*/*` and POST the ids to
-> `/nodes/models`. The endpoint, DB field (`specs.cached_models`), ranking helper and availability
-> API are shipped and tested; enabling the agent-side report is a one-line addition to the heartbeat
-> loop.
+A seller can report their node's cache from the CLI:
+
+```
+petabyte node sync-models <spec_id>   # scan ~/.petabyte and POST the ids to /nodes/models
+petabyte node status <spec_id>        # shows cached-model count among node health
+```
+
+`POST /nodes/models` accepts either the agent's API key **or** the node owner's bearer token, so
+both the daemon and the CLI can report. The endpoint, DB field (`specs.cached_models`), ranking
+helper (`db.rank_specs_for_model`) and availability API are shipped and tested. Wiring the agent
+daemon to call it automatically on each heartbeat is a one-line addition to its loop.
 
 ## Environment variables
 
