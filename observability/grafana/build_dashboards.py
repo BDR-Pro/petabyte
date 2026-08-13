@@ -671,12 +671,96 @@ def d_trust():
                      [ENV, SERVICEVAR], p)
 
 
-BUILDERS = [d_executive, d_marketplace, d_payments, d_gpu, d_api, d_infra, d_security, d_trust]
+def d_operations():
+    """Operations across the product surfaces beyond raw GPU supply: VMs, distributed clusters,
+    disk rental, teams, escrowed/pooled buyer money, the task queue, and login/auth health.
+    Everything here is fed by the scrape-time ops gauges in main.py:_marketplace_metrics and the
+    cluster/login counters in observability.py — see the admin console's Live-operations tiles."""
+    c = Ctx()
+    p = []
+    E = 'environment="$environment"'
+    p.append(rowp(c, "Product surfaces"))
+    p.append(stat(c, "Active VMs", [(f"sum(petabyte_vms_active{{{E}}})", "VMs")],
+                  desc="Buyer VMs running/starting/migrating right now."))
+    p.append(stat(c, "Clusters running",
+                  [(f'sum(petabyte_distributed_clusters{{status="running",{E}}})', "clusters")]))
+    p.append(stat(c, "Disk-rental nodes", [(f"sum(petabyte_disk_rental_nodes{{{E}}})", "nodes")]))
+    p.append(stat(c, "Teams", [(f"sum(petabyte_teams_total{{{E}}})", "teams")]))
+    p.append(stat(c, "In escrow", [(f"sum(petabyte_escrow_held_usd{{{E}}})", "held")],
+                  unit="currencyUSD"))
+    p.append(stat(c, "GPU utilization",
+                  [(f"100 * sum(petabyte_vms_active{{{E}}}) / clamp_min(sum(petabyte_vms_active{{{E}}})"
+                    f" + sum(petabyte_gpus_available{{{E}}}), 1e-9)", "util %")],
+                  unit="percent", steps=[(GREEN, None), (AMBER, 80), (RED, 95)], color="background",
+                  desc="Active VMs / (active + available units)."))
+
+    p.append(rowp(c, "Distributed clusters"))
+    p.append(ts(c, "Clusters by status",
+                [(f"sum by (status) (petabyte_distributed_clusters{{{E}}})", "{{status}}")], stack=True))
+    p.append(ts(c, "Cluster formations per hour (by outcome)",
+                [(f"sum by (outcome) (increase(petabyte_cluster_formations_total{{{E}}}[1h]))",
+                  "{{outcome}}")]))
+    p.append(stat(c, "Cluster formation success rate",
+                  [(f'100 * sum(rate(petabyte_cluster_formations_total{{outcome="success",{E}}}[$__rate_interval]))'
+                    f' / clamp_min(sum(rate(petabyte_cluster_formations_total{{{E}}}[$__rate_interval])), 1e-9)',
+                    "success %")], unit="percent",
+                  steps=[(RED, None), (AMBER, 80), (GREEN, 95)], color="background"))
+
+    p.append(rowp(c, "VMs & task queue"))
+    p.append(stat(c, "VM failovers (cumulative)",
+                  [(f"sum(petabyte_vm_migrations_cumulative{{{E}}})", "migrations")]))
+    p.append(stat(c, "Pending tasks", [(f"sum(petabyte_pending_tasks{{{E}}})", "queued")],
+                  steps=[(GREEN, None), (AMBER, 5), (RED, 20)], color="background"))
+    p.append(stat(c, "Oldest pending task",
+                  [(f"max(petabyte_oldest_pending_task_age_seconds{{{E}}})", "age")], unit="s",
+                  steps=[(GREEN, None), (AMBER, 60), (RED, 300)], color="background"))
+    p.append(ts(c, "Active VMs & queue depth",
+                [(f"sum(petabyte_vms_active{{{E}}})", "active VMs"),
+                 (f"sum(petabyte_pending_tasks{{{E}}})", "pending tasks")]))
+
+    p.append(rowp(c, "Buyer money held"))
+    p.append(stat(c, "Buyer wallet balances",
+                  [(f"sum(petabyte_wallet_balance_usd{{{E}}})", "wallets")], unit="currencyUSD"))
+    p.append(stat(c, "Team pooled balances",
+                  [(f"sum(petabyte_teams_pooled_balance_usd{{{E}}})", "teams")], unit="currencyUSD"))
+    p.append(ts(c, "Escrow, wallets & team balances",
+                [(f"sum(petabyte_escrow_held_usd{{{E}}})", "escrow"),
+                 (f"sum(petabyte_wallet_balance_usd{{{E}}})", "wallets"),
+                 (f"sum(petabyte_teams_pooled_balance_usd{{{E}}})", "teams")], unit="currencyUSD"))
+
+    p.append(rowp(c, "Disk rental"))
+    p.append(stat(c, "GB pledged", [(f"sum(petabyte_disk_rental_gb_pledged{{{E}}})", "GB")],
+                  unit="decgbytes"))
+    p.append(stat(c, "GB used", [(f"sum(petabyte_disk_rental_gb_used{{{E}}})", "GB")],
+                  unit="decgbytes"))
+    p.append(ts(c, "Disk pledged vs used (GB)",
+                [(f"sum(petabyte_disk_rental_gb_pledged{{{E}}})", "pledged"),
+                 (f"sum(petabyte_disk_rental_gb_used{{{E}}})", "used")], unit="decgbytes"))
+
+    p.append(rowp(c, "Access & auth"))
+    p.append(ts(c, "Logins per second (by outcome)",
+                [(f"sum by (outcome) (rate(petabyte_logins_total{{{E}}}[$__rate_interval]))",
+                  "{{outcome}}")], unit="ops"))
+    p.append(stat(c, "Login failure rate",
+                  [(f'100 * sum(rate(petabyte_logins_total{{outcome="failure",{E}}}[$__rate_interval]))'
+                    f' / clamp_min(sum(rate(petabyte_logins_total{{{E}}}[$__rate_interval])), 1e-9)',
+                    "fail %")], unit="percent",
+                  steps=[(GREEN, None), (AMBER, 20), (RED, 50)], color="background"))
+    p.append(ts(c, "Auth failures per second (by reason)",
+                [(f"sum by (reason) (rate(petabyte_auth_failures_total{{{E}}}[$__rate_interval]))",
+                  "{{reason}}")], unit="ops"))
+    return dashboard("petabyte-operations", "Petabyte — Operations",
+                     ["petabyte", "operations"], [ENV], p)
+
+
+BUILDERS = [d_executive, d_marketplace, d_payments, d_gpu, d_api, d_infra, d_security, d_trust,
+            d_operations]
 FILES = {
     "petabyte-executive": "executive.json", "petabyte-marketplace": "marketplace.json",
     "petabyte-settlement": "payments.json", "petabyte-seller-fleet": "gpu-fleet.json",
     "petabyte-api": "api.json", "petabyte-infra": "infrastructure.json",
     "petabyte-security": "security.json", "petabyte-trust": "trust.json",
+    "petabyte-operations": "operations.json",
 }
 
 

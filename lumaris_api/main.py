@@ -2310,6 +2310,77 @@ def _marketplace_metrics():
         ]
     except Exception:  # noqa: BLE001
         logger.debug("backup metrics query failed", exc_info=True)
+    # Operations gauges — the product surfaces beyond raw GPU supply: buyer VMs, distributed
+    # clusters, spare-disk rental, teams (shared wallets), and escrowed buyer money. Live DB
+    # state, bounded labels only. Own try so a query error never drops the gauges above.
+    try:
+        from db import VMRoute, MultiNodeJob, Organization, Booking, User, Task
+        vm_active = dbs.query(func.count(VMRoute.id)).filter(
+            VMRoute.status.in_(("starting", "running", "migrating"))).scalar() or 0
+        vm_migr = dbs.query(func.coalesce(func.sum(VMRoute.migrations), 0)).scalar() or 0
+        rows += [
+            {"name": "petabyte_vms_active",
+             "doc": "Buyer VMs currently active (starting/running/migrating)",
+             "labels": {"environment": env}, "value": vm_active},
+            {"name": "petabyte_vm_migrations_cumulative",
+             "doc": "Cumulative VM failovers/migrations across all routes",
+             "labels": {"environment": env}, "value": int(vm_migr)},
+        ]
+        for _st, _n in dbs.query(MultiNodeJob.status, func.count(MultiNodeJob.id)).filter(
+                MultiNodeJob.kind == "distributed").group_by(MultiNodeJob.status).all():
+            rows.append({"name": "petabyte_distributed_clusters",
+                         "doc": "Distributed (multi-node) clusters by status",
+                         "labels": {"status": str(_st or "unknown"), "environment": env},
+                         "value": int(_n or 0)})
+        disk_nodes = dbs.query(func.count(SellerSpec.id)).filter(
+            SellerSpec.disk_enabled.is_(True)).scalar() or 0
+        disk_gb = dbs.query(func.coalesce(func.sum(SellerSpec.disk_alloc_gb), 0)).filter(
+            SellerSpec.disk_enabled.is_(True)).scalar() or 0
+        rows += [
+            {"name": "petabyte_disk_rental_nodes", "doc": "Nodes actively renting spare disk",
+             "labels": {"environment": env}, "value": disk_nodes},
+            {"name": "petabyte_disk_rental_gb_pledged", "doc": "Total GB pledged for disk rental",
+             "labels": {"environment": env}, "value": int(disk_gb)},
+        ]
+        orgs_n = dbs.query(func.count(Organization.id)).scalar() or 0
+        orgs_bal = dbs.query(func.coalesce(func.sum(Organization.balance), 0)).scalar() or 0
+        rows += [
+            {"name": "petabyte_teams_total", "doc": "Teams (shared-wallet orgs)",
+             "labels": {"environment": env}, "value": orgs_n},
+            {"name": "petabyte_teams_pooled_balance_usd",
+             "doc": "Total balance pooled in team wallets (USD)",
+             "labels": {"environment": env}, "value": float(orgs_bal)},
+        ]
+        in_escrow = dbs.query(func.coalesce(func.sum(Booking.gross_amount), 0.0)).filter(
+            Booking.status == "escrowed", Booking.test.is_(False)).scalar() or 0.0
+        rows.append({"name": "petabyte_escrow_held_usd",
+                     "doc": "Buyer money currently held in escrow (live only, USD)",
+                     "labels": {"environment": env}, "value": float(in_escrow)})
+        wallet_usd = dbs.query(func.coalesce(func.sum(User.balance), 0)).scalar() or 0
+        rows.append({"name": "petabyte_wallet_balance_usd",
+                     "doc": "Total buyer wallet balance held across all users (USD)",
+                     "labels": {"environment": env}, "value": float(wallet_usd)})
+        disk_used = dbs.query(func.coalesce(func.sum(SellerSpec.disk_used_gb), 0)).filter(
+            SellerSpec.disk_enabled.is_(True)).scalar() or 0
+        rows.append({"name": "petabyte_disk_rental_gb_used",
+                     "doc": "GB actually reported used across disk-rental nodes",
+                     "labels": {"environment": env}, "value": float(disk_used)})
+        # queue depth + oldest-pending age — closes the empty workers/queue panels
+        pending = dbs.query(func.count(Task.id)).filter(Task.status == "pending").scalar() or 0
+        rows.append({"name": "petabyte_pending_tasks", "doc": "Buyer tasks awaiting a node",
+                     "labels": {"queue": "tasks", "environment": env}, "value": int(pending)})
+        oldest = dbs.query(func.min(Task.created_at)).filter(Task.status == "pending").scalar()
+        age = 0
+        if oldest is not None:
+            now = _utcnow().replace(tzinfo=None)
+            if getattr(oldest, "tzinfo", None) is not None:
+                oldest = oldest.replace(tzinfo=None)
+            age = max(0, int((now - oldest).total_seconds()))
+        rows.append({"name": "petabyte_oldest_pending_task_age_seconds",
+                     "doc": "Age of the oldest pending task (0 when the queue is empty)",
+                     "labels": {"queue": "tasks", "environment": env}, "value": age})
+    except Exception:  # noqa: BLE001
+        logger.debug("operations metrics query failed", exc_info=True)
     finally:
         dbs.close()
     # Data-API monetization gauges — so revenue is MEASURED, not guessed.
@@ -2523,8 +2594,14 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(),
     user = login_user(db, form_data.username, form_data.password)
     if not user:
         _rl_record_failure(key)
+        obsmod.inc_metric("petabyte_logins_total", outcome="failure",
+                          environment=obsmod.ENVIRONMENT)
+        obsmod.inc_metric("petabyte_auth_failures_total", reason="bad_credentials",
+                          environment=obsmod.ENVIRONMENT)
         raise HTTPException(status_code=400, detail="Invalid credentials")
     _RL_BUCKETS.pop(key, None)      # a success clears the slate for this account
+    obsmod.inc_metric("petabyte_logins_total", outcome="success",
+                      environment=obsmod.ENVIRONMENT)
     token = create_access_token({"sub": user.username, "role": user.role})
     return {"access_token": token, "token_type": "bearer"}
 
@@ -6414,6 +6491,8 @@ def distributed_job(data: DistributedModel, user: dict = Depends(get_current_use
               "gpu_class": data.gpu_class, "region": data.region, "anti_affinity": "spec"}
     nodes = select_plan(db, intent)["selected"]
     if len(nodes) < n:
+        obsmod.inc_metric("petabyte_cluster_formations_total", outcome="insufficient_nodes",
+                          backend=data.backend, environment=obsmod.ENVIRONMENT)
         raise HTTPException(status_code=409, detail={
             "code": "INSUFFICIENT_DISTINCT_NODES",
             "message": (f"A distributed job needs {n} GPUs on {n} different machines, but only "
@@ -6435,6 +6514,8 @@ def distributed_job(data: DistributedModel, user: dict = Depends(get_current_use
             for _, bt in booked:
                 refund_booking(db, bt.booking_id)
             set_job_status(db, job, "failed")
+            obsmod.inc_metric("petabyte_cluster_formations_total", outcome="booking_failed",
+                              backend=data.backend, environment=obsmod.ENVIRONMENT)
             raise HTTPException(status_code=402, detail={
                 "code": "CLUSTER_BOOKING_FAILED",
                 "message": ("Could not reserve every node for the cluster (funds or capacity); "
@@ -6451,6 +6532,8 @@ def distributed_job(data: DistributedModel, user: dict = Depends(get_current_use
         ranks.append({"rank": rank, "spec_id": spec.id, "task_id": task.id,
                       "is_master": rank == 0, "price_per_hour": spec.price_per_hour})
     est = q(sum((D(r["price_per_hour"]) for r in ranks), D(0)) * D(data.hours))
+    obsmod.inc_metric("petabyte_cluster_formations_total", outcome="success",
+                      backend=data.backend, environment=obsmod.ENVIRONMENT)
     return {"status": "ok", "job_id": job.id, "kind": "distributed", "world_size": n,
             "backend": data.backend, "hours": data.hours, "ranks": ranks,
             "master_rank": 0, "estimated_cost": est, "vpn": bool(data.vpn),

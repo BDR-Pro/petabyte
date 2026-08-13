@@ -678,6 +678,10 @@ def init_metrics() -> bool:
         # Distributed lock outcomes — bounded 'outcome' label only (never the lock NAME).
         C("petabyte_lock_acquisitions_total", "Redis distributed-lock outcomes",
           ("outcome", "environment"))
+        # product surfaces (single-choke-point counters)
+        C("petabyte_cluster_formations_total", "Distributed cluster formation attempts",
+          ("outcome", "backend", "environment"))  # success|insufficient_nodes|booking_failed|error
+        C("petabyte_logins_total", "Password login attempts", ("outcome", "environment"))  # success|failure
         # telemetry health
         C("petabyte_telemetry_export_failures_total", "Telemetry export failures",
           ("exporter", "environment"))
