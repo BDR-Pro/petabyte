@@ -216,6 +216,12 @@ html[data-theme=light] .codeline{background:#0E1A2E}
 .badge{font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:999px;border:1px solid var(--line2);color:var(--mut)}
 .badge.ok{color:var(--teal);border-color:rgba(53,224,208,.4);background:rgba(53,224,208,.09)}
 .badge.cc{color:var(--amber);border-color:rgba(255,178,36,.4);background:rgba(255,178,36,.09)}
+.badge.warn{color:var(--warn);border-color:rgba(242,180,80,.42);background:rgba(242,180,80,.10)}
+.badge.bad{color:var(--bad);border-color:rgba(242,116,140,.42);background:rgba(242,116,140,.11)}
+/* status badge: a leading dot + the text label, so state never rides on colour alone.
+   .ok=live/healthy · .warn=in-progress/attention · .bad=stopped/failed · plain=neutral/idle */
+.badge.st{display:inline-flex;align-items:center;gap:6px;padding-inline-start:8px}
+.badge.st::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
 /* ---------- stats ---------- */
 .stats{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
 .stat{flex:1 1 22%;min-width:150px;background:linear-gradient(180deg,var(--depth2),var(--panel2));padding:20px 22px}
@@ -2238,7 +2244,7 @@ async function loadGpu(){
  if(!r.ok){w.innerHTML='<div class="empty"><div class="et">GPU not found</div><div class="es">It may have gone offline or been delisted.</div><a class="btn btn-teal" href="/marketplace">Browse available GPUs</a></div>';return;}
  var s=await r.json();
  var bookable=s.online&&s.available_units>0&&s.can_accept_paid_jobs;
- var status=bookable?'<span class="badge ok">Available now</span>':(s.online?'<span class="badge">Fully booked</span>':'<span class="badge">Offline</span>');
+ var status=bookable?'<span class="badge st ok">Available now</span>':(s.online?'<span class="badge st warn">Fully booked</span>':'<span class="badge st bad">Offline</span>');
  w.innerHTML=
   '<div class="cols" style="gap:18px;align-items:flex-start">'+
    '<div style="flex:1.6 1 380px;min-width:300px">'+
@@ -2579,7 +2585,7 @@ async function scNodes(){
   else{
     box.innerHTML=ns.map(function(n){
       var visible=n.online&&n.attested;
-      function chip(ok,on,off){return '<span class="badge '+(ok?'ok':'')+'">'+(ok?on:off)+'</span>';}
+      function chip(ok,on,off){return '<span class="badge st '+(ok?'ok':'warn')+'">'+(ok?on:off)+'</span>';}
       return '<div class="panel" style="padding:12px;margin-bottom:10px">'+
         '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">'+
           '<b class="mono">'+(n.gpu_model||'GPU')+'</b>'+
@@ -2590,7 +2596,7 @@ async function scNodes(){
           '</div>'+
         '</div>'+
         '<div class="mini" style="margin-top:8px">$'+Number(n.price_per_hour).toFixed(2)+'/hr · '+
-          (n.utilization_pct||0)+'% utilized · '+n.jobs_completed+' jobs done'+
+          (n.utilization_pct||0)+'% utilized · '+n.jobs_completed+(n.jobs_completed===1?' job done':' jobs done')+
           (n.success_rate!=null?(' · '+n.success_rate+'% success'):'')+' · earned $'+Number(n.earned_total||0).toFixed(2)+'</div>'+
       '</div>';}).join('');
   }

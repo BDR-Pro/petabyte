@@ -2903,7 +2903,7 @@ def seller_dashboard(user: dict = Depends(get_current_user), db: Session = Depen
         elif median and D(sp.price_per_hour) > median * D("1.25"):
             blockers.append({"node": sp.public_id,
                              "issue": f"Priced {int((D(sp.price_per_hour)/median - 1) * 100)}% "
-                                      f"above the market median (${median}/hr) — buyers pick "
+                                      f"above the market median (${qc(median)}/hr) — buyers pick "
                                       f"the cheapest node that fits.",
                              "fix": f"Try ${qc(median)}/hr, or turn on auto-pricing."})
         elif not me.can_accept_paid_jobs:

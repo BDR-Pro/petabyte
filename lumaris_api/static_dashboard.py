@@ -106,9 +106,14 @@ section{padding:30px 0}
 .gpu{font-family:var(--disp);font-weight:600}
 .price{font-family:var(--mono);color:var(--amber);font-weight:600}
 .save{font-family:var(--mono);color:var(--pos);font-weight:600}
-.badge{font-family:var(--mono);font-size:10px;letter-spacing:.04em;padding:3px 7px;border-radius:6px;border:1px solid var(--line2);color:var(--mut);white-space:nowrap}
-.badge.ok{color:var(--cyan);border-color:rgba(79,214,201,.4);background:rgba(79,214,201,.08)}
-.badge.cc{color:var(--amber);border-color:rgba(245,178,61,.4);background:rgba(245,178,61,.08)}
+.badge{font-family:var(--mono);font-size:10px;letter-spacing:.04em;padding:3px 9px;border-radius:999px;border:1px solid var(--line2);color:var(--mut);white-space:nowrap}
+.badge.ok{color:var(--cyan);border-color:rgba(58,224,207,.4);background:rgba(58,224,207,.09)}
+.badge.cc{color:var(--amber);border-color:rgba(255,190,69,.4);background:rgba(255,190,69,.09)}
+.badge.warn{color:var(--warn);border-color:rgba(242,180,80,.42);background:rgba(242,180,80,.10)}
+.badge.bad{color:var(--bad);border-color:rgba(242,116,140,.42);background:rgba(242,116,140,.11)}
+/* status badge: leading dot + text label so state never rides on colour alone (matches pages.py) */
+.badge.st{display:inline-flex;align-items:center;gap:6px;padding-inline-start:8px}
+.badge.st::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
 .rep{font-family:var(--mono);font-weight:600}
 .mini{font-family:var(--mono);font-size:11px;color:var(--mut)}
 
