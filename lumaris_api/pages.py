@@ -52,7 +52,13 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 .navbar-toggler{border:1px solid var(--line2);border-radius:999px;padding:7px 11px;color:var(--mut)}
 .navbar-toggler:focus{box-shadow:0 0 0 4px rgba(53,224,208,.15)}
 .navbar-toggler svg{width:18px;height:18px;display:block}
+/* the hamburger is mobile-only; hide it on desktop even if the Bootstrap CDN is slow/blocked */
+@media(min-width:992px){.navbar-toggler{display:none!important}}
 @media(max-width:991.98px){
+ /* Hide the collapsed menu by default WITHOUT relying on the Bootstrap CDN stylesheet: if
+    that asset is slow or blocked, the signed-in nav (mename + theme + sign-out + CTAs) must
+    not render open and overflow the viewport. Mirrors Bootstrap's own .collapse:not(.show). */
+ .navbar-collapse:not(.show){display:none}
  .navbar-collapse{flex-basis:100%;padding:10px 4px 12px}
  .navlinks{flex-direction:column;gap:2px;margin-inline-start:0}
  .navlinks a{padding:9px 13px}
@@ -81,6 +87,7 @@ body{background:
  radial-gradient(1400px 900px at 50% 120%,rgba(20,154,144,.10),transparent 60%),
  var(--abyss);
  color:var(--ink);font-family:var(--body);font-size:14.5px;line-height:1.65;-webkit-font-smoothing:antialiased;
+ overflow-x:clip;
  transition:background-color .3s,color .3s}
 a{color:inherit;text-decoration:none}
 .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
@@ -3312,10 +3319,12 @@ CONSOLE_HTML = _page("Petabyte — console",
 <style>
 :root{--editor-bg:#0B1122;--editor-ink:#F2F6FF;--console-ink:#BFE9E2}
 html[data-theme=light]{--editor-bg:#F5F9FC;--editor-ink:#0E1A2E;--console-ink:#0E5C55}
-.ctabbar{display:flex;gap:5px;flex-wrap:wrap;margin:20px 0 2px;border-bottom:1px solid var(--line)}
-.ctab-btn{background:transparent;border:1px solid transparent;border-bottom:0;color:var(--mut);border-radius:12px 12px 0 0;padding:9px 15px;font-family:var(--disp);font-weight:600;font-size:13px;cursor:pointer}
-.ctab-btn:hover{color:var(--ink)}
-.ctab-btn.on{color:var(--teal);background:var(--panel2);border-color:var(--line)}
+/* pill tabs — match the site's nav-pill / badge language instead of a one-off folder-tab look */
+.ctabbar{display:flex;gap:7px;flex-wrap:wrap;margin:22px 0 4px}
+.ctab-btn{background:transparent;border:1px solid var(--line2);color:var(--mut);border-radius:999px;padding:8px 16px;font-family:var(--disp);font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap;transition:color .15s,background-color .15s,border-color .15s}
+.ctab-btn:hover{color:var(--ink);border-color:var(--line2)}
+.ctab-btn:focus-visible{outline:none;border-color:var(--teal);box-shadow:0 0 0 4px rgba(53,224,208,.16)}
+.ctab-btn.on{color:var(--teal);background:rgba(53,224,208,.10);border-color:rgba(53,224,208,.4)}
 #c_code{width:100%;min-height:150px;background:var(--editor-bg);color:var(--editor-ink);border:1px solid var(--line2);border-radius:12px;padding:13px;font-family:var(--mono);font-size:12.5px;line-height:1.6;resize:vertical}
 .c_console{background:var(--editor-bg);color:var(--console-ink);border:1px solid var(--line);border-radius:12px;padding:14px;min-height:150px;font-family:var(--mono);font-size:12.5px;line-height:1.6;white-space:pre-wrap;overflow:auto}
 .c_console .sys{color:var(--mut)}.c_console .ok{color:var(--pos)}.c_console .amber{color:var(--amber)}
