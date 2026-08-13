@@ -1,6 +1,6 @@
 from fastapi import (
     FastAPI, Depends, HTTPException, Query, Header, Security, Request, WebSocket,
-    WebSocketDisconnect, Body,
+    WebSocketDisconnect, Body, Form,
 )
 from fastapi.responses import PlainTextResponse, JSONResponse, Response, HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
@@ -62,7 +62,9 @@ obsmod.init_observability(obsmod.SERVICE.API)
 from utils import (
     gen_wg_keypair, build_client_wg_config, apply_peer_to_interface,
     gen_secure_api_key, decode_api_key, verify_attestation, verify_signed_proof,
+    seal_secret, open_secret,
 )
+import totp
 from db import (
     D, q, qc, Money, BookingsPaused, SellerSpec, Booking, list_payout_methods, VMRoute, bookings_are_paused, set_bookings_paused, audit,
     start_email_verification, confirm_email, is_disposable_email, redact_destination,
@@ -93,6 +95,7 @@ from db import (
     create_org, get_org, get_membership, org_members, add_org_member, list_orgs_for_user,
     set_org_member_role, remove_org_member,
     list_audit_for_actor, list_audit_for_org, verify_audit_chain,
+    set_totp_secret, enable_totp, disable_totp, hash_backup_code, consume_backup_code,
     org_deposit, try_org_debit, org_refund, org_usage,
     retry_task, set_task_progress, add_task_log, get_task_logs,
     set_benchmark, create_benchmark_task, org_analytics,
@@ -1068,6 +1071,16 @@ class OrgMemberModel(BaseModel):
 
 class OrgRoleModel(BaseModel):
     role: str
+
+
+class TotpEnableModel(BaseModel):
+    code: str = Field(min_length=6, max_length=10)
+    password: str
+
+
+class TotpDisableModel(BaseModel):
+    password: str
+    code: Optional[str] = None
 
 
 class OrgDepositModel(BaseModel):
@@ -2579,7 +2592,7 @@ def google_callback(code: str = Query(...), email: Optional[str] = Query(None),
 
 @app.post("/login", tags=["account"])
 def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(),
-          db: Session = Depends(get_db)):
+          otp: str = Form(None), db: Session = Depends(get_db)):
     # Throttle by (IP, username): guessing one account can't lock out a colleague
     # behind the same office NAT, and a valid password is never refused because
     # someone else was guessing. Only FAILED attempts burn the budget.
@@ -2603,6 +2616,34 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(),
               detail={"username": form_data.username})
         raise HTTPException(status_code=400, detail="Invalid credentials")
     _RL_BUCKETS.pop(key, None)      # a success clears the slate for this account
+    # SECOND FACTOR: password alone is not enough once 2FA is on. Require a valid TOTP code
+    # (from the authenticator app) or a single-use backup code before issuing the session token.
+    if user.totp_enabled:
+        code = (otp or "").strip()
+        if not code:
+            obsmod.inc_metric("petabyte_logins_total", outcome="twofa_required",
+                              environment=obsmod.ENVIRONMENT)
+            raise HTTPException(status_code=401, detail={
+                "code": "TOTP_REQUIRED",
+                "message": "Enter the 6-digit code from your authenticator app."})
+        ok2 = False
+        try:
+            sec = open_secret(user.totp_secret) if user.totp_secret else None
+            ok2 = bool(sec and totp.verify(sec, code))
+        except Exception:  # noqa: BLE001
+            ok2 = False
+        if not ok2:                                   # fall back to a single-use recovery code
+            ok2 = consume_backup_code(db, user, code.replace("-", "").replace(" ", "").lower())
+        if not ok2:
+            _rl_record_failure(key)
+            obsmod.inc_metric("petabyte_logins_total", outcome="twofa_failed",
+                              environment=obsmod.ENVIRONMENT)
+            obsmod.inc_metric("petabyte_auth_failures_total", reason="totp",
+                              environment=obsmod.ENVIRONMENT)
+            audit(db, "auth.2fa_failed", actor=user, ip=ip)
+            raise HTTPException(status_code=401, detail={
+                "code": "TOTP_INVALID",
+                "message": "That code is incorrect or expired — try again."})
     obsmod.inc_metric("petabyte_logins_total", outcome="success",
                       environment=obsmod.ENVIRONMENT)
     audit(db, "auth.login", actor=user, ip=ip)
@@ -7937,6 +7978,82 @@ def account_audit_endpoint(limit: int = Query(100, ge=1, le=500),
     me = get_user_by_username(db, _username(user))
     return {"events": list_audit_for_actor(db, me.id, limit=limit),
             "integrity": verify_audit_chain(db)}
+
+
+# ------------------- TWO-FACTOR AUTH (TOTP / authenticator app) -------------------
+
+@app.get("/account/2fa", tags=["account"])
+def totp_state(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    return {"enabled": bool(me.totp_enabled),
+            "pending": bool(me.totp_secret and not me.totp_enabled)}
+
+
+@app.post("/account/2fa/setup", tags=["account"])
+def totp_setup(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Begin enrollment: mint a fresh secret, store it PENDING (encrypted at rest), and return the
+    secret + otpauth URI so the user can add it to their authenticator app. 2FA is not active until
+    /account/2fa/enable confirms a code."""
+    me = get_user_by_username(db, _username(user))
+    if me.totp_enabled:
+        raise HTTPException(status_code=409,
+                            detail="2FA is already on — disable it first to re-enroll.")
+    secret = totp.random_base32()
+    set_totp_secret(db, me, seal_secret(secret))
+    acct = me.email or me.username
+    return {"secret": secret, "otpauth_uri": totp.provisioning_uri(secret, acct),
+            "issuer": totp.DEFAULT_ISSUER, "account": acct}
+
+
+@app.post("/account/2fa/enable", tags=["account"])
+def totp_enable_endpoint(data: TotpEnableModel, user: dict = Depends(get_current_user),
+                         db: Session = Depends(get_db)):
+    """Confirm enrollment with the current password + a code from the app. On success, 2FA is on
+    and a one-time list of recovery (backup) codes is returned — shown ONCE."""
+    me = get_user_by_username(db, _username(user))
+    if not verify_password(data.password, me.password):
+        raise HTTPException(status_code=403, detail="Password is incorrect.")
+    if not me.totp_secret:
+        raise HTTPException(status_code=400, detail="Start setup first (POST /account/2fa/setup).")
+    try:
+        sec = open_secret(me.totp_secret)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="Setup expired — start again.")
+    if not totp.verify(sec, data.code):
+        raise HTTPException(status_code=400, detail={
+            "code": "TOTP_INVALID", "message": "That code is incorrect or expired."})
+    backups = [secrets.token_hex(5) for _ in range(10)]
+    enable_totp(db, me, [hash_backup_code(b) for b in backups])
+    audit(db, "2fa.enabled", actor=me, resource_type="user", resource_id=me.username)
+    return {"status": "ok", "enabled": True, "backup_codes": backups,
+            "note": "Save these recovery codes now — each works once and they are shown only here."}
+
+
+@app.post("/account/2fa/disable", tags=["account"])
+def totp_disable_endpoint(data: TotpDisableModel, user: dict = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    """Turn 2FA off. Requires the password AND a current code (or a backup code) — so a password
+    alone (without the phone) cannot strip the second factor."""
+    me = get_user_by_username(db, _username(user))
+    if not verify_password(data.password, me.password):
+        raise HTTPException(status_code=403, detail="Password is incorrect.")
+    if not me.totp_enabled:
+        return {"status": "ok", "enabled": False}
+    code = (data.code or "").strip()
+    ok2 = False
+    try:
+        sec = open_secret(me.totp_secret) if me.totp_secret else None
+        ok2 = bool(sec and totp.verify(sec, code))
+    except Exception:  # noqa: BLE001
+        ok2 = False
+    if not ok2:
+        ok2 = consume_backup_code(db, me, code.replace("-", "").replace(" ", "").lower())
+    if not ok2:
+        raise HTTPException(status_code=400, detail={
+            "code": "TOTP_INVALID", "message": "Enter a current 2FA code to disable."})
+    disable_totp(db, me)
+    audit(db, "2fa.disabled", actor=me, resource_type="user", resource_id=me.username)
+    return {"status": "ok", "enabled": False}
 
 
 @app.post("/keys/{jti}/revoke")

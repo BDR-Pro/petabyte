@@ -258,6 +258,9 @@ jobs:
       - name: spare-disk rental (web3/bittorrent storage; per-node attribution + take + idempotent reconcile)
         working-directory: lumaris_api
         run: python disk_rental_test.py
+      - name: two-factor auth (RFC 4226 known-answer TOTP + window/skew + provisioning URI)
+        working-directory: lumaris_api
+        run: python totp_test.py
       - name: agent WireGuard (keys/config/peers + fail-closed bring-up)
         working-directory: lumaris_agent
         run: python wireguard_test.py

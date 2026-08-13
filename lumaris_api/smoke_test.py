@@ -450,6 +450,43 @@ try:
 finally:
     _asess.close()
 
+# ---- Two-factor auth (TOTP / authenticator app) ----
+import totp as _totp
+c.post("/register_user", json={"username": "tfauser", "password": "hunter2-correct-horse"})
+_tfh = {"Authorization": f"Bearer {login('tfauser')}"}
+_setup = c.post("/account/2fa/setup", headers=_tfh).json()
+ok("2fa setup returns a secret + an otpauth URI",
+   len(_setup.get("secret", "")) >= 16 and _setup.get("otpauth_uri", "").startswith("otpauth://totp/"))
+ok("enabling 2fa rejects a wrong code",
+   c.post("/account/2fa/enable", headers=_tfh,
+          json={"code": "000000", "password": "hunter2-correct-horse"}).status_code == 400)
+_en = c.post("/account/2fa/enable", headers=_tfh,
+             json={"code": _totp.totp(_setup["secret"]), "password": "hunter2-correct-horse"}).json()
+ok("2fa enables with a valid code and returns 10 single-use backup codes",
+   _en.get("enabled") is True and len(_en.get("backup_codes", [])) == 10)
+_bk = _en["backup_codes"][0]
+
+
+def _login_otp(otp=None):
+    d = {"username": "tfauser", "password": "hunter2-correct-horse"}
+    if otp is not None:
+        d["otp"] = otp
+    return c.post("/login", data=d)
+
+
+ok("password alone no longer logs in once 2fa is on (TOTP_REQUIRED)",
+   _login_otp().status_code == 401 and _login_otp().json().get("error", {}).get("code") == "TOTP_REQUIRED")
+ok("login with a wrong code is refused", _login_otp("000000").status_code == 401)
+ok("login with a valid TOTP code succeeds", _login_otp(_totp.totp(_setup["secret"])).status_code == 200)
+ok("a backup recovery code logs in", _login_otp(_bk).status_code == 200)
+ok("a backup code is single-use (reuse refused)", _login_otp(_bk).status_code == 401)
+ok("password alone cannot disable 2fa (a current code is required)",
+   c.post("/account/2fa/disable", headers=_tfh, json={"password": "hunter2-correct-horse"}).status_code == 400)
+ok("2fa disables with password + a current code",
+   c.post("/account/2fa/disable", headers=_tfh,
+          json={"password": "hunter2-correct-horse", "code": _totp.totp(_setup["secret"])}).status_code == 200)
+ok("after disabling, password-only login works again", _login_otp().status_code == 200)
+
 # org wallet + budget cap
 c.post("/orgs/{}/deposit".format(org_id), headers=adminh, json={"amount":100.0,"budget_cap":15.0})
 ok("org balance funded", c.get(f"/orgs/{org_id}", headers=adminh).json()["balance"]==100.0)

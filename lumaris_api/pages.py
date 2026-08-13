@@ -1665,6 +1665,11 @@ LOGIN_HTML = _page("Petabyte — sign in", """
     <label class="mini" style="display:block;margin:14px 0 6px">Password</label>
     <input id="p" type="password" placeholder="password (8+ characters)" style="width:100%" autocomplete="current-password"
            onkeydown="if(event.key==='Enter')go()"/>
+    <div id="otprow" style="display:none">
+      <label class="mini" style="display:block;margin:14px 0 6px">Authenticator code</label>
+      <input id="otp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code (or a backup code)" style="width:100%"
+             onkeydown="if(event.key==='Enter')go()"/>
+    </div>
     <button class="btn-amber" style="width:100%;justify-content:center;margin-top:18px" onclick="go()">
       <span id="btn">Sign in</span>
     </button>
@@ -1714,11 +1719,13 @@ async function forgot(){
   }catch(e){}
   info("If an account matches, we've emailed a password reset link. Check your inbox.");
 }
-async function login(u,p){
+async function login(u,p,otp){
+  var body='username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p);
+  if(otp)body+='&otp='+encodeURIComponent(otp);
   var r = await fetch('/login', {method:'POST',
-    headers:{'Content-Type':'application/x-www-form-urlencoded'},
-    body:'username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p)});
-  return r.ok ? (await r.json()).access_token : null;
+    headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:body});
+  var b={};try{b=await r.json()}catch(e){}
+  return {ok:r.ok, token:b.access_token, code:(b.error&&b.error.code)||null, status:r.status};
 }
 async function go(){
   var u=document.getElementById('u').value.trim(), p=document.getElementById('p').value;
@@ -1740,9 +1747,15 @@ async function go(){
         else{fail((typeof b.detail==='string'?b.detail:null)||"That username is taken — try another."); }
         return;}
     }
-    var t=await login(u,p);
-    if(!t){fail(mode==="register"?"Account created — but sign-in failed. Try signing in.":"Wrong username or password."); return;}
-    localStorage.setItem('pb_token', t);document.documentElement.setAttribute('data-auth','in');
+    var otp=(document.getElementById('otp')||{}).value;
+    var res=await login(u,p,otp);
+    if(!res.ok){
+      if(res.code==='TOTP_REQUIRED'){document.getElementById('otprow').style.display='';
+        info("Enter the 6-digit code from your authenticator app.");document.getElementById('otp').focus();return;}
+      if(res.code==='TOTP_INVALID'){document.getElementById('otprow').style.display='';
+        fail("That code is incorrect or expired — try again.");return;}
+      fail(mode==="register"?"Account created — but sign-in failed. Try signing in.":"Wrong username or password.");return;}
+    localStorage.setItem('pb_token', res.token);document.documentElement.setAttribute('data-auth','in');
     location.href='/console';
   }catch(e){fail("Network error — check your connection and try again.");}
 }
@@ -3589,6 +3602,12 @@ print(6 * 7)</textarea>
         </section>
 
         <section id="tab-access" class="cpanel" style="display:none">
+          <section class="csec" style="margin-top:12px"><div class="csec-h"><h2>Two-factor authentication</h2></div>
+            <div class="csec-b" style="padding-top:10px">
+              <p class="mut" style="font-size:13.5px;max-width:66ch">Protect sign-in with a one-time code from an authenticator app (Google Authenticator, Authy, 1Password). After a password, a 6-digit code is required to log in.</p>
+              <div class="card" id="c_2fa" style="margin-top:12px"><span class="mut">Loading…</span></div>
+            </div>
+          </section>
           <p class="mut" style="font-size:13.5px;max-width:66ch">Programmatic access for CI, scripts and your own tools. Scope a key, set an expiry, revoke any time. The full key is shown once at creation.</p>
           <section class="csec" style="margin-top:12px"><div class="csec-b" style="padding-top:14px">
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input id="c_keylabel" placeholder="label (e.g. ci-runner)" style="flex:1;min-width:150px"/><input id="c_keydays" type="number" value="30" min="1" max="90" style="width:90px" title="days until expiry"/><input id="c_keyscopes" placeholder="scopes (comma-sep, optional)" style="flex:1;min-width:150px"/><button class="cbtn pri" data-act="cKeyCreate">Create key</button></div>
@@ -3989,7 +4008,60 @@ async function cAccess(){
      '<td data-l="Status">'+(k.revoked?'<span class="badge">revoked</span>':'<span class="badge ok">active</span>')+'</td>'+
      '<td data-l="">'+(k.revoked?'':'<button class="cbtn sm" data-act="cKeyRevoke" data-a1="'+esc(k.jti)+'">Revoke</button>')+'</td></tr>';
     }).join(''):'<tr><td colspan=5 class="mut mono" style="text-align:center;padding:14px">No API keys yet. Create one to drive Petabyte from code or CI.</td></tr>';
-  cNotifs();cAudit();
+  c2faLoad();cNotifs();cAudit();
+}
+async function c2faLoad(){
+  var el=document.getElementById('c_2fa');if(!el)return;
+  var s=((await api('/account/2fa'))||{}).body||{};
+  if(s.enabled){
+    el.innerHTML='<div><span class="badge ok">2FA is on</span> <span class="mut" style="font-size:13px">Sign-in requires a code from your authenticator app.</span></div>'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">'+
+      '<input id="c2fa_dis_pw" type="password" placeholder="password" style="min-width:150px"/>'+
+      '<input id="c2fa_dis_code" inputmode="numeric" placeholder="current code" style="width:130px"/>'+
+      '<button class="btn btn-ghost" data-act="c2faDisable">Turn off 2FA</button></div>'+
+      '<p class="mini" id="c2fa_msg" style="margin-top:8px;text-transform:none;letter-spacing:0"></p>';
+  } else {
+    el.innerHTML='<div><span class="badge">2FA is off</span></div>'+
+      '<button class="btn btn-amber" style="margin-top:12px" data-act="c2faSetup">Set up authenticator app</button>'+
+      '<p class="mini" id="c2fa_msg" style="margin-top:8px;text-transform:none;letter-spacing:0"></p>';
+  }
+}
+async function c2faSetup(){
+  var r=await api('/account/2fa/setup',{method:'POST'});
+  if(!r.ok){alert('Could not start 2FA setup.');return;}
+  var d=r.body||{};var el=document.getElementById('c_2fa');
+  var grouped=(d.secret||'').replace(/(.{4})/g,'$1 ').trim();
+  el.innerHTML='<div class="lbl">Add this account to your authenticator app</div>'+
+    '<p class="mut" style="font-size:13px;margin:6px 0">Scan the setup URI as a QR, or type the secret in manually, then enter the 6-digit code to confirm.</p>'+
+    '<div class="mini">Secret (manual entry)</div><input readonly value="'+esc(grouped)+'" class="mono" style="width:100%;margin-top:4px"/>'+
+    '<div class="mini" style="margin-top:10px">Setup URI (otpauth)</div><input readonly value="'+esc(d.otpauth_uri||'')+'" class="mono" style="width:100%;font-size:11px;margin-top:4px"/>'+
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">'+
+    '<input id="c2fa_code" inputmode="numeric" placeholder="6-digit code" style="width:130px"/>'+
+    '<input id="c2fa_pw" type="password" placeholder="password" style="min-width:150px"/>'+
+    '<button class="btn btn-amber" data-act="c2faEnable">Enable 2FA</button></div>'+
+    '<p class="mini" id="c2fa_msg" style="margin-top:8px;text-transform:none;letter-spacing:0"></p>';
+}
+async function c2faEnable(){
+  var code=(document.getElementById('c2fa_code')||{}).value||'';
+  var pw=(document.getElementById('c2fa_pw')||{}).value||'';
+  var msg=document.getElementById('c2fa_msg');
+  var r=await api('/account/2fa/enable',{method:'POST',body:JSON.stringify({code:code,password:pw})});
+  if(!r.ok){if(msg)msg.textContent=((r.body&&r.body.error&&r.body.error.message)||(r.body&&r.body.detail)||'Could not enable — check the code and password.');return;}
+  var codes=(r.body||{}).backup_codes||[];var el=document.getElementById('c_2fa');
+  el.innerHTML='<div><span class="badge ok">2FA is on</span></div>'+
+    '<div class="lbl" style="margin-top:12px">Recovery codes — save these now</div>'+
+    '<p class="mut" style="font-size:13px;margin:6px 0">Each works once if you lose your device. They are shown only this time.</p>'+
+    '<div class="panel" style="padding:12px;columns:2"><div class="mono" style="font-size:13px;line-height:1.9">'+
+    codes.map(function(x){return esc(x);}).join('<br>')+'</div></div>'+
+    '<button class="btn btn-ghost" style="margin-top:12px" data-act="cAccess">Done</button>';
+}
+async function c2faDisable(){
+  var pw=(document.getElementById('c2fa_dis_pw')||{}).value||'';
+  var code=(document.getElementById('c2fa_dis_code')||{}).value||'';
+  var msg=document.getElementById('c2fa_msg');
+  var r=await api('/account/2fa/disable',{method:'POST',body:JSON.stringify({password:pw,code:code})});
+  if(!r.ok){if(msg)msg.textContent=((r.body&&r.body.error&&r.body.error.message)||(r.body&&r.body.detail)||'Could not disable — check the password and code.');return;}
+  c2faLoad();
 }
 function cAuditBadge(el,integ){
   if(!el)return;

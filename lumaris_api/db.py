@@ -152,6 +152,10 @@ class User(Base):
     email_token = Column(String, nullable=True)         # hashed verification token
     email_token_exp = Column(DateTime, nullable=True)   # short-lived
     notify_email = Column(Boolean, default=True)
+    # --- two-factor auth (TOTP / authenticator app) ---
+    totp_secret = Column(String, nullable=True)          # base32 secret, ENCRYPTED at rest (utils.seal_secret)
+    totp_enabled = Column(Boolean, default=False, nullable=False)  # True only after a code is confirmed
+    totp_backup_codes = Column(Text, nullable=True)      # JSON list of bcrypt-hashed single-use recovery codes
     tests_passed = Column(Integer, default=0, nullable=False)
     tests_failed = Column(Integer, default=0, nullable=False)
     can_accept_paid_jobs = Column(Boolean, default=True, nullable=False)
@@ -2053,7 +2057,10 @@ def _ensure_columns():
                   ("referral_signup_meta", "VARCHAR"),("email_verified", "BOOLEAN DEFAULT false"), ("email_token", "VARCHAR"),
                   ("email_token_exp", "TIMESTAMP"),
                   ("is_demo", "BOOLEAN NOT NULL DEFAULT false"),
-                  ("created_at", "TIMESTAMP")],
+                  ("created_at", "TIMESTAMP"),
+                  ("totp_secret", "VARCHAR"),
+                  ("totp_enabled", "BOOLEAN NOT NULL DEFAULT false"),
+                  ("totp_backup_codes", "TEXT")],
         "platform": [("bookings_paused", "BOOLEAN DEFAULT false"),
                      ("pause_reason", "VARCHAR"), ("paused_at", "TIMESTAMP"),
                      ("landing_video_id", "VARCHAR"),
@@ -2206,6 +2213,52 @@ def login_user(db: Session, username: str, password: str) -> User | None:
     if user and verify_password(password, user.password):
         return user
     return None
+
+
+# ------------------ Two-factor auth (TOTP) storage helpers ------------------
+
+def set_totp_secret(db: Session, user: User, enc_secret: str) -> None:
+    """Store a PENDING (encrypted) TOTP secret. 2FA is not active until a code confirms it."""
+    user.totp_secret = enc_secret
+    user.totp_enabled = False
+    db.add(user); db.commit()
+
+
+def enable_totp(db: Session, user: User, backup_hashes: list) -> None:
+    user.totp_enabled = True
+    user.totp_backup_codes = json.dumps(backup_hashes)
+    db.add(user); db.commit()
+
+
+def disable_totp(db: Session, user: User) -> None:
+    user.totp_secret = None
+    user.totp_enabled = False
+    user.totp_backup_codes = None
+    db.add(user); db.commit()
+
+
+def hash_backup_code(code: str) -> str:
+    return bcrypt.hashpw(code.encode()[:72], bcrypt.gensalt()).decode()
+
+
+def consume_backup_code(db: Session, user: User, code: str) -> bool:
+    """Single-use recovery codes: if `code` matches an unused hash, remove it and return True."""
+    if not user.totp_backup_codes:
+        return False
+    try:
+        codes = json.loads(user.totp_backup_codes)
+    except Exception:  # noqa: BLE001
+        return False
+    for i, h in enumerate(codes):
+        try:
+            if bcrypt.checkpw(code.encode()[:72], h.encode()):
+                codes.pop(i)
+                user.totp_backup_codes = json.dumps(codes)
+                db.add(user); db.commit()
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
 
 
 def get_user_by_username(db: Session, username: str) -> User | None:
