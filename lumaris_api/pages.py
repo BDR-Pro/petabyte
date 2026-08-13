@@ -135,6 +135,8 @@ nav .wrap{display:flex;align-items:center;gap:22px;height:58px;background:var(--
 /* auth-state visibility, decided before first paint (no flash of the wrong button) */
 html[data-auth=in] #signinlink{display:none!important}
 html[data-auth=out] #signoutlink,html[data-auth=out] #mename,html[data-auth=out] #adminlink{display:none!important}
+/* Console is a signed-in destination only — hide it from logged-out visitors (decided before first paint) */
+html[data-auth=out] #navconsole{display:none!important}
 .signin:hover{color:var(--teal)}
 /* ---------- buttons ---------- */
 button,.btn{font-family:var(--disp);font-weight:600;border:0;border-radius:999px;padding:10px 20px;font-size:13.5px;cursor:pointer;
@@ -313,7 +315,7 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
 </button>
 <div class="collapse navbar-collapse" id="pbnav">
 <div class="navlinks">
-  <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
+  <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/console" id="navconsole" data-ar="لوحة التحكم">Console</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/pricing" data-ar="الأسعار">Pricing</a>
   <a href="/metrics" data-ar="المقاييس">Metrics</a><a href="/install" data-ar="لمالكي كروت الرسومات">For GPU owners</a><a href="/security" data-ar="الأمان">Security</a><a href="/developers" data-ar="المطورون">Developers</a>
 </div>
 <div class="navcta">
@@ -339,7 +341,7 @@ _FOOT = """<footer>
     <p class="mut" style="font-size:12px;margin-top:10px;max-width:30ch">A verified marketplace for community GPU power. Operated from Riyadh by Petabyte, Inc.</p>
   </div>
   <div class="fcol"><div class="fh">Product</div>
-    <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/pricing" data-ar="الأسعار">Pricing</a><a href="/app">Console</a>
+    <a href="/marketplace" data-ar="السوق">Marketplace</a><a href="/pricing" data-ar="الأسعار">Pricing</a><a href="/console">Console</a>
   </div>
   <div class="fcol"><div class="fh">Use cases</div>
     <a href="/artists">Rendering &amp; art</a><a href="/gamers">Game servers</a><a href="/developers">AI &amp; inference</a>
@@ -1554,6 +1556,135 @@ async function reset(){
     fail((typeof b.detail==='string'?b.detail:null)||"This reset link is invalid or has expired.");
   }catch(e){fail("Network error — check your connection and try again.");}
 }
+</script>""")
+
+
+CONSOLE_HTML = _page("Petabyte — console",
+    desc="Your Petabyte console: balance and burn rate, running instances, your GPUs, and every action in one place.",
+    path="/console", body="""
+<div id="c_guest" class="wrap" style="max-width:460px;padding:70px 22px;text-align:center;display:none">
+  <img src="/static/petabyte-logo.png" alt="Petabyte" style="width:52px;opacity:.85"/>
+  <h1 style="font-size:28px;margin:16px 0 8px">Your console</h1>
+  <p class="mut">Sign in to see your balance, running instances, GPUs and jobs in one place.</p>
+  <div style="margin-top:18px"><a class="btn btn-amber" href="/login">Sign in</a></div>
+</div>
+
+<div id="c_hub" style="display:none">
+  <div class="hero"><div class="wrap" style="padding:42px 22px 8px">
+    <div class="eyebrow"><span class="dot"></span> <span data-ar="لوحة التحكم">console</span></div>
+    <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-top:14px">
+      <div id="c_av" style="width:66px;height:66px;border-radius:16px;background:linear-gradient(135deg,var(--teal),var(--deep));display:flex;align-items:center;justify-content:center;font-family:var(--disp);font-weight:700;font-size:26px;color:#04201e"></div>
+      <div style="flex:1;min-width:200px">
+        <h1 id="c_name" style="font-size:clamp(24px,4vw,34px);margin:0">—</h1>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
+          <span id="c_role" class="badge"></span>
+          <span id="c_admin" class="badge cc" style="display:none">admin</span>
+          <span class="mut" style="font-size:12.5px">reputation <b id="c_rep" class="teal"></b></span>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <a class="btn btn-amber" href="/app" data-ar="شغّل مهمة">Launch a job</a>
+        <a class="btn btn-ghost" href="/account" data-ar="الحساب والمحفظة">Account &amp; wallet</a>
+      </div>
+    </div>
+    <div class="stats" style="margin-top:20px">
+      <div class="stat"><div class="l">Balance</div><div class="n teal mono" id="c_bal">—</div></div>
+      <div class="stat"><div class="l">Burning now</div><div class="n amber mono" id="c_burn">—</div></div>
+      <div class="stat"><div class="l">Next 24h</div><div class="n mono" id="c_24">—</div></div>
+      <div class="stat"><div class="l">Runway</div><div class="n mono" id="c_run">—</div></div>
+    </div>
+    <p class="mut" id="c_moneynote" style="font-size:12.5px;margin-top:8px"></p>
+  </div></div>
+
+  <div class="wrap" style="padding:24px 22px 6px">
+    <div class="lbl">Running now</div>
+    <div class="panel" style="overflow:auto;margin-top:10px">
+      <table class="tbl"><thead><tr><th>Instance</th><th>GPU</th><th>Role</th><th>Hours</th><th>Amount</th><th>Status</th></tr></thead>
+      <tbody id="c_runrows"><tr><td colspan="6" class="mut mono" style="padding:18px;text-align:center">loading…</td></tr></tbody></table>
+    </div>
+  </div>
+
+  <div class="wrap" id="c_nodesec" style="padding:22px 22px 6px;display:none">
+    <div class="lbl am">Your GPUs</div>
+    <div class="panel" style="overflow:auto;margin-top:10px">
+      <table class="tbl"><thead><tr><th>GPU</th><th>Status</th><th>$/hr</th><th>Region</th><th>Jobs</th></tr></thead>
+      <tbody id="c_noderows"></tbody></table>
+    </div>
+  </div>
+
+  <div class="wrap" style="padding:24px 22px 44px">
+    <div class="lbl">Quick actions</div>
+    <div class="cols c4" style="margin-top:12px">
+      <a class="card" href="/marketplace" style="text-decoration:none"><b class="teal" style="font-family:var(--disp)">Browse GPUs</b><p class="mut" style="font-size:12.5px;margin-top:5px">Live inventory &amp; prices</p></a>
+      <a class="card" href="/catalog" style="text-decoration:none"><b class="teal" style="font-family:var(--disp)">Templates</b><p class="mut" style="font-size:12.5px;margin-top:5px">Jupyter, PyTorch, LLMs, render</p></a>
+      <a class="card" href="/keys" style="text-decoration:none"><b class="amber" style="font-family:var(--disp)">API keys</b><p class="mut" style="font-size:12.5px;margin-top:5px">Scoped keys for nodes &amp; jobs</p></a>
+      <a class="card" href="/install" style="text-decoration:none"><b class="amber" style="font-family:var(--disp)">List your GPU</b><p class="mut" style="font-size:12.5px;margin-top:5px">Earn from idle hardware</p></a>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var el=function(id){return document.getElementById(id);};
+  var money=function(n){return '$'+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});};
+  // buyer-facing "this is live" statuses (booking + payment states that mean money is at work)
+  var LIVE={RUNNING:1,DISPATCHING:1,GPU_RESERVED:1,active:1,running:1,starting:1,dispatching:1,reserved:1,queued:1};
+  async function boot(){
+    if(!authed()){el('c_guest').style.display='';return;}
+    var me=await api('/me');
+    if(!me.ok){el('c_guest').style.display='';return;}
+    el('c_hub').style.display='';
+    var u=me.body;
+    el('c_name').textContent=u.username;
+    el('c_av').textContent=(u.username||'?').slice(0,1).toUpperCase();
+    el('c_role').textContent=u.role;
+    if(u.is_admin)el('c_admin').style.display='';
+    el('c_rep').textContent=(u.reputation!=null?u.reputation:'—');
+    var sp=await api('/buyer/spend');
+    if(sp.ok){var s=sp.body;
+      el('c_bal').textContent=money(s.balance);
+      el('c_burn').textContent=money(s.burn_rate_per_hour)+'/hr';
+      el('c_24').textContent=money(s.projected_24h);
+      el('c_run').textContent=(s.hours_of_runway!=null?s.hours_of_runway+'h':'—');
+      el('c_moneynote').textContent=(s.active_instances||0)+' instance(s) running · '+money(s.in_escrow)+' held in escrow, refunded for hours you do not use.';
+    }else{
+      el('c_bal').textContent=money(u.balance);
+      el('c_moneynote').textContent='Earnings to date: '+money(u.earnings)+'.';
+    }
+    loadRunning();loadNodes(u);
+  }
+  async function loadRunning(){
+    var r=await api('/account/bookings');var tb=el('c_runrows');
+    if(!r.ok){tb.innerHTML='<tr><td colspan="6" class="mut mono" style="padding:18px;text-align:center">Could not load — try again shortly.</td></tr>';return;}
+    var bk=r.body.bookings||[];
+    if(!bk.length){tb.innerHTML=pbEmpty(6,'Nothing running yet','Launch a workload and it shows up here.','/app','Launch a job');return;}
+    var live=bk.filter(function(b){return LIVE[b.status];});
+    var rows=(live.length?live:bk.slice(0,5));
+    tb.innerHTML=rows.map(function(b){
+      return '<tr><td class="mono" data-l="Instance">#'+b.id+'</td>'+
+        '<td data-l="GPU">'+esc(b.gpu_model||'—')+'</td>'+
+        '<td data-l="Role"><span class="badge">'+esc(b.role)+'</span></td>'+
+        '<td class="mono" data-l="Hours">'+b.hours+'h</td>'+
+        '<td class="mono" data-l="Amount">'+money(b.gross_amount)+'</td>'+
+        '<td data-l="Status"><span class="badge '+(LIVE[b.status]?'ok':'')+'">'+esc(b.status)+'</span></td></tr>';
+    }).join('');
+  }
+  async function loadNodes(u){
+    if(!u.nodes){return;}
+    el('c_nodesec').style.display='';
+    var r=await api('/account/specs');var tb=el('c_noderows');
+    if(!r.ok){tb.innerHTML='<tr><td colspan="5" class="mut mono" style="padding:16px;text-align:center">Could not load.</td></tr>';return;}
+    var ns=r.body.specs||[];
+    if(!ns.length){tb.innerHTML=pbEmpty(5,'No GPUs listed','Turn idle hardware into income.','/install','List your GPU');return;}
+    tb.innerHTML=ns.map(function(s){var online=s.status==='online';
+      return '<tr><td data-l="GPU" style="font-family:var(--disp);font-weight:600">'+esc(s.gpu_model||'CPU')+'</td>'+
+        '<td data-l="Status"><span class="badge '+(online?'ok':'')+'">'+(online?'online':esc(s.status||'offline'))+'</span>'+(s.attested?' <span class="badge ok">verified</span>':'')+'</td>'+
+        '<td class="mono" data-l="$/hr">$'+Number(s.price_per_hour).toFixed(2)+'</td>'+
+        '<td class="mut mono" data-l="Region">'+esc(s.region||'—')+'</td>'+
+        '<td class="mono" data-l="Jobs">'+s.jobs_completed+'</td></tr>';
+    }).join('');
+  }
+  boot();
+})();
 </script>""")
 
 

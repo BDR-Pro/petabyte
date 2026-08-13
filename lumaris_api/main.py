@@ -111,7 +111,7 @@ from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
                    PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TEMPLATES_HTML,
                    CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML,
-                   SELLER_EARNINGS_HTML, RESET_HTML, BUY_HTML, FUNDING_VIEW_HTML)
+                   SELLER_EARNINGS_HTML, RESET_HTML, BUY_HTML, FUNDING_VIEW_HTML, CONSOLE_HTML)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
@@ -1317,6 +1317,13 @@ def login_page():
 @app.get("/account", response_class=HTMLResponse)
 def account_page():
     return ACCOUNT_HTML
+
+@app.get("/console", response_class=HTMLResponse)
+def console_page():
+    """The signed-in user's operational console: balance + burn rate, running instances,
+    their GPUs, and quick actions. Data is read client-side from /me, /buyer/spend,
+    /account/bookings and /account/specs — all existing, auth-gated endpoints."""
+    return CONSOLE_HTML
 
 @app.get("/status", response_class=HTMLResponse)
 def status_page():
