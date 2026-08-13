@@ -8,7 +8,7 @@ ENRICHES it so the NEWER screens have data too:
   * spare-disk rental config + usage on some nodes  -> /seller disk UI, /disk/providers
   * idle-mining config + estimate on some nodes      -> idle earnings UI
   * a formed distributed cluster (ranks + rendezvous) -> /cluster, /jobs/manifest
-  * running + migrated VMs with stable addresses      -> /app VM UI, dynamic-DNS story
+  * running + migrated VMs with stable addresses      -> /console Compute tab, dynamic-DNS story
 
 HONESTY (same rules as demo.py, enforced by demo_test.py):
   * Every base entity is stamped is_demo=True and reported SEPARATELY from real data; the UI badges
@@ -164,7 +164,7 @@ def main(argv):
     print(f"    spare-disk rental ... {disk['disk']} node(s) contributing  ->  /seller disk UI, /disk/providers")
     print(f"    idle mining ......... {disk['idle']} node(s)                ->  idle earnings UI")
     print(f"    distributed cluster . job #{cluster_id}                     ->  /cluster, /jobs/manifest/{cluster_id}")
-    print(f"    rentable VMs ........ {len(vm_ids)} (1 running, 1 migrated)  ->  /app VM UI (stable address)")
+    print(f"    rentable VMs ........ {len(vm_ids)} (1 running, 1 migrated)  ->  /console VM tab (stable address)")
     print("=" * 68 + "\n")
     return 0
 

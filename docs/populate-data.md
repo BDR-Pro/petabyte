@@ -14,7 +14,7 @@ make populate-demo
 
 # then serve THAT database and open the UI
 cd lumaris_api && DATABASE_URL=sqlite:///../demo.db uvicorn main:app --reload
-# -> http://127.0.0.1:8000/marketplace  ·  /app  ·  /cluster  ·  /metrics  ·  /docs
+# -> http://127.0.0.1:8000/marketplace  ·  /console  ·  /cluster  ·  /metrics  ·  /docs
 ```
 
 Pick a specific file, or add to an existing DB without wiping:
@@ -34,12 +34,12 @@ DATABASE_URL=sqlite:///./ui.db python scripts/populate_demo_data.py
 | Data | Screens it lights up |
 |---|---|
 | Sellers with **verified GPUs** (H100/A100/4090…), benchmarks, regions | `/marketplace`, node/trust pages |
-| Buyers with **funded wallets** | `/app`, checkout |
-| **Bookings + jobs** (completed / running / failed) with explainable routing + settlement + earnings | `/app`, `/metrics`, seller earnings |
+| Buyers with **funded wallets** | `/console` Billing, checkout |
+| **Bookings + jobs** (completed / running / failed) with explainable routing + settlement + earnings | `/console`, `/metrics`, seller earnings |
 | **Spare-disk rental** enabled on some nodes (Storj/BTFS/Sia, GB caps, usage) | seller disk UI, `GET /disk/providers`, `/nodes/{id}/disk` |
 | **Idle mining** config + estimate on some nodes | idle earnings UI |
 | A **distributed cluster** (ranks + rendezvous addresses) | `/cluster`, `/jobs/manifest/{id}` |
-| **Rentable VMs** — one running, one "migrated" (stable address kept) | `/app` VM UI, the dynamic-DNS story |
+| **Rentable VMs** — one running, one "migrated" (stable address kept) | `/console` Compute tab, the dynamic-DNS story |
 
 ## Honesty (same rules as the investor demo, enforced by `demo_test.py`)
 
