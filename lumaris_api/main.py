@@ -4022,6 +4022,50 @@ def admin_overview(me=Depends(require_admin), db: Session = Depends(get_db)):
     }
 
 
+@app.get("/admin/ops")
+def admin_ops(me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Extended operational snapshot for the admin console: live marketplace utilization,
+    VMs, distributed clusters, disk rental, teams, escrowed buyer money, and platform-health
+    invariants (ledger balance + payout backlog). Computed live from authoritative rows."""
+    from db import (SellerSpec, Booking, VMRoute, MultiNodeJob, Organization,
+                    financial_integrity, payout_backlog)
+    online = db.query(SellerSpec).filter(SellerSpec.status == "online").count()
+    avail_units = int(db.query(func.coalesce(func.sum(SellerSpec.available_units), 0))
+                      .filter(SellerSpec.status == "online").scalar() or 0)
+    booked = db.query(VMRoute).filter(
+        VMRoute.status.in_(("starting", "running", "migrating"))).count()
+    capacity = avail_units + booked
+    util = round(100.0 * booked / capacity, 1) if capacity else 0.0
+    vm_migr = int(db.query(func.coalesce(func.sum(VMRoute.migrations), 0)).scalar() or 0)
+    clusters = {s: db.query(MultiNodeJob).filter(
+        MultiNodeJob.kind == "distributed", MultiNodeJob.status == s).count()
+        for s in ("running", "assembling", "complete", "failed")}
+    disk_nodes = db.query(SellerSpec).filter(SellerSpec.disk_enabled == True).count()  # noqa: E712
+    disk_gb = int(db.query(func.coalesce(func.sum(SellerSpec.disk_alloc_gb), 0))
+                  .filter(SellerSpec.disk_enabled == True).scalar() or 0)  # noqa: E712
+    orgs_n = db.query(Organization).count()
+    orgs_bal = float(db.query(func.coalesce(func.sum(Organization.balance), 0)).scalar() or 0)
+    in_escrow = float(db.query(func.coalesce(func.sum(Booking.gross_amount), 0.0)).filter(
+        Booking.status == "escrowed", Booking.test == False).scalar() or 0.0)  # noqa: E712
+    fi = financial_integrity(db)
+    pb = payout_backlog(db)
+    return {
+        "marketplace": {"online": online, "available_units": avail_units,
+                        "booked": booked, "utilization_pct": util},
+        "vms": {"active": booked, "migrations_total": vm_migr},
+        "clusters": clusters,
+        "disk": {"nodes": disk_nodes, "alloc_gb": disk_gb},
+        "teams": {"count": orgs_n, "balance": round(orgs_bal, 2)},
+        "in_escrow": round(in_escrow, 2),
+        "health": {
+            "ledger_balanced": fi["balanced"],
+            "imbalanced_tx": fi["imbalanced_tx"],
+            "payout_backlog": pb.get("unbatched", 0),
+            "payout_backlog_age_hours": round((pb.get("oldest_age_seconds", 0) or 0) / 3600.0, 1),
+        },
+    }
+
+
 @app.get("/admin/users")
 def admin_users(me=Depends(require_admin), db: Session = Depends(get_db),
                 q: Optional[str] = None, limit: int = Query(100, le=500)):

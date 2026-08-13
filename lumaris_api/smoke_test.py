@@ -2240,6 +2240,16 @@ ok("admin overview requires auth", c.get("/admin/overview").status_code==401)
 ok("admin overview blocks non-admin", c.get("/admin/overview", headers=NAH).status_code==403)
 _ao=c.get("/admin/overview", headers=GAH)
 ok("admin overview ok for admin", _ao.status_code==200 and {"users","specs","jobs","payouts_pending"} <= set(_ao.json()))
+# --- admin operational snapshot (Live operations tiles + platform-health invariants) ---
+ok("admin ops requires auth", c.get("/admin/ops").status_code==401)
+ok("admin ops blocks non-admin", c.get("/admin/ops", headers=NAH).status_code==403)
+_aops=c.get("/admin/ops", headers=GAH)
+ok("admin ops returns the operational snapshot for admins",
+   _aops.status_code==200 and {"marketplace","vms","clusters","disk","teams","in_escrow","health"} <= set(_aops.json()))
+_aopsb=_aops.json()
+ok("admin ops surfaces the ledger-balance health invariant",
+   "ledger_balanced" in _aopsb["health"] and "payout_backlog" in _aopsb["health"]
+   and isinstance(_aopsb["marketplace"].get("utilization_pct"), (int, float)))
 ok("admin whoami true for admin", c.get("/admin/whoami", headers=GAH).json().get("admin")==True)
 ok("admin whoami 403 for non-admin", c.get("/admin/whoami", headers=NAH).status_code==403)
 # --- DATA MOAT: the GPU-authenticity training dataset is collected + admin-exportable ---

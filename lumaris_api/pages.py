@@ -1322,7 +1322,33 @@ ADMIN_HTML = _page("Petabyte — admin", """
     <div class="panel" style="margin-top:12px;padding:16px 18px;display:flex;flex-wrap:wrap;gap:22px;align-items:center">
       <div><span class="mini">Platform revenue</span><div class="mono teal" style="font-size:18px;font-weight:600" id="a_rev">—</div></div>
       <div><span class="mini">Payouts pending</span><div class="mono amber" style="font-size:18px;font-weight:600" id="a_pend">—</div></div>
+      <div style="margin-inline-start:auto"><span class="mini" id="a_asof"></span></div>
     </div>
+  </div>
+
+  <div class="wrap" style="padding:14px 22px 2px">
+    <div class="lbl" style="margin-bottom:10px">Live operations</div>
+    <div class="stats">
+      <div class="stat"><div class="l">GPU utilization</div><div class="n teal" id="a_util">—</div><div class="mini" id="a_util_sub"></div></div>
+      <div class="stat"><div class="l">Active VMs</div><div class="n" id="a_vms">—</div><div class="mini" id="a_vms_sub"></div></div>
+      <div class="stat"><div class="l">Clusters running</div><div class="n" id="a_clusters">—</div><div class="mini" id="a_clusters_sub"></div></div>
+      <div class="stat"><div class="l">In escrow</div><div class="n amber" id="a_escrow">—</div><div class="mini" id="a_escrow_sub"></div></div>
+    </div>
+    <div class="stats" style="margin-top:10px">
+      <div class="stat"><div class="l">Disk rental</div><div class="n" id="a_disk">—</div><div class="mini" id="a_disk_sub"></div></div>
+      <div class="stat"><div class="l">Teams</div><div class="n" id="a_teams">—</div><div class="mini" id="a_teams_sub"></div></div>
+      <div class="stat"><div class="l">Ledger</div><div class="n" id="a_ledger">—</div><div class="mini" id="a_ledger_sub"></div></div>
+      <div class="stat"><div class="l">Payout backlog</div><div class="n" id="a_backlog">—</div><div class="mini" id="a_backlog_sub"></div></div>
+    </div>
+  </div>
+
+  <div class="wrap" style="padding:12px 22px 2px">
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <a class="btn btn-ghost" href="/metrics">Marketplace metrics</a>
+      <a class="btn btn-ghost" href="/admin/funding-view">Funding metrics</a>
+      <a class="btn btn-ghost" href="/status">Public status</a>
+    </div>
+    <p class="mini" style="margin-top:8px">Full time-series (per-endpoint latency, error rates, background workers) live in Grafana; these tiles are the at-a-glance operational heartbeat, refreshed every 20s.</p>
   </div>
 
   <div class="wrap" style="padding:22px 22px 4px">
@@ -1416,7 +1442,41 @@ async function boot(){
   document.getElementById('a_rev').textContent=money(o.platform_revenue);
   document.getElementById('a_pend').textContent=o.payouts_pending.count+' · '+money(o.payouts_pending.amount);
   document.getElementById('console').style.display='';
-  loadUsers();loadSpecs();loadPayouts();loadIncidents();loadPayments();loadVideo();
+  loadOps();loadUsers();loadSpecs();loadPayouts();loadIncidents();loadPayments();loadVideo();
+  if(!window._adminTick){window._adminTick=setInterval(function(){loadOverviewTiles();loadOps();},20000);}
+}
+async function loadOverviewTiles(){
+  var ov=await api('/admin/overview');if(!ov.ok)return;var o=ov.body;
+  document.getElementById('a_users').textContent=o.users.total;
+  document.getElementById('a_nodes').textContent=o.specs.online;
+  document.getElementById('a_jobs').textContent=o.jobs.completed;
+  document.getElementById('a_gmv').textContent=money(o.gmv);
+  document.getElementById('a_rev').textContent=money(o.platform_revenue);
+  document.getElementById('a_pend').textContent=o.payouts_pending.count+' · '+money(o.payouts_pending.amount);
+}
+async function loadOps(){
+  var r=await api('/admin/ops');if(!r.ok)return;var o=r.body;
+  var m=o.marketplace||{},h=o.health||{},cl=o.clusters||{},d=o.disk||{},t=o.teams||{},v=o.vms||{};
+  document.getElementById('a_util').textContent=(m.utilization_pct||0)+'%';
+  document.getElementById('a_util_sub').textContent=(m.booked||0)+' booked · '+(m.available_units||0)+' free · '+(m.online||0)+' online';
+  document.getElementById('a_vms').textContent=v.active||0;
+  document.getElementById('a_vms_sub').textContent=(v.migrations_total||0)+' failovers total';
+  document.getElementById('a_clusters').textContent=cl.running||0;
+  document.getElementById('a_clusters_sub').textContent=(cl.complete||0)+' complete · '+(cl.failed||0)+' failed';
+  document.getElementById('a_escrow').textContent=money(o.in_escrow);
+  document.getElementById('a_escrow_sub').textContent='buyer money held';
+  document.getElementById('a_disk').textContent=d.nodes||0;
+  document.getElementById('a_disk_sub').textContent=(d.alloc_gb||0)+' GB pledged';
+  document.getElementById('a_teams').textContent=t.count||0;
+  document.getElementById('a_teams_sub').textContent=money(t.balance)+' pooled';
+  var lg=document.getElementById('a_ledger');
+  lg.textContent=h.ledger_balanced?'balanced':'IMBALANCE';
+  lg.className='n '+(h.ledger_balanced?'teal':'');
+  lg.style.color=h.ledger_balanced?'':'var(--bad)';
+  document.getElementById('a_ledger_sub').textContent=h.ledger_balanced?'debits = credits':((h.imbalanced_tx||0)+' broken tx');
+  document.getElementById('a_backlog').textContent=h.payout_backlog||0;
+  document.getElementById('a_backlog_sub').textContent=(h.payout_backlog?('oldest '+h.payout_backlog_age_hours+'h'):'clear');
+  var asof=document.getElementById('a_asof');if(asof)asof.textContent='updated '+new Date().toLocaleTimeString();
 }
 async function loadPayments(){
   var r=await api('/admin/payments');var tb=document.getElementById('payrows');
