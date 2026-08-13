@@ -3409,9 +3409,11 @@ print(6 * 7)</textarea>
     </div>
 
     <div id="tab-teams" style="display:none">
-      <div class="lbl" style="margin-top:20px">Teams</div>
-      <p class="mut" style="font-size:13.5px;max-width:66ch">Share a wallet across a lab or company and set a hard budget cap so a runaway job can never overspend. Members bill to the team's balance.</p>
-      <div class="panel" style="overflow:auto;margin-top:12px"><table class="tbl"><thead><tr><th>Team</th><th>Your role</th><th>Balance</th><th>Budget cap</th><th>Spent</th><th>Members</th></tr></thead><tbody id="c_orgs"><tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+      <div class="lbl" style="margin-top:20px">Teams &amp; access (IAM)</div>
+      <p class="mut" style="font-size:13.5px;max-width:70ch">Share a wallet across a lab or company and set a hard budget cap so a runaway job can never overspend. Add people to the team, give each a role, and remove them when they leave. Members bill to the team's balance.</p>
+      <p class="mini" style="margin-top:8px;text-transform:none;letter-spacing:0;font-size:12px">Roles — <b class="teal">admin</b>: manage members, funds &amp; budget, and run compute · <b class="teal">billing</b>: add funds &amp; set the budget, and run compute · <b class="teal">member</b>: run compute against the team wallet.</p>
+      <div class="panel" style="overflow:auto;margin-top:12px"><table class="tbl"><thead><tr><th>Team</th><th>Your role</th><th>Balance</th><th>Budget cap</th><th>Spent</th><th>Members</th><th></th></tr></thead><tbody id="c_orgs"><tr><td colspan=7 class="mut mono" style="text-align:center;padding:16px">Loading…</td></tr></tbody></table></div>
+      <div id="c_team_detail" style="display:none;margin-top:16px"></div>
       <div class="card" style="margin-top:16px;max-width:460px">
         <div class="lbl">Create a team</div>
         <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
@@ -3656,17 +3658,70 @@ async function cTeams(){
      '<td data-l="Balance" class="mono">'+cD2(o.balance)+'</td>'+
      '<td data-l="Budget cap" class="mono">'+(o.budget_cap!=null?cD2(o.budget_cap):'&#8734;')+'</td>'+
      '<td data-l="Spent" class="mono">'+cD2(o.spent)+'</td>'+
-     '<td data-l="Members" class="mono">'+cInt(o.members)+'</td></tr>';
-    }).join(''):'<tr><td colspan=6 class="mut mono" style="text-align:center;padding:16px">No teams yet — create one to share a wallet and set a budget cap.</td></tr>';
+     '<td data-l="Members" class="mono">'+cInt(o.members)+'</td>'+
+     '<td data-l=""><button class="btn-ghost" style="padding:4px 12px;font-size:12px" data-act="cTeamOpen" data-a1="'+o.org_id+'">Manage</button></td></tr>';
+    }).join(''):'<tr><td colspan=7 class="mut mono" style="text-align:center;padding:16px">No teams yet — create one to share a wallet and set a budget cap.</td></tr>';
 }
 async function cOrgCreate(){
   var name=((document.getElementById('c_orgname')||{}).value||'').trim();
   var msg=document.getElementById('c_orgmsg');
   if(name.length<2){if(msg)msg.textContent='Team name must be at least 2 characters.';return;}
   var r=await api('/orgs',{method:'POST',body:JSON.stringify({name:name})});
-  if(r.ok){document.getElementById('c_orgname').value='';if(msg)msg.textContent='Created "'+name+'" — you are the admin.';cTeams();}
+  if(r.ok){document.getElementById('c_orgname').value='';if(msg)msg.textContent='Created "'+name+'" — you are the admin.';cTeams();cTeamOpen(r.body.org_id);}
   else{if(msg)msg.textContent=(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not create team.';}
 }
+// ---- IAM: team members management (admins add/remove members and set roles) ----
+async function cTeamOpen(orgId){
+  var box=document.getElementById('c_team_detail');if(!box)return;
+  var r=await api('/orgs/'+orgId);
+  if(!r.ok){box.style.display='';box.innerHTML='<div class="card"><p class="mut">Could not load this team.</p></div>';return;}
+  var o=r.body||{};var isAdmin=(o.your_role==='admin');var mem=o.members||[];
+  var rows=mem.map(function(mm){
+    var roleCell=isAdmin
+      ? '<select data-role-select="1" data-org="'+orgId+'" data-user="'+esc(mm.username)+'">'+
+          ['admin','billing','member'].map(function(rn){return '<option value="'+rn+'"'+(mm.role===rn?' selected':'')+'>'+rn+'</option>';}).join('')+'</select>'
+      : cBadge(mm.role);
+    var rm=isAdmin?'<button class="btn-ghost" style="padding:4px 10px;font-size:11px" data-act="cMemberRemove" data-a1="'+orgId+'" data-a2="'+esc(mm.username)+'">Remove</button>':'';
+    return '<tr><td data-l="Member" class="mono">'+esc(mm.username)+'</td><td data-l="Role">'+roleCell+'</td><td data-l="">'+rm+'</td></tr>';
+  }).join('');
+  var invite=isAdmin
+    ? '<div class="lbl" style="margin-top:16px">Add a member</div>'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">'+
+      '<input id="c_inv_user" placeholder="username" style="flex:1;min-width:150px"/>'+
+      '<select id="c_inv_role"><option value="member">member</option><option value="billing">billing</option><option value="admin">admin</option></select>'+
+      '<button class="btn btn-amber" data-act="cMemberAdd" data-a1="'+orgId+'">Add</button></div>'+
+      '<p class="mini" id="c_inv_msg" style="margin-top:8px;text-transform:none;letter-spacing:0"></p>'
+    : '<p class="mini" style="margin-top:12px;text-transform:none;letter-spacing:0">Only a team admin can add or change members.</p>';
+  box.style.display='';
+  box.innerHTML='<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">'+
+    '<div class="lbl" style="margin:0">Members — '+esc(o.name)+'</div>'+
+    '<span class="mini" style="text-transform:none;letter-spacing:0">balance '+cD2(o.balance)+' · spent '+cD2(o.spent)+' · budget '+(o.budget_cap!=null?cD2(o.budget_cap):'&#8734;')+'</span></div>'+
+    '<div class="panel" style="overflow:auto;margin-top:10px"><table class="tbl"><thead><tr><th>Member</th><th>Role</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    invite+'</div>';
+}
+async function cMemberAdd(orgId){
+  var u=((document.getElementById('c_inv_user')||{}).value||'').trim();
+  var role=(document.getElementById('c_inv_role')||{}).value||'member';
+  var msg=document.getElementById('c_inv_msg');
+  if(!u){if(msg)msg.textContent='Enter a username.';return;}
+  var r=await api('/orgs/'+orgId+'/members',{method:'POST',body:JSON.stringify({username:u,role:role})});
+  if(r.ok){cTeamOpen(orgId);cTeams();}
+  else{if(msg)msg.textContent=(r.body&&typeof r.body.detail==='string'&&r.body.detail)||(r.status===404?'No user with that username.':'Could not add member.');}
+}
+async function cMemberRole(orgId,username,role){
+  var r=await api('/orgs/'+orgId+'/members/'+encodeURIComponent(username),{method:'PUT',body:JSON.stringify({role:role})});
+  if(!r.ok)alert((r.body&&(r.body.detail||r.body.message))||'Could not change role.');
+  cTeamOpen(orgId);cTeams();
+}
+async function cMemberRemove(orgId,username){
+  if(!confirm('Remove '+username+' from this team?'))return;
+  var r=await api('/orgs/'+orgId+'/members/'+encodeURIComponent(username),{method:'DELETE'});
+  if(!r.ok)alert((r.body&&(r.body.detail||r.body.message))||'Could not remove member.');
+  cTeamOpen(orgId);cTeams();
+}
+document.addEventListener('change',function(e){var s=e.target;
+  if(s&&s.getAttribute&&s.getAttribute('data-role-select')!=null){
+    cMemberRole(s.getAttribute('data-org'),s.getAttribute('data-user'),s.value);}});
 
 async function cAccess(){
   var ks=(((await api('/account/keys'))||{}).body||{}).keys||[];

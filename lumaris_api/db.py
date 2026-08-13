@@ -3282,6 +3282,45 @@ def add_org_member(db: Session, org: "Organization", username: str, role: str) -
     return True
 
 
+def org_admin_count(db: Session, org_id: int) -> int:
+    return db.query(OrgMember).filter(OrgMember.org_id == org_id,
+                                      OrgMember.role == "admin").count()
+
+
+def set_org_member_role(db: Session, org_id: int, username: str, role: str) -> str:
+    """Change an existing member's role. Returns a status string the API maps to HTTP:
+    'ok' | 'not_found' (user isn't a member) | 'last_admin' (would leave the org with no admin).
+    An org must always keep at least one admin — demoting the sole admin is refused."""
+    if role not in ("admin", "billing", "member"):
+        raise ValueError("role must be admin|billing|member")
+    u = db.query(User).filter(User.username == username).first()
+    if not u:
+        return "not_found"
+    m = get_membership(db, org_id, u.id)
+    if not m:
+        return "not_found"
+    if m.role == "admin" and role != "admin" and org_admin_count(db, org_id) <= 1:
+        return "last_admin"
+    m.role = role
+    db.add(m); db.commit()
+    return "ok"
+
+
+def remove_org_member(db: Session, org_id: int, username: str) -> str:
+    """Remove a member from an org. Returns 'ok' | 'not_found' | 'last_admin'.
+    Removing the sole admin is refused so an org can never become unmanageable."""
+    u = db.query(User).filter(User.username == username).first()
+    if not u:
+        return "not_found"
+    m = get_membership(db, org_id, u.id)
+    if not m:
+        return "not_found"
+    if m.role == "admin" and org_admin_count(db, org_id) <= 1:
+        return "last_admin"
+    db.delete(m); db.commit()
+    return "ok"
+
+
 def org_deposit(db: Session, org: "Organization", amount: float) -> float:
     if amount <= 0:
         raise ValueError("amount must be positive")

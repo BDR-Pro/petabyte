@@ -91,6 +91,7 @@ from db import (
     webhook_already_processed, credit_user_by_username,
     create_challenge, consume_challenge, set_spec_confidential, spec_confidential_active,
     create_org, get_org, get_membership, org_members, add_org_member, list_orgs_for_user,
+    set_org_member_role, remove_org_member,
     org_deposit, try_org_debit, org_refund, org_usage,
     retry_task, set_task_progress, add_task_log, get_task_logs,
     set_benchmark, create_benchmark_task, org_analytics,
@@ -1062,6 +1063,10 @@ class OrgCreateModel(BaseModel):
 class OrgMemberModel(BaseModel):
     username: str
     role: str = "member"
+
+
+class OrgRoleModel(BaseModel):
+    role: str
 
 
 class OrgDepositModel(BaseModel):
@@ -5184,6 +5189,43 @@ def add_member_endpoint(org_id: int, data: OrgMemberModel,
             raise HTTPException(status_code=404, detail="User not found")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "ok", "members": org_members(db, org_id)}
+
+
+@app.put("/orgs/{org_id}/members/{username}", tags=["account"])
+def set_member_role_endpoint(org_id: int, username: str, data: OrgRoleModel,
+                             user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Change a team member's role (admin only). The org must always keep at least one
+    admin, so demoting the sole admin is refused (409)."""
+    me = get_user_by_username(db, _username(user))
+    m = get_membership(db, org_id, me.id)
+    if not m or m.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    try:
+        res = set_org_member_role(db, org_id, username, data.role)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if res == "not_found":
+        raise HTTPException(status_code=404, detail="Not a member of this team")
+    if res == "last_admin":
+        raise HTTPException(status_code=409, detail="A team must keep at least one admin")
+    return {"status": "ok", "members": org_members(db, org_id)}
+
+
+@app.delete("/orgs/{org_id}/members/{username}", tags=["account"])
+def remove_member_endpoint(org_id: int, username: str,
+                           user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Remove a member from a team (admin only). The sole admin cannot be removed (409),
+    so a team can never be left with no one able to manage it."""
+    me = get_user_by_username(db, _username(user))
+    m = get_membership(db, org_id, me.id)
+    if not m or m.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    res = remove_org_member(db, org_id, username)
+    if res == "not_found":
+        raise HTTPException(status_code=404, detail="Not a member of this team")
+    if res == "last_admin":
+        raise HTTPException(status_code=409, detail="A team must keep at least one admin")
     return {"status": "ok", "members": org_members(db, org_id)}
 
 

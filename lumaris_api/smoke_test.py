@@ -399,6 +399,31 @@ ok("GET /orgs lists the caller's teams for the console Teams panel",
 ok("a non-member does not see that org in their team list",
    all(o["org_id"]!=org_id for o in c.get("/orgs", headers=outsiderh).json().get("orgs", [])))
 
+# ---- IAM: team member role management + removal (console Teams tab) ----
+def _role_of(uname):
+    ms=c.get(f"/orgs/{org_id}", headers=adminh).json().get("members", [])
+    return next((m["role"] for m in ms if m["username"]==uname), None)
+ok("admin promotes a member's role (member -> billing)",
+   c.put(f"/orgs/{org_id}/members/orgmember", headers=adminh, json={"role":"billing"}).status_code==200
+   and _role_of("orgmember")=="billing")
+ok("a non-admin cannot change roles",
+   c.put(f"/orgs/{org_id}/members/orgmember", headers=memberh, json={"role":"admin"}).status_code==403)
+ok("changing the role of a non-member is 404",
+   c.put(f"/orgs/{org_id}/members/outsider", headers=adminh, json={"role":"member"}).status_code==404)
+ok("the sole admin cannot be demoted (org must keep an admin)",
+   c.put(f"/orgs/{org_id}/members/orgadmin", headers=adminh, json={"role":"member"}).status_code==409)
+ok("the sole admin cannot be removed",
+   c.delete(f"/orgs/{org_id}/members/orgadmin", headers=adminh).status_code==409)
+c.put(f"/orgs/{org_id}/members/orgmember", headers=adminh, json={"role":"member"})  # restore
+ok("orgmember restored to member for downstream tests", _role_of("orgmember")=="member")
+# add + remove a throwaway member (leaves state as it was)
+ok("admin adds then removes a member",
+   c.post(f"/orgs/{org_id}/members", headers=adminh, json={"username":"outsider","role":"member"}).status_code==200
+   and c.delete(f"/orgs/{org_id}/members/outsider", headers=adminh).status_code==200
+   and _role_of("outsider") is None)
+ok("a non-admin cannot remove members",
+   c.delete(f"/orgs/{org_id}/members/orgmember", headers=memberh).status_code==403)
+
 # org wallet + budget cap
 c.post("/orgs/{}/deposit".format(org_id), headers=adminh, json={"amount":100.0,"budget_cap":15.0})
 ok("org balance funded", c.get(f"/orgs/{org_id}", headers=adminh).json()["balance"]==100.0)
