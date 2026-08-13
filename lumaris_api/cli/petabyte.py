@@ -7,11 +7,6 @@
   petabyte specs
   petabyte run notebook.ipynb --gpu H100 --hours 1
   petabyte wallet
-  petabyte doctor            # check API URL, connectivity, and sign-in
-
-Human-friendly by default (semantic colour + tables); add --json to any command for
-stable machine-readable output. Colour turns itself off when stdout is not a TTY or
-NO_COLOR is set, so pipes and CI stay clean.
 """
 import argparse
 import json
@@ -20,15 +15,27 @@ import sys
 import time
 
 import httpx
+import os as _os
 
-import cli_ui
+# The model hub (discover/pull/manage models) lives in the sibling `modelhub` package. Make it
+# importable whether the CLI is run as `python cli/petabyte.py` or installed as `petabyte`.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from modelhub import cli as mh_cli
+except Exception:  # noqa: BLE001 — model commands are optional; the compute CLI still works without
+    mh_cli = None
+
+_TTY = hasattr(__import__("sys").stdout, "isatty") and __import__("sys").stdout.isatty() and not _os.getenv("NO_COLOR")
+def _c(txt, code):
+    return f"\033[{code}m{txt}\033[0m" if _TTY else txt
+def _amber(t): return _c(t, "38;5;214")
+def _cyan(t): return _c(t, "38;5;44")
+def _green(t): return _c(t, "38;5;42")
+def _dim(t): return _c(t, "2")
+def _bold(t): return _c(t, "1")
 
 CONFIG = os.getenv("PETABYTE_CONFIG") or os.path.expanduser("~/.petabyte/cli.json")
 DEFAULT_API = os.getenv("PETABYTE_API_URL", "http://localhost:8000")
-
-out = cli_ui.Ui(sys.stdout)
-err = cli_ui.Ui(sys.stderr)
-JSON = False   # set from --json / PETABYTE_JSON; flips every command to machine mode
 
 
 def _cfg():
@@ -39,7 +46,9 @@ def _cfg():
 
 
 def _save(cfg):
-    os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+    d = os.path.dirname(CONFIG)
+    if d:                                   # a bare filename (e.g. PETABYTE_CONFIG=cli.json) has no dir
+        os.makedirs(d, exist_ok=True)
     json.dump(cfg, open(CONFIG, "w"))
 
 
@@ -50,115 +59,63 @@ def _client(cfg, auth=True):
     return httpx.Client(base_url=cfg["api_url"], headers=headers, timeout=30)
 
 
-def _die(msg, r=None, **fields):
-    """Exit non-zero with a readable error (human) or a JSON error object (machine)."""
-    detail = None
+def _die(msg, r=None):
     if r is not None:
-        detail = f"HTTP {r.status_code}: {r.text[:200]}"
-    if JSON:
-        cli_ui.emit_json({"error": msg, "detail": detail, **fields}, sys.stderr)
-    else:
-        err.error(msg, detail=detail, **fields)
+        msg += f" ({r.status_code}: {r.text[:200]})"
+    print(f"error: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
-def _money(v):
-    """Render a money value the same way everywhere: $1,234.50."""
-    try:
-        return "$" + format(float(v), ",.2f")
-    except (TypeError, ValueError):
-        return f"${v}"
-
-
-# --------------------------------------------------------------------- commands
 def cmd_register(a, cfg):
     with _client(cfg, auth=False) as c:
         r = c.post("/register_user", json={"username": a.username, "password": a.password})
-    if r.status_code != 200:
-        _die("Registration failed", r,
-             checks=["username may already be taken", "password must be 8+ characters"])
-    if JSON:
-        cli_ui.emit_json({"registered": True, "username": a.username})
-    else:
-        out.success(f"Registered account '{a.username}'", Next="petabyte login "
-                    f"-u {a.username} -p ******")
+    print("registered" if r.status_code == 200 else _die("register failed", r))
 
 
 def cmd_login(a, cfg):
     with _client(cfg, auth=False) as c:
         r = c.post("/login", data={"username": a.username, "password": a.password})
     if r.status_code != 200:
-        _die("Sign-in failed", r, checks=["wrong username or password",
-                                          "account not registered yet (petabyte register)"])
+        _die("login failed", r)
     cfg["token"] = r.json()["access_token"]
     _save(cfg)
-    if JSON:
-        cli_ui.emit_json({"logged_in": True, "username": a.username})
-    else:
-        out.success(f"Signed in as {a.username}", API=cfg["api_url"])
+    print("logged in")
 
 
 def cmd_deposit(a, cfg):
     with _client(cfg) as c:
         r = c.post("/deposit", json={"amount": a.amount})
-    if r.status_code != 200:
-        _die("Deposit failed", r, checks=["sign in first (petabyte login)"])
-    bal = r.json().get("balance")
-    if JSON:
-        cli_ui.emit_json({"balance": bal})
-    else:
-        out.success(f"Deposited {_money(a.amount)}", Balance=_money(bal))
+    print(f"balance: ${r.json()['balance']}" if r.status_code == 200 else _die("deposit failed", r))
 
 
 def cmd_wallet(a, cfg):
     with _client(cfg) as c:
         r = c.get("/wallet")
     if r.status_code != 200:
-        _die("Could not load wallet", r, checks=["sign in first (petabyte login)"])
+        _die("wallet failed", r)
     w = r.json()
-    if JSON:
-        cli_ui.emit_json(w)
-        return
-    out.panel("Wallet", [
-        ("Balance", _money(w.get("balance", 0))),
-        ("Earnings", _money(w.get("earnings", 0))),
-    ])
+    print(f"balance:  ${w['balance']}\nearnings: ${w['earnings']}")
 
 
 def cmd_specs(a, cfg):
     with _client(cfg) as c:
         r = c.get("/specs")
     if r.status_code != 200:
-        _die("Could not list GPUs", r, checks=["sign in first (petabyte login)"])
-    specs = r.json().get("specs", [])
-    if JSON:
-        cli_ui.emit_json(specs)
-        return
+        _die("specs failed", r)
+    specs = r.json()["specs"]
     if not specs:
-        out.info("No bookable GPUs are online right now.")
-        out.line(out.dim("  A GPU appears here once a seller node is attested and online."))
+        print("no bookable GPUs available right now")
         return
-    rows = []
+    print(_dim(f"  {'ID':>3}  {'GPU':<10} {'$/HR':>7}  {'UNITS':>5}  {'REP':>3}  PROVIDER"))
     for sp in specs:
         rep = sp.get("reputation_score", sp.get("reputation"))
         tags = []
-        if sp.get("confidential"):
-            tags.append(out.amber("confidential"))
-        if sp.get("region_verified"):
-            tags.append(out.cyan("region" + out.icon("ok")))
-        rows.append([
-            sp["spec_id"],
-            sp.get("gpu_model") or "CPU",
-            _money(sp["price_per_hour"]) + "/hr",
-            sp.get("available_units"),
-            rep,
-            sp.get("provider"),
-            " ".join(tags),
-        ])
-    out.table(["ID", "GPU", "PRICE", "UNITS", "REP", "PROVIDER", ""], rows,
-              aligns=["r", "l", "r", "r", "r", "l", "l"])
-    out.line(out.dim(f"\n  {len(specs)} GPU{'s' if len(specs) != 1 else ''} available "
-                     f"· cheapest first · book with: petabyte run <file> --gpu <model>"))
+        if sp.get("confidential"): tags.append(_amber("confidential"))
+        if sp.get("region_verified"): tags.append(_cyan("region\u2713"))
+        line = (f"  {sp['spec_id']:>3}  {_bold(str(sp['gpu_model'] or 'CPU')):<10} "
+                f"{_amber('$'+format(sp['price_per_hour'],'.2f')):>7}  "
+                f"{sp['available_units']:>5}  {rep:>3}  {sp['provider']}")
+        print(line + ("  " + " ".join(tags) if tags else ""))
 
 
 def _read_code(path):
@@ -170,180 +127,217 @@ def _read_code(path):
 
 
 def cmd_run(a, cfg):
-    try:
-        code = _read_code(a.file)
-    except FileNotFoundError:
-        _die(f"File not found: {a.file}")
+    code = _read_code(a.file)
     with _client(cfg) as c:
+        # pick a spec
         spec_id = a.spec
-        chosen = None
         if not spec_id:
-            specs = c.get("/specs").json().get("specs", [])
+            sr = c.get("/specs")
+            if sr.status_code != 200:       # e.g. 401/5xx — don't .json() a non-OK body
+                _die("could not list GPUs", sr)
+            specs = sr.json().get("specs", [])
             if a.gpu:
                 specs = [s for s in specs if (s["gpu_model"] or "").lower() == a.gpu.lower()]
             if not specs:
-                _die("No matching GPU is available right now",
-                     checks=[f"try a different --gpu (you asked for {a.gpu})" if a.gpu
-                             else "no seller nodes are online", "petabyte specs — see what's online"])
-            chosen = specs[0]                       # cheapest (list is price-sorted)
-            spec_id = chosen["spec_id"]
-            if not JSON:
-                out.step(f"Selected GPU {chosen['gpu_model']} "
-                         f"@ {_money(chosen['price_per_hour'])}/hr (spec {spec_id})")
-        r = c.post("/request_vm", json={"spec_id": spec_id, "hours": a.hours})
+                _die("no matching GPU available")
+            spec_id = specs[0]["spec_id"]   # cheapest (list is price-sorted)
+            print(_dim(f"→ selected spec {spec_id} ({specs[0]['gpu_model']} @ ${specs[0]['price_per_hour']}/hr)"))
+        # book (optionally on a private WireGuard VPN — the buyer chooses)
+        want_vpn = bool(getattr(a, "vpn", False))
+        r = c.post("/request_vm", json={"spec_id": spec_id, "hours": a.hours, "vpn": want_vpn})
         if r.status_code != 200:
-            _die("Booking failed", r, checks=["enough balance? petabyte wallet",
-                                             "GPU may have just gone offline"])
+            _die("booking failed", r)
         bk = r.json()
-        if not JSON:
-            out.step(f"Booked #{bk['booking_id']} — escrowed {_money(bk['gross_amount'])} "
-                     f"(fee {_money(bk['platform_fee'])}, seller {_money(bk['seller_payout'])})",
-                     done=True)
+        print(f"booked #{bk['booking_id']}  escrow ${bk['gross_amount']} "
+              f"(fee ${bk['platform_fee']}, seller ${bk['seller_payout']})")
+        if want_vpn and bk.get("vpn_config_url"):
+            cr = c.get(bk["vpn_config_url"])
+            if cr.status_code == 200:
+                path = f"petabyte-{bk['booking_id']}.conf"
+                with open(path, "w") as f:
+                    f.write(cr.text)
+                print(_green(f"✓ VPN config written to {path}") +
+                      _dim(f"  → connect with:  sudo wg-quick up ./{path}"))
+            else:
+                print(_amber("! could not fetch VPN config (booking still active)"))
+        # create task
         r = c.post("/create_task", json={"booking_id": bk["booking_id"],
                                          "task_type": "notebook", "code": code})
         if r.status_code != 200:
-            _die("Task creation failed", r)
+            _die("task creation failed", r)
         tid = r.json()["task_id"]
-        if not JSON:
-            out.step(f"Dispatched task #{tid} — waiting for a node to execute…")
+        print(f"dispatched task #{tid} — waiting for a node to execute...")
+        # poll
         deadline = time.time() + a.timeout
         while time.time() < deadline:
             t = c.get(f"/tasks/{tid}").json()
             if t["status"] in ("completed", "failed"):
-                if JSON:
-                    cli_ui.emit_json({"booking_id": bk["booking_id"], "task_id": tid,
-                                      "status": t["status"], "result": t.get("result")})
-                    return
-                out.blank()
-                if t["status"] == "completed":
-                    out.success(f"Task #{tid} completed")
-                else:
-                    err.error(f"Task #{tid} failed")
-                out.line(out.dim("  ── output " + "─" * 40))
-                out.line(t.get("result") or out.dim("(no output)"))
-                sys.exit(0 if t["status"] == "completed" else 1)
+                hdr = _green("\u2713 COMPLETED") if t["status"]=="completed" else _amber("\u2717 FAILED")
+                print(f"\n{hdr}")
+                print(t.get("result") or "(no output)")
+                return
             time.sleep(2)
-        _die(f"Timed out after {a.timeout}s waiting for task #{tid}",
-             checks=["the node may be slow — the job is still booked",
-                     f"petabyte specs and re-check, or raise --timeout"])
+        print("timed out waiting for result", file=sys.stderr)
 
 
-def cmd_doctor(a, cfg):
-    """Diagnose the CLI's environment: API URL, connectivity, and sign-in state."""
-    api = cfg["api_url"]
-    checks = []
+def cmd_vpn(a, cfg):
+    """Download (or re-download) the WireGuard client config for a VPN-enabled booking."""
+    with _client(cfg) as c:
+        r = c.get(f"/vpn_config/{a.booking_id}")
+        if r.status_code != 200:
+            _die("no VPN config for that booking (was it booked with --vpn?)", r)
+        path = a.out or f"petabyte-{a.booking_id}.conf"
+        with open(path, "w") as f:
+            f.write(r.text)
+        print(_green(f"✓ VPN config written to {path}"))
+        print(_dim(f"  connect:  sudo wg-quick up ./{path}      disconnect:  sudo wg-quick down ./{path}"))
 
-    def record(name, ok, detail):
-        checks.append({"check": name, "ok": bool(ok), "detail": detail})
 
-    # 1) reachability
-    reachable, health_detail = False, ""
-    try:
-        with _client(cfg, auth=False) as c:
-            t0 = time.time()
-            hr = c.get("/healthz")
-            ms = int((time.time() - t0) * 1000)
-            reachable = hr.status_code < 500
-            health_detail = f"HTTP {hr.status_code} in {ms}ms"
-    except Exception as e:
-        health_detail = f"{type(e).__name__}: {e}"
-    record("API reachable", reachable, health_detail)
-
-    # 2) sign-in
-    signed_in, who = False, "not signed in"
-    if cfg.get("token"):
-        try:
-            with _client(cfg) as c:
-                me = c.get("/me")
-            if me.status_code == 200:
-                signed_in = True
-                who = me.json().get("username", "?")
-            else:
-                who = f"token rejected (HTTP {me.status_code}) — petabyte login"
-        except Exception as e:
-            who = f"{type(e).__name__}: {e}"
-    record("Signed in", signed_in, who)
-
-    # 3) marketplace
-    online, mk_detail = None, ""
-    try:
-        with _client(cfg, auth=False) as c:
-            mk = c.get("/marketplace/specs")
-        if mk.status_code == 200:
-            data = mk.json()
-            data = data if isinstance(data, list) else data.get("specs", [])
-            online = len(data)
-            mk_detail = f"{online} GPU(s) online"
-    except Exception as e:
-        mk_detail = f"{type(e).__name__}: {e}"
-    record("Marketplace", online is not None, mk_detail)
-
-    healthy = reachable
-    if JSON:
-        cli_ui.emit_json({"api_url": api, "healthy": healthy, "checks": checks})
-        sys.exit(0 if healthy else 1)
-
-    out.heading("petabyte doctor")
-    out.kv("API URL", api, width=14)
-    for ch in checks:
-        state = "ok" if ch["ok"] else ("warning" if ch["check"] == "Signed in" else "failed")
-        out.line(f"{out.status_label(state):<22} {out.dim(ch['check'])}  {ch['detail']}")
-    out.blank()
-    if healthy:
-        out.success("Environment looks healthy.")
+def cmd_earnings(a, cfg):
+    """Seller payout state: balance, withdrawable earnings, what's still clearing, recent payouts."""
+    with _client(cfg) as c:
+        w = c.get("/wallet")
+        if w.status_code != 200:
+            _die("wallet failed", w)
+        w = w.json()
+        pays = c.get("/wallet/payouts")
+    print(_bold("Earnings"))
+    print(f"  balance:      {_amber('$' + format(w['balance'], '.2f'))}")
+    print(f"  earnings:     ${format(w['earnings'], '.2f')}")
+    print(f"  withdrawable: {_green('$' + format(w['withdrawable'], '.2f'))}")
+    print(f"  clearing:     ${format(w['clearing'], '.2f')}  " + _dim(f"(held {w['hold_hours']}h)"))
+    print("  instant payout: " + (_green('eligible') if w.get('instant_eligible') else _dim('not yet')))
+    if pays.status_code == 200 and pays.json().get("payouts"):
+        print(_dim("\n  recent payouts:"))
+        print(_dim(f"    {'AMOUNT':>10}  {'KIND':<12} {'STATUS':<10} WHEN"))
+        for p in pays.json()["payouts"][:8]:
+            print(f"    {'$' + format(p['amount_usd'], '.2f'):>10}  {str(p['kind'])[:12]:<12} "
+                  f"{str(p['status'])[:10]:<10} {str(p['created_at'])[:10]}")
     else:
-        err.error("Cannot reach the API",
-                  reason=f"{api} did not respond.",
-                  checks=["is PETABYTE_API_URL correct?",
-                          "is the server running / is the URL public?"],
-                  run="petabyte --api <url> doctor")
-    sys.exit(0 if healthy else 1)
+        print(_dim("\n  no payouts yet — add a payout method on the earnings page, then `withdraw`."))
 
 
-def main(argv=None):
-    global JSON
-    p = argparse.ArgumentParser(
-        prog="petabyte",
-        description="Book GPU compute and run a notebook in one command.",
-        epilog="Set PETABYTE_API_URL or pass --api to point at a server. "
-               "Add --json for machine-readable output. NO_COLOR disables colour.")
-    p.add_argument("--api", metavar="URL", help="API base URL (overrides saved config)")
-    p.add_argument("--json", action="store_true",
-                   help="machine-readable JSON output (stable; no colour)")
-    sub = p.add_subparsers(dest="cmd", required=True, metavar="<command>")
+def _node_status(a, cfg):
+    sid = a.spec_id
+    with _client(cfg) as c:
+        dash = c.get("/seller/dashboard")
+        if dash.status_code != 200:
+            _die("dashboard failed", dash)
+        dash = dash.json()
+        models = c.get(f"/nodes/{sid}/models")
+        disk = c.get(f"/nodes/{sid}/disk")
+    node = next((n for n in dash.get("nodes", []) if n.get("spec_id") == sid), None)
+    if not node:
+        _die(f"node {sid} not found (is it one of yours?)")
+    on = _green("online") if node["online"] else _amber("offline")
+    att = _green("attested") if node["attested"] else _amber("unverified")
+    print(_bold(f"Node {sid}") + f"  {node.get('gpu_model') or 'CPU'}  [{on} · {att}]")
+    sug = _dim(f"  (suggested ${format(node['suggested_price'], '.2f')})") if node.get("suggested_price") else ""
+    print(f"  price:        ${format(node['price_per_hour'], '.2f')}/hr" + sug)
+    print(f"  units:        {node['units_busy']}/{node['units_total']} busy  ({node['utilization_pct']}% util)")
+    succ = f"  ({node['success_rate']}% success)" if node.get("success_rate") is not None else ""
+    print(f"  jobs:         {node['jobs_completed']} done · {node['jobs_failed']} failed" + succ)
+    print(f"  reputation:   {node['reputation']}")
+    print(f"  earned:       {_green('$' + format(node['earned_total'], '.2f'))}")
+    print(f"  last seen:    {node.get('last_seen') or 'never'}")
+    if models.status_code == 200:
+        ms = models.json().get("models", [])
+        if ms:
+            print(f"  models cached: {len(ms)}" + _dim("  " + ", ".join(ms[:6]) + (" …" if len(ms) > 6 else "")))
+        else:
+            print("  models cached: 0" + _dim(f"  (run: petabyte node sync-models {sid})"))
+    if disk.status_code == 200 and disk.json().get("enabled"):
+        d = disk.json()
+        print(f"  disk rental:  {d['provider']} up to {d['alloc_gb']} GB")
+    for b in [x for x in dash.get("blockers", []) if x.get("node") == node.get("id")]:
+        print(_amber("  ! " + b["issue"]) + _dim("  fix: " + b.get("fix", "")))
 
-    s = sub.add_parser("register", help="create an account")
-    s.add_argument("-u", "--username", required=True)
-    s.add_argument("-p", "--password", required=True)
-    s = sub.add_parser("login", help="sign in and save a token")
-    s.add_argument("-u", "--username", required=True)
-    s.add_argument("-p", "--password", required=True)
-    s = sub.add_parser("deposit", help="add funds to your wallet")
-    s.add_argument("amount", type=float, metavar="AMOUNT")
-    sub.add_parser("wallet", help="show balance and earnings")
-    sub.add_parser("specs", help="list bookable GPUs (cheapest first)")
-    s = sub.add_parser("run", help="book the cheapest matching GPU and run a file on it")
-    s.add_argument("file", help="a .ipynb (code cells) or .py file")
-    s.add_argument("--spec", type=int, help="book a specific spec id (skips auto-select)")
-    s.add_argument("--gpu", help="require a GPU model, e.g. H100")
-    s.add_argument("--hours", type=int, default=1, help="max runtime hours (default 1)")
-    s.add_argument("--timeout", type=int, default=120, help="seconds to wait (default 120)")
-    sub.add_parser("doctor", help="check API URL, connectivity, and sign-in")
 
-    a = p.parse_args(argv)
-    JSON = a.json or cli_ui._env_flag("PETABYTE_JSON")
-    if JSON:                                     # machine mode: never colour either stream
-        out.color = err.color = False
+def _node_sync_models(a, cfg):
+    """Scan the local ~/.petabyte model cache and report the ids to the marketplace, so the
+    scheduler prefers THIS node for jobs that need a model it already holds."""
+    try:
+        from modelhub import ModelManager
+    except Exception:  # noqa: BLE001
+        _die("model hub not available on this machine (cannot scan the local cache)")
+    ids = ModelManager().cached_model_ids()
+    with _client(cfg) as c:
+        r = c.post("/nodes/models", json={"spec_id": a.spec_id, "models": ids})
+    if r.status_code != 200:
+        _die("sync failed", r)
+    n = r.json().get("cached_models", 0)
+    print(_green(f"✓ reported {n} cached model(s)") + _dim(f" for node {a.spec_id}"))
+    for m in ids[:12]:
+        print(_dim("    " + m))
+    if not ids:
+        print(_dim("    (local cache is empty — pull a model first: petabyte model pull <id>)"))
+
+
+def cmd_node(a, cfg):
+    {"status": _node_status, "sync-models": _node_sync_models}[a.node_cmd](a, cfg)
+
+
+def main():
+    p = argparse.ArgumentParser(prog="petabyte")
+    p.add_argument("--api", help="API base URL (overrides saved config)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("register"); s.add_argument("-u", "--username", required=True); s.add_argument("-p", "--password", required=True)
+    s = sub.add_parser("login");    s.add_argument("-u", "--username", required=True); s.add_argument("-p", "--password", required=True)
+    s = sub.add_parser("deposit");  s.add_argument("amount", type=float)
+    sub.add_parser("wallet")
+    sub.add_parser("specs")
+    s = sub.add_parser("run", help="run a notebook/.py on a rented GPU, OR start a model runtime")
+    s.add_argument("file", help="a .ipynb/.py file (compute job) OR a model id like Qwen/Qwen3-8B")
+    s.add_argument("--spec", type=int); s.add_argument("--gpu")
+    s.add_argument("--hours", type=int, default=1); s.add_argument("--timeout", type=int, default=120)
+    s.add_argument("--vpn", action="store_true",
+                   help="rent on a private WireGuard VPN and save the client config")
+    s.add_argument("--revision"); s.add_argument("--format"); s.add_argument("--quantization")
+    s.add_argument("--force", action="store_true")
+    s = sub.add_parser("vpn", help="download the WireGuard config for a VPN booking")
+    s.add_argument("booking_id", type=int); s.add_argument("-o", "--out")
+
+    # seller: read node/payout state, and feed the model cache-locality signal
+    sub.add_parser("earnings", help="your balance, withdrawable earnings and recent payouts")
+    n = sub.add_parser("node", help="inspect a node you host")
+    ns = n.add_subparsers(dest="node_cmd", required=True)
+    st = ns.add_parser("status", help="node status: online/attested, utilization, jobs, earnings")
+    st.add_argument("spec_id", type=int)
+    sm = ns.add_parser("sync-models",
+                       help="scan the local ~/.petabyte cache and report it to the marketplace")
+    sm.add_argument("spec_id", type=int)
+
+    # model hub: discover/pull/manage AI models (Hugging Face-grade UX). Owns `model`, `pull`, `auth`;
+    # `run` is shared with the compute flow above and dispatched smartly below.
+    if mh_cli is not None:
+        mh_cli.register(sub, include=("model", "pull", "auth"))
+
+    a = p.parse_args()
     cfg = _cfg()
     if a.api:
         cfg["api_url"] = a.api
-    handlers = {"register": cmd_register, "login": cmd_login, "deposit": cmd_deposit,
-                "wallet": cmd_wallet, "specs": cmd_specs, "run": cmd_run, "doctor": cmd_doctor}
-    try:
-        handlers[a.cmd](a, cfg)
-    except httpx.HTTPError as e:
-        _die("Network error talking to the API", reason=str(e),
-             checks=[f"is {cfg['api_url']} reachable?", "petabyte doctor"])
+
+    if mh_cli is not None and a.cmd in ("model", "pull", "auth"):
+        sys.exit(mh_cli.handle(a) or 0)
+    if a.cmd == "run" and _is_model_ref(a.file):
+        if mh_cli is None:
+            _die("model runtime unavailable (modelhub not importable)")
+        ns = __import__("argparse").Namespace(
+            id=a.file, format=a.format, quantization=a.quantization, revision=a.revision,
+            force=a.force, home=None)
+        sys.exit(mh_cli.cmd_run(ns) or 0)
+    {"register": cmd_register, "login": cmd_login, "deposit": cmd_deposit,
+     "wallet": cmd_wallet, "specs": cmd_specs, "run": cmd_run, "vpn": cmd_vpn,
+     "earnings": cmd_earnings, "node": cmd_node}[a.cmd](a, cfg)
+
+
+def _is_model_ref(arg):
+    """`run` overloads a file path and a model id. A model id has a source/slug shape and is NOT an
+    existing local file or a notebook/script."""
+    if os.path.exists(arg) or arg.endswith((".ipynb", ".py")):
+        return False
+    return ("/" in arg) or (":" in arg) or arg.startswith(("hf:", "pt:", "http://", "https://"))
 
 
 if __name__ == "__main__":

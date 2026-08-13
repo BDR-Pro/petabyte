@@ -17,3 +17,9 @@ dependencies = [
     "sqlalchemy>=2.0.41",
     "uvicorn>=0.35.0",
 ]
+
+# The `petabyte` command: compute (register/login/run) + the model hub (model pull/list/...).
+# The model hub itself is pure-stdlib, so this needs no extra dependency.
+[project.scripts]
+petabyte = "cli.petabyte:main"
+petabyte-models = "modelhub.cli:main"

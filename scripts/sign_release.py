@@ -62,6 +62,13 @@ def gen_private_key(path: str) -> Ed25519PrivateKey:
                             serialization.PrivateFormat.PKCS8,
                             serialization.NoEncryption())
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # The mode arg to os.open only applies when CREATING the file (and is masked by umask). If the
+    # path already existed with looser perms, truncating it keeps them — so force 0600 on the fd.
+    if hasattr(os, "fchmod"):
+        try:
+            os.fchmod(fd, 0o600)
+        except OSError:
+            pass   # non-POSIX (Windows); the signer runs on Linux/CI where this holds
     with os.fdopen(fd, "wb") as f:
         f.write(pem)
     return key

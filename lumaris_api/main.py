@@ -1,17 +1,19 @@
 from fastapi import (
     FastAPI, Depends, HTTPException, Query, Header, Security, Request, WebSocket,
-    WebSocketDisconnect, Body,
+    WebSocketDisconnect, Body, Form,
 )
 from fastapi.responses import PlainTextResponse, JSONResponse, Response, HTMLResponse, RedirectResponse
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func, case, or_, distinct
+from sqlalchemy import text, func, case, or_, and_, distinct, cast, Float
 from pydantic import BaseModel, Field, field_validator, model_validator
 from contextlib import asynccontextmanager
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
+import copy
+import hashlib
 import json
 import logging
 from decimal import Decimal
@@ -61,7 +63,10 @@ obsmod.init_observability(obsmod.SERVICE.API)
 from utils import (
     gen_wg_keypair, build_client_wg_config, apply_peer_to_interface,
     gen_secure_api_key, decode_api_key, verify_attestation, verify_signed_proof,
+    seal_secret, open_secret,
+    s3_put_bytes, s3_get_bytes, s3_delete, s3_exists,
 )
+import totp
 from db import (
     D, q, qc, Money, BookingsPaused, SellerSpec, Booking, list_payout_methods, VMRoute, bookings_are_paused, set_bookings_paused, audit,
     start_email_verification, confirm_email, is_disposable_email, redact_destination,
@@ -77,6 +82,9 @@ from db import (
     try_reserve_unit, release_unit, create_booking, get_booking_by_id,
     revoke_jti, is_jti_revoked, add_wg_peer,
     record_issued_key, list_issued_keys, get_or_create_oauth_user,
+    create_install_token, resolve_install_token,
+    meter_data_call, usage_summary, record_price_snapshot, price_history, _live_price_index,
+    data_api_revenue,
     idem_begin, idem_finish, idem_abort,
     create_task, claim_next_task, get_task_for_agent, mark_task_running,
     submit_task_result, get_booking_for_buyer,
@@ -85,8 +93,14 @@ from db import (
     deposit, try_debit, book_with_escrow, mark_booking_active,
     release_booking, refund_booking, settle_dead_specs, get_or_create_platform,
     webhook_already_processed, credit_user_by_username,
-    create_challenge, consume_challenge, set_spec_confidential,
-    create_org, get_org, get_membership, org_members, add_org_member,
+    create_challenge, consume_challenge, set_spec_confidential, spec_confidential_active,
+    create_org, get_org, get_membership, org_members, add_org_member, list_orgs_for_user,
+    set_org_member_role, remove_org_member,
+    list_audit_for_actor, list_audit_for_org, verify_audit_chain,
+    set_totp_secret, enable_totp, disable_totp, hash_backup_code, consume_backup_code,
+    create_volume, get_volume, list_volumes, volume_blob_shas, volume_blob_exists,
+    register_volume_blob, plan_snapshot, finalize_snapshot, list_snapshots, get_snapshot,
+    restore_manifest, delete_volume,
     org_deposit, try_org_debit, org_refund, org_usage,
     retry_task, set_task_progress, add_task_log, get_task_logs,
     set_benchmark, create_benchmark_task, org_analytics,
@@ -95,29 +109,39 @@ from db import (
     note_heartbeat, note_job_completed, note_job_failed, note_fraud,
     compute_reputation, recent_rep_events, trust_level_for,
     set_idle_fallback, record_idle_report, idle_credited_total,
+    set_disk_rental, delete_disk_rental, record_disk_report, disk_credited_total,
+    disk_node_name, DISK_PROVIDERS,
+    set_spec_cached_models, spec_cached_models, specs_with_model_cached, rank_specs_for_model,
     add_payout_method, list_payout_methods, get_payout_method,
     request_payout, set_payout_status, list_payouts,
+    withdrawable_earnings, is_payout_matured, EARNINGS_HOLD_HOURS, PAYOUT_MATURITY_MIN_JOBS,
     create_schedule, list_schedules, run_due_schedules,
     list_notifications,
     create_multinode_job, add_job_segment, segment_for_task, complete_segment,
     all_segments_done, segment_output_refs, set_job_status, get_multinode_job,
     job_segments,
+    create_distributed_job, set_rendezvous, rendezvous_info, distributed_job_for_task,
+    rank_for_agent, register_peer, cluster_peers, cluster_ready,
 )
 import db as dbmod
 from auth import create_access_token, verify_token
-from static_dashboard import DASHBOARD_HTML
+# Shared FastAPI dependencies (auth + DB session) live in deps.py so domain routers can use
+# them without importing main. Every Depends(...) below resolves to these same callables.
+from deps import oauth2_scheme, get_current_user, _username, api_key_user  # noqa: F401
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
-                   GAMERS_HTML, ARTISTS_HTML, PRICING_HTML, SECURITY_HTML,
-                   PRIVACY_HTML, TERMS_HTML, AUP_HTML, GPU_DETAIL_HTML, STATUS_HTML, TEMPLATES_HTML,
-                   CONTACT_HTML, NOTFOUND_HTML, DEMO_HTML, METRICS_HTML,
-                   SELLER_EARNINGS_HTML, RESET_HTML, BUY_HTML, FUNDING_VIEW_HTML, CONSOLE_HTML)
+                   NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML)
+from web_routes import router as web_router     # static public pages (extracted router)
+from trust_routes import router as trust_router  # trust/transparency API (extracted router)
+from models_routes import router as models_router  # model hub: discover/pull/manage (extracted router)
 from templates_registry import TEMPLATES, public_catalog
 from router import select_plan
 from payout_providers import screen, get_provider
 import notifications
 RENDER_IMAGE = TEMPLATES['blender']['image']
-FFMPEG_IMAGE = TEMPLATES['ffmpeg']['image']
+# Image for the DEDICATED /transcode + /stitch job paths (NVENC/NVDEC). This is a job type, not a
+# one-click launch template — running the bare image does nothing, so it's not in the catalog.
+FFMPEG_IMAGE = "jrottenberg/ffmpeg:6.1-nvidia"
 from utils import (
     verify_webhook_signature, verify_tee_report, geolocate_country,
     mint_presigned_put, mint_presigned_get, s3_key_for, s3_uri,
@@ -148,6 +172,10 @@ MAILCHIMP_AUDIENCE_ID = os.getenv("MAILCHIMP_AUDIENCE_ID", "").strip()
 # Fallback video shown until an admin sets one in the panel (your Short's ID).
 DEFAULT_LANDING_VIDEO_ID = os.getenv("DEFAULT_LANDING_VIDEO_ID", "UUSWYaxboDA").strip()
 BASE_DOMAIN = os.getenv("BASE_DOMAIN", "petabyte.market")          # for stable VM URLs
+# Per-VM subdomain zone for the hostname-routed SSH/HTTP form (root@<id>.<zone>). Defaults to
+# BASE_DOMAIN (so <id>.petabyte.market, unchanged); set to e.g. "vm.petabyte.market" to put every
+# VM under one wildcard record. See docs/dynamic_dns.md for the DNS setup.
+VM_DNS_ZONE = os.getenv("VM_DNS_ZONE", BASE_DOMAIN)
 
 # The passwords attackers try first. A full HIBP k-anonymity check is the right next
 # step (it needs an outbound call); this blocks the ones that get guessed in seconds.
@@ -162,15 +190,12 @@ GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "")                     # gateway -> 
 PAYMENT_WEBHOOK_SECRET = os.getenv("PAYMENT_WEBHOOK_SECRET", "")
 AWS_REFERENCE_PRICE = os.getenv("AWS_REFERENCE_PRICE", "12.29")
 
-# Per-GPU-class on-demand cloud reference rates (USD/hr, approximate, single-GPU).
-# A savings claim is only honest if it compares LIKE FOR LIKE — quoting an H100-class
-# rate against an RTX 4090 listing would manufacture a fake ~97% "discount". Where we
-# don't recognise the GPU, we show NO savings figure rather than an invented one.
-CLOUD_REFERENCE = {
-    "h100": 12.29, "h200": 14.00, "a100": 4.10, "l40": 1.80, "l4": 0.90,
-    "a10": 1.30, "v100": 3.06, "t4": 0.53, "rtx 4090": 0.80, "4090": 0.80,
-    "rtx 4080": 0.60, "rtx 3090": 0.55, "3090": 0.55, "rtx a6000": 1.60, "a6000": 1.60,
-}
+# Per-GPU-class on-demand cloud reference rates + the fair like-for-like lookup live in
+# pricing_engine (shared by the marketplace savings figures, the auto-price batch, and the
+# recommendation endpoint so there is ONE reference table, no drift). A savings claim is only
+# honest LIKE FOR LIKE — where we don't recognise the GPU, cloud_reference_for returns None and
+# we show NO savings figure rather than an invented one.
+from pricing_engine import CLOUD_REFERENCE, cloud_reference_for  # noqa: E402,F401
 
 
 METRIC_DEFINITIONS = {
@@ -193,17 +218,6 @@ METRIC_DEFINITIONS = {
     "contains_demo_data": "True when the numbers include seeded demo entities. Demo "
                           "and real data are separable via scope=demo|real.",
 }
-
-
-def cloud_reference_for(gpu_model: str):
-    """The on-demand cloud rate for THIS GPU class, or None if we can't compare fairly."""
-    if not gpu_model:
-        return None
-    g = gpu_model.lower()
-    for key in sorted(CLOUD_REFERENCE, key=len, reverse=True):
-        if key in g:
-            return CLOUD_REFERENCE[key]
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +286,17 @@ def _maintenance_cycle() -> None:
         except Exception:  # noqa: BLE001 — never let cleanup break the maintenance cycle
             logger.exception("reclaim_abandoned_reservations cycle failed")
         reprice_specs(db)                # demand-based auto-pricing for opted-in nodes
+        try:
+            reconcile_newsletter(db, limit=50)   # deliver any deferred newsletter signups
+        except Exception:  # noqa: BLE001 — a mailing-list hiccup must not break maintenance
+            logger.exception("newsletter reconcile cycle failed")
+        try:
+            # data-API price history: capture one index snapshot every DATA_SNAPSHOT_INTERVAL_S.
+            if time.time() - _maintenance.get("last_snapshot", 0.0) >= DATA_SNAPSHOT_INTERVAL_S:
+                record_price_snapshot(db)
+                _maintenance["last_snapshot"] = time.time()
+        except Exception:  # noqa: BLE001 — a snapshot hiccup must not break maintenance
+            logger.exception("price snapshot cycle failed")
         _maintenance["last_success"] = time.time()
     finally:
         db.close()
@@ -494,8 +519,6 @@ if _origins:
         allow_methods=["GET", "POST"],
         allow_headers=["Authorization", "Content-Type", "X-API-KEY", "Idempotency-Key"],
     )
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 
 # ---------------------------------------------------------------------------
@@ -901,6 +924,22 @@ class IdleReportModel(BaseModel):
     est_daily_usd: float = 0.0
 
 
+class DiskRentalModel(BaseModel):
+    spec_id: int
+    enabled: bool
+    # provider + alloc_gb are REQUIRED to enable (validated in the handler) — disk rental is an
+    # explicit configured contribution, never a defaulted "fallback".
+    provider: Optional[str] = Field(None, max_length=16)   # storj | btfs | sia
+    alloc_gb: Optional[int] = Field(None, ge=1, le=1_000_000)  # seller's GB cap (>=1)
+
+
+class DiskReportModel(BaseModel):
+    spec_id: int
+    provider: str = Field(max_length=16)
+    used_gb: float = Field(0.0, ge=0)
+    est_daily_usd: float = Field(0.0, ge=0)
+
+
 class EmailModel(BaseModel):
     email: str
     notify_email: bool = True
@@ -916,6 +955,7 @@ class PayoutMethodModel(BaseModel):
 class WithdrawModel(BaseModel):
     method_id: int
     amount: float = Field(gt=0)
+    instant: bool = False           # pay a small fee for immediate cash-out; default = free/scheduled
 
 
 class ScheduleModel(BaseModel):
@@ -1036,6 +1076,72 @@ class OrgMemberModel(BaseModel):
     role: str = "member"
 
 
+class OrgRoleModel(BaseModel):
+    role: str
+
+
+class TotpEnableModel(BaseModel):
+    code: str = Field(min_length=6, max_length=10)
+    password: str
+
+
+class TotpDisableModel(BaseModel):
+    password: str
+    code: Optional[str] = None
+
+
+# ---- Persistent volumes (content-addressed, incremental snapshots) ----
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+class VolumeCreateModel(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    size_limit_gb: Optional[int] = Field(default=None, ge=1, le=1_000_000)
+
+    @field_validator("name")
+    @classmethod
+    def _safe_name(cls, v: str) -> str:
+        return _clean_label(v, field="volume name", maxlen=80, required=True)
+
+
+class SnapshotFileModel(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+    sha256: str
+    size: int = Field(ge=0, le=5_000_000_000_000)   # per-file logical size (<=5 TB)
+
+    @field_validator("sha256")
+    @classmethod
+    def _hex(cls, v: str) -> str:
+        v = str(v or "").strip().lower()
+        if not _SHA256_RE.match(v):
+            raise ValueError("sha256 must be 64 lowercase hex characters")
+        return v
+
+    @field_validator("path")
+    @classmethod
+    def _path(cls, v: str) -> str:
+        v = str(v or "").strip()
+        if not v or "\x00" in v:
+            raise ValueError("path is required")
+        return v
+
+
+class SnapshotPlanModel(BaseModel):
+    # A snapshot manifest is bounded so a single request can't enumerate an unbounded file set.
+    files: list[SnapshotFileModel] = Field(max_length=200_000)
+
+
+class SnapshotCreateModel(BaseModel):
+    files: list[SnapshotFileModel] = Field(max_length=200_000)
+    label: Optional[str] = Field(default=None, max_length=120)
+    vm_id: Optional[str] = Field(default=None, max_length=120)
+
+    @field_validator("label", "vm_id")
+    @classmethod
+    def _safe(cls, v):
+        return _clean_label(v, field="label", maxlen=120, required=False) if v else v
+
+
 class OrgDepositModel(BaseModel):
     amount: float = Field(gt=0)
     budget_cap: Optional[float] = None
@@ -1062,20 +1168,8 @@ class VMDetailsModel(BaseModel):
 
 
 # ------------------- AUTH HELPERS -------------------
-
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
-    try:
-        return verify_token(token)
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-
-def _username(user: dict) -> str:
-    sub = user.get("sub")
-    if not sub:
-        raise HTTPException(status_code=401, detail="Malformed token")
-    return sub
-
+# get_current_user / _username / api_key_user / oauth2_scheme now live in deps.py (imported
+# above) so domain routers can share them without importing main.
 
 # Only these peers may set X-Forwarded-For. If the socket peer isn't a trusted
 # proxy, the header is attacker-controlled: anyone could send
@@ -1214,22 +1308,7 @@ def seller_actor(request: Request, db: Session = Depends(get_db)):
     return owner
 
 
-def api_key_user(x_api_key: str = Header(..., alias="X-API-KEY"),
-                 db: Session = Depends(get_db)):
-    """Authenticate an unattended agent via X-API-KEY (honors revocation)."""
-    try:
-        data = decode_api_key(x_api_key)
-    except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
-    if is_jti_revoked(db, data["jti"]):
-        raise HTTPException(status_code=401, detail="Key revoked")
-    user = get_user_by_username(db, data["u"])
-    if not user:
-        raise HTTPException(status_code=401, detail="Unknown user")
-    user._scopes = data.get("scopes", []) or []
-    user._is_api_key = True          # scopes are an API-KEY concept, not a session one
-    return user
-
+# api_key_user (X-API-KEY agent auth) now lives in deps.py (imported above).
 
 # Keys minted before scopes existed carry none. Treating "no scopes" as FULL ACCESS
 # means a parsing bug, a bad migration, or a truncated field silently becomes root.
@@ -1241,6 +1320,43 @@ FULL_ACCESS = "*"
 # in someone's living room should not be able to move money.
 DEFAULT_KEY_SCOPES = ("node", "jobs")
 LEGACY_KEYS_ARE_FULL_ACCESS = os.getenv("LEGACY_KEYS_FULL_ACCESS", "false").lower() == "true"
+
+# Paid data API: metered, pay-as-you-go against the wallet balance. Each account gets a small
+# monthly TRIAL (not a giveaway); past it, calls cost DATA_API_PRICE_PER_1K/1000 x the endpoint's
+# price weight, debited from the wallet. Premium datasets are priced higher via DATA_API_UNITS.
+DATA_API_FREE_CALLS_MONTH = int(os.getenv("DATA_API_FREE_CALLS_MONTH", "100"))   # monthly trial
+DATA_API_PRICE_PER_1K = float(os.getenv("DATA_API_PRICE_PER_1K", "0.50"))        # base rate / 1k
+DATA_SNAPSHOT_INTERVAL_S = int(os.getenv("DATA_SNAPSHOT_INTERVAL_S", "3600"))
+# Per-endpoint price weight (commodity = 1; premium = higher). A weighted call costs
+# base_price x weight and consumes `weight` of the trial. Tiered, honest monetization.
+DATA_API_UNITS = {
+    "gpu-prices": 1, "market": 1, "availability": 1, "savings": 1,
+    "gpu-prices/history": 2, "workloads": 2,
+    "demand": 4, "templates": 4, "benchmarks": 5,      # premium: realized $ + the data moat
+}
+# A published SANDBOX key: lets developers exercise the real request/auth/response flow FREE and
+# unmetered (no account, no wallet, never charged). Safe to publish — it only unlocks read access.
+# It lives in its OWN namespace (the `pk_sandbox_` prefix) so it can NEVER be confused with, or used
+# in place of, a real minted API key: seller/node/jobs keys are Fernet ciphertext tokens (they start
+# with `gAAAAA`), so a `pk_sandbox_`-prefixed literal can never be a valid real key, and a real key
+# can never look like the sandbox key. We refuse to honour a sandbox value that lacks the prefix
+# (fail-closed) so a real key can't be aliased into free data access by misconfiguration.
+# Distributed (multi-node cluster) jobs: the most GPUs one job may span across DISTINCT nodes.
+MAX_DISTRIBUTED_NODES = int(os.getenv("MAX_DISTRIBUTED_NODES", "100"))
+# Spare-disk rental: hard ceiling on how much disk one node may pledge (safety bound on input).
+MAX_DISK_ALLOC_GB = int(os.getenv("MAX_DISK_ALLOC_GB", "100000"))    # 100 TB
+# Platform commission on storage-network earnings (same shape as NICEHASH_TAKE_RATE).
+STORAGE_TAKE_RATE = float(os.getenv("STORAGE_TAKE_RATE", "0.10"))
+# Honest reference: representative net $/TB/month a node earns on a decentralized storage network,
+# used ONLY for the pre-commit earnings estimate shown to sellers (not a payout figure).
+DISK_REFERENCE_USD_PER_TB_MONTH = float(os.getenv("DISK_REFERENCE_USD_PER_TB_MONTH", "1.5"))
+
+DATA_API_SANDBOX_KEY_PREFIX = "pk_sandbox_"
+DATA_API_SANDBOX_KEY = os.getenv("DATA_API_SANDBOX_KEY", "pk_sandbox_petabyte_dev").strip()
+if DATA_API_SANDBOX_KEY and not DATA_API_SANDBOX_KEY.startswith(DATA_API_SANDBOX_KEY_PREFIX):
+    logger.error("DATA_API_SANDBOX_KEY must start with %r to stay namespaced away from real API "
+                 "keys — disabling the sandbox key until it is fixed.", DATA_API_SANDBOX_KEY_PREFIX)
+    DATA_API_SANDBOX_KEY = ""
 
 
 def require_scope(user, scope: str):
@@ -1276,9 +1392,11 @@ def require_scope(user, scope: str):
 def landing():
     return LANDING_HTML
 
-@app.get("/app", response_class=HTMLResponse)
-def dashboard():
-    return DASHBOARD_HTML.replace("__AWS_REF__", AWS_REFERENCE_PRICE)
+@app.get("/app", include_in_schema=False)
+def dashboard_redirect():
+    # The old standalone buyer dashboard was folded into the unified console. Keep /app as a
+    # permanent redirect so existing links, emails and OAuth bookmarks land on /console.
+    return RedirectResponse(url="/console", status_code=308)
 
 @app.get("/investors", response_class=HTMLResponse)
 def investors_page():
@@ -1286,11 +1404,16 @@ def investors_page():
 
 @app.get("/developers", response_class=HTMLResponse)
 def developers_page():
-    return DEVELOPERS_HTML
+    # The published sandbox key is shown in the docs so devs can try the live endpoints for free.
+    return DEVELOPERS_HTML.replace("{{SANDBOX_KEY}}", DATA_API_SANDBOX_KEY)
 
 @app.get("/install", response_class=HTMLResponse)
 def install_page():
     return INSTALL_HTML
+
+@app.get("/roi", response_class=HTMLResponse)
+def roi_page():
+    return ROI_HTML
 
 @app.get("/keys", response_class=HTMLResponse)
 def keys_page():
@@ -1318,113 +1441,163 @@ def login_page():
 def account_page():
     return ACCOUNT_HTML
 
-@app.get("/console", response_class=HTMLResponse)
-def console_page():
-    """The signed-in user's operational console: balance + burn rate, running instances,
-    their GPUs, and quick actions. Data is read client-side from /me, /buyer/spend,
-    /account/bookings and /account/specs — all existing, auth-gated endpoints."""
-    return CONSOLE_HTML
-
-@app.get("/status", response_class=HTMLResponse)
-def status_page():
-    """Plain service status — honest, generated from live heartbeats."""
-    return HTMLResponse(STATUS_HTML)
-
-@app.get("/metrics", response_class=HTMLResponse)
-def metrics_page():
-    """Investor / operations metrics dashboard (data from /metrics/overview)."""
-    return HTMLResponse(METRICS_HTML)
-
-@app.get("/buy/{public_id}", response_class=HTMLResponse)
-def buy_page(public_id: str):
-    """Browser checkout + run experience for one GPU: the buyer completes the entire
-    Stripe compute-tx lifecycle (authorize -> card -> reserve -> dispatch -> run ->
-    capture -> receipt) without touching an internal endpoint by hand. The spec id is
-    read client-side from the path."""
-    return HTMLResponse(BUY_HTML)
-
-@app.get("/seller/payouts", response_class=HTMLResponse)
-def seller_payouts_page():
-    """Seller Stripe onboarding + earnings/transfers/payouts (data from /payments/*).
-    Distinct from the JSON API at /seller/earnings and /seller/earnings/stripe."""
-    return HTMLResponse(SELLER_EARNINGS_HTML)
-
-@app.get("/templates-catalog", response_class=HTMLResponse)
-@app.get("/catalog", response_class=HTMLResponse)
-def templates_page():
-    return TEMPLATES_HTML
-
-@app.get("/demo", response_class=HTMLResponse)
-@app.get("/book-a-demo", response_class=HTMLResponse)
-def demo_page():
-    return DEMO_HTML
-
-
-@app.get("/contact", response_class=HTMLResponse)
-def contact_page():
-    return CONTACT_HTML
-
-
-@app.get("/pricing", response_class=HTMLResponse)
-def pricing_page():
-    return PRICING_HTML
-
-@app.get("/security", response_class=HTMLResponse)
-def security_page():
-    return SECURITY_HTML
-
-@app.get("/privacy", response_class=HTMLResponse)
-def privacy_page():
-    return PRIVACY_HTML
-
-@app.get("/terms", response_class=HTMLResponse)
-def terms_page():
-    return TERMS_HTML
-
-@app.get("/acceptable-use", response_class=HTMLResponse)
-def aup_page():
-    return AUP_HTML
-
-@app.get("/gpu/{public_id}", response_class=HTMLResponse)
-def gpu_detail_page(public_id: str):
-    return GPU_DETAIL_HTML
-
-@app.get("/gamers", response_class=HTMLResponse)
-def gamers_page():
-    return GAMERS_HTML
-
-@app.get("/artists", response_class=HTMLResponse)
-def artists_page():
-    return ARTISTS_HTML
+# Static public web surface (marketing / legal / trust / status / info) lives in web_routes.py
+# as the first slice of the staged main.py -> domain-routers extraction. Zero DB/auth coupling.
+app.include_router(web_router)
+# Model hub: discover / download / manage open models (pages + /api/models/*). Backed by the
+# provider-independent `modelhub` library — the same code the `petabyte model` CLI uses.
+app.include_router(models_router)
 
 def _find_installer(name: str):
-    """Locate a bundled installer script across dev + deployed layouts."""
+    """Locate a bundled installer script across dev + deployed layouts.
+
+    The CANONICAL source (lumaris_agent/) wins over the deploy-copied installers/ snapshot:
+    a stale committed installers/ copy (e.g. missing the container egress firewall) must never
+    be served ahead of the current, secure agent script — that was a real seller-security
+    regression on Docker/compose deploys. Generated artifacts with no canonical source (the
+    agent.tar.gz bundle) still fall back to installers/."""
     here = os.path.dirname(__file__)
     for cand in (
-        os.path.join(here, "installers", name),        # copied here by deploy.sh/update.sh
-        os.path.join(here, "..", "lumaris_agent", name),  # dev / monorepo checkout
+        os.path.join(here, "..", "lumaris_agent", name),  # canonical source of truth
+        os.path.join(here, "installers", name),           # deploy snapshot / built artifacts
     ):
         if os.path.exists(cand):
             return cand
     return None
 
-@app.get("/install.sh")
-def install_script():
-    """Serve the Linux node installer so the one-liner needs no extra hosting."""
+def _release_pubkey_pem() -> str:
+    """The release verification PUBLIC key (from the PETABYTE_RELEASE_PUBKEY variable, a base64
+    raw Ed25519 key) as a PEM — the form the node's update.sh pins and openssl verifies against.
+    Empty when unset/invalid, which keeps signed auto-update OFF (fail-closed) rather than
+    pinning a bad key."""
+    b64 = os.getenv("PETABYTE_RELEASE_PUBKEY", "").strip()
+    if not b64:
+        return ""
+    try:
+        import base64 as _b64
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from cryptography.hazmat.primitives import serialization as _ser
+        raw = _b64.b64decode(b64, validate=True)
+        if len(raw) != 32:
+            return ""
+        return Ed25519PublicKey.from_public_bytes(raw).public_bytes(
+            _ser.Encoding.PEM, _ser.PublicFormat.SubjectPublicKeyInfo).decode()
+    except Exception:
+        return ""
+
+
+def _render_install_sh(*, api_url=None, api_key=None, price=None):
+    """The Linux installer, ready to serve. Always substitutes the pinned release pubkey. When
+    api_url+api_key are given (token enrollment), prepend exports so the script needs NO env
+    prefix and NO interactive input. Returns None if the installer isn't bundled."""
     path = _find_installer("install.sh")
     if not path:
-        raise HTTPException(status_code=404, detail="installer not bundled")
+        return None
     with open(path) as f:
-        return Response(content=f.read(), media_type="text/x-shellscript")
+        script = f.read()
+    script = script.replace("__PETABYTE_RELEASE_PUBKEY_PEM__", _release_pubkey_pem())
+    if api_url and api_key:
+        head = ["#!/usr/bin/env bash",
+                "# Petabyte token-bound enrollment installer. Do NOT share this URL — it enrols a worker.",
+                "export PETABYTE_API_URL='%s'" % api_url,
+                "export PETABYTE_API_KEY='%s'" % api_key]
+        if price is not None:
+            head.append("export PRICE_PER_HOUR='%s'" % price)
+        script = "\n".join(head) + "\n" + script
+    return script
+
+
+def _render_install_ps1(*, api_url=None, api_key=None, price=None):
+    """The Windows (WSL2) installer, ready to serve. With api_url+api_key, prepend $env: assigns
+    so `irm … | iex` runs fully non-interactively. Returns None if not bundled."""
+    path = _find_installer("install.ps1")
+    if not path:
+        return None
+    with open(path) as f:
+        script = f.read()
+    if api_url and api_key:
+        head = ["# Petabyte token-bound enrollment installer. Do NOT share this URL — it enrols a worker.",
+                "$env:PETABYTE_API_URL='%s'" % api_url,
+                "$env:PETABYTE_API_KEY='%s'" % api_key]
+        if price is not None:
+            head.append("$env:PRICE_PER_HOUR='%s'" % price)
+        script = "\n".join(head) + "\n" + script
+    return script
+
+
+@app.get("/install.sh")
+def install_script():
+    """Serve the Linux node installer so the one-liner needs no extra hosting.
+
+    The pinned release PUBLIC key is substituted into the script at download time (the seller
+    already trusts this API over TLS for the installer). update.sh then verifies every future
+    agent bundle against it; unset -> the placeholder resolves empty and auto-update stays
+    fail-closed (refused)."""
+    script = _render_install_sh()
+    if script is None:
+        raise HTTPException(status_code=404, detail="installer not bundled")
+    return Response(content=script, media_type="text/x-shellscript")
 
 @app.get("/install.ps1")
 def install_script_ps1():
     """Serve the Windows (WSL2) installer for the PowerShell one-liner."""
-    path = _find_installer("install.ps1")
-    if not path:
+    script = _render_install_ps1()
+    if script is None:
         raise HTTPException(status_code=404, detail="installer not bundled")
-    with open(path) as f:
-        return Response(content=f.read(), media_type="text/plain")
+    return Response(content=script, media_type="text/plain")
+
+
+def _base_url(request: Request) -> str:
+    """This server's public base URL (scheme+host), no trailing slash — so a token-bound node
+    registers back to wherever the seller reached us (prod, preview, self-host), not a constant."""
+    return str(request.base_url).rstrip("/")
+
+
+def _mint_node_key_for(db: Session, user) -> str:
+    """Mint a fresh node-scoped API key for a seller (used by token enrollment; each fetch
+    yields its own independently-revocable worker key)."""
+    api_key, jti = gen_secure_api_key(user.username, 90, ["node", "jobs"])
+    record_issued_key(db, user.id, jti, "one-line installer", ["node", "jobs"], 90)
+    return api_key
+
+
+# NOTE: the ".ps1" route MUST be declared before the bare "/i/{token}" route — the bare
+# param matches ".ps1" too (dots are legal in a path segment), so the specific one has to win.
+@app.get("/i/{token}.ps1")
+def install_by_token_ps1(token: str, request: Request, db: Session = Depends(get_db)):
+    """One-line, non-interactive enrollment (Windows): `irm <server>/i/<token>.ps1 | iex`."""
+    row = resolve_install_token(db, token)
+    user = get_user_by_id(db, row.user_id) if row else None
+    if user is None:
+        raise HTTPException(status_code=404, detail="This install link is invalid or has expired.")
+    key = _mint_node_key_for(db, user)
+    price = None if row.price is None else format(row.price, "f")
+    script = _render_install_ps1(api_url=_base_url(request), api_key=key, price=price)
+    if script is None:
+        raise HTTPException(status_code=404, detail="installer not bundled")
+    return Response(content=script, media_type="text/plain")
+
+
+@app.get("/i/{token}")
+def install_by_token(token: str, request: Request, db: Session = Depends(get_db)):
+    """One-line, non-interactive enrollment (Linux/macOS):
+
+        curl -fsSL <server>/i/<token> | bash
+
+    Resolves the enrollment token, mints a fresh node key, and returns install.sh with the key,
+    this server's URL and (optional) pinned price already baked in — the node installs, benchmarks
+    and comes online with nothing to type. Each fetch enrols a distinct worker, so one token can
+    bring up a whole rig. Invalid/expired tokens 404."""
+    row = resolve_install_token(db, token)
+    user = get_user_by_id(db, row.user_id) if row else None
+    if user is None:
+        raise HTTPException(status_code=404, detail="This install link is invalid or has expired.")
+    key = _mint_node_key_for(db, user)
+    price = None if row.price is None else format(row.price, "f")
+    script = _render_install_sh(api_url=_base_url(request), api_key=key, price=price)
+    if script is None:
+        raise HTTPException(status_code=404, detail="installer not bundled")
+    return Response(content=script, media_type="text/x-shellscript")
 
 
 @app.get("/manage.ps1")
@@ -1451,6 +1624,21 @@ def agent_tarball():
             with open(cand, "rb") as f:
                 return Response(content=f.read(), media_type="application/gzip")
     raise HTTPException(status_code=404, detail="agent bundle not built on this host")
+
+
+@app.get("/agent.tar.gz.sig")
+def agent_tarball_sig():
+    """Serve the detached Ed25519 signature of agent.tar.gz (produced at deploy time by
+    scripts/sign_release.py with the offline release key). The node's update.sh verifies the
+    downloaded bundle against this before applying it — SIGNED updates only, fail-closed. 404
+    when unsigned (then update.sh refuses to auto-update rather than trusting TLS alone)."""
+    here = os.path.dirname(__file__)
+    for cand in (os.path.join(here, "installers", "agent.tar.gz.sig"),
+                 os.path.join(here, "..", "lumaris_agent.tar.gz.sig")):
+        if os.path.exists(cand):
+            with open(cand, "rb") as f:
+                return Response(content=f.read(), media_type="application/octet-stream")
+    raise HTTPException(status_code=404, detail="agent bundle signature not present on this host")
 
 
 @app.get("/uninstall.sh")
@@ -1551,29 +1739,64 @@ def public_spec_detail(public_id: str, db: Session = Depends(get_db)):
 def public_specs(db: Session = Depends(get_db),
                  gpu: Optional[str] = None, region: Optional[str] = None,
                  min_vram: int = 0, max_price: Optional[float] = None,
-                 confidential: Optional[bool] = None, sort: str = "price"):
-    """Public, read-only inventory with search/filter (no auth, limited fields)."""
-    from db import SellerSpec
+                 confidential: Optional[bool] = None, sort: str = "price",
+                 limit: int = Query(200, ge=1, le=200), offset: int = Query(0, ge=0)):
+    """Public, read-only inventory with search/filter (no auth, limited fields).
+
+    Filtering, sorting and pagination run in SQL (indexed columns + a JOIN to the owner) so the
+    handler never loads the whole table into Python — it fetches only the matching page. `count`
+    is the TOTAL number of matches; `specs` is the requested page (`limit`/`offset`). Only the
+    page is enriched with the (pure) reputation/trust/cloud fields."""
+    from db import SellerSpec, User
+    # "live" = online with a fresh heartbeat, expressed in SQL (naive-UTC cutoff matches stored
+    # last_seen and spec_is_live()). Owner must be allowed to take paid jobs (INNER JOIN).
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=HEARTBEAT_TIMEOUT_S)).replace(tzinfo=None)
+    q = (db.query(SellerSpec).join(User, User.id == SellerSpec.user_id)
+         .filter(SellerSpec.attested == True,                        # noqa: E712
+                 SellerSpec.status == "online",
+                 SellerSpec.last_seen.isnot(None),
+                 SellerSpec.last_seen >= cutoff,
+                 SellerSpec.available_units >= 1,
+                 User.can_accept_paid_jobs == True))                 # noqa: E712
+    if gpu:
+        needle = gpu.replace("%", "").replace("_", "")               # GPU names carry no LIKE wildcards
+        q = q.filter(SellerSpec.gpu_model.ilike(f"%{needle}%"))
+    if region:
+        q = q.filter(func.lower(SellerSpec.region) == region.lower())
+    if min_vram:
+        q = q.filter(func.coalesce(SellerSpec.vram_gb, 0) >= min_vram)
+    if max_price is not None:
+        q = q.filter(SellerSpec.price_per_hour <= max_price)
+    if confidential is not None:
+        q = q.filter(SellerSpec.confidential == confidential)
+
+    total = q.count()
+
+    if sort == "vram":
+        q = q.order_by(func.coalesce(SellerSpec.vram_gb, 0).desc(), SellerSpec.id.asc())
+    elif sort == "rep":
+        # The reputation score (0..100) is a PURE function of stored columns, so it can be
+        # ordered on in SQL — same formula as db.compute_reputation (clamp omitted: irrelevant
+        # to ordering). Lets us paginate a reputation-sorted page without loading every row.
+        _done = func.coalesce(SellerSpec.jobs_completed, 0)
+        _failed = func.coalesce(SellerSpec.jobs_failed, 0)
+        _tot = _done + _failed
+        rep_expr = (60.0
+                    + case((_tot > 0, 30.0 * cast(_done, Float) / cast(_tot, Float)
+                            - 15.0 * cast(_failed, Float) / cast(_tot, Float)), else_=0.0)
+                    + case((and_(SellerSpec.benchmark_tokens_sec.isnot(None),
+                                 SellerSpec.benchmark_tokens_sec != 0), 5.0), else_=0.0)
+                    - 25.0 * func.coalesce(SellerSpec.fraud_count, 0))
+        q = q.order_by(rep_expr.desc(), SellerSpec.id.asc())
+    else:   # price (default)
+        q = q.order_by(SellerSpec.price_per_hour.asc(), SellerSpec.id.asc())
+
+    page = q.limit(limit).offset(offset).all()
+
     out = []
-    for spec in db.query(SellerSpec).filter(SellerSpec.attested == True).all():  # noqa: E712
-        if not spec_is_live(spec) or spec.available_units < 1:
-            continue
-        owner = get_user_by_id(db, spec.user_id)
-        if not owner or not owner.can_accept_paid_jobs:
-            continue
-        if gpu and gpu.lower() not in (spec.gpu_model or "").lower():
-            continue
-        if region and region.lower() != (spec.region or "").lower():
-            continue
-        if (spec.vram_gb or 0) < min_vram:
-            continue
-        if max_price is not None and spec.price_per_hour > max_price:
-            continue
-        if confidential is not None and bool(spec.confidential) != confidential:
-            continue
-        total = (spec.jobs_completed or 0) + (spec.jobs_failed or 0)
+    for spec in page:      # only the page is enriched (reputation is a cheap pure computation)
+        total_j = (spec.jobs_completed or 0) + (spec.jobs_failed or 0)
         _rep = compute_reputation(db, spec)
-        _score = _rep["score"] if isinstance(_rep, dict) else _rep
         out.append({"id": spec.public_id,
                     "gpu_model": spec.gpu_model or "CPU",
                     "gpu_count": spec.gpu_count or 0, "vram_gb": spec.vram_gb or 0,
@@ -1583,18 +1806,15 @@ def public_specs(db: Session = Depends(get_db),
                     "auto_price": bool(spec.auto_price),
                     "region": spec.region, "region_verified": bool(spec.region_verified),
                     "confidential": bool(spec.confidential),
-                    "reputation_score": _score,
+                    "reputation_score": _rep["score"] if isinstance(_rep, dict) else _rep,
                     "available_units": spec.available_units,
                     "total_units": spec.total_units,
                     "attested": bool(spec.attested),
                     "trust": trust_level_for(spec),
                     "jobs_completed": spec.jobs_completed, "jobs_failed": spec.jobs_failed,
-                    "success_rate": round(100.0 * spec.jobs_completed / total, 1) if total else None})
-    keyfn = {"price": lambda x: x["price_per_hour"],
-             "rep": lambda x: -x["reputation_score"],
-             "vram": lambda x: -x["vram_gb"]}.get(sort, lambda x: x["price_per_hour"])
-    out.sort(key=keyfn)
-    return {"specs": out, "count": len(out), "aws_reference": float(AWS_REFERENCE_PRICE)}
+                    "success_rate": round(100.0 * spec.jobs_completed / total_j, 1) if total_j else None})
+    return {"specs": out, "count": total, "limit": limit, "offset": offset,
+            "aws_reference": float(AWS_REFERENCE_PRICE)}
 
 
 @app.get("/docs", include_in_schema=False)
@@ -1617,6 +1837,246 @@ def api_reference():
 <script id="api-reference" data-url="/openapi.json" data-configuration='{"theme":"deepSpace"}'></script>
 <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
 </body></html>""")
+
+
+# ------------------- SPLIT API PORTALS: /data (buy data) vs /devs (build compute) -------------------
+# Two products, two Scalar reference portals, each backed by a TAG-FILTERED OpenAPI spec so the two
+# never overlap: an endpoint documented under /data can never appear under /devs, and vice-versa.
+# The `data` tag is the buy-data product; the compute/build tags are the developer product. The
+# filter also EXCLUDES the data tag from /devs explicitly, so even a future double-tagged endpoint
+# stays out of the developer portal (data wins). This mirrors the key model: data keys carry the
+# `data` scope; compute/agent keys carry `node`/`jobs` — a key for one product is refused by the other.
+_DATA_PORTAL_TAGS = {"data"}
+_DEV_PORTAL_TAGS = {"compute", "marketplace", "seller", "wallet", "account"}
+_OPENAPI_METHODS = {"get", "post", "put", "patch", "delete", "options", "head", "trace"}
+
+
+def _portal_openapi(*, include: set, exclude: set, title: str, description: str,
+                    exclude_path_prefixes: tuple = ()) -> dict:
+    """A copy of the app's OpenAPI schema keeping only operations whose tags intersect `include`
+    and DON'T intersect `exclude` — so /data and /devs render disjoint, product-scoped references.
+    `exclude_path_prefixes` drops whole paths (e.g. operator-only /admin/) regardless of tag."""
+    spec = copy.deepcopy(app.openapi())
+    spec["info"] = {**spec.get("info", {}), "title": title, "description": description}
+    kept_paths = {}
+    for path, ops in (spec.get("paths") or {}).items():
+        if any(path.startswith(p) for p in exclude_path_prefixes):
+            continue
+        kept_ops, keep = {}, {}
+        for method, op in ops.items():
+            if method.lower() not in _OPENAPI_METHODS:
+                keep[method] = op                     # path-level shared keys (parameters, summary)
+                continue
+            tags = set((op or {}).get("tags") or [])
+            if tags & exclude:
+                continue
+            if include and not (tags & include):
+                continue
+            kept_ops[method] = op
+        if kept_ops:
+            kept_paths[path] = {**keep, **kept_ops}
+    spec["paths"] = kept_paths
+    shown = (include - exclude) if include else set()
+    if shown:
+        spec["tags"] = [t for t in spec.get("tags", []) if t.get("name") in shown]
+    return spec
+
+
+def _scalar_portal(spec_url: str, title: str) -> HTMLResponse:
+    """A standalone Scalar API-reference page bound to one filtered spec (CDN bundle; the CSP
+    already allows cdn.jsdelivr.net scripts and same-origin spec fetch)."""
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
+<title>{title}</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/static/petabyte-logo.png"></head><body style="margin:0">
+<script id="api-reference" data-url="{spec_url}" data-configuration='{{"theme":"deepSpace"}}'></script>
+<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</body></html>""")
+
+
+def _data_portal_description() -> str:
+    free = DATA_API_FREE_CALLS_MONTH
+    per_call = f"{DATA_API_PRICE_PER_1K / 1000.0:.4f}".rstrip("0").rstrip(".")
+    sandbox = DATA_API_SANDBOX_KEY or "(sandbox key disabled)"
+    return f"""# Petabyte Data API
+
+Programmatic access to Petabyte's live GPU-marketplace data: a benchmark-anchored **price index**,
+**price history**, **cloud-savings**, **live supply**, buyer-side **demand**, **workload mix**,
+**templates bought**, and the GPU-**authenticity** dataset. REST + JSON, one key.
+
+> This is the **buy-data** product. To rent GPUs and run workloads, see the **[Developer API](/devs)**.
+> The two are separate: an endpoint here is never part of the Developer API, and the keys don't cross over.
+
+## Buying data — pay as you go
+
+No subscription, no seat licence. You pay per call, only past a free monthly trial.
+
+1. **Try it free, no signup.** `GET /api/v1/data/sample` returns example payloads (keyless), so you can
+   see every response shape first. Or hit the **real** endpoints free & unmetered with the published
+   **sandbox key**: `X-API-KEY: {sandbox}`.
+2. **Get a key.** Sign in and mint a **`data`-scoped** key on the [keys page](/keys).
+3. **Fund your wallet.** Fees are debited from your wallet balance ([add funds](/wallet)).
+4. **Call it.** Every response carries a `usage` receipt — whether the call was billed and how much.
+
+## Pricing
+
+* Each account gets a free monthly trial of **{free} call-units**.
+* Beyond the trial, a call costs **${per_call} × the endpoint's price weight**, debited from your wallet.
+* **Weights** — commodity datasets (`gpu-prices`, `market`, `savings`, `availability`) = 1; history &
+  `workloads` cost more; `demand`, `templates`, `benchmarks` are premium. Premium data, premium price.
+* A call your balance can't cover is refused with **`402`** — never silently given away.
+* `GET /api/v1/data/usage` is always free and reports your month's calls and spend.
+
+## Authentication & scope
+
+Send your key in the **`X-API-KEY`** header. Data keys carry the **`data` scope** — a different scope
+from the compute/agent keys (`node`, `jobs`) used by the [Developer API](/devs). This API is gated to
+the `data` scope, so a `node`/`jobs` key is **refused here (403)**. And the two references share **no
+endpoint** — nothing in the Data API is part of the Developer API. One product, one scope.
+
+## Honesty
+
+Every dataset is **aggregate and anonymized** — no seller, buyer, node or spec identity is ever
+returned. Sandbox and demo activity is excluded, so you get real demand, not inflated numbers. When
+there is nothing to report, you get an **empty** result — never fabricated data."""
+
+
+def _dev_portal_description() -> str:
+    return """# Petabyte Developer API
+
+Build on the compute exchange: browse verified GPUs, **rent by the hour with escrow**, deploy
+workloads and templates, run jobs, manage your wallet and payouts, and drive the seller agent.
+
+> This is the **build-compute** product. To buy market data, see the **[Data API](/data)**.
+> The two are separate: no data endpoint appears here, and the keys don't cross over.
+
+## Keys & scopes
+
+Mint a scoped key on the [keys page](/keys) and send it as **`X-API-KEY`**. Compute/agent keys carry
+the **`node`** and **`jobs`** scopes — a different scope from the **`data`** key used by the
+[Data API](/data), which is gated to `data` keys (a `node`/`jobs` key is refused there, 403). The two
+products are documented separately and share **no endpoint**. Pick the product, pick the scope.
+
+## Distributed compute (one job across many GPUs)
+
+`POST /distributed` splits a single job across up to 100 GPUs that live on **different machines**
+but form **one cluster over the VPN** (torchrun/NCCL). The platform:
+
+* gang-schedules N nodes across **distinct providers** — never two ranks on the same PC;
+* **escrows all N up-front, all-or-nothing** — a cluster that can't fully form is refused and
+  refunded (you're charged nothing for a half-formed cluster);
+* assigns ranks `0..N-1` and coordinates **rendezvous**: rank 0 registers its VPN address at
+  `POST /jobs/rendezvous`, the other ranks poll `GET /jobs/rendezvous/{job_id}` to join, then each
+  node runs your container under `torchrun --nnodes=N --node_rank=<rank>`;
+* completes when every rank finishes; a dead rank fails the whole run (gang semantics).
+
+On each node the agent **executes** its rank: it registers its own VPN address, resolves the
+master, launches your container under `torchrun` wired to `--master_addr/--node_rank/--nnodes`,
+and reports a **signed result** — the same attested-key path every job uses, so a distributed run
+is bound to real hardware. The cluster is marked complete only once **every** rank's signed result
+arrives.
+
+**Validate your cluster first (self-test).** Pass `selftest: true` (no `image`/`command` needed) and
+each rank runs a built-in **cross-process all-reduce** instead of a container: the ranks actually
+talk to each other over the mesh and every rank must converge on the correct global reduction. It's
+the "does my N-node cluster really communicate and reduce correctly?" smoke test to run before
+committing to a long, expensive training job.
+
+Track the cluster at `GET /jobs/manifest/{job_id}` (per-rank status + the master address).
+
+**Private network (VPN).** Pass `vpn: true` to `/distributed` (or `/request_vm`) and the buyer gets
+a WireGuard tunnel into the private cluster network: `GET /jobs/{job_id}/vpn_config` (or
+`/vpn_config/{booking_id}`) returns a ready-to-use client config. A fresh keypair is minted per
+download; the server never keeps the client private key.
+
+## Bring your own scheduler — Petabyte is just another provider
+
+Big-corp, academic and government workloads already run on **Slurm, MPI, Ray, or Kubernetes** and
+won't rewrite their stack. Adopting Petabyte is adding a **node pool**, not an infra change: every
+rank registers its VPN address, and Petabyte hands the cluster back as the artifacts your launcher
+already consumes.
+
+* `GET /jobs/{job_id}/hostfile` → an **MPI/torchrun hostfile** (`<host> slots=<gpus>`). Run it with
+  your existing `mpirun --hostfile hostfile -np <N> ...` — zero code change.
+* `GET /jobs/{job_id}/cluster` → the full node list + **ready-to-run launch commands** for
+  `mpirun`, `torchrun`, `ray`, and `srun`, plus the master address.
+
+Integration patterns (Petabyte = an extra provider, your control plane stays put):
+* **Slurm** — cloud-burst: point your `ResumeProgram`/`SuspendProgram` at `POST /distributed` so
+  `slurmctld` elastically provisions Petabyte nodes that join your existing controller.
+* **MPI / OpenMPI** — feed the `hostfile` straight into `mpirun`.
+* **Ray** — `ray start --head` on rank 0, `ray start --address=<master>` on the rest (both printed
+  by `/cluster`).
+* **PyTorch** — `torchrun --rdzv_backend=static --master_addr=<master>` from `/cluster`.
+* **Kubernetes** — join the Petabyte nodes as autoscaled GPU workers behind your scheduler.
+
+## Money model
+
+Rentals are **prepaid into escrow** before any work runs, and released to the seller as the work
+completes (or refunded to you if a node drops). Fund your wallet, book compute, and every state
+transition is visible on your transaction."""
+
+
+@app.get("/data/openapi.json", include_in_schema=False)
+def data_portal_openapi():
+    """OpenAPI for the buy-data product only (the `data` tag)."""
+    return _portal_openapi(include=_DATA_PORTAL_TAGS, exclude=set(),
+                           title="Petabyte Data API", description=_data_portal_description())
+
+
+@app.get("/devs/openapi.json", include_in_schema=False)
+def devs_portal_openapi():
+    """OpenAPI for the build-compute product only — the developer tags, with the data product
+    explicitly EXCLUDED so the two portals never share an endpoint."""
+    return _portal_openapi(include=_DEV_PORTAL_TAGS, exclude=_DATA_PORTAL_TAGS | {"admin"},
+                           title="Petabyte Developer API", description=_dev_portal_description(),
+                           exclude_path_prefixes=("/admin/", "/internal/"))
+
+
+@app.get("/data", include_in_schema=False)
+def data_portal():
+    """Scalar reference for the buy-data API — how to buy data, priced and metered."""
+    return _scalar_portal("/data/openapi.json", "Petabyte Data API")
+
+
+@app.get("/devs", include_in_schema=False)
+def devs_portal():
+    """Scalar reference for the build-compute developer API (rent GPUs, run jobs)."""
+    return _scalar_portal("/devs/openapi.json", "Petabyte Developer API")
+
+
+# ------------------- WIKI: new-user guide, rendered in the SAME Scalar docs environment -------------------
+# The source of truth is the Markdown in wiki/ (GitHub-readable). Here we assemble those pages into one
+# OpenAPI `info.description` — which Scalar renders as rich Markdown with a heading-driven sidebar — and
+# serve it through the exact same Scalar shell (_scalar_portal) as /docs, /data and /devs.
+_WIKI_ORDER = ["index", "overview", "getting-started", "buyers", "sellers", "cli", "models",
+               "storage", "teams-and-security", "payments-and-trust", "api", "self-hosting", "glossary"]
+
+
+def _wiki_markdown() -> str:
+    base = os.path.join(os.path.dirname(__file__), "..", "wiki")
+    parts = []
+    for name in _WIKI_ORDER:
+        p = os.path.join(base, name + ".md")
+        if os.path.exists(p):
+            try:
+                parts.append(open(p, encoding="utf-8").read().strip())
+            except Exception:  # noqa: BLE001
+                continue
+    return "\n\n---\n\n".join(parts) or "# Petabyte Wiki\n\nDocumentation is being prepared."
+
+
+@app.get("/wiki/openapi.json", include_in_schema=False)
+def wiki_openapi():
+    """A minimal OpenAPI doc whose description IS the wiki — so Scalar renders it like the API docs."""
+    return JSONResponse({"openapi": "3.1.0", "paths": {}, "tags": [],
+                         "info": {"title": "Petabyte — Wiki & Guide", "version": "1.0",
+                                  "description": _wiki_markdown()}})
+
+
+@app.get("/wiki", include_in_schema=False)
+def wiki_portal():
+    """The new-user wiki, rendered in the same Scalar docs environment as the API reference."""
+    return _scalar_portal("/wiki/openapi.json", "Petabyte — Wiki & Guide")
 
 
 @app.exception_handler(BookingsPaused)
@@ -1908,8 +2368,154 @@ def _marketplace_metrics():
                          "value": _minor})
     except Exception:  # noqa: BLE001
         logger.debug("financial-integrity metrics query failed", exc_info=True)
+    # Trust & integrity — the verification MOAT, made measurable. Reuses the same honest
+    # counts as the public /trust page (single source of truth). All labels are bounded
+    # (tier/status enumerations), never an id. Own try: never drops the gauges above.
+    try:
+        import trust as _trust
+        ts = _trust.trust_summary(dbs)
+        rows += [
+            {"name": "petabyte_attested_gpus", "doc": "Attested GPUs (verifiable listings)",
+             "labels": {"environment": env}, "value": ts["attested_gpus"]},
+            {"name": "petabyte_confidential_nodes_active",
+             "doc": "Nodes holding a FRESH confidential (TEE) attestation",
+             "labels": {"environment": env}, "value": ts["confidential_nodes_active"]},
+            {"name": "petabyte_jobs_completed_total", "doc": "Completed jobs (lifetime)",
+             "labels": {"environment": env}, "value": ts["jobs_completed"]},
+            {"name": "petabyte_results_content_bound",
+             "doc": "Results bound to the sha256 of the real output bytes",
+             "labels": {"environment": env}, "value": ts["results_content_bound"]},
+            {"name": "petabyte_verifiable_receipts",
+             "doc": "Jobs with a retained node signature (buyer-verifiable receipt)",
+             "labels": {"environment": env}, "value": ts["verifiable_receipts"]},
+            {"name": "petabyte_sellers_fraud_flagged",
+             "doc": "Sellers with fraud on record (payouts frozen pending review)",
+             "labels": {"environment": env}, "value": ts["sellers_fraud_flagged"]},
+        ]
+        for _tier, _n in (ts.get("trust_tiers") or {}).items():
+            rows.append({"name": "petabyte_trust_tier_gpus",
+                         "doc": "Attested GPUs by trust tier",
+                         "labels": {"tier": _tier, "environment": env}, "value": _n})
+        for _status, _n in (ts.get("quorum_checks_by_status") or {}).items():
+            rows.append({"name": "petabyte_quorum_checks",
+                         "doc": "Redundant re-execution (quorum) checks by outcome",
+                         "labels": {"status": str(_status), "environment": env}, "value": _n})
+    except Exception:  # noqa: BLE001
+        logger.debug("trust-integrity metrics query failed", exc_info=True)
+    # Disaster-recovery: age of the last successful DB backup (alert when it grows), plus
+    # success/failure counts. Own try — a query error never drops the gauges above.
+    try:
+        import backup as _bk
+        bs = _bk.backup_status(dbs)
+        rows += [
+            {"name": "petabyte_db_backup_last_age_seconds",
+             "doc": "Seconds since the last SUCCESSFUL database backup (-1 if none yet)",
+             "labels": {"environment": env},
+             "value": (bs["last_backup_age_seconds"] if bs["last_backup_age_seconds"] is not None else -1)},
+            {"name": "petabyte_db_backups_ok", "doc": "Successful database backups currently retained",
+             "labels": {"environment": env}, "value": bs["ok_count"]},
+            {"name": "petabyte_db_backups_failed", "doc": "Failed database backup attempts on record",
+             "labels": {"environment": env}, "value": bs["failed_count"]},
+            {"name": "petabyte_db_backup_bytes", "doc": "Total compressed size of retained backups",
+             "labels": {"environment": env}, "value": bs["total_bytes"]},
+        ]
+    except Exception:  # noqa: BLE001
+        logger.debug("backup metrics query failed", exc_info=True)
+    # Operations gauges — the product surfaces beyond raw GPU supply: buyer VMs, distributed
+    # clusters, spare-disk rental, teams (shared wallets), and escrowed buyer money. Live DB
+    # state, bounded labels only. Own try so a query error never drops the gauges above.
+    try:
+        from db import VMRoute, MultiNodeJob, Organization, Booking, User, Task
+        vm_active = dbs.query(func.count(VMRoute.id)).filter(
+            VMRoute.status.in_(("starting", "running", "migrating"))).scalar() or 0
+        vm_migr = dbs.query(func.coalesce(func.sum(VMRoute.migrations), 0)).scalar() or 0
+        rows += [
+            {"name": "petabyte_vms_active",
+             "doc": "Buyer VMs currently active (starting/running/migrating)",
+             "labels": {"environment": env}, "value": vm_active},
+            {"name": "petabyte_vm_migrations_cumulative",
+             "doc": "Cumulative VM failovers/migrations across all routes",
+             "labels": {"environment": env}, "value": int(vm_migr)},
+        ]
+        for _st, _n in dbs.query(MultiNodeJob.status, func.count(MultiNodeJob.id)).filter(
+                MultiNodeJob.kind == "distributed").group_by(MultiNodeJob.status).all():
+            rows.append({"name": "petabyte_distributed_clusters",
+                         "doc": "Distributed (multi-node) clusters by status",
+                         "labels": {"status": str(_st or "unknown"), "environment": env},
+                         "value": int(_n or 0)})
+        disk_nodes = dbs.query(func.count(SellerSpec.id)).filter(
+            SellerSpec.disk_enabled.is_(True)).scalar() or 0
+        disk_gb = dbs.query(func.coalesce(func.sum(SellerSpec.disk_alloc_gb), 0)).filter(
+            SellerSpec.disk_enabled.is_(True)).scalar() or 0
+        rows += [
+            {"name": "petabyte_disk_rental_nodes", "doc": "Nodes actively renting spare disk",
+             "labels": {"environment": env}, "value": disk_nodes},
+            {"name": "petabyte_disk_rental_gb_pledged", "doc": "Total GB pledged for disk rental",
+             "labels": {"environment": env}, "value": int(disk_gb)},
+        ]
+        orgs_n = dbs.query(func.count(Organization.id)).scalar() or 0
+        orgs_bal = dbs.query(func.coalesce(func.sum(Organization.balance), 0)).scalar() or 0
+        rows += [
+            {"name": "petabyte_teams_total", "doc": "Teams (shared-wallet orgs)",
+             "labels": {"environment": env}, "value": orgs_n},
+            {"name": "petabyte_teams_pooled_balance_usd",
+             "doc": "Total balance pooled in team wallets (USD)",
+             "labels": {"environment": env}, "value": float(orgs_bal)},
+        ]
+        in_escrow = dbs.query(func.coalesce(func.sum(Booking.gross_amount), 0.0)).filter(
+            Booking.status == "escrowed", Booking.test.is_(False)).scalar() or 0.0
+        rows.append({"name": "petabyte_escrow_held_usd",
+                     "doc": "Buyer money currently held in escrow (live only, USD)",
+                     "labels": {"environment": env}, "value": float(in_escrow)})
+        wallet_usd = dbs.query(func.coalesce(func.sum(User.balance), 0)).scalar() or 0
+        rows.append({"name": "petabyte_wallet_balance_usd",
+                     "doc": "Total buyer wallet balance held across all users (USD)",
+                     "labels": {"environment": env}, "value": float(wallet_usd)})
+        disk_used = dbs.query(func.coalesce(func.sum(SellerSpec.disk_used_gb), 0)).filter(
+            SellerSpec.disk_enabled.is_(True)).scalar() or 0
+        rows.append({"name": "petabyte_disk_rental_gb_used",
+                     "doc": "GB actually reported used across disk-rental nodes",
+                     "labels": {"environment": env}, "value": float(disk_used)})
+        # queue depth + oldest-pending age — closes the empty workers/queue panels
+        pending = dbs.query(func.count(Task.id)).filter(Task.status == "pending").scalar() or 0
+        rows.append({"name": "petabyte_pending_tasks", "doc": "Buyer tasks awaiting a node",
+                     "labels": {"queue": "tasks", "environment": env}, "value": int(pending)})
+        oldest = dbs.query(func.min(Task.created_at)).filter(Task.status == "pending").scalar()
+        age = 0
+        if oldest is not None:
+            now = _utcnow().replace(tzinfo=None)
+            if getattr(oldest, "tzinfo", None) is not None:
+                oldest = oldest.replace(tzinfo=None)
+            age = max(0, int((now - oldest).total_seconds()))
+        rows.append({"name": "petabyte_oldest_pending_task_age_seconds",
+                     "doc": "Age of the oldest pending task (0 when the queue is empty)",
+                     "labels": {"queue": "tasks", "environment": env}, "value": age})
+    except Exception:  # noqa: BLE001
+        logger.debug("operations metrics query failed", exc_info=True)
     finally:
         dbs.close()
+    # Data-API monetization gauges — so revenue is MEASURED, not guessed.
+    dbr = SessionLocal()
+    try:
+        r = data_api_revenue(dbr)
+        rows += [
+            {"name": "petabyte_data_api_revenue_usd",
+             "doc": "All-time data-API revenue booked to platform revenue (USD)",
+             "labels": {"environment": env}, "value": r["revenue_usd_total"]},
+            {"name": "petabyte_data_api_revenue_usd_month",
+             "doc": "Data-API revenue this calendar month (USD)",
+             "labels": {"environment": env}, "value": r["revenue_usd_month"]},
+            {"name": "petabyte_data_api_billed_calls",
+             "doc": "All-time billed (paid) data-API calls",
+             "labels": {"environment": env}, "value": r["billed_calls_total"]},
+            {"name": "petabyte_data_api_paying_accounts_month",
+             "doc": "Accounts that paid for data-API calls this month",
+             "labels": {"environment": env}, "value": r["paying_accounts_month"]},
+        ]
+    except Exception:  # noqa: BLE001
+        logger.debug("data-api revenue metrics query failed", exc_info=True)
+    finally:
+        dbr.close()
     return rows
 
 
@@ -1930,12 +2536,107 @@ def register_user(data: UserRegisterModel, request: Request, db: Session = Depen
     if ref_code:
         from db import apply_referral
         apply_referral(db, user, ref_code, signup_meta=_client_ip(request))
+    # top of the growth funnel — mirrored to product analytics via observability.event()
+    obs.event(EVENTS.USER_SIGNED_UP, message="user registered",
+              user_id=user.id, referred=bool(ref_code))
     resp = JSONResponse({"status": "ok", "msg": "User registered"})
     # consume the attribution cookie so a later signup on a shared machine isn't mis-credited
     if request.cookies.get("pb_ref"):
         resp.delete_cookie("pb_ref", path="/")
     return resp
 
+
+class NodeQuickstartModel(BaseModel):
+    wallet: str = Field(..., min_length=8, max_length=128)
+    chain: Optional[str] = Field(None, max_length=32)   # informational: eth|polygon|base|arbitrum|optimism
+
+
+# EVM address: 0x + 40 hex. USDC lives on many EVM chains (Ethereum/Polygon/Base/Arbitrum/
+# Optimism), all sharing this format. Non-EVM chains are a documented later extension.
+_EVM_ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+
+@app.post("/nodes/quickstart", tags=["seller"])
+def node_quickstart(data: NodeQuickstartModel, request: Request, db: Session = Depends(get_db)):
+    """Miner-style onboarding: paste the USDC wallet you want to be paid to and get a
+    ready-to-run installer command back — no email, no password, no signup form.
+
+    What it does — and, just as importantly, what it does NOT:
+      * creates (or reuses) a lightweight seller identity keyed to the wallet. The password
+        is random and unusable; the node authenticates with the returned API key, not a login.
+      * records the wallet as your USDC payout DESTINATION, **unverified**. This never makes
+        you payout-ready and never moves a cent: withdrawing earnings later requires identity
+        verification (KYC), exactly as regulation demands — that gate lives in the payout path,
+        not here. Onboarding is the only thing this makes frictionless.
+      * OFAC-screens the address when the sanctions list is configured (the binding, fail-closed
+        screen runs again at payout).
+      * returns a one-line, non-interactive installer (curl … | bash / irm … | iex) whose URL
+        carries a short enrollment token — no key to paste, nothing to type.
+
+    All nodes started with the same wallet share one balance — like workers under one mining
+    address. Bookability for PAID jobs still depends on the live payout/eligibility checks; a
+    wallet-only node can come online and benchmark, and becomes rentable once its owner verifies.
+    """
+    import sanctions
+    wallet = (data.wallet or "").strip()
+    if not _EVM_ADDR_RE.match(wallet):
+        raise HTTPException(status_code=422, detail=(
+            "Enter a valid USDC wallet address (0x… on Ethereum, Polygon, Base, Arbitrum, or Optimism)."))
+    wallet_l = wallet.lower()   # EVM addresses are case-insensitive — normalise for identity + screen
+    if sanctions.ofac_addresses_available() and sanctions.is_sanctioned_address(wallet_l):
+        raise HTTPException(status_code=403, detail="This address cannot be onboarded.")
+    username = "wallet_" + wallet_l[2:]     # deterministic identity (drop the 0x prefix)
+    me = get_user_by_username(db, username)
+    new_account = False
+    if me is None:
+        me = create_user(db, username, secrets.token_urlsafe(32))   # random, unusable password
+        if me is None:                                              # lost a create race -> reuse
+            me = get_user_by_username(db, username)
+        else:
+            new_account = True
+    if me is None:
+        raise HTTPException(status_code=500, detail="Could not create your node identity.")
+    if me.role != "seller":
+        set_role(db, username, "seller")
+    # Record the wallet as an UNVERIFIED usdc payout destination (idempotent). verified stays
+    # False, so request_payout() refuses it until KYC — capturing the destination moves no money.
+    have = any(pm.kind == "usdc" and (pm.destination or "").lower() == wallet_l
+               for pm in list_payout_methods(db, me.id))
+    if not have:
+        add_payout_method(db, me, "usdc", wallet, label="mining wallet (verify at payout)")
+    # Wallet onboarding auto-prices from each node's benchmark, so no pinned price on the token.
+    tok = create_install_token(db, me)
+    base = _base_url(request)
+    if new_account:
+        obs.event(EVENTS.USER_SIGNED_UP, message="wallet-only node onboarding", user_id=me.id, referred=False)
+    return {"status": "ok", "wallet": wallet, "new_account": new_account, "payout_ready": False,
+            "install_token": tok.token,
+            "install": {"linux": "curl -fsSL %s/i/%s | bash" % (base, tok.token),
+                        "windows": "irm %s/i/%s.ps1 | iex" % (base, tok.token)},
+            "note": "Onboarding only — withdrawing earnings later requires identity verification (KYC)."}
+
+
+class InstallTokenModel(BaseModel):
+    price: Optional[float] = Field(None, ge=0, le=1000)
+
+
+@app.post("/nodes/install_token", tags=["seller"])
+def make_install_token(data: InstallTokenModel, request: Request,
+                       user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Create a short one-line installer link for the SIGNED-IN seller (the account path's
+    equivalent of /nodes/quickstart). An optional price pins the listing rate; omit it and each
+    node auto-prices from its own GPU benchmark. Returns the same non-interactive one-liners."""
+    me = get_user_by_username(db, _username(user))
+    if me is None:
+        raise HTTPException(status_code=401, detail="Sign in first.")
+    if me.role != "seller":
+        set_role(db, me.username, "seller")
+    price = data.price if (data.price and data.price > 0) else None
+    tok = create_install_token(db, me, price=price)
+    base = _base_url(request)
+    return {"status": "ok", "install_token": tok.token,
+            "install": {"linux": "curl -fsSL %s/i/%s | bash" % (base, tok.token),
+                        "windows": "irm %s/i/%s.ps1 | iex" % (base, tok.token)}}
 
 
 # ------------------- GOOGLE SIGN-IN -------------------
@@ -1984,11 +2685,11 @@ def google_callback(code: str = Query(...), email: Optional[str] = Query(None),
         email_verified = bool(info.get("email_verified"))
     u = get_or_create_oauth_user(db, user_email, "google", email_verified=email_verified)
     token = create_access_token({"sub": u.username, "role": u.role})
-    return RedirectResponse(url="/app#t=" + token)
+    return RedirectResponse(url="/console#t=" + token)
 
 @app.post("/login", tags=["account"])
 def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(),
-          db: Session = Depends(get_db)):
+          otp: str = Form(None), db: Session = Depends(get_db)):
     # Throttle by (IP, username): guessing one account can't lock out a colleague
     # behind the same office NAT, and a valid password is never refused because
     # someone else was guessing. Only FAILED attempts burn the budget.
@@ -2004,8 +2705,45 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(),
     user = login_user(db, form_data.username, form_data.password)
     if not user:
         _rl_record_failure(key)
+        obsmod.inc_metric("petabyte_logins_total", outcome="failure",
+                          environment=obsmod.ENVIRONMENT)
+        obsmod.inc_metric("petabyte_auth_failures_total", reason="bad_credentials",
+                          environment=obsmod.ENVIRONMENT)
+        audit(db, "auth.login_failed", actor=form_data.username, ip=ip,
+              detail={"username": form_data.username})
         raise HTTPException(status_code=400, detail="Invalid credentials")
     _RL_BUCKETS.pop(key, None)      # a success clears the slate for this account
+    # SECOND FACTOR: password alone is not enough once 2FA is on. Require a valid TOTP code
+    # (from the authenticator app) or a single-use backup code before issuing the session token.
+    if user.totp_enabled:
+        code = (otp or "").strip()
+        if not code:
+            obsmod.inc_metric("petabyte_logins_total", outcome="twofa_required",
+                              environment=obsmod.ENVIRONMENT)
+            raise HTTPException(status_code=401, detail={
+                "code": "TOTP_REQUIRED",
+                "message": "Enter the 6-digit code from your authenticator app."})
+        ok2 = False
+        try:
+            sec = open_secret(user.totp_secret) if user.totp_secret else None
+            ok2 = bool(sec and totp.verify(sec, code))
+        except Exception:  # noqa: BLE001
+            ok2 = False
+        if not ok2:                                   # fall back to a single-use recovery code
+            ok2 = consume_backup_code(db, user, code.replace("-", "").replace(" ", "").lower())
+        if not ok2:
+            _rl_record_failure(key)
+            obsmod.inc_metric("petabyte_logins_total", outcome="twofa_failed",
+                              environment=obsmod.ENVIRONMENT)
+            obsmod.inc_metric("petabyte_auth_failures_total", reason="totp",
+                              environment=obsmod.ENVIRONMENT)
+            audit(db, "auth.2fa_failed", actor=user, ip=ip)
+            raise HTTPException(status_code=401, detail={
+                "code": "TOTP_INVALID",
+                "message": "That code is incorrect or expired — try again."})
+    obsmod.inc_metric("petabyte_logins_total", outcome="success",
+                      environment=obsmod.ENVIRONMENT)
+    audit(db, "auth.login", actor=user, ip=ip)
     token = create_access_token({"sub": user.username, "role": user.role})
     return {"access_token": token, "token_type": "bearer"}
 
@@ -2017,6 +2755,8 @@ def change_role(data: RoleModel, user: dict = Depends(get_current_user),
         new_role = set_role(db, _username(user), data.role)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    audit(db, "account.role_change", actor=_username(user), resource_type="user",
+          resource_id=_username(user), detail={"role": new_role})
     return {"status": "ok", "msg": f"Role changed to {new_role}"}
 
 
@@ -2228,9 +2968,86 @@ def heartbeat(data: HeartbeatModel, request: Request, owner=Depends(api_key_user
                           declared=spec.country, detected=detected)
     except Exception:  # noqa: BLE001
         pass
+    # Compact earnings forecast so the agent can show the seller what they're making, live.
+    try:
+        from earnings import forecast as _forecast
+        _e = _forecast(spec.price_per_hour, PLATFORM_TAKE_RATE,
+                       idle_daily_usd=spec.idle_est_daily_usd, idle_enabled=spec.idle_fallback)
+        _earn = {"net_per_hour": _e["net_per_hour"],
+                 "estimated_daily_usd_low": _e["headline"]["low_daily_usd"],
+                 "estimated_daily_usd_high": _e["headline"]["high_daily_usd"],
+                 "idle_mining_daily_usd": _e["idle_mining_daily_usd"]}
+    except Exception:  # noqa: BLE001
+        _earn = None
     return {"status": "ok", "spec_id": spec.id, "state": "online",
             "detected_country": detected, "region_verified": spec.region_verified,
-            "idle_fallback": bool(spec.idle_fallback)}
+            "idle_fallback": bool(spec.idle_fallback),
+            "disk": _disk_cfg(spec),      # start/limit/stop the spare-disk storage node
+            "earnings": _earn}
+
+
+@app.get("/nodes/{spec_id}/earnings_forecast", tags=["seller"])
+def node_earnings_forecast(spec_id: int, user: dict = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
+    """The seller's honest earnings forecast for one of their nodes: definitive net take-home
+    per hour + estimated daily/monthly at several utilization levels (+ idle-mining trickle)."""
+    me = get_user_by_username(db, _username(user))
+    spec = get_spec_by_id(db, spec_id)
+    if not spec or me is None or spec.user_id != me.id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    from earnings import forecast
+    out = forecast(spec.price_per_hour, PLATFORM_TAKE_RATE,
+                   idle_daily_usd=spec.idle_est_daily_usd, idle_enabled=spec.idle_fallback)
+    out["spec_id"] = spec.id
+    out["gpu_model"] = spec.gpu_model
+    return out
+
+
+@app.get("/nodes/{spec_id}/price/recommendation", tags=["seller"])
+def node_price_recommendation(spec_id: int, user: dict = Depends(get_current_user),
+                              db: Session = Depends(get_db)):
+    """An explainable, performance-anchored price recommendation for one of the seller's nodes.
+
+    Anchors on the per-GPU cloud on-demand rate ("cheaper than cloud, verified"), then adjusts for
+    live demand, verified trust, confidential/region/reputation premiums — and returns every step
+    as a labelled factor so the seller sees WHY. Advisory only: the seller still sets the price
+    (this is also exactly what auto-price applies when the node opts in)."""
+    me = get_user_by_username(db, _username(user))
+    spec = get_spec_by_id(db, spec_id)
+    if not spec or me is None or spec.user_id != me.id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    import pricing_engine
+    # Live demand for THIS GPU class: busy / total across live, attested specs of the same model.
+    key = (spec.gpu_model or "cpu").lower()
+    busy = total = 0
+    for s in db.query(SellerSpec).filter(SellerSpec.attested == True).all():  # noqa: E712
+        if (s.gpu_model or "cpu").lower() != key or not spec_is_live(s):
+            continue
+        t = s.total_units or 1
+        total += t
+        busy += max(0, t - (s.available_units or 0))
+    util = (busy / total) if total else 0.0
+    tl = trust_level_for(spec)
+    rec = pricing_engine.recommend(
+        cloud_reference_for(spec.gpu_model),
+        perf_reference=pricing_engine.performance_reference_price(spec.gpu_model),
+        utilization=util,
+        trust_level=tl.get("level"),
+        benchmark_verdict=getattr(spec, "benchmark_verdict", None),
+        confidential=dbmod.spec_confidential_active(spec),
+        region_verified=bool(getattr(spec, "region_verified", False)),
+        reputation=me.reputation,
+        min_price=(float(spec.min_price) if spec.min_price is not None else None),
+        max_price=(float(spec.max_price) if spec.max_price is not None else None),
+        current_price=float(spec.price_per_hour or 0),
+    )
+    rec["spec_id"] = spec.id
+    rec["gpu_model"] = spec.gpu_model
+    rec["utilization_pct"] = round(util * 100, 1)
+    rec["trust_level"] = tl.get("level")
+    rec["trust_label"] = tl.get("label")
+    rec["auto_price"] = bool(spec.auto_price)
+    return rec
 
 
 # ------------------- BUYER -------------------
@@ -2279,8 +3096,8 @@ def request_vm(req: RequestVMModel, user: dict = Depends(get_current_user),
         _fail(400, {"code": "OWN_HARDWARE",
                     "message": "This is your own machine. You can't rent from yourself — "
                                "earnings come from other people's jobs."})
-    if req.require_confidential and not spec.confidential:
-        _fail(403, "Spec is not confidential-computing attested")
+    if req.require_confidential and not spec_confidential_active(spec):
+        _fail(403, "Spec is not confidential-computing attested (or its attestation is stale)")
     if req.require_region and ((spec.region or "") != req.require_region or not spec.region_verified):
         _fail(403, f"Spec not in a VERIFIED region {req.require_region}")
     if req.require_country and ((spec.detected_country or "") != req.require_country or not spec.region_verified):
@@ -2434,6 +3251,17 @@ def jobs_next(agent=Depends(api_key_user), db: Session = Depends(get_db)):
     return payload
 
 
+def _record_benchmark_sample(db, spec, *, source, metrics=None, verdict=None,
+                             pow_verified=None, elapsed_s=None, tokens_sec=None):
+    """Append a labelled example to the authenticity training dataset. Never raises."""
+    try:
+        from db import record_benchmark_sample
+        record_benchmark_sample(db, spec, source=source, metrics=metrics, verdict=verdict,
+                                pow_verified=pow_verified, elapsed_s=elapsed_s, tokens_sec=tokens_sec)
+    except Exception:
+        logger.debug("benchmark sample record failed (non-fatal)", exc_info=True)
+
+
 def _build_job_payload(task) -> dict:
     """Build the job envelope returned to the agent. Never includes platform secrets or
     full buyer workload inputs beyond what the job type needs to run."""
@@ -2448,7 +3276,9 @@ def _build_job_payload(task) -> dict:
         return {"task_id": task.id, "task_type": "test",
                 "size": params.get("size"), "seed": params.get("seed"), **_backup}
     if task.task_type == "benchmark":
-        return {"task_id": task.id, "task_type": "benchmark", **_backup}
+        ch = json.loads(task.code or "{}")
+        return {"task_id": task.id, "task_type": "benchmark",
+                "bench_seed": ch.get("bench_seed"), "bench_size": ch.get("bench_size"), **_backup}
     if task.task_type == "render":
         rp = json.loads(task.template_params or "{}")
         return {"task_id": task.id, "task_type": "render", "image": RENDER_IMAGE,
@@ -2461,15 +3291,42 @@ def _build_job_payload(task) -> dict:
         rp = json.loads(task.template_params or "{}")
         return {"task_id": task.id, "task_type": "stitch", "image": FFMPEG_IMAGE,
                 **rp, **_backup}
+    if task.task_type == "distributed":
+        # One rank of a multi-node cluster. The agent runs `image`/`command` under torchrun with
+        # the rank/world_size below, forming an NCCL/gloo cluster with the other ranks OVER THE
+        # VPN. EVERY rank POSTs its own VPN address to register_url (so the cluster is exportable as
+        # an MPI hostfile / Ray address); rank 0's registration also becomes the master. Non-master
+        # ranks poll rendezvous_url until the master address appears, then join.
+        rp = json.loads(task.template_params or "{}")
+        jid = rp.get("job_id")
+        return {"task_id": task.id, "task_type": "distributed",
+                "image": rp.get("image"), "command": rp.get("command"),
+                "gpu": True, "env": rp.get("env") or {},
+                # cluster peers must reach each other over the WireGuard mesh (not the public net)
+                "egress": "cluster",
+                "distributed": {"job_id": jid, "rank": rp.get("rank"),
+                                "world_size": rp.get("world_size"),
+                                "backend": rp.get("backend", "nccl"),
+                                "is_master": bool(rp.get("is_master")),
+                                "selftest": bool(rp.get("selftest")),
+                                "register_url": "/jobs/rendezvous",
+                                "rendezvous_url": f"/jobs/rendezvous/{jid}"},
+                **_backup}
     if task.task_type == "template":
         tpl = TEMPLATES.get(task.template, {})
+        params = json.loads(task.template_params or "{}")
+        # A serving LLM template must have a model to boot. Fall back to the template's
+        # documented default so a one-click launch actually starts a usable service instead
+        # of a crash-looping container; the buyer can still override via params.model.
+        if not params.get("model") and tpl.get("default_model"):
+            params["model"] = tpl["default_model"]
         return {"task_id": task.id, "task_type": "template", "template": task.template,
                 "image": tpl.get("image"), "port": tpl.get("port"),
                 "cache": tpl.get("cache"), "gpu": tpl.get("gpu", True),
                 # The agent enforces this. Default CLOSED: if a template forgets to
                 # declare a policy, the workload gets no network rather than the host's.
                 "egress": tpl.get("egress", "none"),
-                "params": json.loads(task.template_params or "{}"), **_backup}
+                "params": params, **_backup}
     return {"task_id": task.id, "task_type": "vm", "vm_type": task.vm_type,
             "cpu": task.cpu, "ram": task.ram, "cuda": task.cuda}
 
@@ -2534,7 +3391,14 @@ def _auto_fail_compute_tx(db, task, reason: str = "job reported failed"):
         return _sc.fail_job(db, tx, reason=reason).status
     except Exception:
         logger.exception("auto-fail error for tx %s (job failed)", tx.public_id)
-        return tx.status
+        # The session may be in a broken state (e.g. a failed flush left a PendingRollbackError);
+        # reading tx.status then triggers a refresh query that raises. Roll back FIRST, and fall
+        # back to a literal — a result POST must NEVER become a 500.
+        try:
+            db.rollback()
+            return tx.status
+        except Exception:  # noqa: BLE001
+            return None
 
 
 @app.post("/jobs/result")
@@ -2585,13 +3449,32 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
         # seller, and a no-majority split holds everyone for review.
         if getattr(tw, "trigger", "manual") == "quorum":
             import quorum
-            quorum.record_submission(db, task.id, data.proof.get("output_hash"))
+            # Prefer the REAL signed content hash of the output bytes for quorum comparison —
+            # two honest nodes doing the same deterministic work produce the same content_hash.
+            quorum.record_submission(
+                db, task.id, data.proof.get("content_hash") or data.proof.get("output_hash"))
         return {"status": "ok", "task_id": task.id, "test_passed": passed,
                 "reputation": agent.reputation,
                 "can_accept_paid_jobs": agent.can_accept_paid_jobs}
 
-    # 3) Normal job: signature binds output to the node; store hash + result.
-    submit_task_result(db, task, data.result or data.proof.get("output_hash"), data.status)
+    # 3) Normal job: the signature binds the output to the node. Persist the seller-signed
+    #    content_hash (sha256 of the real output bytes) so a fraction of real jobs can be
+    #    re-executed on independent nodes and compared (quorum) — not just trusted.
+    submit_task_result(db, task, data.result or data.proof.get("output_hash"), data.status,
+                       content_hash=data.proof.get("content_hash"),
+                       signature=data.signature, proof=data.proof)
+    # Real-job re-verification: if this completion is a SHADOW re-run of a sampled job, record
+    # its content hash to the open quorum (a divergent hash vs the honest majority freezes this
+    # node). Then, with probability REVERIFY_SAMPLE_RATE, re-verify THIS job on other nodes.
+    if data.status == "completed":
+        try:
+            import quorum as _quorum
+            _quorum.record_submission(
+                db, task.id, data.proof.get("content_hash") or data.proof.get("output_hash"))
+            import reverify as _reverify
+            _reverify.sample_and_open(db, task)
+        except Exception:
+            logger.exception("real-job re-verification hook failed (non-fatal)")
     if data.status == "completed":
         lat = None
         try:
@@ -2621,6 +3504,8 @@ def jobs_result(data: JobResultModel, agent=Depends(api_key_user),
         # Move it to JOB_FAILED and free the reservation + void the buyer's hold (bills nothing).
         # Legacy bookings stay retained here (failed tasks are retryable — see /tasks/{id}/retry).
         compute_tx_status = _auto_fail_compute_tx(db, task, reason="job reported failed")
+        # If this task is one rank of a distributed cluster, a dead rank fails the whole run.
+        _fail_distributed_if_member(db, task)
     # NOTE: a failed job is NOT auto-refunded here — failed tasks are retryable
     # (see /tasks/{id}/retry), which relies on the escrow being retained. Escrow is
     # returned by the buyer cancel path and by the reaper when a node goes dead.
@@ -2781,6 +3666,36 @@ def buyer_spend(user: dict = Depends(get_current_user), db: Session = Depends(ge
     }
 
 
+@app.get("/vms", tags=["compute"])
+def list_my_vms(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Every VM the signed-in buyer has launched, with its STABLE address + live status. Powers
+    the console; there was previously no way to list your own VMs (only GET /vm/{id})."""
+    me = get_user_by_username(db, _username(user))
+    vms = []
+    for vm in vm_routes_for_buyer(db, me.id):
+        vms.append({"vm_id": vm.id, "template": vm.template, "status": vm.status,
+                    "url": _vm_url(vm), "port": vm.app_port, "migrations": vm.migrations,
+                    "hourly_rate": D(vm.hourly_rate), "hours_left": _hours_left(vm),
+                    "created_at": vm.created_at.isoformat() if vm.created_at else None})
+    return {"vms": vms}
+
+
+@app.get("/clusters", tags=["compute"])
+def list_my_clusters(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Every distributed cluster the signed-in buyer has launched (status + rendezvous readiness).
+    Powers the console; complements GET /jobs/manifest/{id} (a single cluster)."""
+    from db import MultiNodeJob
+    me = get_user_by_username(db, _username(user))
+    rows = (db.query(MultiNodeJob)
+            .filter(MultiNodeJob.buyer_id == me.id, MultiNodeJob.kind == "distributed")
+            .order_by(MultiNodeJob.id.desc()).limit(50).all())
+    return {"clusters": [
+        {"job_id": j.id, "status": j.status, "world_size": j.total_segments,
+         "backend": j.backend, "rendezvous_ready": bool(j.master_addr),
+         "created_at": j.created_at.isoformat() if j.created_at else None,
+         "manifest_url": f"/jobs/manifest/{j.id}"} for j in rows]}
+
+
 @app.get("/onboarding", tags=["account"])
 def onboarding(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Where am I, and what do I do next?
@@ -2865,10 +3780,21 @@ def seller_dashboard(user: dict = Depends(get_current_user), db: Session = Depen
                               "fix": "Install the agent — one command on the machine "
                                      "with the GPU.", "action": "/install"}]}
 
-    market = [D(s.price_per_hour) for s in db.query(SellerSpec).filter(
-                 SellerSpec.attested.is_(True)).all() if spec_is_live(s)]
+    # One pass over live, attested specs: the price median (for the "priced above market"
+    # blocker) AND per-GPU-class demand (busy/total) that feeds the price recommendation.
+    market = []
+    class_busy, class_total = {}, {}
+    for s in db.query(SellerSpec).filter(SellerSpec.attested.is_(True)).all():
+        if not spec_is_live(s):
+            continue
+        market.append(D(s.price_per_hour))
+        ck = (s.gpu_model or "cpu").lower()
+        t = s.total_units or 1
+        class_total[ck] = class_total.get(ck, 0) + t
+        class_busy[ck] = class_busy.get(ck, 0) + max(0, t - (s.available_units or 0))
     median = sorted(market)[len(market)//2] if market else None
 
+    import pricing_engine
     nodes, blockers = [], []
     for sp in specs:
         live = spec_is_live(sp)
@@ -2879,8 +3805,26 @@ def seller_dashboard(user: dict = Depends(get_current_user), db: Session = Depen
         earned = sum((D(b.seller_payout) for b in db.query(Booking).filter(
                         Booking.spec_id == sp.id, Booking.status == "released").all()),
                      Decimal(0))
+        # Explainable price recommendation (same engine as /nodes/*/price/recommendation and
+        # the auto-price batch) so the seller sees a suggested number + why, inline.
+        ck = (sp.gpu_model or "cpu").lower()
+        ct = class_total.get(ck, 0)
+        class_util = (class_busy.get(ck, 0) / ct) if ct else (util / 100.0)
+        rec = pricing_engine.recommend(
+            cloud_reference_for(sp.gpu_model),
+            perf_reference=pricing_engine.performance_reference_price(sp.gpu_model),
+            utilization=class_util,
+            trust_level=trust_level_for(sp).get("level"),
+            benchmark_verdict=getattr(sp, "benchmark_verdict", None),
+            confidential=dbmod.spec_confidential_active(sp),
+            region_verified=bool(getattr(sp, "region_verified", False)),
+            reputation=me.reputation,
+            min_price=(float(sp.min_price) if sp.min_price is not None else None),
+            max_price=(float(sp.max_price) if sp.max_price is not None else None),
+            current_price=float(sp.price_per_hour or 0),
+        )
         nodes.append({
-            "id": sp.public_id, "gpu_model": sp.gpu_model,
+            "id": sp.public_id, "spec_id": sp.id, "gpu_model": sp.gpu_model,
             "online": live, "attested": bool(sp.attested),
             "price_per_hour": D(sp.price_per_hour),
             "units_total": sp.total_units, "units_busy": busy,
@@ -2889,6 +3833,10 @@ def seller_dashboard(user: dict = Depends(get_current_user), db: Session = Depen
             "success_rate": round(100.0 * sp.jobs_completed / total, 1) if total else None,
             "reputation": rep["score"] if isinstance(rep, dict) else rep,
             "earned_total": q(earned),
+            "suggested_price": rec["recommended_price"],
+            "suggested_reason": rec["explanation"],
+            "savings_vs_cloud_pct": rec["savings_vs_cloud_pct"],
+            "auto_price": bool(sp.auto_price),
             "last_seen": sp.last_seen.isoformat() if sp.last_seen else None,
         })
 
@@ -3207,6 +4155,64 @@ def admin_financial_integrity(me=Depends(require_admin), db: Session = Depends(g
     return {"ok": fi["balanced"], "ledger": fi, "payout_backlog": pb}
 
 
+@app.get("/admin/dataset/authenticity", tags=["admin"])
+def admin_dataset_authenticity(limit: int = Query(1000, ge=1, le=50000),
+                               since_id: int = Query(0, ge=0),
+                               fmt: str = Query("json", alias="format"),
+                               me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Export the GPU-authenticity TRAINING dataset — feature rows (score + ratio-to-public-
+    reference per metric) + labels (fraud / verdict), plus headline stats. GPU/perf signals only,
+    no PII. `format=jsonl` returns newline-delimited JSON for direct ingestion by a trainer.
+    `since_id` enables incremental pulls."""
+    import training_data as td
+    rows = td.export_authenticity_dataset(db, limit=limit, since_id=since_id)
+    if fmt == "jsonl":
+        return PlainTextResponse(td.to_jsonl(rows), media_type="application/x-ndjson")
+    return {"stats": td.dataset_stats(db), "count": len(rows), "rows": rows}
+
+
+@app.get("/admin/backups", tags=["admin"])
+def admin_list_backups(limit: int = Query(50, ge=1, le=500),
+                       me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Disaster-recovery status of the PLATFORM database backups: the health summary (last
+    successful backup + its age, counts, total size) plus the most recent backup rows."""
+    import backup as _bk
+    rows = dbmod.list_database_backups(db, limit=limit)
+    return {"status": _bk.backup_status(db), "count": len(rows), "backups": [{
+        "id": r.id, "s3_uri": r.s3_uri, "s3_key": r.s3_key, "engine": r.engine,
+        "environment": r.environment, "size_bytes": r.size_bytes, "sha256": r.sha256,
+        "status": r.status, "error": r.error,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    } for r in rows]}
+
+
+@app.post("/admin/backups/run", tags=["admin"])
+def admin_run_backup(retention: int = Query(None, ge=0, le=100000),
+                     me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Take a database backup NOW (dump -> gzip -> S3 -> record -> prune). Idempotent to run
+    often; usually driven by cron / a systemd timer via scripts/backup_database.py. Returns the
+    backup summary, or 503 with the reason if the dump/upload fails (which also records a
+    status=failed row so 'no recent backup' alerts fire)."""
+    import backup as _bk
+    try:
+        return _bk.create_backup(db, retention=retention)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"backup failed: {e}")
+
+
+@app.post("/admin/backups/{backup_id}/verify", tags=["admin"])
+def admin_verify_backup(backup_id: int, me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Integrity-check a stored backup: download it and confirm its SHA-256 matches what we
+    recorded and that it still decompresses."""
+    import backup as _bk
+    try:
+        return _bk.verify_backup(db, backup_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"verify failed: {e}")
+
+
 @app.get("/admin/overview")
 def admin_overview(me=Depends(require_admin), db: Session = Depends(get_db)):
     from db import User, SellerSpec, Task, Booking, Platform, Payout
@@ -3234,6 +4240,50 @@ def admin_overview(me=Depends(require_admin), db: Session = Depends(get_db)):
         "gmv": round(float(gmv), 2),
         "platform_revenue": round(plat.revenue, 2) if plat else 0.0,
         "payouts_pending": {"count": pend_n, "amount": round(float(pend_sum), 2)},
+    }
+
+
+@app.get("/admin/ops")
+def admin_ops(me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Extended operational snapshot for the admin console: live marketplace utilization,
+    VMs, distributed clusters, disk rental, teams, escrowed buyer money, and platform-health
+    invariants (ledger balance + payout backlog). Computed live from authoritative rows."""
+    from db import (SellerSpec, Booking, VMRoute, MultiNodeJob, Organization,
+                    financial_integrity, payout_backlog)
+    online = db.query(SellerSpec).filter(SellerSpec.status == "online").count()
+    avail_units = int(db.query(func.coalesce(func.sum(SellerSpec.available_units), 0))
+                      .filter(SellerSpec.status == "online").scalar() or 0)
+    booked = db.query(VMRoute).filter(
+        VMRoute.status.in_(("starting", "running", "migrating"))).count()
+    capacity = avail_units + booked
+    util = round(100.0 * booked / capacity, 1) if capacity else 0.0
+    vm_migr = int(db.query(func.coalesce(func.sum(VMRoute.migrations), 0)).scalar() or 0)
+    clusters = {s: db.query(MultiNodeJob).filter(
+        MultiNodeJob.kind == "distributed", MultiNodeJob.status == s).count()
+        for s in ("running", "assembling", "complete", "failed")}
+    disk_nodes = db.query(SellerSpec).filter(SellerSpec.disk_enabled == True).count()  # noqa: E712
+    disk_gb = int(db.query(func.coalesce(func.sum(SellerSpec.disk_alloc_gb), 0))
+                  .filter(SellerSpec.disk_enabled == True).scalar() or 0)  # noqa: E712
+    orgs_n = db.query(Organization).count()
+    orgs_bal = float(db.query(func.coalesce(func.sum(Organization.balance), 0)).scalar() or 0)
+    in_escrow = float(db.query(func.coalesce(func.sum(Booking.gross_amount), 0.0)).filter(
+        Booking.status == "escrowed", Booking.test == False).scalar() or 0.0)  # noqa: E712
+    fi = financial_integrity(db)
+    pb = payout_backlog(db)
+    return {
+        "marketplace": {"online": online, "available_units": avail_units,
+                        "booked": booked, "utilization_pct": util},
+        "vms": {"active": booked, "migrations_total": vm_migr},
+        "clusters": clusters,
+        "disk": {"nodes": disk_nodes, "alloc_gb": disk_gb},
+        "teams": {"count": orgs_n, "balance": round(orgs_bal, 2)},
+        "in_escrow": round(in_escrow, 2),
+        "health": {
+            "ledger_balanced": fi["balanced"],
+            "imbalanced_tx": fi["imbalanced_tx"],
+            "payout_backlog": pb.get("unbatched", 0),
+            "payout_backlog_age_hours": round((pb.get("oldest_age_seconds", 0) or 0) / 3600.0, 1),
+        },
     }
 
 
@@ -3470,7 +4520,21 @@ def idle_report(data: IdleReportModel, agent=Depends(api_key_user),
     if not spec or spec.user_id != agent.id:
         raise HTTPException(status_code=404, detail="Spec not found or not yours")
     record_idle_report(db, spec, data.algo, data.hashrate, data.est_daily_usd)
-    return {"status": "ok"}
+    # Mining hashrate is a memory-bandwidth proxy — compare it to the public per-GPU number for
+    # the CLAIMED model (advisory; too noisy to freeze on). Surfaces a mismatch to the seller
+    # and records a labelled data point for the authenticity model.
+    verdict = None
+    try:
+        from gpu_benchmark import classify, HASHRATE_ALGO_METRIC
+        metric = HASHRATE_ALGO_METRIC.get(str(data.algo or "").lower())
+        if metric and spec.gpu_model and data.hashrate:
+            v = classify(spec.gpu_model, data.hashrate, metric=metric)
+            verdict = v["verdict"]
+            _record_benchmark_sample(db, spec, source="idle_mining",
+                                     metrics={metric: data.hashrate}, verdict=verdict)
+    except Exception:
+        logger.debug("idle hashrate authenticity check failed (non-fatal)", exc_info=True)
+    return {"status": "ok", "hashrate_verdict": verdict}
 
 
 @app.get("/nodes/{spec_id}/idle")
@@ -3486,6 +4550,165 @@ def idle_status(spec_id: int, user: dict = Depends(get_current_user),
             "reported_at": str(spec.idle_reported_at) if spec.idle_reported_at else None,
             "credited_total_usd": idle_credited_total(db, spec.id),
             "worker_id": f"pb-{spec.id}"}
+
+
+# ------------------- Spare-disk rental (rent unused disk to a web3/BitTorrent network) -------------------
+# A seller rents spare disk to a decentralized storage network (Storj / BTFS / Sia). This is NOT an
+# idle/fallback mode — it is an EXPLICIT contribution the seller turns on with real arguments (a
+# provider AND a GB cap, both required). It runs INDEPENDENTLY of GPU rentals (disk != GPU), so it
+# earns whether or not a job is running. Each node contributes under a UNIQUE node name
+# (pbdisk-<spec_id>) so a settled payout attributes 1:1 to the seller's unified balance — no
+# per-seller storage wallet (the attribution model NiceHash's `pb-<spec_id>` worker id also uses).
+# The seller sets the GB cap and can change it, pause, or delete at any time.
+
+def _disk_cfg(spec) -> dict:
+    """The config the agent needs to start/limit/stop its storage node (sent on the heartbeat)."""
+    return {"enabled": bool(spec.disk_enabled),
+            "provider": spec.disk_provider,
+            "alloc_gb": spec.disk_alloc_gb,
+            "node_name": disk_node_name(spec)}
+
+
+@app.post("/nodes/disk", tags=["seller"])
+def configure_disk_rental(data: DiskRentalModel, user: dict = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    """Configure a node's SPARE-DISK rental to a storage network. Enabling ALWAYS requires explicit
+    args — a `provider` AND an `alloc_gb` (GB cap); this is a configured contribution, never a
+    defaulted fallback. Independent of GPU rentals (disk earns even while a paid job runs). Earnings
+    land in the unified balance, attributed by the node name pbdisk-<id>; Petabyte never holds a
+    per-seller storage wallet. Disable by sending enabled=false (config kept for one-click re-enable)."""
+    owner = _require_seller(db, user)
+    spec = _get_spec(db, data.spec_id)
+    if not spec or spec.user_id != owner.id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    if data.enabled:
+        # EXPLICIT args required to enable — no defaulting of provider or cap.
+        provider = (data.provider or "").lower()
+        if provider not in DISK_PROVIDERS:
+            raise HTTPException(status_code=422, detail={
+                "code": "DISK_PROVIDER_REQUIRED",
+                "message": f"enabling disk rental requires a provider ({sorted(DISK_PROVIDERS)})."})
+        if data.alloc_gb is None or int(data.alloc_gb) < 1:
+            raise HTTPException(status_code=422, detail={
+                "code": "DISK_ALLOC_REQUIRED",
+                "message": "enabling disk rental requires alloc_gb (the GB cap to pledge, >= 1)."})
+        alloc = min(int(data.alloc_gb), MAX_DISK_ALLOC_GB)
+        set_disk_rental(db, spec, True, provider=provider, alloc_gb=alloc)
+    else:
+        # Pause: keep the stored provider/cap so re-enabling is one click.
+        set_disk_rental(db, spec, False)
+    return {"status": "ok", "spec_id": spec.id, "disk": _disk_cfg(spec)}
+
+
+@app.delete("/nodes/{spec_id}/disk", tags=["seller"])
+def delete_disk_node(spec_id: int, user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """Cancel + delete disk contribution: disable and clear the config. The agent removes the
+    storage-node container and wipes its data dir on the next heartbeat. Already-credited earnings
+    are unaffected (they're in the seller's balance)."""
+    owner = _require_seller(db, user)
+    spec = _get_spec(db, spec_id)
+    if not spec or spec.user_id != owner.id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    delete_disk_rental(db, spec)
+    return {"status": "deleted", "spec_id": spec.id, "disk": _disk_cfg(spec)}
+
+
+@app.post("/nodes/disk_report", tags=["seller"])
+def disk_report(data: DiskReportModel, agent=Depends(api_key_user),
+                db: Session = Depends(get_db)):
+    """Agent reports storage-node usage + an estimated daily trickle (for the seller's visibility).
+    The actual earnings are settled separately from the provider by node name (disk_reconcile)."""
+    spec = _get_spec(db, data.spec_id)
+    if not spec or spec.user_id != agent.id:
+        raise HTTPException(status_code=404, detail="Spec not found or not yours")
+    record_disk_report(db, spec, data.provider, data.used_gb, data.est_daily_usd)
+    return {"status": "ok", "spec_id": spec.id, "node_name": disk_node_name(spec)}
+
+
+def _node_reporter(x_api_key: str = Header(None, alias="X-API-KEY"),
+                   authorization: str = Header(None), db: Session = Depends(get_db)):
+    """Resolve the caller for a node self-report from EITHER an agent API key (the daemon) OR the
+    owner's bearer token (a seller running `petabyte node sync-models`). Ownership is still checked
+    per-spec at the call site, so this only widens WHO may report, never WHICH node."""
+    if x_api_key:
+        try:
+            data = decode_api_key(x_api_key)
+        except ValueError as e:
+            raise HTTPException(status_code=401, detail=str(e))
+        if is_jti_revoked(db, data["jti"]):
+            raise HTTPException(status_code=401, detail="Key revoked")
+        u = get_user_by_username(db, data["u"])
+        if not u:
+            raise HTTPException(status_code=401, detail="Unknown user")
+        return u
+    if authorization and authorization.lower().startswith("bearer "):
+        try:
+            claims = verify_token(authorization.split(" ", 1)[1])
+        except ValueError:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        u = get_user_by_username(db, _username(claims))
+        if not u:
+            raise HTTPException(status_code=401, detail="Unknown user")
+        return u
+    raise HTTPException(status_code=401, detail="Authentication required (X-API-KEY or bearer token)")
+
+
+@app.post("/nodes/models", tags=["seller"])
+def report_cached_models(data: dict, actor=Depends(_node_reporter), db: Session = Depends(get_db)):
+    """Report which model ids a node holds locally (from its ~/.petabyte cache). Feeds the
+    scheduler's cache-locality signal so a job prefers a node that already has the model — avoiding a
+    re-download of tens of GB. Body: {spec_id, models:[...]}. Callable by the agent (X-API-KEY) or
+    the node's owner (bearer, e.g. `petabyte node sync-models`)."""
+    spec = _get_spec(db, (data or {}).get("spec_id"))
+    if not spec or spec.user_id != actor.id:
+        raise HTTPException(status_code=404, detail="Spec not found or not yours")
+    n = set_spec_cached_models(db, spec, (data or {}).get("models") or [])
+    return {"status": "ok", "spec_id": spec.id, "cached_models": n}
+
+
+@app.get("/nodes/{spec_id}/models", tags=["seller"])
+def node_cached_models(spec_id: int, user: dict = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    spec = _get_spec(db, spec_id)
+    if not spec or not me or spec.user_id != me.id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    return {"spec_id": spec.id, "models": spec_cached_models(spec),
+            "reported_at": str(spec.cached_models_at) if spec.cached_models_at else None}
+
+
+@app.get("/nodes/{spec_id}/disk", tags=["seller"])
+def disk_status(spec_id: int, user: dict = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    spec = _get_spec(db, spec_id)
+    if not spec or not me or spec.user_id != me.id:
+        raise HTTPException(status_code=404, detail="Spec not found")
+    return {"spec_id": spec.id, "enabled": bool(spec.disk_enabled),
+            "provider": spec.disk_provider, "alloc_gb": spec.disk_alloc_gb,
+            "used_gb": spec.disk_used_gb, "est_daily_usd": spec.disk_est_daily_usd,
+            "reported_at": str(spec.disk_reported_at) if spec.disk_reported_at else None,
+            "credited_total_usd": disk_credited_total(db, spec.id),
+            "node_name": disk_node_name(spec)}
+
+
+@app.get("/disk/providers", tags=["seller"])
+def disk_providers():
+    """The storage-network adapters a node can pledge disk to, with an honest net $/TB/month
+    reference for the pre-commit estimate. Actual earnings come from the provider (disk_reconcile);
+    this is a planning figure, not a payout guarantee."""
+    ref = DISK_REFERENCE_USD_PER_TB_MONTH
+    return {"providers": [
+        {"id": "storj", "name": "Storj", "kind": "web3 object storage",
+         "image": "storjlabs/storagenode:latest", "est_usd_per_tb_month": ref},
+        {"id": "btfs", "name": "BitTorrent File System (BTFS)", "kind": "bittorrent / TRON",
+         "image": "btfs/node:latest", "est_usd_per_tb_month": ref},
+        {"id": "sia", "name": "Sia (hostd)", "kind": "web3 storage host",
+         "image": "ghcr.io/siafoundation/hostd:latest", "est_usd_per_tb_month": ref},
+    ], "take_rate": STORAGE_TAKE_RATE,
+       "note": "Each node contributes under a unique name (pbdisk-<id>); earnings land in your "
+               "unified Petabyte balance. Opt-in; you set the GB cap and can disable/delete anytime."}
 
 
 # ------------------- ACCOUNT / NOTIFICATIONS -------------------
@@ -3627,17 +4850,66 @@ def withdraw(data: WithdrawModel, request: Request,
             "message": f"This destination was added recently and cannot receive funds "
                        f"for {PAYOUT_COOLING_OFF_H}h after being added."})
 
-    p = request_payout(db, me, m, data.amount)
+    # ANTI-FRAUD HOLD: earnings from a just-completed job clear a dispute/re-verification window
+    # before they can leave. Only pay out what has cleared.
+    _wd = float(withdrawable_earnings(db, me))
+    if data.amount > _wd + 1e-9:
+        raise HTTPException(status_code=402, detail={
+            "code": "EARNINGS_CLEARING",
+            "message": f"${_wd:.2f} is available to withdraw now. The rest is in a "
+                       f"{EARNINGS_HOLD_HOURS}h clearing/dispute window after each job completes.",
+            "withdrawable_usd": round(_wd, 2)})
+    # INSTANT (fast) cash-out is locked until the seller has matured — the fast-exit fraud window.
+    if data.instant and not is_payout_matured(db, me):
+        raise HTTPException(status_code=403, detail={
+            "code": "INSTANT_PAYOUT_LOCKED",
+            "message": f"Instant payout unlocks after {PAYOUT_MATURITY_MIN_JOBS} completed jobs in "
+                       f"good standing. Use the free scheduled payout, or withdraw once earnings clear."})
+    from db import instant_payout_fee
+    fee = float(instant_payout_fee(data.amount)) if data.instant else 0.0
+    if data.instant and fee >= data.amount:
+        raise HTTPException(status_code=422, detail={
+            "code": "AMOUNT_TOO_SMALL_FOR_INSTANT",
+            "message": "That amount is too small for an instant payout after the fee — "
+                       "withdraw more, or use the free scheduled payout."})
+    p = request_payout(db, me, m, data.amount, fee=fee)
     if not p:
         raise HTTPException(status_code=402, detail="Insufficient earnings")
     audit(db, "payout.requested", actor=me, resource_type="payout", resource_id=p.id,
           ip=_client_ip(request),
           request_id=getattr(request.state, "request_id", None),
-          detail={"amount_usd": str(p.amount_usd), "kind": p.kind,
+          detail={"amount_usd": str(p.amount_usd), "fee_usd": str(p.fee_usd or 0),
+                  "instant": bool(data.instant), "kind": p.kind,
                   "destination": redact_destination(m.destination)})
     notifications.notify(db, me.id, "payout.requested", amount=p.amount_usd, kind=p.kind)
     return {"status": "ok", "payout_id": p.id, "amount_usd": p.amount_usd,
+            "fee_usd": float(p.fee_usd or 0), "instant": bool(data.instant),
             "payout_status": p.status, "kind": p.kind}
+
+
+@app.get("/wallet/payout_quote", tags=["wallet"])
+def payout_quote(amount: float = Query(..., gt=0),
+                 user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Show the cost BEFORE committing: scheduled payouts are free; instant costs a small fee.
+    Lets the UI present both options honestly so nobody is surprised by a deduction."""
+    from db import instant_payout_fee
+    me = get_user_by_username(db, _username(user))
+    fee = float(instant_payout_fee(amount))
+    wd = float(withdrawable_earnings(db, me))
+    matured = is_payout_matured(db, me)
+    return {
+        "amount_usd": round(amount, 2),
+        "withdrawable_now_usd": round(wd, 2),
+        "clearing_usd": round(max(0.0, float(me.earnings) - wd), 2),
+        "hold_hours": EARNINGS_HOLD_HOURS,
+        "scheduled": {"fee_usd": 0.0, "net_usd": round(amount, 2),
+                      "note": "Free — paid out on your schedule / next batch."},
+        "instant": {"fee_usd": round(fee, 2), "net_usd": round(amount - fee, 2),
+                    "available": fee < amount and matured,
+                    "eligible": matured,
+                    "note": ("Paid out right away for a small fee." if matured else
+                             f"Unlocks after {PAYOUT_MATURITY_MIN_JOBS} completed jobs in good standing.")},
+    }
 
 
 # ------------------- EMAIL VERIFICATION -------------------
@@ -3813,6 +5085,34 @@ def newsletter_subscribe(body: NewsletterModel, request: Request,
     obs.event("marketing.newsletter.subscribed", message="newsletter signup",
               new=created, mailgun_synced=synced, source="homepage", email_sha=tag)
     return {"ok": True, "message": "Thanks — you're subscribed."}
+
+
+def reconcile_newsletter(db, limit: int = 100) -> dict:
+    """Deliver signups that were recorded but not yet reflected in the mailing list (Mailgun was
+    down/unconfigured at signup, or hit a transient error). Without this, every 'you're
+    subscribed' with a blank/failed Mailgun would strand forever. Runs in the maintenance loop
+    (self-healing) and via POST /admin/newsletter/reconcile. No-op unless Mailgun is configured,
+    so an unconfigured deploy costs nothing."""
+    provider = (NEWSLETTER_PROVIDER or "none").lower()
+    if provider != "mailgun" or not (os.getenv("MAILGUN_API_KEY", "").strip() and NEWSLETTER_LIST_ADDRESS):
+        return {"reconciled": 0, "failed": 0, "skipped": True,
+                "pending": dbmod.count_unsynced_newsletter(db)}
+    done = failed = 0
+    for sub in dbmod.unsynced_newsletter_subscribers(db, limit=limit):
+        if _newsletter_add_to_mailgun(sub.email) in ("synced", "already"):
+            dbmod.mark_newsletter_synced(db, sub.email, True)
+            done += 1
+        else:
+            failed += 1     # leave unsynced; the next cycle retries
+    return {"reconciled": done, "failed": failed, "skipped": False,
+            "pending": dbmod.count_unsynced_newsletter(db)}
+
+
+@app.post("/admin/newsletter/reconcile", tags=["admin"])
+def admin_reconcile_newsletter(limit: int = Query(1000, ge=1, le=10000),
+                               me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Push any newsletter signups not yet reflected in the mailing list to the provider now."""
+    return reconcile_newsletter(db, limit=limit)
 
 
 @app.get("/landing/video", tags=["marketing"])
@@ -4162,6 +5462,15 @@ def get_schedule(user: dict = Depends(get_current_user), db: Session = Depends(g
 
 # ------------------- ORGANIZATIONS -------------------
 
+@app.get("/orgs", tags=["account"])
+def list_orgs_endpoint(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Teams the signed-in user belongs to — shared-wallet enterprise/lab accounts with an
+    optional budget cap. There is no public org directory, so this is how the console lets a
+    user find the orgs they can act on (create one with POST /orgs)."""
+    me = get_user_by_username(db, _username(user))
+    return {"orgs": list_orgs_for_user(db, me.id)}
+
+
 @app.post("/orgs")
 def create_org_endpoint(data: OrgCreateModel, user: dict = Depends(get_current_user),
                         db: Session = Depends(get_db)):
@@ -4169,6 +5478,8 @@ def create_org_endpoint(data: OrgCreateModel, user: dict = Depends(get_current_u
     org = create_org(db, data.name, me)
     if not org:
         raise HTTPException(status_code=400, detail="Org name already taken")
+    audit(db, "team.create", actor=me, resource_type="org", resource_id=org.id,
+          org_id=org.id, detail={"name": org.name})
     return {"status": "ok", "org_id": org.id, "name": org.name, "your_role": "admin"}
 
 
@@ -4197,6 +5508,49 @@ def add_member_endpoint(org_id: int, data: OrgMemberModel,
             raise HTTPException(status_code=404, detail="User not found")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    audit(db, "team.member.add", actor=me, resource_type="org_member", resource_id=data.username,
+          org_id=org_id, detail={"role": data.role})
+    return {"status": "ok", "members": org_members(db, org_id)}
+
+
+@app.put("/orgs/{org_id}/members/{username}", tags=["account"])
+def set_member_role_endpoint(org_id: int, username: str, data: OrgRoleModel,
+                             user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Change a team member's role (admin only). The org must always keep at least one
+    admin, so demoting the sole admin is refused (409)."""
+    me = get_user_by_username(db, _username(user))
+    m = get_membership(db, org_id, me.id)
+    if not m or m.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    try:
+        res = set_org_member_role(db, org_id, username, data.role)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if res == "not_found":
+        raise HTTPException(status_code=404, detail="Not a member of this team")
+    if res == "last_admin":
+        raise HTTPException(status_code=409, detail="A team must keep at least one admin")
+    audit(db, "team.member.role", actor=me, resource_type="org_member", resource_id=username,
+          org_id=org_id, detail={"role": data.role})
+    return {"status": "ok", "members": org_members(db, org_id)}
+
+
+@app.delete("/orgs/{org_id}/members/{username}", tags=["account"])
+def remove_member_endpoint(org_id: int, username: str,
+                           user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Remove a member from a team (admin only). The sole admin cannot be removed (409),
+    so a team can never be left with no one able to manage it."""
+    me = get_user_by_username(db, _username(user))
+    m = get_membership(db, org_id, me.id)
+    if not m or m.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    res = remove_org_member(db, org_id, username)
+    if res == "not_found":
+        raise HTTPException(status_code=404, detail="Not a member of this team")
+    if res == "last_admin":
+        raise HTTPException(status_code=409, detail="A team must keep at least one admin")
+    audit(db, "team.member.remove", actor=me, resource_type="org_member", resource_id=username,
+          org_id=org_id)
     return {"status": "ok", "members": org_members(db, org_id)}
 
 
@@ -4213,7 +5567,23 @@ def org_deposit_endpoint(org_id: int, data: OrgDepositModel,
     if data.budget_cap is not None:
         org.budget_cap = data.budget_cap; db.add(org); db.commit()
     bal = org_deposit(db, org, data.amount)
+    audit(db, "team.deposit", actor=me, resource_type="org", resource_id=org_id, org_id=org_id,
+          detail={"amount": float(data.amount), "budget_cap": (float(data.budget_cap)
+                  if data.budget_cap is not None else None)})
     return {"status": "ok", "balance": bal, "budget_cap": org.budget_cap}
+
+
+@app.get("/orgs/{org_id}/audit", tags=["account"])
+def org_audit_endpoint(org_id: int, limit: int = Query(200, ge=1, le=500),
+                       user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Tenant-facing audit trail for a team — every member change, deposit and spend scoped to it.
+    Admin-only (the security-team / SOC-2 view). Includes a tamper-evidence check over the chain."""
+    me = get_user_by_username(db, _username(user))
+    m = get_membership(db, org_id, me.id)
+    if not m or m.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    return {"org_id": org_id, "events": list_audit_for_org(db, org_id, limit=limit),
+            "integrity": verify_audit_chain(db)}
 
 
 @app.get("/orgs/{org_id}/usage")
@@ -4240,6 +5610,8 @@ def deposit_funds(data: DepositModel, user: dict = Depends(get_current_user),
                             detail="Direct deposit disabled; use checkout (payment webhook)")
     me = get_user_by_username(db, _username(user))
     balance = deposit(db, me, data.amount)
+    obs.event(EVENTS.WALLET_FUNDED, message="wallet funded (sandbox deposit)",
+              user_id=me.id, source="deposit")
     return {"status": "ok", "balance": balance}
 
 
@@ -4904,7 +6276,12 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
 @app.get("/wallet", tags=["wallet"])
 def wallet(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
-    return {"balance": round(me.balance, 4), "earnings": round(me.earnings, 4)}
+    wd = float(withdrawable_earnings(db, me))
+    return {"balance": round(me.balance, 4), "earnings": round(me.earnings, 4),
+            "withdrawable": round(wd, 4),
+            "clearing": round(max(0.0, float(me.earnings) - wd), 4),
+            "instant_eligible": is_payout_matured(db, me),
+            "hold_hours": EARNINGS_HOLD_HOURS}
 
 
 @app.get("/me", tags=["account"])
@@ -5105,7 +6482,23 @@ def _advance_manifest(db, task, result_ref):
         return
     job = complete_segment(db, seg, result_ref)
     if job and job.status == "running" and all_segments_done(db, job):
-        _finalize_job(db, job)
+        if job.kind == "distributed":
+            # A coordinated cluster has no stitch step — it is done when every rank finishes.
+            set_job_status(db, job, "complete", output_ref=result_ref)
+        else:
+            _finalize_job(db, job)
+
+
+def _fail_distributed_if_member(db, task):
+    """A distributed cluster is gang-scheduled: if any rank dies, the run can't continue, so the
+    whole job is marked failed. (Escrow on the other ranks is retained/retryable or refunded by
+    the buyer cancel path — same as any failed job.)"""
+    seg = segment_for_task(db, task.id)
+    if not seg:
+        return
+    job = get_multinode_job(db, seg.job_id)
+    if job and job.kind == "distributed" and job.status == "running":
+        set_job_status(db, job, "failed")
 
 
 def _finalize_job(db, job):
@@ -5191,11 +6584,19 @@ def job_manifest(job_id: int, user: dict = Depends(get_current_user),
     if not job or not me or (job.buyer_id != me.id and not _is_admin(me)):
         raise HTTPException(status_code=404, detail="Job not found")
     segs = job_segments(db, job_id)
-    return {"job_id": job.id, "kind": job.kind, "status": job.status,
-            "total_segments": job.total_segments, "output_ref": job.output_ref,
-            "stitch_task_id": job.stitch_task_id,
-            "segments": [{"idx": s.idx, "task_id": s.task_id, "range": [s.range_start, s.range_end],
-                          "status": s.status, "output_ref": s.output_ref} for s in segs]}
+    out = {"job_id": job.id, "kind": job.kind, "status": job.status,
+           "total_segments": job.total_segments, "output_ref": job.output_ref,
+           "stitch_task_id": job.stitch_task_id,
+           "segments": [{"idx": s.idx, "task_id": s.task_id, "range": [s.range_start, s.range_end],
+                         "status": s.status, "output_ref": s.output_ref} for s in segs]}
+    if job.kind == "distributed":
+        # A cluster manifest: world_size, the collective backend, and rank-0's rendezvous address.
+        out.update({"world_size": job.total_segments, "backend": job.backend,
+                    "master_addr": job.master_addr, "master_port": job.master_port,
+                    "rendezvous_ready": bool(job.master_addr),
+                    "ranks": [{"rank": s.idx, "task_id": s.task_id, "status": s.status}
+                              for s in segs]})
+    return out
 
 
 @app.post("/render")
@@ -5237,6 +6638,307 @@ def render_job(data: RenderModel, user: dict = Depends(get_current_user),
             "frame_range": [data.frame_start, data.frame_end], "tasks": tasks,
             "manifest_url": f"/jobs/manifest/{job.id}",
             "estimated_cost": q(sum((D(t["price_per_hour"]) for t in tasks), D(0)) * D(data.hours))}
+
+
+# ------------------- DISTRIBUTED COMPUTE (one job across N GPUs on different machines) -------------------
+# Split a single job across up to MAX_DISTRIBUTED_NODES GPUs that live on DIFFERENT machines but
+# form one cluster over the VPN (torchrun/NCCL all-reduce). The platform gang-schedules N distinct
+# nodes (one per provider = never two ranks on the same PC), escrows all-or-nothing, assigns ranks,
+# and coordinates rendezvous; each node's agent runs the container under torchrun with its rank.
+
+_HOSTPORT_RE = re.compile(r"^[A-Za-z0-9._:\-\[\]]{1,255}$")   # IPv4/IPv6/hostname (VPN address)
+
+# The built-in cluster SELF-TEST sentinel. When a buyer passes selftest=true, the command is
+# rewritten to this so each rank's agent runs a real cross-process all-reduce (proving the ranks
+# actually communicate + reduce correctly) instead of a container. MUST match the agent's
+# distributed_run.SELFTEST_SENTINEL.
+DISTRIBUTED_SELFTEST_SENTINEL = "petabyte:selftest-allreduce"
+
+
+class DistributedModel(BaseModel):
+    image: Optional[str] = Field(None, min_length=3, max_length=300)  # training/compute container image
+    command: Optional[str] = Field(None, max_length=8000)   # torchrun target, e.g. "train.py --epochs 3"
+    world_size: int = Field(ge=2, le=100)                   # GPUs/ranks (hard cap re-checked below)
+    hours: int = Field(ge=1, le=168)
+    gpu_class: Optional[str] = Field(None, max_length=64)
+    region: Optional[str] = Field(None, max_length=64)
+    backend: str = Field("nccl", max_length=16)             # nccl (GPU) | gloo (CPU/fallback)
+    env: Optional[dict] = None
+    vpn: bool = False                                       # give the buyer a WireGuard tunnel in
+    selftest: bool = False                                  # run the built-in cluster all-reduce self-test
+
+
+@app.post("/distributed", tags=["compute"])
+def distributed_job(data: DistributedModel, user: dict = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """Run ONE job across N GPUs on N different machines, wired into a single cluster over the VPN.
+
+    The router picks N nodes across DISTINCT providers (never two ranks on the same PC), escrows
+    all N up-front (all-or-nothing — a cluster that can't fully form is refused and refunded),
+    assigns ranks 0..N-1, and coordinates rendezvous: rank 0 registers its VPN address, the others
+    join it (torchrun --nnodes=N). The job completes when every rank finishes; if any rank dies the
+    whole run is marked failed (gang semantics).
+
+    Pass `selftest: true` to run the built-in CLUSTER SELF-TEST instead of a container: each rank
+    performs a real cross-process all-reduce, proving the N ranks actually communicate and compute
+    the correct global reduction — a no-GPU, no-image "does my cluster really work?" smoke test to
+    run before committing to a long training job. (image/command are then optional.)"""
+    buyer = get_user_by_username(db, _username(user))
+    if not buyer:
+        raise HTTPException(status_code=401, detail="Unknown user")
+    if data.backend not in ("nccl", "gloo"):
+        raise HTTPException(status_code=422, detail="backend must be 'nccl' or 'gloo'")
+    n = int(data.world_size)
+    if n < 2 or n > MAX_DISTRIBUTED_NODES:
+        raise HTTPException(status_code=422,
+                            detail=f"world_size must be between 2 and {MAX_DISTRIBUTED_NODES}")
+    # The self-test needs no buyer image/command; a real training run does. Resolve both here so
+    # the dispatched task carries exactly what the agent needs to execute.
+    if data.selftest:
+        image = data.image or "petabyte/selftest:builtin"   # placeholder — the agent runs no container
+        command = DISTRIBUTED_SELFTEST_SENTINEL
+    else:
+        if not data.image:
+            raise HTTPException(status_code=422,
+                                detail="image is required (or set selftest=true for the cluster self-test)")
+        image, command = data.image, data.command
+    env = {str(k): str(v) for k, v in (data.env or {}).items()}
+    # Gang-schedule N DISTINCT MACHINES. anti_affinity="spec" spreads ranks by machine (spec), not
+    # by owner — so a single user's home lab of N computers (each its own agent + API key + spec)
+    # can form the cluster, and so can N machines across N accounts. (Fan-out redundancy still
+    # uses the default owner-level anti-affinity elsewhere.)
+    intent = {"workload": "distributed", "redundancy": n, "hours": data.hours,
+              "gpu_class": data.gpu_class, "region": data.region, "anti_affinity": "spec"}
+    nodes = select_plan(db, intent)["selected"]
+    if len(nodes) < n:
+        obsmod.inc_metric("petabyte_cluster_formations_total", outcome="insufficient_nodes",
+                          backend=data.backend, environment=obsmod.ENVIRONMENT)
+        raise HTTPException(status_code=409, detail={
+            "code": "INSUFFICIENT_DISTINCT_NODES",
+            "message": (f"A distributed job needs {n} GPUs on {n} different machines, but only "
+                        f"{len(nodes)} distinct machines are online right now. Each computer runs "
+                        f"its own agent (its own API key + spec); they can be under one account or "
+                        f"several."),
+            "requested": n, "available": len(nodes)})
+    job = create_distributed_job(db, buyer,
+                                 {"image": image, "command": command, "vpn": bool(data.vpn),
+                                  "selftest": bool(data.selftest)},
+                                 world_size=n, backend=data.backend)
+    booked, ranks = [], []
+    for rank, sel in enumerate(nodes[:n]):
+        spec = _get_spec(db, sel["spec_id"])
+        task = _book_segment_task(db, buyer, spec, data.hours, "distributed")
+        if not task:
+            # All-or-nothing: a cluster missing a rank can't train. Unwind every booked rank
+            # (refund escrow + free capacity) so the buyer is charged nothing for a non-cluster.
+            for _, bt in booked:
+                refund_booking(db, bt.booking_id)
+            set_job_status(db, job, "failed")
+            obsmod.inc_metric("petabyte_cluster_formations_total", outcome="booking_failed",
+                              backend=data.backend, environment=obsmod.ENVIRONMENT)
+            raise HTTPException(status_code=402, detail={
+                "code": "CLUSTER_BOOKING_FAILED",
+                "message": ("Could not reserve every node for the cluster (funds or capacity); "
+                            "nothing was charged."),
+                "booked": len(booked), "needed": n})
+        task.template_params = json.dumps({"job_id": job.id, "rank": rank, "world_size": n,
+                                           "backend": data.backend, "image": image,
+                                           "command": command, "env": env,
+                                           "selftest": bool(data.selftest),
+                                           "is_master": rank == 0})
+        task.volume = f"dist-{job.id}"; db.add(task); db.commit()
+        add_job_segment(db, job, rank, task.id, rank, rank)
+        booked.append((spec, task))
+        ranks.append({"rank": rank, "spec_id": spec.id, "task_id": task.id,
+                      "is_master": rank == 0, "price_per_hour": spec.price_per_hour})
+    est = q(sum((D(r["price_per_hour"]) for r in ranks), D(0)) * D(data.hours))
+    obsmod.inc_metric("petabyte_cluster_formations_total", outcome="success",
+                      backend=data.backend, environment=obsmod.ENVIRONMENT)
+    return {"status": "ok", "job_id": job.id, "kind": "distributed", "world_size": n,
+            "backend": data.backend, "hours": data.hours, "ranks": ranks,
+            "master_rank": 0, "estimated_cost": est, "vpn": bool(data.vpn),
+            "vpn_config_url": (f"/jobs/{job.id}/vpn_config" if data.vpn else None),
+            "manifest_url": f"/jobs/manifest/{job.id}",
+            "rendezvous_url": f"/jobs/rendezvous/{job.id}",
+            "note": ("Ranks form one cluster over the VPN. Rank 0 registers its address at "
+                     "/jobs/rendezvous; the others poll /jobs/rendezvous/{job_id} to join.")}
+
+
+@app.get("/distributed/availability", tags=["compute"])
+def distributed_availability(gpu_class: Optional[str] = Query(None, max_length=64),
+                             region: Optional[str] = Query(None, max_length=64),
+                             db: Session = Depends(get_db)):
+    """How big a cluster can form right now: the count of DISTINCT bookable MACHINES (one rank per
+    machine — a single user may contribute several computers, each its own agent/spec) and a
+    representative per-node price, so the app can show the max cluster size and an estimated cost
+    before a buyer commits. Aggregate only — no seller identity."""
+    import router as _router
+    intent = {}
+    if gpu_class:
+        intent["gpu_class"] = gpu_class
+    if region:
+        intent["region"] = region
+    # One rank per MACHINE (distinct spec), matching /distributed's anti_affinity="spec": a user's
+    # multiple computers each count as a bookable node.
+    machines = {}
+    for cnd in _router.gather_candidates(db, intent):
+        machines[cnd["spec"].id] = float(cnd["price"])
+    prices = sorted(machines.values())
+    est = (prices[len(prices) // 2] if prices else None)   # median per-node $/hr
+    return {"available_nodes": len(machines),
+            "max_cluster": min(len(machines), MAX_DISTRIBUTED_NODES),
+            "max_nodes_cap": MAX_DISTRIBUTED_NODES,
+            "est_price_per_hour": est}
+
+
+class RendezvousModel(BaseModel):
+    task_id: int
+    host: str = Field(min_length=1, max_length=255)     # this rank's VPN-reachable address
+    port: int = Field(gt=0, le=65535)
+    slots: int = Field(1, ge=1, le=64)                  # GPUs this rank contributes (mpirun slots)
+
+
+@app.post("/jobs/rendezvous", tags=["compute"])
+def jobs_rendezvous_register(data: RendezvousModel, agent=Depends(api_key_user),
+                             db: Session = Depends(get_db)):
+    """A rank registers ITS OWN VPN-reachable address for the cluster. Every rank calls this, so the
+    whole cluster becomes addressable (an MPI hostfile / Ray address / torchrun rendezvous). Rank 0
+    additionally becomes the cluster master. An agent may only register a rank it owns, and only
+    rank 0 can set the master — no other rank can hijack it."""
+    task = get_task_for_agent(db, data.task_id, agent)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found or not yours")
+    job = distributed_job_for_task(db, task.id)
+    if not job:
+        raise HTTPException(status_code=409, detail="Task is not part of a distributed job")
+    seg = segment_for_task(db, task.id)
+    if not seg:
+        raise HTTPException(status_code=404, detail="No cluster rank for this task")
+    if not _HOSTPORT_RE.match(data.host):
+        raise HTTPException(status_code=422, detail="host must be an IP/hostname (VPN address)")
+    register_peer(db, seg, data.host, data.port, data.slots)   # record THIS rank's address
+    if seg.idx == 0:                                            # rank 0 is also the master
+        if not set_rendezvous(db, job, data.host, data.port):
+            raise HTTPException(status_code=409, detail="Rendezvous already set to a different address")
+    return {"status": "ok", "job_id": job.id, "my_rank": seg.idx, "is_master": seg.idx == 0,
+            "master_addr": job.master_addr, "master_port": job.master_port,
+            "world_size": job.total_segments, "cluster_ready": cluster_ready(db, job)}
+
+
+@app.get("/jobs/rendezvous/{job_id}", tags=["compute"])
+def jobs_rendezvous_get(job_id: int, task_id: Optional[int] = Query(None),
+                        agent=Depends(api_key_user), db: Session = Depends(get_db)):
+    """A rank fetches everything it needs to join the cluster: its own rank, world_size, the
+    backend, and (once rank 0 is up) the master address. Non-master ranks poll until ready=true.
+    Only an agent that owns one of the job's ranks may read it.
+
+    `task_id` disambiguates WHICH rank is asking when ONE account owns several ranks in the same
+    cluster (a home lab: many computers, one account, distinct API keys — the key resolves to the
+    user, so the caller names its own task to get its exact rank). Omitted → the agent's
+    first-owned rank (correct when each rank is a different account)."""
+    job = get_multinode_job(db, job_id)
+    if not job or job.kind != "distributed":
+        raise HTTPException(status_code=404, detail="Distributed job not found")
+    if task_id is not None:
+        task = get_task_for_agent(db, task_id, agent)
+        seg = segment_for_task(db, task_id) if task else None
+        if not task or not seg or seg.job_id != job.id:
+            raise HTTPException(status_code=404, detail="You have no such rank in this job")
+        rank = seg.idx
+    else:
+        seg, rank = rank_for_agent(db, job, agent)
+    if seg is None:
+        raise HTTPException(status_code=404, detail="You have no rank in this job")
+    info = rendezvous_info(db, job)
+    info.update({"my_rank": rank, "is_master": rank == 0,
+                 "cluster_ready": cluster_ready(db, job)})
+    return info
+
+
+# ---- "Petabyte is just another provider": export the cluster to the tools an org already runs ----
+# Big-corp / academic / gov workloads run on Slurm, MPI, Ray, Kubernetes — they will not rewrite
+# their stack. These endpoints hand the running cluster back as the standard artifacts those tools
+# consume, so adopting Petabyte is "add a node pool", not "change your infrastructure".
+
+def _cluster_launch_cmds(job, peers) -> dict:
+    """Ready-to-run commands that drive THIS cluster from the standard launchers."""
+    import json as _json
+    params = _json.loads(job.params or "{}")
+    cmd = params.get("command") or "<your-entrypoint>"
+    n = job.total_segments
+    total_slots = sum(p["slots"] for p in peers) or n
+    master = f"{job.master_addr}:{job.master_port}" if job.master_addr else "<rank0-host>:<port>"
+    mhost = job.master_addr or "<rank0-host>"
+    mport = job.master_port or 29500
+    return {
+        "mpirun": f"mpirun --hostfile hostfile -np {total_slots} {cmd}",
+        "torchrun": (f"torchrun --nnodes={n} --nproc_per_node=<gpus_per_node> "
+                     f"--node_rank=$RANK --rdzv_backend=static "
+                     f"--master_addr={mhost} --master_port={mport} {cmd}"),
+        "ray_head": f"ray start --head --port={mport}",
+        "ray_worker": f"ray start --address={master}",
+        "slurm_srun": f"srun --nodes={n} --ntasks={total_slots} {cmd}",
+    }
+
+
+@app.get("/jobs/{job_id}/hostfile", response_class=PlainTextResponse, tags=["compute"])
+def cluster_hostfile(job_id: int, user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """The cluster as an MPI/torchrun HOSTFILE (`<host> slots=<gpus>` per line). Drop it into your
+    existing `mpirun --hostfile` — Petabyte is just another set of nodes. Owner-only."""
+    job = get_multinode_job(db, job_id)
+    me = get_user_by_username(db, _username(user))
+    if not job or job.kind != "distributed" or not me or (job.buyer_id != me.id and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="Distributed job not found")
+    peers = cluster_peers(db, job)
+    ready = all(p["registered"] for p in peers) if peers else False
+    lines = [f"# Petabyte cluster job {job.id}: {sum(1 for p in peers if p['registered'])}/"
+             f"{len(peers)} nodes registered (ready={str(ready).lower()})"]
+    for p in peers:
+        if p["registered"]:
+            lines.append(f"{p['host']} slots={p['slots']}")
+    return "\n".join(lines) + "\n"
+
+
+@app.get("/jobs/{job_id}/cluster", tags=["compute"])
+def cluster_spec(job_id: int, user: dict = Depends(get_current_user),
+                 db: Session = Depends(get_db)):
+    """The full cluster spec + ready-to-run launch commands for MPI / torchrun / Ray / Slurm, so
+    your existing scheduler treats Petabyte as another node pool. Owner-only."""
+    job = get_multinode_job(db, job_id)
+    me = get_user_by_username(db, _username(user))
+    if not job or job.kind != "distributed" or not me or (job.buyer_id != me.id and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="Distributed job not found")
+    peers = cluster_peers(db, job)
+    return {"job_id": job.id, "status": job.status, "world_size": job.total_segments,
+            "backend": job.backend, "ready": cluster_ready(db, job),
+            "master": ({"rank": 0, "host": job.master_addr, "port": job.master_port}
+                       if job.master_addr else None),
+            "nodes": peers, "hostfile_url": f"/jobs/{job.id}/hostfile",
+            "launch": _cluster_launch_cmds(job, peers)}
+
+
+@app.get("/jobs/{job_id}/vpn_config", response_class=PlainTextResponse, tags=["compute"])
+def cluster_vpn_config(job_id: int, user: dict = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    """The buyer's WireGuard CLIENT config for a VPN-enabled distributed cluster — a private,
+    encrypted tunnel into the cluster's network. Owner-only; only when the job was launched with
+    vpn=true. A fresh keypair is minted per download; the private half lives only in this response
+    (the server never keeps it), the public half is registered as a /32 peer."""
+    job = get_multinode_job(db, job_id)
+    me = get_user_by_username(db, _username(user))
+    if not job or job.kind != "distributed" or not me or (job.buyer_id != me.id and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="Distributed job not found")
+    try:
+        want_vpn = bool(json.loads(job.params or "{}").get("vpn"))
+    except Exception:
+        want_vpn = False
+    if not want_vpn:
+        raise HTTPException(status_code=400, detail="This cluster was not launched with VPN")
+    client_priv, client_pub = gen_wg_keypair()
+    peer = add_wg_peer(db, me, client_pub)               # race-safe /32 allocation
+    apply_peer_to_interface(client_pub, peer.address)    # live only when WG_APPLY=true
+    return build_client_wg_config(client_priv, peer.address)
 
 
 @app.post("/solve")
@@ -5281,20 +6983,487 @@ def suggest_price(gpu_model: Optional[str] = None, db: Session = Depends(get_db)
         if gpu_model and gpu_model.lower() not in (spec.gpu_model or "").lower():
             continue
         prices.append(spec.price_per_hour)
-    ref = float(AWS_REFERENCE_PRICE)
+    # Per-GPU cloud reference (shared table) so a T4 isn't anchored off an H100-class rate.
+    # Only fall back to the generic AWS reference when we don't recognise the GPU class.
+    import pricing_engine
+    cloud_ref = cloud_reference_for(gpu_model)
+    perf_ref = pricing_engine.performance_reference_price(gpu_model)
+    ref = float(cloud_ref) if cloud_ref is not None else float(AWS_REFERENCE_PRICE)
     if prices:
         prices.sort()
         median = prices[len(prices) // 2]
         suggested, low, high = qc(median), qc(prices[0]), qc(prices[-1])
         basis = f"median of {len(prices)} similar live node(s)"
-    else:
-        suggested = qc(D(ref) * D("0.45"))    # ~55% under cloud when no market yet
+    elif perf_ref is not None:
+        # Benchmark-anchored: guarantees a slower GPU is never suggested above a faster one.
+        suggested = qc(D(str(perf_ref)))
+        low, high = qc(D(str(perf_ref)) * D("0.80")), qc(D(str(perf_ref)) * D("1.20"))
+        basis = "priced on this GPU's FP16 benchmark (a faster card always sits above a slower one)"
+    elif cloud_ref is not None:
+        suggested = qc(D(ref) * D("0.45"))    # ~55% under THIS GPU's cloud rate when no market yet
         low, high = qc(D(ref) * D("0.30")), qc(D(ref) * D("0.70"))
-        basis = "no similar nodes online — anchored to ~55% below the cloud reference"
+        basis = "no similar nodes online — anchored ~55% below the cloud reference for this GPU"
+    else:
+        suggested = qc(D(ref) * D("0.45"))
+        low, high = qc(D(ref) * D("0.30")), qc(D(ref) * D("0.70"))
+        basis = "unrecognised GPU + no similar nodes online — anchored to a generic cloud reference"
     return {"gpu_model": gpu_model or "any", "suggested_price": suggested,
             "range_low": low, "range_high": high, "market_samples": len(prices),
-            "cloud_reference": ref, "basis": basis,
+            "benchmark_reference_price": perf_ref,
+            "cloud_reference": round(ref, 2), "cloud_reference_known": cloud_ref is not None,
+            "basis": basis,
             "note": "Suggestion only — you set your price. Stay below the cloud reference to win bookings."}
+
+
+@app.get("/pricing/catalog", tags=["marketplace"])
+def pricing_catalog(db: Session = Depends(get_db)):
+    """The GPU price catalog: every recognised GPU model, sorted by FP16 benchmark ascending, with
+    its benchmark-anchored reference price per hour and the live marketplace average.
+
+    The reference price is a MONOTONIC function of the FP16 TFLOPS benchmark, so a slower GPU is
+    never priced above a faster one — the fairness rule the marketplace guarantees. `avg_price_per_hour`
+    is the mean over currently-live listings of that model (null when none are online)."""
+    import pricing_engine
+    import gpu_benchmark
+    from db import SellerSpec
+    # Live listing prices grouped by canonical GPU model (same normaliser the benchmark uses).
+    live_by_model = {}
+    for s in db.query(SellerSpec).all():
+        if not spec_is_live(s):
+            continue
+        key = gpu_benchmark.normalize_model(s.gpu_model)
+        if key is None:
+            continue
+        live_by_model.setdefault(key, []).append(float(s.price_per_hour or 0))
+    rows = []
+    for r in pricing_engine.catalog():
+        live = live_by_model.get(r["gpu_model"], [])
+        r = dict(r)
+        r["live_listings"] = len(live)
+        r["avg_price_per_hour"] = round(sum(live) / len(live), 2) if live else None
+        r["min_price_per_hour"] = round(min(live), 2) if live else None
+        r["max_price_per_hour"] = round(max(live), 2) if live else None
+        rows.append(r)
+    return {"catalog": rows, "count": len(rows), "sorted_by": "benchmark_tflops_fp16 ascending",
+            "note": "Reference price is derived monotonically from the FP16 TFLOPS benchmark: a "
+                    "slower GPU is never priced above a faster one. Sellers set their own price; "
+                    "this is the fair baseline."}
+
+
+@app.get("/pricing/roi", tags=["marketplace"])
+def pricing_roi(kwh: float = Query(0.12, ge=0, le=2.0),
+                hours: float = Query(8.0, ge=0, le=24.0),
+                full_build: bool = Query(False),
+                db: Session = Depends(get_db)):
+    """"Buy a GPU and rent it" ROI + breakeven, per GPU — every term shown so nothing is a black box.
+
+    Earnings come from the SAME benchmark-anchored reference price the marketplace uses (a buyer's
+    price), minus Petabyte's fee and electricity, for however many `hours` per day you actually rent
+    it out. `full_build=true` accounts for the WHOLE PC (adds a rest-of-build cost + system watts),
+    not just the GPU. Hardware cost defaults to published launch MSRP and is meant to be overridden
+    with today's real price (the buy links show it). This is a MODEL, not a promise: rented hours
+    are demand-dependent and the biggest lever — the response says so."""
+    import hardware_reference as hw
+    take = float(PLATFORM_TAKE_RATE)
+    amz = os.getenv("AFFILIATE_AMAZON_TAG", "").strip()
+    negwrap = os.getenv("AFFILIATE_NEWEGG_WRAP", "").strip()
+    rows = []
+    for model in hw.models():
+        r = hw.roi_row(model, kwh_usd=kwh, hours_per_day=hours, platform_fee=take, full_build=full_build)
+        if r is None:
+            continue
+        r["buy_urls"] = hw.buy_urls(model, amazon_tag=amz, newegg_wrap=negwrap)
+        rows.append(r)
+    # Soonest breakeven first; unprofitable rows (breakeven None) sink to the bottom.
+    rows.sort(key=lambda x: (x["breakeven_days"] is None, x["breakeven_days"] or 9e18))
+    affiliate_on = bool(amz) or bool(negwrap)
+    return {
+        "assumptions": {
+            "kwh_usd": round(kwh, 4),
+            "hours_per_day": round(hours, 2),
+            "full_build": bool(full_build),
+            "platform_fee_pct": round(take * 100.0, 1),
+            "system_cost_ref_usd": hw.SYSTEM_COST_USD,
+            "system_watts_ref": hw.SYSTEM_WATTS,
+            "scope_note": ("Whole-PC: cost and power include the rest of the build (CPU, board, RAM, "
+                           "PSU, storage, case)." if full_build else
+                           "GPU-only: just the card's cost and power. Toggle full_build to include "
+                           "the rest of the PC."),
+            "power_note": "Counts load power during rented hours only; excludes idle/host draw and "
+                          "internet.",
+            "hours_note": "Rented hours/day are demand-dependent and NOT guaranteed — the biggest "
+                          "driver of ROI. Marketplace demand is still early; model conservatively.",
+            "cost_note": "Hardware cost defaults to LAUNCH MSRP (+ a rest-of-build reference in "
+                         "whole-PC mode); street prices vary — use the buy links for today's price.",
+        },
+        "affiliate": {
+            "enabled": affiliate_on,
+            "amazon": bool(amz),
+            "newegg": bool(negwrap),
+            "disclosure": "Petabyte may earn a commission from qualifying purchases made through "
+                          "these retailer links — at no extra cost to you.",
+        },
+        "count": len(rows),
+        "gpus": rows,
+    }
+
+
+@app.get("/partners", tags=["marketplace"])
+def partners_list():
+    """Recommended gear & tools for people running a rig (storage, USDC cash-out, parts planner,
+    power). Each link is a plain useful link unless the founder has configured that partner's
+    affiliate/referral URL — then it's monetised (FTC disclosure below). Honest when unset."""
+    import affiliates
+    ps = affiliates.partners()
+    return {
+        "partners": ps,
+        "affiliate": {
+            "enabled": any(p["affiliate"] for p in ps),
+            "disclosure": "Petabyte may earn a commission from purchases or signups made through "
+                          "these partner links — at no extra cost to you.",
+        },
+    }
+
+
+# ------------------- PAID DATA API (metered, pay-as-you-go against wallet) -------------------
+# Programmatic access to Petabyte's GPU price index + market data + price HISTORY. Auth with an
+# API key carrying the `data` scope. Every call is metered; calls beyond the free monthly quota
+# are billed per-call from the wallet balance (402 when the balance can't cover it). /usage is
+# free to check and never billed.
+
+class _SandboxCaller:
+    """A stand-in 'user' for the published SANDBOX key: authenticated for read access, but with no
+    account, no wallet, and no id — so it can never be billed and never touches per-user state."""
+    is_sandbox = True
+    id = None
+    _is_api_key = True
+    _scopes = ("data",)
+
+
+def data_api_caller(x_api_key: str = Header(..., alias="X-API-KEY"),
+                    db: Session = Depends(get_db)):
+    """Auth for the data API. The published SANDBOX key resolves to a free, unmetered caller so
+    developers can exercise the real request/auth/response flow without an account or wallet; any
+    other key goes through normal API-key auth (and is scoped + metered as usual).
+
+    The sandbox key is matched ONLY when it carries its namespace prefix and exactly equals the
+    configured value — it is never fed to the real key decoder, and it is only honoured on the data
+    API (seller/node/jobs endpoints depend on api_key_user directly, which rejects it). The two key
+    namespaces cannot collide: real keys are Fernet tokens, the sandbox key is a prefixed literal."""
+    if (DATA_API_SANDBOX_KEY
+            and x_api_key.startswith(DATA_API_SANDBOX_KEY_PREFIX)
+            and secrets.compare_digest(x_api_key, DATA_API_SANDBOX_KEY)):
+        return _SandboxCaller()
+    return api_key_user(x_api_key, db)
+
+
+def _meter_data_or_402(user, db, endpoint="gpu-prices") -> dict:
+    if getattr(user, "is_sandbox", False):
+        # The published sandbox key: real data, free and unmetered — never charged, never counted.
+        return {"sandbox": True, "billed": False, "charged": 0.0, "units": 0,
+                "note": "sandbox key — free & unmetered; mint a data-scoped key for production use"}
+    require_scope(user, "data")
+    units = DATA_API_UNITS.get(endpoint, 1)
+    m = meter_data_call(db, user.id, free_quota=DATA_API_FREE_CALLS_MONTH,
+                        price_per_call=DATA_API_PRICE_PER_1K / 1000.0, units=units)
+    if not m.get("ok"):
+        raise HTTPException(status_code=402, detail={
+            "code": "DATA_API_QUOTA_EXCEEDED",
+            "message": "Your monthly trial is used up and your wallet balance can't cover the "
+                       "per-call fee. Add funds to your wallet to keep using the data API.",
+            "price_per_call_usd": m.get("price_per_call"),
+            "period": m.get("period")})
+    return m
+
+
+@app.get("/api/v1/data/gpu-prices", tags=["data"])
+def data_gpu_prices(user=Depends(data_api_caller), db: Session = Depends(get_db)):
+    """Current GPU price index: benchmark-anchored reference price + live marketplace avg/min/max
+    per model. Metered (needs a `data`-scoped key)."""
+    usage = _meter_data_or_402(user, db, "gpu-prices")
+    return {"as_of": datetime.now(timezone.utc).isoformat(),
+            "gpus": _live_price_index(db), "usage": usage}
+
+
+@app.get("/api/v1/data/gpu-prices/history", tags=["data"])
+def data_gpu_price_history(gpu_model: Optional[str] = Query(None), days: int = Query(30, ge=1, le=365),
+                          limit: int = Query(2000, ge=1, le=5000),
+                          user=Depends(data_api_caller), db: Session = Depends(get_db)):
+    """Historical price-index points (newest first), optionally filtered to one GPU model. This is
+    the premium series recorded from periodic snapshots. Metered."""
+    usage = _meter_data_or_402(user, db, "gpu-prices/history")
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
+    rows = price_history(db, gpu_model=gpu_model, since=since, limit=limit)
+    out = [{"captured_at": (r.captured_at.isoformat() if r.captured_at else None),
+            "gpu_model": r.gpu_model,
+            "reference_price": (float(r.reference_price) if r.reference_price is not None else None),
+            "avg_price": (float(r.avg_price) if r.avg_price is not None else None),
+            "min_price": (float(r.min_price) if r.min_price is not None else None),
+            "max_price": (float(r.max_price) if r.max_price is not None else None),
+            "live_count": r.live_count} for r in rows]
+    return {"gpu_model": gpu_model, "days": days, "count": len(out), "points": out, "usage": usage}
+
+
+@app.get("/api/v1/data/market", tags=["data"])
+def data_market(user=Depends(data_api_caller), db: Session = Depends(get_db)):
+    """Marketplace summary: how many GPU models have live listings, total live units, and the
+    overall live price range. Metered."""
+    usage = _meter_data_or_402(user, db, "market")
+    idx = _live_price_index(db)
+    listed = [r for r in idx if r["live_count"] > 0]
+    avgs = [r["avg_price"] for r in listed if r["avg_price"] is not None]
+    return {"as_of": datetime.now(timezone.utc).isoformat(),
+            "models_total": len(idx), "models_with_listings": len(listed),
+            "live_units": sum(r["live_count"] for r in idx),
+            "avg_price_low": (min(avgs) if avgs else None),
+            "avg_price_high": (max(avgs) if avgs else None),
+            "usage": usage}
+
+
+@app.get("/api/v1/data/savings", tags=["data"])
+def data_savings(user=Depends(data_api_caller), db: Session = Depends(get_db)):
+    """Cloud-savings index: per GPU, the benchmark-anchored reference price vs the public cloud
+    on-demand rate and the % cheaper. Sorted by benchmark. Metered."""
+    usage = _meter_data_or_402(user, db, "savings")
+    import pricing_engine
+    rows = pricing_engine.catalog()
+    savings = [r["savings_vs_cloud_pct"] for r in rows if r.get("savings_vs_cloud_pct") is not None]
+    return {"as_of": datetime.now(timezone.utc).isoformat(),
+            "gpus": rows,
+            "median_savings_vs_cloud_pct": (sorted(savings)[len(savings) // 2] if savings else None),
+            "usage": usage}
+
+
+@app.get("/api/v1/data/availability", tags=["data"])
+def data_availability(user=Depends(data_api_caller), db: Session = Depends(get_db)):
+    """Live supply index: how many nodes are online per GPU model and per region right now.
+    Aggregate counts only — no seller identity. Metered."""
+    usage = _meter_data_or_402(user, db, "availability")
+    import gpu_benchmark
+    from db import SellerSpec
+    by_model, by_region, total = {}, {}, 0
+    for s in db.query(SellerSpec).all():
+        if not spec_is_live(s):
+            continue
+        total += 1
+        key = gpu_benchmark.normalize_model(s.gpu_model) or (s.gpu_model or "unknown")
+        by_model[key] = by_model.get(key, 0) + 1
+        reg = (s.region or s.country or "unknown")
+        by_region[reg] = by_region.get(reg, 0) + 1
+    return {"as_of": datetime.now(timezone.utc).isoformat(),
+            "live_nodes_total": total,
+            "by_gpu": [{"gpu_model": k, "live_nodes": v}
+                       for k, v in sorted(by_model.items(), key=lambda kv: -kv[1])],
+            "by_region": [{"region": k, "live_nodes": v}
+                          for k, v in sorted(by_region.items(), key=lambda kv: -kv[1])],
+            "usage": usage}
+
+
+@app.get("/api/v1/data/benchmarks", tags=["data"])
+def data_benchmarks(since_id: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=5000),
+                    user=Depends(data_api_caller), db: Session = Depends(get_db)):
+    """The GPU-authenticity dataset (the data moat): per-observation benchmark scores, their ratio
+    to the public per-model reference, server-timing, proof-of-work result, and the fraud/verdict
+    LABELS — the (features, label) corpus a fraud/authenticity model trains on. ANONYMIZED: no
+    seller identity and no node id. `since_id` supports incremental pulls. Metered."""
+    usage = _meter_data_or_402(user, db, "benchmarks")
+    import training_data as td
+    rows = td.export_authenticity_dataset(db, limit=limit, since_id=since_id)
+    for r in rows:
+        r.pop("spec_id", None)     # anonymize: never sell node identity, only GPU/perf signal
+    return {"count": len(rows), "since_id": since_id,
+            "next_since_id": (rows[0]["sample_id"] if rows else since_id),
+            "stats": td.dataset_stats(db),
+            "rows": rows, "usage": usage}
+
+
+@app.get("/api/v1/data/demand", tags=["data"])
+def data_demand(days: int = Query(30, ge=1, le=365),
+                user=Depends(data_api_caller), db: Session = Depends(get_db)):
+    """Buyer-side DEMAND index: over the last `days`, real bookings aggregated per GPU model —
+    booking count, GPU-hours rented, GMV, and the average price buyers ACTUALLY paid (realized,
+    not listed). Sandbox/demo bookings are excluded so this is real demand, not inflated. Aggregate
+    only — no buyer identity. Metered."""
+    usage = _meter_data_or_402(user, db, "demand")
+    import gpu_benchmark
+    from db import Booking, SellerSpec
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
+    agg, tot_b, tot_h, tot_gmv = {}, 0, 0, 0.0
+    rows = (db.query(Booking, SellerSpec)
+            .join(SellerSpec, SellerSpec.id == Booking.spec_id)
+            .filter(Booking.test == False, Booking.is_demo == False,   # noqa: E712 — real demand only
+                    Booking.created_at >= cutoff).all())
+    for b, sp in rows:
+        key = gpu_benchmark.normalize_model(sp.gpu_model) or (sp.gpu_model or "unknown")
+        a = agg.setdefault(key, {"bookings": 0, "gpu_hours": 0, "gmv": 0.0})
+        h, g = int(b.hours or 0), float(b.gross_amount or 0)
+        a["bookings"] += 1; a["gpu_hours"] += h; a["gmv"] += g
+        tot_b += 1; tot_h += h; tot_gmv += g
+    by_gpu = [{"gpu_model": k, "bookings": a["bookings"], "gpu_hours": a["gpu_hours"],
+               "gmv_usd": round(a["gmv"], 2),
+               "avg_price_per_hour": (round(a["gmv"] / a["gpu_hours"], 2) if a["gpu_hours"] else None)}
+              for k, a in sorted(agg.items(), key=lambda kv: -kv[1]["gmv"])]
+    return {"as_of": datetime.now(timezone.utc).isoformat(), "window_days": days,
+            "totals": {"bookings": tot_b, "gpu_hours": tot_h, "gmv_usd": round(tot_gmv, 2)},
+            "by_gpu": by_gpu, "usage": usage}
+
+
+@app.get("/api/v1/data/workloads", tags=["data"])
+def data_workloads(days: int = Query(30, ge=1, le=365),
+                   user=Depends(data_api_caller), db: Session = Depends(get_db)):
+    """Buyer-side WORKLOAD mix: over the last `days`, what buyers actually run — jobs by type
+    (notebook/vm/template) and by launch template (vLLM, Blender, …). Platform audit tasks are
+    excluded. Aggregate counts only — no buyer identity or code. Metered."""
+    usage = _meter_data_or_402(user, db, "workloads")
+    from db import Task
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
+    by_type, by_template, total = {}, {}, 0
+    for t in db.query(Task).filter(Task.created_at >= cutoff).all():
+        if (t.task_type or "") == "test":     # server-seeded integrity audits, not buyer demand
+            continue
+        total += 1
+        by_type[t.task_type or "unknown"] = by_type.get(t.task_type or "unknown", 0) + 1
+        if t.template:
+            by_template[t.template] = by_template.get(t.template, 0) + 1
+    return {"as_of": datetime.now(timezone.utc).isoformat(), "window_days": days, "total_jobs": total,
+            "by_type": [{"task_type": k, "jobs": v}
+                        for k, v in sorted(by_type.items(), key=lambda kv: -kv[1])],
+            "by_template": [{"template": k, "jobs": v}
+                            for k, v in sorted(by_template.items(), key=lambda kv: -kv[1])],
+            "usage": usage}
+
+
+@app.get("/api/v1/data/templates", tags=["data"])
+def data_templates(days: int = Query(30, ge=1, le=365),
+                   user=Depends(data_api_caller), db: Session = Depends(get_db)):
+    """What templates buyers are actually PURCHASING, and how much: over the last `days`, for each
+    launch template (vLLM, Ollama, Blender, …) — jobs bought, distinct buyers (a COUNT, not
+    identities), GPU-hours, GMV, average spend per job, and the most-requested models inside that
+    template. Only paid, real bookings (sandbox/demo excluded). Aggregate — no buyer identity or
+    code. Metered."""
+    usage = _meter_data_or_402(user, db, "templates")
+    import json as _json
+    from db import Task, Booking
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
+    agg = {}
+    rows = (db.query(Task, Booking)
+            .join(Booking, Booking.id == Task.booking_id)
+            .filter(Task.template.isnot(None), Task.created_at >= cutoff,
+                    Booking.test == False, Booking.is_demo == False).all())  # noqa: E712 — real only
+    for t, b in rows:
+        a = agg.setdefault(t.template, {"jobs": 0, "gpu_hours": 0, "gmv": 0.0,
+                                        "buyers": set(), "models": {}})
+        a["jobs"] += 1
+        a["gpu_hours"] += int(b.hours or 0)
+        a["gmv"] += float(b.gross_amount or 0)
+        if b.buyer_id is not None:
+            a["buyers"].add(b.buyer_id)            # counted only — the id is never returned
+        try:
+            params = _json.loads(t.template_params or "{}") or {}
+            model = params.get("model") or params.get("default_model")
+        except Exception:
+            model = None
+        if model:
+            a["models"][model] = a["models"].get(model, 0) + 1
+    out = []
+    for name, a in sorted(agg.items(), key=lambda kv: -kv[1]["jobs"]):
+        top = sorted(a["models"].items(), key=lambda kv: -kv[1])[:5]
+        out.append({"template": name, "jobs": a["jobs"], "unique_buyers": len(a["buyers"]),
+                    "gpu_hours": a["gpu_hours"], "gmv_usd": round(a["gmv"], 2),
+                    "avg_gmv_per_job": (round(a["gmv"] / a["jobs"], 2) if a["jobs"] else None),
+                    "top_models": [{"model": m, "jobs": n} for m, n in top]})
+    return {"as_of": datetime.now(timezone.utc).isoformat(), "window_days": days,
+            "templates_total": len(out),
+            "jobs_total": sum(r["jobs"] for r in out),
+            "templates": out, "usage": usage}
+
+
+# The example payloads served by /api/v1/data/sample. Static, keyless, clearly-fake numbers so a
+# developer can see the exact shape of every dataset (and the `usage` envelope) BEFORE they mint a
+# key or spend a cent. Everything here is labelled sandbox/example — it is not real market data.
+_DATA_API_SAMPLE = {
+    "sandbox": True,
+    "note": ("Example payloads with FAKE numbers — the real shapes you get from /api/v1/data/*. "
+             "Try the live endpoints free with the sandbox key 'X-API-KEY: "
+             + DATA_API_SANDBOX_KEY + "', then mint a data-scoped key for production."),
+    "usage_envelope": {"sandbox": True, "billed": False, "charged": 0.0, "units": 0,
+                       "note": "billed:true and charged:$ appear here on a real, metered key"},
+    "endpoints": {
+        "gpu-prices": {
+            "as_of": "2026-01-01T00:00:00+00:00",
+            "gpus": [{"gpu_model": "RTX 4090", "reference_price": 0.44,
+                      "avg_price": 0.41, "min_price": 0.35, "max_price": 0.49, "live_count": 12}]},
+        "gpu-prices/history": {
+            "gpu_model": "RTX 4090", "days": 30, "count": 1,
+            "points": [{"captured_at": "2026-01-01T00:00:00+00:00", "gpu_model": "RTX 4090",
+                        "reference_price": 0.44, "avg_price": 0.41, "min_price": 0.35,
+                        "max_price": 0.49, "live_count": 12}]},
+        "market": {"as_of": "2026-01-01T00:00:00+00:00", "models_total": 18,
+                   "models_with_listings": 9, "live_units": 74,
+                   "avg_price_low": 0.09, "avg_price_high": 2.10},
+        "savings": {"as_of": "2026-01-01T00:00:00+00:00", "median_savings_vs_cloud_pct": 72.0,
+                    "gpus": [{"gpu_model": "RTX 4090", "reference_price": 0.44,
+                              "cloud_reference_usd_hr": 1.60, "savings_vs_cloud_pct": 72.5}]},
+        "availability": {"as_of": "2026-01-01T00:00:00+00:00", "live_nodes_total": 74,
+                         "by_gpu": [{"gpu_model": "RTX 4090", "live_nodes": 21}],
+                         "by_region": [{"region": "us-east", "live_nodes": 30}]},
+        "benchmarks": {"count": 1, "since_id": 0, "next_since_id": 1001,
+                       "stats": {"samples": 1, "consistent_pct": 100.0},
+                       "rows": [{"sample_id": 1001, "gpu_model": "RTX 4090", "source": "benchmark",
+                                 "tflops_fp16": 320.0, "ratio_to_reference": 0.99,
+                                 "pow_verified": True, "label_verdict": "consistent"}]},
+        "demand": {"as_of": "2026-01-01T00:00:00+00:00", "window_days": 30,
+                   "totals": {"bookings": 128, "gpu_hours": 954, "gmv_usd": 412.30},
+                   "by_gpu": [{"gpu_model": "RTX 4090", "bookings": 61, "gpu_hours": 402,
+                               "gmv_usd": 176.40, "avg_price_per_hour": 0.44}]},
+        "workloads": {"as_of": "2026-01-01T00:00:00+00:00", "window_days": 30, "total_jobs": 128,
+                      "by_type": [{"task_type": "template", "jobs": 74}],
+                      "by_template": [{"template": "vllm", "jobs": 41}]},
+        "templates": {"as_of": "2026-01-01T00:00:00+00:00", "window_days": 30, "templates_total": 1,
+                      "jobs_total": 41,
+                      "templates": [{"template": "vllm", "jobs": 41, "unique_buyers": 17,
+                                     "gpu_hours": 210, "gmv_usd": 92.40, "avg_gmv_per_job": 2.25,
+                                     "top_models": [{"model": "meta-llama/Llama-3-8B", "jobs": 12}]}]},
+    },
+}
+
+
+@app.get("/api/v1/data/sample", tags=["data"])
+def data_sample():
+    """KEYLESS example data — no API key, no account, no charge. Returns a labelled FAKE payload for
+    every dataset so developers can see the exact response shape before signing up. Use the sandbox
+    key against the real endpoints for live data, then mint a data-scoped key for production."""
+    return _DATA_API_SAMPLE
+
+
+@app.get("/api/v1/data/usage", tags=["data"])
+def data_usage(user=Depends(data_api_caller), db: Session = Depends(get_db)):
+    """The caller's data-API usage this month — free to check, never billed. Needs a `data` key
+    (or the sandbox key, whose usage is never tracked)."""
+    if getattr(user, "is_sandbox", False):
+        return {"sandbox": True, "period": None, "calls": 0, "billed_calls": 0,
+                "amount_usd": 0.0, "free_quota": DATA_API_FREE_CALLS_MONTH,
+                "note": "sandbox key — usage is not tracked; free & unmetered"}
+    require_scope(user, "data")
+    return usage_summary(db, user.id, free_quota=DATA_API_FREE_CALLS_MONTH)
+
+
+@app.post("/admin/data/snapshot", tags=["admin"])
+def admin_data_snapshot(me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Admin: capture a price-index snapshot now (the maintenance loop also does this hourly)."""
+    n = record_price_snapshot(db)
+    return {"status": "ok", "rows": n}
+
+
+@app.get("/admin/data/revenue", tags=["admin"])
+def admin_data_revenue(me=Depends(require_admin), db: Session = Depends(get_db)):
+    """Admin: data-API monetization scoreboard — billed calls + revenue (month + all-time),
+    read from the ledger. Also exposed as Prometheus gauges (petabyte_data_api_*)."""
+    r = data_api_revenue(db)
+    r["pricing"] = {"base_per_1k_usd": DATA_API_PRICE_PER_1K,
+                    "free_trial_calls_month": DATA_API_FREE_CALLS_MONTH,
+                    "endpoint_weights": DATA_API_UNITS}
+    return r
 
 
 @app.post("/launch", tags=["compute"])
@@ -5398,9 +7567,25 @@ def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
 
 
 def _vm_url(vm):
-    """The stable, node-independent address for a VM. Failover keeps this constant."""
-    return {"ssh": f"ssh vm-{vm.id}@{BASE_DOMAIN}",
-            "http": f"https://{vm.id}.{BASE_DOMAIN}" if vm.app_port else None,
+    """The stable, node-independent address for a VM. Failover keeps it constant — derived ONLY
+    from the opaque vm id, never the node's IP, so a backup on a different machine is reachable at
+    the same address with NO DNS change (see docs/dynamic_dns.md).
+
+    CANONICAL form is the per-VM SUBDOMAIN `<id>.<VM_DNS_ZONE>`, because the id is the HOST — which
+    leaves the SSH username FREE for whatever login user the image defines: `root@`, `app@`,
+    `ubuntu@`, `jupyter@`, ... The same VM is reachable as any of them; the hostname carries no
+    user. (VM_DNS_ZONE defaults to BASE_DOMAIN; set it to e.g. `vm.petabyte.market` to put every
+    VM under one wildcard record + one wildcard cert.)
+
+    `ssh_username_fallback` is the zero-client-config alternative (`vm-<id>@<base>`, routed by
+    sshpiper on the username). It is SSH-only AND cannot carry a login user — the id already IS the
+    username — so a second user (root vs app) would need its own handle. Prefer the hostname form."""
+    host = f"{vm.id}.{VM_DNS_ZONE}"
+    return {"hostname": host,                 # user-agnostic: `<user>@<hostname>` for ANY user
+            "default_user": "root",           # a sensible default; the image may define others
+            "ssh": f"ssh root@{host}",         # any user works: `ssh app@{host}`, `ssh ubuntu@{host}`, ...
+            "http": f"https://{host}" if vm.app_port else None,
+            "ssh_username_fallback": f"ssh vm-{vm.id}@{BASE_DOMAIN}",
             "id": vm.id}
 
 
@@ -5528,6 +7713,11 @@ def resolve_vm_route(vm_id: str, request: Request, db: Session = Depends(get_db)
             "app_port": vm.app_port, "status": vm.status}
 
 
+# Public trust & transparency API (/trust/summary, /jobs/{id}/receipt) lives in trust_routes.py
+# — the first DB+auth domain router extracted from main via deps.py. Mounted below.
+app.include_router(trust_router)
+
+
 # ------------------- BENCHMARKS -------------------
 
 @app.post("/benchmark")
@@ -5555,10 +7745,94 @@ def benchmark_result(data: BenchmarkResultModel, agent=Depends(api_key_user),
         verify_signed_proof(spec.attest_pubkey, data.proof, data.signature)
     except ValueError as e:
         raise HTTPException(status_code=401, detail=f"Invalid proof: {e}")
-    set_benchmark(db, spec, data.tokens_sec, data.meta or {})
+
+    # Server-time the benchmark + anti-replay: bind this submission to the benchmark task the
+    # PLATFORM dispatched. The server observes the wall-clock from dispatch to result (so the
+    # number is not purely self-reported), and consuming the task means a previously-signed
+    # benchmark cannot be replayed to refresh a stale listing.
+    elapsed_s = None
+    pow_verified = None
+    try:
+        from db import Task as _Task
+        btid = int((data.proof or {}).get("task_id") or 0)
+    except Exception:
+        btid = 0
+    if btid:
+        bt = (db.query(_Task).filter(_Task.id == btid, _Task.spec_id == spec.id,
+                                     _Task.task_type == "benchmark").first())
+        if bt is not None:
+            if bt.status == "completed":
+                raise HTTPException(status_code=409,
+                                    detail="benchmark already submitted (replay rejected)")
+            from datetime import datetime as _dt, timezone as _tz
+            start = bt.assigned_at or bt.created_at
+            if start is not None:
+                start = start.replace(tzinfo=_tz.utc) if start.tzinfo is None else start
+                elapsed_s = round(max(0.0, (_dt.now(_tz.utc) - start).total_seconds()), 3)
+            # Server-seeded PROOF-OF-WORK: the node must answer THIS fresh challenge. A wrong
+            # answer means the number wasn't produced by real, fresh computation on the node
+            # (a fabricated/replayed benchmark can't solve a seed it never saw) -> fraud freeze.
+            try:
+                _ch = json.loads(bt.code or "{}")
+                _seed, _size = _ch.get("bench_seed"), _ch.get("bench_size")
+                _got = (data.proof or {}).get("challenge_hash")
+                if _seed is not None and _size is not None and _got is not None:
+                    from db import compute_test_hash
+                    pow_verified = (_got == compute_test_hash(int(_size), int(_seed)))
+            except Exception:
+                logger.exception("benchmark proof-of-work check failed to evaluate")
+            submit_task_result(db, bt, "benchmark", "completed")   # consume -> anti-replay
+            if pow_verified is False:
+                import seller_audit
+                seller_audit.freeze_for_fraud(
+                    db, spec, "benchmark proof-of-work mismatch (fabricated/stale challenge answer)")
+                raise HTTPException(status_code=409, detail="benchmark proof-of-work failed")
+
+    # Gamer-style authenticity check: compare every benchmark score inside the SIGNED proof
+    # (FP16 matmul TFLOPS, Blender Open Data, Cinebench, PugetBench) against PUBLIC reference
+    # data for the model the seller CLAIMS to list (spec.gpu_model). The hardware-invariant
+    # FP16 metric may FREEZE payouts on a gross over-claim; render/video metrics are advisory
+    # (they flag a mismatch and suppress the trust boost, but never auto-freeze).
+    meta = data.meta or {}
+    verdict = None
+    try:
+        from gpu_benchmark import classify_all
+        if spec.gpu_model:
+            agg = classify_all(spec.gpu_model, data.proof)
+            verdict = agg["verdict"]
+            if agg["results"]:
+                meta = {**meta, "benchmark_checks": [
+                    {"metric": r["metric"], "label": r["label"], "verdict": r["verdict"],
+                     "source": r["source"], "detail": r["detail"]} for r in agg["results"]]}
+            if agg["fraud"]:
+                bad = next((r for r in agg["results"] if r.get("fraud")), None)
+                import seller_audit
+                seller_audit.freeze_for_fraud(
+                    db, spec,
+                    f"benchmark over-claim on {bad['metric'] if bad else '?'}: "
+                    f"{spec.gpu_model} — {bad['detail'] if bad else ''}"[:200])
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("benchmark authenticity check failed (non-fatal)")
+
+    if elapsed_s is not None:
+        meta = {**meta, "server_timed": True, "elapsed_s": elapsed_s}
+    if pow_verified is not None:
+        meta = {**meta, "pow_verified": pow_verified}
+    set_benchmark(db, spec, data.tokens_sec, meta, verdict=verdict, elapsed_s=elapsed_s)
+    # Labelled data point for the authenticity model (the data moat): the benchmark scores
+    # inside the signed proof + the verdict + proof-of-work + server-timing.
+    _bench_scores = {k: v for k, v in (data.proof or {}).items()
+                     if k in ("tflops_fp16", "blender_optix", "cinebench_2024_gpu",
+                              "pugetbench_resolve", "pugetbench_premiere", "hashrate_ethash_mhs")}
+    _record_benchmark_sample(db, spec, source="benchmark", metrics=_bench_scores, verdict=verdict,
+                             pow_verified=pow_verified, elapsed_s=elapsed_s, tokens_sec=data.tokens_sec)
     from db import record_rep_event
     record_rep_event(db, spec, "benchmark", data.tokens_sec)
-    return {"status": "ok", "spec_id": spec.id, "tokens_sec": data.tokens_sec}
+    return {"status": "ok", "spec_id": spec.id, "tokens_sec": data.tokens_sec,
+            "benchmark_verdict": verdict, "server_timed": elapsed_s is not None,
+            "elapsed_s": elapsed_s, "pow_verified": pow_verified}
 
 
 
@@ -5732,11 +8006,23 @@ def restore_task(task_id: int, data: RestoreModel, user: dict = Depends(get_curr
 def retry_task_endpoint(task_id: int, user: dict = Depends(get_current_user),
                         db: Session = Depends(get_db)):
     """Buyer re-queues a failed task (bounded retries)."""
-    from db import Task
+    from db import Task, ComputeTransaction
     buyer = get_user_by_username(db, _username(user))
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task or not buyer or task.buyer_id != buyer.id:
         raise HTTPException(status_code=404, detail="Task not found")
+    # A Stripe-native task whose card authorization was VOIDED when the job failed cannot be
+    # retried in place: re-queueing would let a completed retry return success while the PI is
+    # canceled (buyer never charged, seller never paid via Stripe). The one-time authorization is
+    # gone — the buyer must place a NEW order. (Legacy wallet-escrow tasks have no tx and retry
+    # normally, since their escrow is retained.)
+    ntx = db.query(ComputeTransaction).filter(ComputeTransaction.task_id == task.id).first()
+    if ntx is not None:
+        import marketplace_insight as _mi
+        if ntx.status in _mi.TX_FAILED:
+            raise HTTPException(status_code=409, detail=(
+                "This order's card authorization was voided when the job failed — a retry cannot "
+                "re-charge it. Place a new order to run this workload again."))
     if not retry_task(db, task):
         raise HTTPException(status_code=409, detail="Task not retryable (not failed or retry limit)")
     return {"status": "ok", "task_id": task.id, "task_status": "pending", "retries": task.retries}
@@ -5813,10 +8099,16 @@ def create_api_key(days: int = Query(7, ge=1, le=90),
                    label: Optional[str] = Query(None),
                    user: dict = Security(get_current_user),
                    db: Session = Depends(get_db)):
+    """Mint a node/API key. A user may hold MANY keys at once — mint ONE PER COMPUTER so each
+    machine's agent runs with its own key (and its own spec). `label` (e.g. the hostname) makes
+    them easy to tell apart and revoke individually at /account/keys. This is how one account runs
+    a fleet of computers; those distinct machines can even join the same distributed cluster."""
     scope_list = [x.strip() for x in scopes.split(",") if x.strip()] if scopes else list(DEFAULT_KEY_SCOPES)
     api_key, jti = gen_secure_api_key(_username(user), days, scope_list)
     me = get_user_by_username(db, _username(user))
     record_issued_key(db, me.id, jti, label, scope_list, days)
+    audit(db, "apikey.create", actor=me, resource_type="api_key", resource_id=jti,
+          detail={"scopes": scope_list, "days": days, "label": label})
     return {"status": "ok", "api_key": api_key, "jti": jti, "scopes": scope_list}
 
 
@@ -5824,6 +8116,318 @@ def create_api_key(days: int = Query(7, ge=1, le=90),
 def list_keys(user: dict = Security(get_current_user), db: Session = Depends(get_db)):
     me = get_user_by_username(db, _username(user))
     return {"keys": list_issued_keys(db, me.id)}
+
+
+@app.get("/account/audit", tags=["account"])
+def account_audit_endpoint(limit: int = Query(100, ge=1, le=500),
+                           user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The signed-in user's own audit trail — every security-relevant action they took (logins,
+    key create/revoke, role & team changes, withdrawals), newest first. Immutable and
+    hash-chained; `integrity` reports whether the chain still verifies (tamper-evidence)."""
+    me = get_user_by_username(db, _username(user))
+    return {"events": list_audit_for_actor(db, me.id, limit=limit),
+            "integrity": verify_audit_chain(db)}
+
+
+# ------------------- TWO-FACTOR AUTH (TOTP / authenticator app) -------------------
+
+@app.get("/account/2fa", tags=["account"])
+def totp_state(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    me = get_user_by_username(db, _username(user))
+    return {"enabled": bool(me.totp_enabled),
+            "pending": bool(me.totp_secret and not me.totp_enabled)}
+
+
+@app.post("/account/2fa/setup", tags=["account"])
+def totp_setup(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Begin enrollment: mint a fresh secret, store it PENDING (encrypted at rest), and return the
+    secret + otpauth URI so the user can add it to their authenticator app. 2FA is not active until
+    /account/2fa/enable confirms a code."""
+    me = get_user_by_username(db, _username(user))
+    if me.totp_enabled:
+        raise HTTPException(status_code=409,
+                            detail="2FA is already on — disable it first to re-enroll.")
+    secret = totp.random_base32()
+    set_totp_secret(db, me, seal_secret(secret))
+    acct = me.email or me.username
+    return {"secret": secret, "otpauth_uri": totp.provisioning_uri(secret, acct),
+            "issuer": totp.DEFAULT_ISSUER, "account": acct}
+
+
+@app.post("/account/2fa/enable", tags=["account"])
+def totp_enable_endpoint(data: TotpEnableModel, user: dict = Depends(get_current_user),
+                         db: Session = Depends(get_db)):
+    """Confirm enrollment with the current password + a code from the app. On success, 2FA is on
+    and a one-time list of recovery (backup) codes is returned — shown ONCE."""
+    me = get_user_by_username(db, _username(user))
+    if not verify_password(data.password, me.password):
+        raise HTTPException(status_code=403, detail="Password is incorrect.")
+    if not me.totp_secret:
+        raise HTTPException(status_code=400, detail="Start setup first (POST /account/2fa/setup).")
+    try:
+        sec = open_secret(me.totp_secret)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="Setup expired — start again.")
+    if not totp.verify(sec, data.code):
+        raise HTTPException(status_code=400, detail={
+            "code": "TOTP_INVALID", "message": "That code is incorrect or expired."})
+    backups = [secrets.token_hex(5) for _ in range(10)]
+    enable_totp(db, me, [hash_backup_code(b) for b in backups])
+    audit(db, "2fa.enabled", actor=me, resource_type="user", resource_id=me.username)
+    return {"status": "ok", "enabled": True, "backup_codes": backups,
+            "note": "Save these recovery codes now — each works once and they are shown only here."}
+
+
+@app.post("/account/2fa/disable", tags=["account"])
+def totp_disable_endpoint(data: TotpDisableModel, user: dict = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    """Turn 2FA off. Requires the password AND a current code (or a backup code) — so a password
+    alone (without the phone) cannot strip the second factor."""
+    me = get_user_by_username(db, _username(user))
+    if not verify_password(data.password, me.password):
+        raise HTTPException(status_code=403, detail="Password is incorrect.")
+    if not me.totp_enabled:
+        return {"status": "ok", "enabled": False}
+    code = (data.code or "").strip()
+    ok2 = False
+    try:
+        sec = open_secret(me.totp_secret) if me.totp_secret else None
+        ok2 = bool(sec and totp.verify(sec, code))
+    except Exception:  # noqa: BLE001
+        ok2 = False
+    if not ok2:
+        ok2 = consume_backup_code(db, me, code.replace("-", "").replace(" ", "").lower())
+    if not ok2:
+        raise HTTPException(status_code=400, detail={
+            "code": "TOTP_INVALID", "message": "Enter a current 2FA code to disable."})
+    disable_totp(db, me)
+    audit(db, "2fa.disabled", actor=me, resource_type="user", resource_id=me.username)
+    return {"status": "ok", "enabled": False}
+
+
+# ============================ PERSISTENT VOLUMES (incremental) ============================
+# Buyer-owned storage that outlives any single VM. Snapshots are CONTENT-ADDRESSED and
+# INCREMENTAL: files are chunked at file granularity by their sha256, identical/unchanged
+# content is stored exactly once, and each new snapshot only uploads the DELTA (the blobs it
+# doesn't already have). Restoring "since" an earlier snapshot returns only the changed files.
+# This is deliberately NOT a full-disk mirror — you pay for unique bytes, not for every copy.
+#
+# Two-phase write (agent/CLI side):
+#   1. POST /volumes/{id}/snapshot/plan  -> which blobs are MISSING (the delta to upload)
+#   2. PUT  /volumes/{id}/blobs/{sha256} -> upload each missing blob's bytes (sha-verified)
+#   3. POST /volumes/{id}/snapshot       -> record the manifest; delta_bytes is what was new
+# Restore (any later VM):
+#   GET /volumes/{id}/snapshots/{sid}/restore[?since=<sid>] -> manifest + per-blob download path
+
+VOLUME_MAX_BLOB_MB = int(os.getenv("VOLUME_MAX_BLOB_MB", "1024"))   # cap for the through-API path
+
+
+def _volume_blob_key(buyer_id: int, volume_id: int, sha256: str) -> str:
+    """Object-storage key for one content blob. Namespaced per buyer+volume so a sha collision
+    across tenants can never cross-read, and so deleting a volume is a clean prefix wipe."""
+    return f"volumes/{buyer_id}/{volume_id}/blobs/{sha256}"
+
+
+def _require_object_storage():
+    if not os.getenv("S3_BUCKET"):
+        raise HTTPException(status_code=503, detail=(
+            "Object storage is not configured on this deployment (set S3_BUCKET). "
+            "Volumes require object storage."))
+
+
+def _owned_volume(db, me, volume_id: int):
+    """Load a volume and enforce ownership. Returns the Volume or raises 404 (we 404 rather than
+    403 on someone else's id so volume ids aren't enumerable across tenants)."""
+    v = get_volume(db, volume_id)
+    if not v or v.buyer_id != me.id:
+        raise HTTPException(status_code=404, detail="Volume not found")
+    return v
+
+
+@app.post("/volumes", tags=["storage"])
+def create_volume_endpoint(data: VolumeCreateModel, request: Request,
+                           user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Create a persistent volume for the signed-in buyer."""
+    me = get_user_by_username(db, _username(user))
+    v = create_volume(db, me, data.name, size_limit_gb=data.size_limit_gb)
+    audit(db, "volume.create", actor=me, resource_type="volume", resource_id=v.id,
+          ip=_client_ip(request), detail={"name": v.name, "size_limit_gb": v.size_limit_gb})
+    return {"status": "ok", "id": v.id, "name": v.name, "size_limit_gb": v.size_limit_gb,
+            "bytes_stored": v.bytes_stored, "snapshots": v.snapshot_count}
+
+
+@app.get("/volumes", tags=["storage"])
+def list_volumes_endpoint(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The signed-in buyer's volumes (newest first) with real deduplicated bytes held."""
+    me = get_user_by_username(db, _username(user))
+    return {"volumes": list_volumes(db, me.id)}
+
+
+@app.get("/volumes/{volume_id}", tags=["storage"])
+def get_volume_endpoint(volume_id: int, user: dict = Depends(get_current_user),
+                        db: Session = Depends(get_db)):
+    """One volume with its snapshots. `logical_bytes` is what the newest snapshot represents;
+    `bytes_stored` is what we actually keep after dedup — the gap is the savings."""
+    me = get_user_by_username(db, _username(user))
+    v = _owned_volume(db, me, volume_id)
+    snaps = list_snapshots(db, volume_id)
+    logical = snaps[0]["total_bytes"] if snaps else 0
+    return {"id": v.id, "name": v.name, "size_limit_gb": v.size_limit_gb,
+            "bytes_stored": v.bytes_stored, "snapshot_count": v.snapshot_count,
+            "logical_bytes": logical,
+            "dedup_saved_bytes": max(0, sum(s["total_bytes"] for s in snaps) - v.bytes_stored),
+            "created_at": v.created_at.isoformat() if v.created_at else None,
+            "snapshots": snaps}
+
+
+@app.delete("/volumes/{volume_id}", tags=["storage"])
+def delete_volume_endpoint(volume_id: int, request: Request,
+                           user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Delete a volume, all its snapshots, and every content blob it held (from object storage)."""
+    me = get_user_by_username(db, _username(user))
+    v = _owned_volume(db, me, volume_id)
+    _require_object_storage()
+    shas = delete_volume(db, v)
+    removed = 0
+    for sha in shas:
+        try:
+            s3_delete(_volume_blob_key(me.id, volume_id, sha))
+            removed += 1
+        except Exception:  # noqa: BLE001 — index row is already gone; a stray object is harmless
+            pass
+    audit(db, "volume.delete", actor=me, resource_type="volume", resource_id=volume_id,
+          ip=_client_ip(request), detail={"blobs_removed": removed})
+    return {"status": "ok", "id": volume_id, "blobs_removed": removed}
+
+
+@app.post("/volumes/{volume_id}/snapshot/plan", tags=["storage"])
+def plan_snapshot_endpoint(volume_id: int, data: SnapshotPlanModel,
+                           user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Given the manifest you WANT to snapshot, return which blobs are missing (the delta to
+    upload) vs. already held (deduped). Only the missing blobs need to be PUT."""
+    me = get_user_by_username(db, _username(user))
+    _owned_volume(db, me, volume_id)
+    files = [f.model_dump() for f in data.files]
+    plan = plan_snapshot(db, volume_id, files)
+    for m in plan["missing"]:
+        m["upload_path"] = f"/volumes/{volume_id}/blobs/{m['sha256']}"
+    return plan
+
+
+@app.put("/volumes/{volume_id}/blobs/{sha256}", tags=["storage"])
+async def put_volume_blob(volume_id: int, sha256: str, request: Request,
+                          user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Upload one content blob's bytes. The server verifies sha256(body) matches the URL — content
+    addressing is enforced server-side, so a client can't mislabel content. Idempotent: an
+    already-stored blob is a no-op (deduped)."""
+    me = get_user_by_username(db, _username(user))
+    v = _owned_volume(db, me, volume_id)
+    _require_object_storage()
+    sha = (sha256 or "").strip().lower()
+    if not _SHA256_RE.match(sha):
+        raise HTTPException(status_code=400, detail="sha256 must be 64 lowercase hex characters")
+    max_bytes = VOLUME_MAX_BLOB_MB * 1024 * 1024
+    clen = request.headers.get("content-length")
+    if clen and clen.isdigit() and int(clen) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"Blob exceeds {VOLUME_MAX_BLOB_MB} MB limit")
+    body = await request.body()
+    if len(body) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"Blob exceeds {VOLUME_MAX_BLOB_MB} MB limit")
+    actual = hashlib.sha256(body).hexdigest()
+    if actual != sha:
+        raise HTTPException(status_code=400, detail={
+            "code": "SHA_MISMATCH", "message": "Body sha256 does not match the URL",
+            "expected": sha, "actual": actual})
+    key = _volume_blob_key(me.id, volume_id, sha)
+    # Already held if it's indexed (from a prior snapshot) OR its bytes are already in storage
+    # (uploaded earlier in this snapshot). Content addressing makes a re-PUT a safe no-op.
+    already = volume_blob_exists(db, volume_id, sha) or s3_exists(key)
+    if not already:
+        if v.size_limit_gb:
+            limit = int(v.size_limit_gb) * 1024 * 1024 * 1024
+            if int(v.bytes_stored or 0) + len(body) > limit:
+                raise HTTPException(status_code=413, detail="Volume size limit reached")
+        s3_put_bytes(key, body)
+    return {"status": "ok", "sha256": sha, "size": len(body), "deduped": already}
+
+
+@app.get("/volumes/{volume_id}/blobs/{sha256}", tags=["storage"])
+def get_volume_blob(volume_id: int, sha256: str, user: dict = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """Download one content blob's bytes (to reconstruct a file during restore)."""
+    me = get_user_by_username(db, _username(user))
+    _owned_volume(db, me, volume_id)
+    _require_object_storage()
+    sha = (sha256 or "").strip().lower()
+    if not _SHA256_RE.match(sha):
+        raise HTTPException(status_code=400, detail="bad sha256")
+    if not volume_blob_exists(db, volume_id, sha):
+        raise HTTPException(status_code=404, detail="Blob not found in this volume")
+    try:
+        data = s3_get_bytes(_volume_blob_key(me.id, volume_id, sha))
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=404, detail="Blob object is missing from storage")
+    return Response(content=data, media_type="application/octet-stream")
+
+
+@app.post("/volumes/{volume_id}/snapshot", tags=["storage"])
+def create_snapshot_endpoint(volume_id: int, data: SnapshotCreateModel, request: Request,
+                             user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Record a snapshot from a manifest. Every referenced blob must already be in object storage
+    (uploaded now, or held from a previous snapshot). `delta_bytes` is the NEW unique bytes this
+    snapshot added — that's all you're billed for."""
+    me = get_user_by_username(db, _username(user))
+    v = _owned_volume(db, me, volume_id)
+    _require_object_storage()
+    files = [f.model_dump() for f in data.files]
+    # Enforce the size cap on the delta this snapshot would commit (new unique bytes only).
+    plan = plan_snapshot(db, volume_id, files)
+    if v.size_limit_gb:
+        limit = int(v.size_limit_gb) * 1024 * 1024 * 1024
+        if int(v.bytes_stored or 0) + int(plan["missing_bytes"]) > limit:
+            raise HTTPException(status_code=413, detail="Volume size limit reached")
+    # present_shas = blobs physically in object storage for this volume (indexed OR just-uploaded).
+    present = set(volume_blob_shas(db, volume_id))
+    for m in plan["missing"]:
+        try:
+            s3_get_bytes(_volume_blob_key(me.id, volume_id, m["sha256"]))
+            present.add(m["sha256"])
+        except Exception:  # noqa: BLE001 — a referenced blob was never uploaded
+            pass
+    try:
+        snap = finalize_snapshot(db, v, files, present, label=data.label, vm_id=data.vm_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"code": "BLOB_MISSING", "message": str(e)})
+    audit(db, "volume.snapshot", actor=me, resource_type="volume", resource_id=volume_id,
+          ip=_client_ip(request),
+          detail={"seq": snap.seq, "delta_bytes": snap.delta_bytes, "files": len(files)})
+    return {"status": "ok", "id": snap.id, "seq": snap.seq, "label": snap.label,
+            "files": len(files), "total_bytes": snap.total_bytes, "delta_bytes": snap.delta_bytes,
+            "reused_blobs": plan["reused_blobs"], "bytes_stored": v.bytes_stored}
+
+
+@app.get("/volumes/{volume_id}/snapshots/{snapshot_id}/restore", tags=["storage"])
+def restore_snapshot_endpoint(volume_id: int, snapshot_id: int,
+                              since: Optional[int] = Query(None),
+                              user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The manifest to reconstruct a snapshot, each file annotated with its blob download path.
+    With `since=<earlier snapshot id>`, return ONLY the files whose content changed since then —
+    the delta the client still needs (it already has the rest locally). 'Once a user needs it,
+    send the delta.'"""
+    me = get_user_by_username(db, _username(user))
+    _owned_volume(db, me, volume_id)
+    snap = get_snapshot(db, volume_id, snapshot_id)
+    if not snap:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    base = None
+    if since is not None:
+        base = get_snapshot(db, volume_id, since)
+        if not base:
+            raise HTTPException(status_code=404, detail="`since` snapshot not found")
+    res = restore_manifest(db, volume_id, snap, since=base)
+    for f in res["files"]:
+        f["download_path"] = f"/volumes/{volume_id}/blobs/{f['sha256']}"
+    return res
 
 
 @app.post("/keys/{jti}/revoke")
@@ -5834,6 +8438,7 @@ def revoke_key_by_jti(jti: str, user: dict = Security(get_current_user),
     if jti not in owned:
         raise HTTPException(status_code=404, detail="Key not found")
     revoke_jti(db, jti)
+    audit(db, "apikey.revoke", actor=me, resource_type="api_key", resource_id=jti)
     return {"status": "ok", "jti": jti, "revoked": True}
 
 

@@ -617,12 +617,150 @@ def d_security():
                      [ENV, SERVICEVAR], p)
 
 
-BUILDERS = [d_executive, d_marketplace, d_payments, d_gpu, d_api, d_infra, d_security]
+def d_trust():
+    """Trust & Integrity — the verification moat, made visible. Every panel reads the
+    scrape-time petabyte_* trust gauges emitted by main._marketplace_metrics (same honest
+    counts as the public /trust page)."""
+    c = Ctx()
+    p = []
+    E = 'environment="$environment"'
+    p.append(text(c, "", "**The verification moat, in numbers.** These are the same honest counts as "
+                         "the public [/trust](https://petabyte.market/trust) page — no fabrication, "
+                         "zeros mean zero. Attestation → benchmark-vs-public-reference → signed, "
+                         "content-bound results → redundant re-execution → payout freeze on fraud."))
+    p.append(rowp(c, "Verification coverage"))
+    p.append(stat(c, "Attested GPUs", [(f"max(petabyte_attested_gpus{{{E}}})", "attested")],
+                  color="background", steps=[(GREEN, None)], w=5,
+                  desc="Listings backed by an Ed25519-signed hardware report (verifiable)."))
+    p.append(stat(c, "Confidential nodes (fresh TEE)",
+                  [(f"max(petabyte_confidential_nodes_active{{{E}}})", "confidential")], w=5,
+                  desc="Nodes holding a fresh confidential attestation (fail-closed in prod)."))
+    p.append(stat(c, "Verifiable receipts issued",
+                  [(f"max(petabyte_verifiable_receipts{{{E}}})", "receipts")], w=7,
+                  desc="Completed jobs whose node signature is retained for the buyer to re-verify."))
+    p.append(stat(c, "Results bound to output bytes",
+                  [(f"max(petabyte_results_content_bound{{{E}}})", "content-bound")], w=7,
+                  desc="Results committing to sha256 of the real output bytes (quorum-comparable)."))
+    p.append(barchart(c, "GPUs by trust tier",
+                      f"max by (tier) (petabyte_trust_tier_gpus{{{E}}})", "{{tier}}", w=12,
+                      desc="self_reported → agent_verified → benchmark_consistent; 'flagged' = a "
+                           "benchmark that contradicted the claimed GPU model."))
+    p.append(ts(c, "Completed jobs (lifetime)",
+                [(f"max(petabyte_jobs_completed_total{{{E}}})", "completed")], unit="short", w=12,
+                desc="Durable count — survives a seller going offline."))
+
+    p.append(rowp(c, "Fraud caught & redundant verification"))
+    p.append(stat(c, "Sellers frozen for fraud",
+                  [(f"max(petabyte_sellers_fraud_flagged{{{E}}})", "frozen")],
+                  color="background", steps=[(GREEN, None), (AMBER, 1)], w=6,
+                  desc="Sellers with fraud on record (payouts frozen pending review) — the system "
+                       "working, not a failure."))
+    p.append(stat(c, "Suspicious seller telemetry (24h)",
+                  [(f"sum(increase(petabyte_seller_suspicious_total{{{E}}}[24h]))", "suspicious")],
+                  color="background", steps=[(GREEN, None), (AMBER, 1), (RED, 10)], w=6,
+                  desc="Nodes whose reported telemetry didn't add up."))
+    p.append(barchart(c, "Redundant re-execution (quorum) outcomes",
+                      f"max by (status) (petabyte_quorum_checks{{{E}}})", "{{status}}", w=12,
+                      desc="AGREED = honest majority; DIVERGENT/INCONCLUSIVE = a mismatch was "
+                           "caught and held/frozen."))
+    p.append(rowp(c, "Integrity event log"))
+    p.append(logs(c, "Trust & integrity events (fraud freezes / suspicious / invalid results)",
+                  '{service=~"$service"} | json | event_name=~"seller.suspicious'
+                  '|result.validation.failed|seller.reaped.batch|unhandled.exception"'))
+    return dashboard("petabyte-trust", "Petabyte — Trust & Integrity", ["petabyte", "trust"],
+                     [ENV, SERVICEVAR], p)
+
+
+def d_operations():
+    """Operations across the product surfaces beyond raw GPU supply: VMs, distributed clusters,
+    disk rental, teams, escrowed/pooled buyer money, the task queue, and login/auth health.
+    Everything here is fed by the scrape-time ops gauges in main.py:_marketplace_metrics and the
+    cluster/login counters in observability.py — see the admin console's Live-operations tiles."""
+    c = Ctx()
+    p = []
+    E = 'environment="$environment"'
+    p.append(rowp(c, "Product surfaces"))
+    p.append(stat(c, "Active VMs", [(f"sum(petabyte_vms_active{{{E}}})", "VMs")],
+                  desc="Buyer VMs running/starting/migrating right now."))
+    p.append(stat(c, "Clusters running",
+                  [(f'sum(petabyte_distributed_clusters{{status="running",{E}}})', "clusters")]))
+    p.append(stat(c, "Disk-rental nodes", [(f"sum(petabyte_disk_rental_nodes{{{E}}})", "nodes")]))
+    p.append(stat(c, "Teams", [(f"sum(petabyte_teams_total{{{E}}})", "teams")]))
+    p.append(stat(c, "In escrow", [(f"sum(petabyte_escrow_held_usd{{{E}}})", "held")],
+                  unit="currencyUSD"))
+    p.append(stat(c, "GPU utilization",
+                  [(f"100 * sum(petabyte_vms_active{{{E}}}) / clamp_min(sum(petabyte_vms_active{{{E}}})"
+                    f" + sum(petabyte_gpus_available{{{E}}}), 1e-9)", "util %")],
+                  unit="percent", steps=[(GREEN, None), (AMBER, 80), (RED, 95)], color="background",
+                  desc="Active VMs / (active + available units)."))
+
+    p.append(rowp(c, "Distributed clusters"))
+    p.append(ts(c, "Clusters by status",
+                [(f"sum by (status) (petabyte_distributed_clusters{{{E}}})", "{{status}}")], stack=True))
+    p.append(ts(c, "Cluster formations per hour (by outcome)",
+                [(f"sum by (outcome) (increase(petabyte_cluster_formations_total{{{E}}}[1h]))",
+                  "{{outcome}}")]))
+    p.append(stat(c, "Cluster formation success rate",
+                  [(f'100 * sum(rate(petabyte_cluster_formations_total{{outcome="success",{E}}}[$__rate_interval]))'
+                    f' / clamp_min(sum(rate(petabyte_cluster_formations_total{{{E}}}[$__rate_interval])), 1e-9)',
+                    "success %")], unit="percent",
+                  steps=[(RED, None), (AMBER, 80), (GREEN, 95)], color="background"))
+
+    p.append(rowp(c, "VMs & task queue"))
+    p.append(stat(c, "VM failovers (cumulative)",
+                  [(f"sum(petabyte_vm_migrations_cumulative{{{E}}})", "migrations")]))
+    p.append(stat(c, "Pending tasks", [(f"sum(petabyte_pending_tasks{{{E}}})", "queued")],
+                  steps=[(GREEN, None), (AMBER, 5), (RED, 20)], color="background"))
+    p.append(stat(c, "Oldest pending task",
+                  [(f"max(petabyte_oldest_pending_task_age_seconds{{{E}}})", "age")], unit="s",
+                  steps=[(GREEN, None), (AMBER, 60), (RED, 300)], color="background"))
+    p.append(ts(c, "Active VMs & queue depth",
+                [(f"sum(petabyte_vms_active{{{E}}})", "active VMs"),
+                 (f"sum(petabyte_pending_tasks{{{E}}})", "pending tasks")]))
+
+    p.append(rowp(c, "Buyer money held"))
+    p.append(stat(c, "Buyer wallet balances",
+                  [(f"sum(petabyte_wallet_balance_usd{{{E}}})", "wallets")], unit="currencyUSD"))
+    p.append(stat(c, "Team pooled balances",
+                  [(f"sum(petabyte_teams_pooled_balance_usd{{{E}}})", "teams")], unit="currencyUSD"))
+    p.append(ts(c, "Escrow, wallets & team balances",
+                [(f"sum(petabyte_escrow_held_usd{{{E}}})", "escrow"),
+                 (f"sum(petabyte_wallet_balance_usd{{{E}}})", "wallets"),
+                 (f"sum(petabyte_teams_pooled_balance_usd{{{E}}})", "teams")], unit="currencyUSD"))
+
+    p.append(rowp(c, "Disk rental"))
+    p.append(stat(c, "GB pledged", [(f"sum(petabyte_disk_rental_gb_pledged{{{E}}})", "GB")],
+                  unit="decgbytes"))
+    p.append(stat(c, "GB used", [(f"sum(petabyte_disk_rental_gb_used{{{E}}})", "GB")],
+                  unit="decgbytes"))
+    p.append(ts(c, "Disk pledged vs used (GB)",
+                [(f"sum(petabyte_disk_rental_gb_pledged{{{E}}})", "pledged"),
+                 (f"sum(petabyte_disk_rental_gb_used{{{E}}})", "used")], unit="decgbytes"))
+
+    p.append(rowp(c, "Access & auth"))
+    p.append(ts(c, "Logins per second (by outcome)",
+                [(f"sum by (outcome) (rate(petabyte_logins_total{{{E}}}[$__rate_interval]))",
+                  "{{outcome}}")], unit="ops"))
+    p.append(stat(c, "Login failure rate",
+                  [(f'100 * sum(rate(petabyte_logins_total{{outcome="failure",{E}}}[$__rate_interval]))'
+                    f' / clamp_min(sum(rate(petabyte_logins_total{{{E}}}[$__rate_interval])), 1e-9)',
+                    "fail %")], unit="percent",
+                  steps=[(GREEN, None), (AMBER, 20), (RED, 50)], color="background"))
+    p.append(ts(c, "Auth failures per second (by reason)",
+                [(f"sum by (reason) (rate(petabyte_auth_failures_total{{{E}}}[$__rate_interval]))",
+                  "{{reason}}")], unit="ops"))
+    return dashboard("petabyte-operations", "Petabyte — Operations",
+                     ["petabyte", "operations"], [ENV], p)
+
+
+BUILDERS = [d_executive, d_marketplace, d_payments, d_gpu, d_api, d_infra, d_security, d_trust,
+            d_operations]
 FILES = {
     "petabyte-executive": "executive.json", "petabyte-marketplace": "marketplace.json",
     "petabyte-settlement": "payments.json", "petabyte-seller-fleet": "gpu-fleet.json",
     "petabyte-api": "api.json", "petabyte-infra": "infrastructure.json",
-    "petabyte-security": "security.json",
+    "petabyte-security": "security.json", "petabyte-trust": "trust.json",
+    "petabyte-operations": "operations.json",
 }
 
 

@@ -34,7 +34,7 @@ observability/
 │   │   ├── transaction_trace.json       uid: petabyte-transaction-trace
 │   │   └── investor_demo.json           uid: petabyte-investor-demo
 │   └── provisioning/
-│       ├── dashboards/petabyte.yaml     # file provider -> /var/lib/grafana/dashboards
+│       ├── dashboards/petabyte.yaml     # file provider -> /etc/grafana/dashboards
 │       └── datasources/datasources.yaml # Prometheus(uid=prometheus), Loki(uid=loki), Tempo(uid=tempo)
 ├── otel-collector/
 │   └── config.yaml                 # PRODUCTION collector scaffold (TLS + bearer auth)
@@ -77,10 +77,21 @@ is checked to actually exist.
 ## How it's provisioned
 
 - **Datasources** and the **dashboard provider** are provisioned declaratively
-  from `grafana/provisioning/`. Mount `provisioning/` at
-  `/etc/grafana/provisioning` and the dashboard JSON at
-  `/var/lib/grafana/dashboards` (read-only). Grafana loads them on startup and
-  keeps them in sync with this repo (`allowUiUpdates: false`).
+  from `grafana/provisioning/`. Compose mounts `provisioning/` at
+  `/etc/grafana/provisioning` and the dashboard JSON at **`/etc/grafana/dashboards`**
+  (read-only), and the provider (`provisioning/dashboards/petabyte.yaml`) points at
+  that same path. The dashboards path is deliberately **outside** `/var/lib/grafana`
+  (the persistent `grafana-data` named volume) — mounting it *inside* the named volume
+  could let the volume mask the files, which is what left the `Petabyte` folder created
+  but empty. Grafana loads them on startup and keeps them in sync with this repo
+  (`allowUiUpdates: false`).
+- **The deploy proves provisioning, not just liveness.** After reload, the deploy
+  workflow runs `grafana/verify_provisioning.py` against the local Grafana API and only
+  succeeds if the health check passes **and** the datasources are provisioned **and**
+  every dashboard UID from the committed JSON is present in the `Petabyte` folder. On a
+  mismatch it dumps non-secret diagnostics (host/container files, mounts, provisioning
+  log lines, expected-vs-observed UIDs), rolls back to the last good config, and fails.
+  Run it locally for the static config check: `python observability/grafana/verify_provisioning.py`.
 - Datasources reference each other by stable **uid** (`prometheus`, `loki`,
   `tempo`). Dashboards and alerts reference the same uids and the dashboard uids
   above, so cross-links (Loki `trace_id` -> Tempo; Tempo -> Loki; alert

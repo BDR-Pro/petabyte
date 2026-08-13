@@ -17,7 +17,10 @@ import os
 from cryptography.fernet import Fernet
 
 os.environ["TRUSTED_PROXIES"] = "testclient,127.0.0.1,::1"
-os.environ.setdefault("DATABASE_URL", "sqlite:///./security.db")
+# Force the dedicated SQLite test DB UNCONDITIONALLY. Never inherit DATABASE_URL here — this
+# file used to DROP SCHEMA public on a postgres URL, which would wipe staging/prod if the env
+# happened to point there. This is an offline SQLite-only suite.
+os.environ["DATABASE_URL"] = "sqlite:///./security.db"
 os.environ["SECRET_KEY"] = "test-jwt-secret"
 os.environ["SERVER_PRIVATE_KEY"] = Fernet.generate_key().decode()
 os.environ["WG_PUBLIC_KEY"] = "SERVERPUBLICKEYbase64example=="
@@ -32,11 +35,7 @@ for f in ("security.db", "security.db-wal", "security.db-shm"):
 
 from fastapi.testclient import TestClient   # noqa: E402
 from pydantic import ValidationError        # noqa: E402
-import db as dbmod                           # noqa: E402
-if dbmod.engine.dialect.name.startswith("postgres"):
-    with dbmod.engine.begin() as _c:
-        _c.exec_driver_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    dbmod.init_db()
+import db as dbmod                           # noqa: E402  (SQLite only — see DATABASE_URL above)
 import main   # noqa: E402
 
 c = TestClient(main.app)

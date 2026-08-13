@@ -114,6 +114,9 @@ SERVICE_NAME = os.getenv("OTEL_SERVICE_NAME", SERVICE.API).strip()
 class EVENTS:
     """Stable event names (log `event_name` + span event). Never rename in place — these
     are consumed by dashboards, alerts, runbooks, and future AI ops features."""
+    # product funnel (mirrored to product analytics; see product_analytics.FUNNEL)
+    USER_SIGNED_UP = "user.signed_up"
+    WALLET_FUNDED = "wallet.funded"
     # request / auth
     HTTP_REQUEST = "http.request.completed"
     AUTH_FAILED = "auth.failed"
@@ -400,6 +403,11 @@ def event(name: str, *, level: int = logging.INFO, **fields) -> None:
         if sp is not None:
             with contextlib.suppress(Exception):
                 sp.add_event(name, attributes=_span_safe_attrs(fields))
+        # Mirror funnel events to product analytics (PostHog) from this single choke point.
+        # No-op unless it's a funnel event AND analytics is configured; never raises.
+        with contextlib.suppress(Exception):
+            import product_analytics
+            product_analytics.maybe_capture(name, fields)
     except Exception:  # noqa: BLE001 — telemetry must never raise into the caller
         if FAILURE_MODE != "degrade":
             raise
@@ -670,6 +678,10 @@ def init_metrics() -> bool:
         # Distributed lock outcomes — bounded 'outcome' label only (never the lock NAME).
         C("petabyte_lock_acquisitions_total", "Redis distributed-lock outcomes",
           ("outcome", "environment"))
+        # product surfaces (single-choke-point counters)
+        C("petabyte_cluster_formations_total", "Distributed cluster formation attempts",
+          ("outcome", "backend", "environment"))  # success|insufficient_nodes|booking_failed|error
+        C("petabyte_logins_total", "Password login attempts", ("outcome", "environment"))  # success|failure
         # telemetry health
         C("petabyte_telemetry_export_failures_total", "Telemetry export failures",
           ("exporter", "environment"))

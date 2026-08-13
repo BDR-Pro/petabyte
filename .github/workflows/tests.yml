@@ -45,6 +45,9 @@ jobs:
       - name: payout routing (provider-neutral, offline)
         working-directory: lumaris_api
         run: python payout_test.py
+      - name: payout rails (irreversible USDC gated + fail-closed)
+        working-directory: lumaris_api
+        run: python payout_rails_test.py
       - name: email (mailgun, offline unit)
         working-directory: lumaris_api
         run: python email_test.py
@@ -60,9 +63,18 @@ jobs:
       - name: security (ip-spoof / cross-tenant refs / stored-xss at write time)
         working-directory: lumaris_api
         run: python security_test.py
+      - name: confidential computing (TEE fail-closed in prod + attestation freshness)
+        working-directory: lumaris_api
+        run: python tee_test.py
       - name: agent auto-update is signed (fleet-RCE guard)
         working-directory: desktop-app
         run: python updater_test.py
+      - name: agent sandbox (buyer job can't harm the seller host)
+        working-directory: lumaris_agent
+        run: python sandbox_test.py
+      - name: agent pricing (node auto-prices from its GPU benchmark; no invented flat rate)
+        working-directory: lumaris_agent
+        run: python provision_test.py
       - name: release signer <-> updater round-trip
         run: python scripts/sign_release_test.py
       - name: account (reset + cal webhook + demo notify)
@@ -86,6 +98,9 @@ jobs:
       - name: tunnel (NAT traversal + failover)
         working-directory: lumaris_gateway
         run: python tunnel_test.py
+      - name: vm dns / stable address (survives failover, no new IP, no placement leak)
+        working-directory: lumaris_api
+        run: python vm_dns_test.py
 
   postgres:
     name: postgres (the one that counts)
@@ -213,6 +228,57 @@ jobs:
       - name: observability (correlation / redaction / cardinality / degrade-safe)
         working-directory: lumaris_api
         run: python observability_test.py
+      - name: product analytics (PostHog funnel mirror — off-by-default, no PII)
+        working-directory: lumaris_api
+        run: python product_analytics_test.py
+      - name: gpu benchmark authenticity (score vs public reference band)
+        working-directory: lumaris_api
+        run: python gpu_benchmark_test.py
+      - name: authenticity training dataset (feature rows + labels export)
+        working-directory: lumaris_api
+        run: python training_data_test.py
+      - name: seller earnings forecast (net/hr exact + honest estimates)
+        working-directory: lumaris_api
+        run: python earnings_test.py
+      - name: pricing engine (cloud-anchored, demand+trust, explainable, clamped)
+        working-directory: lumaris_api
+        run: python pricing_engine_test.py
+      - name: GPU ROI (buy-and-rent breakeven: transparent, honest, affiliate-tagged)
+        working-directory: lumaris_api
+        run: python hardware_reference_test.py
+      - name: paid data API (metered, pay-as-you-go from wallet, scope-gated, price history)
+        working-directory: lumaris_api
+        run: python data_api_test.py
+      - name: distributed compute (one job across N GPUs on different machines, VPN cluster, gang-scheduled)
+        working-directory: lumaris_api
+        run: python distributed_test.py
+      - name: distributed EXECUTION (real N-process all-reduce; every rank converges on the right answer)
+        working-directory: lumaris_agent
+        run: python distributed_run_test.py
+      - name: spare-disk rental (web3/bittorrent storage; per-node attribution + take + idempotent reconcile)
+        working-directory: lumaris_api
+        run: python disk_rental_test.py
+      - name: two-factor auth (RFC 4226 known-answer TOTP + window/skew + provisioning URI)
+        working-directory: lumaris_api
+        run: python totp_test.py
+      - name: persistent volumes (content-addressed incremental snapshots; only the delta uploaded)
+        working-directory: lumaris_api
+        run: python volumes_test.py
+      - name: model hub (discover/pull/verify/cache; real HTTP range+resume, dedup, gated, CLI)
+        working-directory: lumaris_api
+        run: python modelhub_test.py
+      - name: agent WireGuard (keys/config/peers + fail-closed bring-up)
+        working-directory: lumaris_agent
+        run: python wireguard_test.py
+      - name: database backup to S3 (disaster recovery: dump/gzip/sha256/retention/verify)
+        working-directory: lumaris_api
+        run: python backup_test.py
+      - name: sanctions screen (free public OFAC: country embargo + SDN crypto address, fail-closed)
+        working-directory: lumaris_api
+        run: python sanctions_test.py
+      - name: launch templates (every template is a real, pullable, runnable container)
+        working-directory: lumaris_api
+        run: python templates_test.py
       - name: agent telemetry (span exception-safety / redaction / trace-join / degrade)
         working-directory: lumaris_agent
         run: python agent_telemetry_test.py
@@ -231,6 +297,10 @@ jobs:
               except Exception as e: print(f"::error::{f}: {e}"); bad += 1
           sys.exit(1 if bad else 0)
           PY
+      - name: grafana provisioning (provider<->mount alignment + verify guards)
+        run: |
+          python observability/grafana/verify_provisioning.py
+          python observability/grafana/verify_provisioning_test.py
       - name: configuration drift (manifest / code / workflows / template.env in sync)
         run: python scripts/check_configuration_drift.py
       - name: manifest is up to date (re-generate → no diff)
@@ -455,6 +525,37 @@ jobs:
         run: ruff check lumaris_api lumaris_agent lumaris_gateway || true
       - name: ruff (format check)
         run: ruff format --check lumaris_api || true
+
+  docker-build:
+    # Container build verification: the production image must build, and the app must
+    # actually come up healthy inside it (gunicorn + the canonical lumaris_api.main:app
+    # entrypoint), talking to a real Postgres. Proves `docker compose up` works for anyone.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - name: build the API image
+        run: docker build -t petabyte-api:ci .
+      - name: boot the image against Postgres and hit /healthz
+        run: |
+          docker network create pb
+          docker run -d --name db --network pb \
+            -e POSTGRES_USER=petabyte -e POSTGRES_PASSWORD=petabyte -e POSTGRES_DB=petabyte \
+            postgres:16
+          for i in $(seq 1 30); do
+            docker exec db pg_isready -U petabyte -d petabyte && break; sleep 2; done
+          docker run -d --name api --network pb -p 8000:8000 \
+            -e DATABASE_URL=postgresql+psycopg2://petabyte:petabyte@db:5432/petabyte \
+            -e SECRET_KEY=ci-insecure -e SERVER_PRIVATE_KEY=HjosLuZJfl-Qo_pSU5b61P_E5202al_7t9va97hjYBE= \
+            -e PAYMENT_WEBHOOK_SECRET=ci -e WG_PUBLIC_KEY=x -e WG_ENDPOINT=y \
+            -e GOOGLE_OAUTH_STUB=true -e ENVIRONMENT=development -e PAYMENTS_MODE=sandbox \
+            petabyte-api:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1; then echo "healthy"; ok=1; break; fi
+            sleep 2
+          done
+          if [ "${ok:-0}" != "1" ]; then echo "::error::container never became healthy"; docker logs api; exit 1; fi
+          curl -fsS http://127.0.0.1:8000/trust/summary | head -c 400; echo
 
   security-scan:
     runs-on: ubuntu-latest

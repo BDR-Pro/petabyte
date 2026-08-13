@@ -59,7 +59,8 @@ Add --json to `doctor` for machine-readable output."""
 
 def banner(ui: cli_ui.Ui, *, product=PRODUCT, url=None) -> None:
     """One tidy startup header instead of a bare log line."""
-    ui.line(ui.bold(ui.teal(f"◆ {product}")) + ui.dim(f"  v{VERSION}"))
+    marker = "◆" if ui.unicode else "*"      # ◆ is not cp1252-encodable — fall back on ASCII
+    ui.line(ui.bold(ui.teal(f"{marker} {product}")) + ui.dim(f"  v{VERSION}"))
     if url:
         ui.line(ui.dim(f"  API {url}"))
 
@@ -86,7 +87,8 @@ def _run_doctor(as_json: bool) -> int:
 
     add("API URL set", "ok" if api else "fail", api or "PETABYTE_API_URL is not set")
     add("API key set", "ok" if key else "fail",
-        (key[:8] + "…") if key else "PETABYTE_API_KEY is not set (create one on /install)")
+        (key[:8] + ("…" if cli_ui.supports_unicode() else "...")) if key
+        else "PETABYTE_API_KEY is not set (create one on /install)")
     add("Spec id set", "ok" if spec else "warn",
         spec or "PETABYTE_SPEC_ID not set — run provision.py to register this node")
 
