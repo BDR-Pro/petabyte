@@ -1583,7 +1583,7 @@ async function loadIncidents(){
   (b.failed_payouts||[]).forEach(function(x){rows.push(['failed payout','#'+x.payout_id,money(x.amount_usd),(x.age_minutes||0)+'m',x.reason]);});
   document.getElementById('inc_sub').textContent=b.counts?('· '+b.counts.stalled_bookings+' stalled · '+b.counts.failed_jobs+' failed jobs · '+b.counts.failed_payouts+' failed payouts'):'';
   if(!rows.length){tb.innerHTML='<tr><td colspan=5 class="mut mono" style="padding:20px;text-align:center">No incidents. Everything is settling normally.</td></tr>';return;}
-  tb.innerHTML=rows.map(function(r){return '<tr><td><span class="badge">'+r[0]+'</span></td><td class="mono">'+r[1]+'</td><td class="mono amber">'+r[2]+'</td><td class="mono mut">'+r[3]+'</td><td class="mut" style="font-size:12.5px">'+r[4]+'</td></tr>';}).join('');
+  tb.innerHTML=rows.map(function(r){return '<tr><td><span class="badge">'+esc(r[0])+'</span></td><td class="mono">'+esc(r[1])+'</td><td class="mono amber">'+esc(r[2])+'</td><td class="mono mut">'+esc(r[3])+'</td><td class="mut" style="font-size:12.5px">'+esc(r[4])+'</td></tr>';}).join('');
 }
 async function loadVideo(){
   try{var r=await fetch('/landing/video');if(!r.ok)return;var d=await r.json();
@@ -2316,8 +2316,8 @@ async function loadNotifs(){
     return '<div style="display:flex;gap:12px;align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--hair)">'+
       '<span class="mono" style="width:20px;flex:none;color:'+(bad?'var(--warn)':'var(--teal)')+'">'+(icon[n.event_type]||'•')+'</span>'+
       '<div style="flex:1;min-width:0">'+
-        '<div style="font-size:13.5px;font-family:var(--disp);font-weight:600">'+(n.subject||n.event_type)+'</div>'+
-        '<div class="mut" style="font-size:12.5px">'+(n.body||'')+'</div></div>'+
+        '<div style="font-size:13.5px;font-family:var(--disp);font-weight:600">'+esc(n.subject||n.event_type)+'</div>'+
+        '<div class="mut" style="font-size:12.5px">'+esc(n.body||'')+'</div></div>'+
       '<span class="mini" style="flex:none">'+(n.status||'')+'</span></div>';}).join('');
 }
 

@@ -11,7 +11,6 @@
 # Pin the key by shipping it in the installer (never fetch it at runtime). The installer also
 # leaves the timer DISABLED unless PETABYTE_AUTO_UPDATE=true, so this only runs when opted in.
 set -euo pipefail
-REPO="${PETABYTE_REPO:-https://github.com/BDR-Pro/petabyte.git}"
 SUBDIR="${PETABYTE_AGENT_SUBDIR:-lumaris_agent}"
 APP=/opt/petabyte-agent
 SERVICE=petabyte-agent
@@ -28,25 +27,29 @@ verify_bundle() {  # verify_bundle <bundle> <sigfile> — 0 ok, 1 fail/unavailab
     -rawin -in "$bundle" -sigfile "$sig" >/dev/null 2>&1
 }
 
-# Prefer OUR server's agent bundle (works when the repo is private; no git creds on hosts).
+# SIGNED UPDATES ONLY — fail closed. We fetch the agent bundle from OUR API and it MUST verify
+# against the pinned release key before ANY file is applied. There is deliberately NO unsigned
+# fallback: an unsigned `git clone` (or any TLS-only fetch) would let a compromised repo/CI/account
+# push root-run code to the whole fleet — exactly the threat the pinned signing key defends against.
+# If the signed bundle is unavailable or the signature does not verify, we skip/refuse the update.
 # The API URL was written to the agent env file at provision time.
 API_URL="$(grep -E '^PETABYTE_API_URL=' /etc/petabyte/agent.env 2>/dev/null | cut -d= -f2-)"
-if [ -n "$API_URL" ] \
-   && curl -fsSL "$API_URL/agent.tar.gz" -o "$TMP/agent.tar.gz" 2>/dev/null \
-   && tar -xzf "$TMP/agent.tar.gz" -C "$TMP" 2>/dev/null && [ -d "$TMP/$SUBDIR" ]; then
-  # SIGNED UPDATES ONLY — fail closed. The bundle MUST verify against the pinned release key;
-  # we NEVER fall back to TLS-only trust for code that runs as root on the seller's machine.
-  if [ ! -f "$PUBKEY" ]; then
-    echo "SECURITY: no pinned release key at $PUBKEY — refusing to apply an unsigned agent update." \
-         "Ship the release public key in the installer (see update.sh header)."; exit 1
-  fi
-  curl -fsSL "$API_URL/agent.tar.gz.sig" -o "$TMP/agent.tar.gz.sig" 2>/dev/null || true
-  if ! verify_bundle "$TMP/agent.tar.gz" "$TMP/agent.tar.gz.sig"; then
-    echo "SECURITY: agent bundle signature did not verify against $PUBKEY — refusing update"; exit 1
-  fi
-else
-  # Fallback: clone the repo (needs access if private).
-  git clone --depth 1 "$REPO" "$TMP" 2>/dev/null || { echo "fetch failed"; exit 0; }
+if [ -z "$API_URL" ]; then
+  echo "no PETABYTE_API_URL in /etc/petabyte/agent.env — cannot fetch a signed bundle; skipping update"
+  exit 0
+fi
+if ! curl -fsSL "$API_URL/agent.tar.gz" -o "$TMP/agent.tar.gz" 2>/dev/null \
+   || ! tar -xzf "$TMP/agent.tar.gz" -C "$TMP" 2>/dev/null || [ ! -d "$TMP/$SUBDIR" ]; then
+  echo "signed agent bundle unavailable from $API_URL — skipping update (no unsigned fallback)"
+  exit 0
+fi
+if [ ! -f "$PUBKEY" ]; then
+  echo "SECURITY: no pinned release key at $PUBKEY — refusing to apply an unsigned agent update." \
+       "Ship the release public key in the installer (see update.sh header)."; exit 1
+fi
+curl -fsSL "$API_URL/agent.tar.gz.sig" -o "$TMP/agent.tar.gz.sig" 2>/dev/null || true
+if ! verify_bundle "$TMP/agent.tar.gz" "$TMP/agent.tar.gz.sig"; then
+  echo "SECURITY: agent bundle signature did not verify against $PUBKEY — refusing update"; exit 1
 fi
 
 RSYNC_EXCL=(--exclude .venv --exclude '*.env' --exclude '*.log' --exclude __pycache__ --exclude .git)

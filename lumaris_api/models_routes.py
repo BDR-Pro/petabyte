@@ -29,6 +29,22 @@ from pages import MODELS_HTML, MODEL_DETAIL_HTML, MODELS_INSTALLED_HTML
 router = APIRouter(tags=["models"])
 
 MODEL_PULL_ENABLED = os.getenv("MODEL_PULL_ENABLED", "false").lower() == "true"
+
+# Server-side model operations must NOT be pointed at arbitrary URLs. A direct http(s)/s3/file
+# source turns this host into an SSRF proxy (internal services, cloud metadata at 169.254.169.254,
+# localhost admin ports) and lets a remote manifest dictate exactly what bytes we fetch. Restrict
+# server-side resolution to Hugging Face and the Petabyte registry (whose hosts are operator config,
+# not request input). The CLI still supports direct URLs when run locally on the operator's own box.
+_TRUSTED_SERVER_SOURCES = {"hf", "huggingface", "pt", "petabyte"}
+
+
+def _reject_untrusted_source(ref):
+    src = (getattr(ref, "source", None) or "hf").lower()
+    if src not in _TRUSTED_SERVER_SOURCES:
+        raise HTTPException(status_code=400, detail=(
+            "server-side model operations support Hugging Face and the Petabyte registry only; "
+            "direct-URL / S3 / file sources are disabled here (SSRF protection). "
+            "Use the CLI locally: petabyte model pull <id>"))
 MODEL_MAX_PULL_GB = float(os.getenv("MODEL_MAX_PULL_GB", "200"))
 
 # A small curated set so the catalog is useful before anyone types a query. These are well-known
@@ -139,7 +155,7 @@ def api_availability(id: str = Query(..., max_length=200), db: Session = Depends
 
 
 @router.get("/api/models/downloads/{job_id}")
-def api_download_status(job_id: str):
+def api_download_status(job_id: str, user: dict = Depends(get_current_user)):
     with _jobs_lock:
         job = _jobs.get(job_id)
     if not job:
@@ -160,6 +176,7 @@ def api_pull(body: dict, user: dict = Depends(get_current_user)):
         ref = parse(mid)
     except ModelIdError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    _reject_untrusted_source(ref)
     # size preflight (against the resolved manifest) before we start writing to the host
     try:
         man = mgr().resolve_manifest(ref, fmt=body.get("format"),
@@ -192,8 +209,17 @@ def api_pull(body: dict, user: dict = Depends(get_current_user)):
 
 @router.delete("/api/models/{model_id:path}")
 def api_remove(model_id: str, revision: str = Query(None), user: dict = Depends(get_current_user)):
+    if not MODEL_PULL_ENABLED:
+        raise HTTPException(status_code=503, detail=(
+            "server-side model cache management is disabled on this deployment "
+            "(set MODEL_PULL_ENABLED=true). Use the CLI locally: petabyte model remove <id>"))
     try:
-        res = mgr().remove(parse(model_id), revision=revision)
+        ref = parse(model_id)
+    except ModelIdError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    _reject_untrusted_source(ref)
+    try:
+        res = mgr().remove(ref, revision=revision)
     except ModelIdError as e:
         raise HTTPException(status_code=422, detail=str(e))
     if not res["removed"]:
@@ -204,6 +230,10 @@ def api_remove(model_id: str, revision: str = Query(None), user: dict = Depends(
 @router.get("/api/models/{model_id:path}")
 def api_info(model_id: str, format: str = Query(None), quantization: str = Query(None),
              revision: str = Query(None), db: Session = Depends(get_db)):
+    try:
+        _reject_untrusted_source(parse(model_id))
+    except ModelIdError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     try:
         info = mgr().info(model_id, fmt=format, quantization=quantization, revision=revision)
     except GatedError as e:

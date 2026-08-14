@@ -208,6 +208,33 @@ def _start_backup_thread(task):
     return stop
 
 
+def _host_ram_bytes():
+    try:
+        import os as _o
+        return _o.sysconf("SC_PAGE_SIZE") * _o.sysconf("SC_PHYS_PAGES")
+    except Exception:                                    # noqa: BLE001 (non-Linux: no sysconf)
+        return 0
+
+
+def _default_mem_cap():
+    """Conservative RAM cap when the server didn't size the job: total host RAM minus ~2 GiB
+    headroom, so a runaway container can't OOM-kill the host/agent. None where unmeasurable."""
+    total = _host_ram_bytes()
+    if total <= 0:
+        return None
+    return str(max(1024 ** 3, total - 2 * 1024 ** 3)) + "b"
+
+
+def _default_cpu_cap():
+    """Leave the host at least one core so a job can't peg every CPU and starve the agent."""
+    try:
+        import os as _o
+        n = _o.cpu_count() or 1
+    except Exception:                                    # noqa: BLE001
+        return None
+    return str(max(1, n - 1))
+
+
 def _isolation_flags(task):
     """Hardening flags for EVERY buyer container — protects the SELLER's machine.
     Kept in parity with the Linux agent (lumaris_agent/task_fetcher.py): drop ALL Linux
@@ -218,10 +245,12 @@ def _isolation_flags(task):
     flags = ["--cap-drop", "ALL",
              "--security-opt", "no-new-privileges",
              "--pids-limit", str(task.get("pids") or 1024)]
-    mem = task.get("memory")
+    # RAM/CPU caps: booked size when the server sends them, else a conservative host-derived default
+    # (never "no cap") so a buyer container can't OOM-kill the host/agent or pin every CPU (H6).
+    mem = task.get("memory") or _default_mem_cap()
     if mem:
         flags += ["--memory", str(mem), "--memory-swap", str(mem)]
-    cpus = task.get("cpus")
+    cpus = task.get("cpus") or _default_cpu_cap()
     if cpus:
         flags += ["--cpus", str(cpus)]
     try:
@@ -374,7 +403,7 @@ def _run_transcode(task):
     if not shutil.which("docker"):
         _post("/jobs/result", _signed_result(tid, status="failed")); return
     work = tempfile.mkdtemp(prefix=f"tc-{tid}-")
-    src = _os.path.join(work, "in"); dst = _os.path.join(work, f"out.{task.get('container','mp4')}")
+    src = _os.path.join(work, "in"); dst = _os.path.join(work, f"out.{_safe_ext(task.get('container'))}")
     try:
         g = httpx.post(f"{API_URL}/jobs/input_url", headers=HEADERS, timeout=15,
                        json={"task_id": tid, "ref": task.get("input_ref", "")}).json()
@@ -436,10 +465,10 @@ def _run_stitch(task):
             for i, ref in enumerate(refs):
                 gg = httpx.post(f"{API_URL}/jobs/input_url", headers=HEADERS, timeout=15,
                                 json={"task_id": tid, "ref": ref}).json()
-                p = _os.path.join(work, f"seg{i}.{task.get('container','mp4')}")
+                p = _os.path.join(work, f"seg{i}.{_safe_ext(task.get('container'))}")
                 open(p, "wb").write(httpx.get(gg["download_url"], timeout=600).content)
                 lf.write(f"file '{p}'\n")
-        out = _os.path.join(work, f"final.{task.get('container','mp4')}")
+        out = _os.path.join(work, f"final.{_safe_ext(task.get('container'))}")
         if task.get("kind") == "transcode":
             # segments already fetched to /work -> no network needed; drop caps too
             concat = ["docker", "run", "--rm", "--network", "none"]
@@ -540,6 +569,15 @@ def _run_distributed(task):
     rank = int(dist.get("rank", 0)); world = int(dist.get("world_size", 1))
     backend = dist.get("backend", "nccl"); job_id = dist.get("job_id")
     _set_ui(status="running", task=f"Distributed rank {rank}/{world} #{tid}")
+    # SECURITY (H5): a cluster rank runs with --network host so it can reach peers over WireGuard,
+    # which bypasses the per-job egress firewall — only safe on a node the operator opted into VPN
+    # isolation. Refuse unless AGENT_VPN_ENABLED is set (mirror of the Linux agent's vpn_enabled()).
+    if os.getenv("AGENT_VPN_ENABLED", "false").lower() != "true":
+        report_log(tid, "distributed rank refused: AGENT_VPN_ENABLED is not set on this node "
+                        "(--network host for a cluster rank requires VPN isolation)")
+        _post("/jobs/result", _signed_result(tid, status="failed"))
+        _set_ui(status="idle", task=None, fail=True)
+        return
     host = _dist.local_vpn_addr()
     port = int(os.getenv("DIST_RENDEZVOUS_PORT", str(_dist.DEFAULT_RENDEZVOUS_PORT)))
     try:

