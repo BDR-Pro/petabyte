@@ -54,7 +54,13 @@ def ok(label, cond):
 # ---- setup: seller + buyer, seller role, attested spec with 3 units ----
 c.post("/register_user", json={"username":"seller1","password":"hunter2-correct-horse"})
 c.post("/register_user", json={"username":"buyer1","password":"hunter2-correct-horse"})
-def login(u): return c.post("/login", data={"username":u,"password":"hunter2-correct-horse"}).json()["access_token"]
+def login(u):
+    # /login now also Set-Cookies an HttpOnly session on the shared client. This suite is
+    # Bearer-based, so drop that cookie after capturing the token — otherwise the ambient
+    # session would silently authenticate the many "no-auth -> 401" assertions below.
+    _r = c.post("/login", data={"username":u,"password":"hunter2-correct-horse"})
+    c.cookies.clear()
+    return _r.json()["access_token"]
 sh = {"Authorization":f"Bearer {login('seller1')}"}
 bh = {"Authorization":f"Bearer {login('buyer1')}"}
 c.post("/deposit", headers=bh, json={"amount":100000.0})  # fund buyer for all test bookings
@@ -437,7 +443,9 @@ ok("the audit chain verifies (tamper-evident) — intact over the recorded event
 _aaud=c.get("/account/audit", headers=adminh).json()
 ok("personal audit trail lists the caller's own actions",
    any(e["action"]=="team.create" for e in _aaud["events"]) and _aaud["integrity"]["intact"] is True)
-ok("personal audit requires auth", c.get("/account/audit").status_code==401)
+# "no auth" now means no Bearer AND no session cookie — the shared client `c` carries a
+# pb_session cookie from earlier logins (a cookie IS a valid session), so use a fresh client.
+ok("personal audit requires auth", TestClient(main.app).get("/account/audit").status_code==401)
 # tamper-evidence: editing a stored row breaks the chain (deletion/edit is detectable)
 import db as _auditdb
 _asess=_auditdb.SessionLocal()
@@ -2208,7 +2216,7 @@ _meh={"Authorization":f"Bearer {login('buyer1')}"}
 _me=c.get("/me", headers=_meh); ok("/me returns profile", _me.status_code==200 and {"username","role","balance","nodes","bookings"} <= set(_me.json()))
 ok("/account/specs lists my nodes", c.get("/account/specs", headers=_meh).status_code==200)
 ok("/account/bookings lists my jobs", c.get("/account/bookings", headers=_meh).status_code==200)
-ok("/me requires auth", c.get("/me").status_code in (401,403))
+ok("/me requires auth", TestClient(main.app).get("/me").status_code in (401,403))  # fresh client: no session cookie
 ok("nav has sign-in and sign-out", 'id="signinlink"' in _lt0 and 'id="signoutlink"' in _lt0)
 # node bootstrap with API key only (no creds): seller mints key, node registers+attests with it
 _nk=c.post("/create_api_key?days=90&label=node&scopes=node,jobs", headers=s5h).json()["api_key"]
@@ -2218,7 +2226,7 @@ ok("register_specs with API key only", _rs.status_code==200 and "spec_id" in _rs
 _ksid=_rs.json()["spec_id"]
 _katt={"cpu":8,"ram":32,"gpu_model":"L4","nonce":"kn","ts":int(time.time())}
 ok("prove/attest with API key only", c.post("/prove", headers=_kh, json={"spec_id":_ksid,"attestation":_katt,"signature":sign_proof(_VENDOR_SK,_katt),"pubkey":base64.b64encode(_VENDOR_SK.public_key().public_bytes_raw()).decode()}).status_code==200)
-ok("register_specs blocks no-auth", c.post("/register_specs", json={"cpu":1,"ram":1,"duration":1,"price_per_hour":1,"provider":"x","units":1}).status_code==401)
+ok("register_specs blocks no-auth", TestClient(main.app).post("/register_specs", json={"cpu":1,"ram":1,"duration":1,"price_per_hour":1,"provider":"x","units":1}).status_code==401)  # fresh client: no session cookie
 ok("login page offers Google sign-in", "auth/google/login" in c.get("/login").text)
 # --- private-repo readiness: agent installs from OUR server, not a GitHub clone ---
 ok("installer fetches the agent bundle from the server (works when repo is private)",
@@ -2284,11 +2292,18 @@ lg=c.get("/auth/google/login", follow_redirects=False)
 ok("google login redirects", lg.status_code in (302,307) and "callback" in lg.headers.get("location",""))
 cb=c.get("/auth/google/callback?code=stub&email=gtest@example.com", follow_redirects=False)
 loc=cb.headers.get("location","")
-ok("google callback issues JWT redirect to /console", cb.status_code in (302,307) and "/console#t=" in loc)
-gjwt=loc.split("t=")[1]
-gw=c.get("/wallet", headers={"Authorization":f"Bearer {gjwt}"})
-ok("google-issued JWT authenticates", gw.status_code==200)
-ok("google user is created/persistent", c.get("/auth/google/callback?code=x&email=gtest@example.com", follow_redirects=False).status_code in (302,307))
+# The session is delivered as an HttpOnly cookie now, NEVER a #t=JWT URL fragment (which would
+# leak into history / referrers / JS). Clean redirect, token in the cookie jar.
+ok("google callback redirects cleanly to /console (no token in the URL)",
+   cb.status_code in (302,303,307) and loc.rstrip("/").endswith("/console") and "#t=" not in loc)
+ok("google callback sets the HttpOnly session cookie (not a URL fragment)",
+   bool(c.cookies.get("pb_session")))
+# the callback set the session cookie on the client -> the browser is now authenticated by it
+ok("google-issued session cookie authenticates", c.get("/wallet").status_code==200)
+# The cookie VALUE is the JWT; capture it for the Bearer-style admin checks below, then clear
+# the jar so the shared client `c` has NO ambient session (keeps the no-auth assertions honest).
+gjwt=c.cookies.get("pb_session"); c.cookies.clear()
+ok("google user is created/persistent", c.get("/auth/google/callback?code=x&email=gtest@example.com", follow_redirects=False).status_code in (302,303,307))
 
 # ==== ADMIN CONSOLE (env-allowlisted, gated) ====
 os.environ["ADMIN_USERS"]="gtest@example.com"   # make the google user an admin (read dynamically)

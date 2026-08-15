@@ -150,9 +150,12 @@ def _run_browser(c, buyer_t, seller_t, pub):
         browser = _launch(p)
         try:
             page = browser.new_page()
-            # Authenticate the browser exactly like the app does: JWT in localStorage.
-            page.goto(B + "/")
-            page.evaluate("t => localStorage.setItem('pb_token', t)", buyer_t)
+            # Authenticate the browser exactly like the app does now: the JWT in the HttpOnly
+            # pb_session cookie + a readable pb_csrf token (any value: api() echoes the same
+            # cookie back as X-CSRF-Token, so cookie==header always matches for our own writes).
+            page.context.add_cookies([
+                {"name": "pb_session", "value": buyer_t, "url": B},
+                {"name": "pb_csrf", "value": "e2e-csrf", "url": B}])
 
             page.goto(B + "/buy/" + pub)
             page.wait_for_selector("#buy_pay", timeout=20000)
@@ -184,9 +187,12 @@ def _run_browser(c, buyer_t, seller_t, pub):
             ok("buyer was charged a real, non-zero amount",
                (pv.get("captured_amount") or 0) > 0)
 
-            # Seller side of the journey: earnings/payout state, in the browser.
-            page.goto(B + "/")
-            page.evaluate("t => localStorage.setItem('pb_token', t)", seller_t)
+            # Seller side of the journey: earnings/payout state, in the browser. Swap the
+            # session cookie to the seller (clear the buyer's first) — cookie auth, not localStorage.
+            page.context.clear_cookies()
+            page.context.add_cookies([
+                {"name": "pb_session", "value": seller_t, "url": B},
+                {"name": "pb_csrf", "value": "e2e-csrf", "url": B}])
             page.goto(B + "/seller/payouts")
             page.wait_for_selector("#earn_rows", timeout=20000)
             page.wait_for_function(

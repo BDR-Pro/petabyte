@@ -8,6 +8,13 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
+# Browser session cookies (the JWT lives here, NOT in localStorage, so an XSS payload can't
+# read the token). SESSION_COOKIE is HttpOnly; CSRF_COOKIE is readable by JS and doubles as
+# the client-side "am I signed in?" hint. Bearer auth (CLI/API) is unaffected by all of this.
+SESSION_COOKIE = "pb_session"
+CSRF_COOKIE = "pb_csrf"
+SESSION_MAX_AGE = ACCESS_TOKEN_EXPIRE_MINUTES * 60   # cookie lifetime == token lifetime
+
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY environment variable is not set")
 

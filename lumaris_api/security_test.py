@@ -170,5 +170,57 @@ ok("RenderModel accepts a normal frame range",
                     nodes=8, samples=256).frame_end == 240)
 
 
+# ---------------------------------------------------------------- cookie session + CSRF (WS2)
+# The browser JWT now lives in an HttpOnly cookie (XSS can't read it), with a double-submit
+# CSRF token for cookie-authenticated writes. Bearer auth (CLI/API) is unchanged and NOT
+# CSRF-checked. Use a FRESH client so no ambient cookie leaks in from earlier tests.
+_cc = TestClient(main.app)
+_cc.post("/register_user", json={"username": "csrf_user", "password": "hunter2-correct-horse"})
+_lg = _cc.post("/login", data={"username": "csrf_user", "password": "hunter2-correct-horse"})
+_setck = " ".join(_lg.headers.get_list("set-cookie")) if hasattr(_lg.headers, "get_list") else _lg.headers.get("set-cookie", "")
+ok("login sets an HttpOnly pb_session cookie (JWT not reachable from JS)",
+   "pb_session=" in _setck and "httponly" in _setck.lower())
+ok("login still returns the bearer token in the body (CLI/API unaffected)",
+   isinstance(_lg.json().get("access_token"), str))
+ok("login sets a readable pb_csrf double-submit cookie",
+   "pb_csrf=" in _setck and bool(_cc.cookies.get("pb_csrf")))
+_csrf = _cc.cookies.get("pb_csrf")
+
+# the ambient cookie authenticates a safe GET (no header needed)
+ok("cookie session authenticates a GET (/me)", _cc.get("/me").status_code == 200)
+
+# a cookie-authenticated WRITE without the CSRF header is REJECTED (403)
+ok("cookie-auth POST without X-CSRF-Token is blocked (403 CSRF)",
+   _cc.post("/change_role", json={"role": "seller"}).status_code == 403)
+# ...and ACCEPTED with the matching double-submit token
+ok("cookie-auth POST with a matching X-CSRF-Token is accepted (not 403)",
+   _cc.post("/change_role", json={"role": "seller"},
+            headers={"X-CSRF-Token": _csrf}).status_code != 403)
+# a forged/mismatched token is rejected
+ok("cookie-auth POST with a WRONG X-CSRF-Token is blocked (403)",
+   _cc.post("/change_role", json={"role": "buyer"},
+            headers={"X-CSRF-Token": "not-the-token"}).status_code == 403)
+
+# Bearer auth carries no ambient authority -> NOT CSRF-checked (a stray cookie must not force it)
+_btok = _lg.json()["access_token"]
+_bc = TestClient(main.app)
+ok("Bearer POST needs no CSRF token (Bearer is not a CSRF target)",
+   _bc.post("/change_role", json={"role": "seller"},
+            headers={"Authorization": f"Bearer {_btok}"}).status_code != 403)
+
+# logout clears the session server-side (HttpOnly -> JS can't), and auth then fails
+_out = _cc.post("/logout")
+_clear = " ".join(_out.headers.get_list("set-cookie")) if hasattr(_out.headers, "get_list") else _out.headers.get("set-cookie", "")
+ok("logout deletes the session cookie", "pb_session=" in _clear)
+_cc.cookies.clear()
+ok("after logout (no cookie) a protected GET is unauthenticated", _cc.get("/me").status_code in (401, 403))
+
+# a PUBLIC endpoint is never CSRF-blocked by a stray cookie (CSRF lives in the auth dep, not a
+# blanket middleware): a fresh anonymous client can still POST a public webhook/route.
+ok("public endpoints are not CSRF-gated (no session -> no CSRF)",
+   TestClient(main.app).post("/newsletter/subscribe",
+                             json={"email": "csrf-check@example.com"}).status_code in (200, 400, 409, 422, 429))
+
+
 print(f"\n=== security: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
 raise SystemExit(1 if _fail else 0)

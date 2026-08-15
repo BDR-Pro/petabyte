@@ -425,8 +425,10 @@ section("failure states: sane statuses, no stack traces leaked")
 r = get("/this-page-does-not-exist-xyz")
 ok("unknown page returns 404 (not 500)", r.status_code == 404, f"HTTP {r.status_code}")
 ok("404 body does not leak a Python traceback", "Traceback (most recent call last)" not in r.text)
-# a protected API without auth → 401/403 JSON, not a crash
-r = get("/wallet")
+# a protected API without auth → 401/403 JSON, not a crash. Use a FRESH client with no cookie
+# jar: the shared `client` holds a valid pb_session cookie from earlier logins, and a browser
+# WITH a session is (correctly) authenticated — "no auth" must mean no Bearer AND no cookie.
+r = TestClient(main.app, raise_server_exceptions=False).get("/wallet")
 ok("protected API without auth is 401/403 (not 500)", r.status_code in (401, 403), f"HTTP {r.status_code}")
 ok("unauthorized response does not leak a traceback", "Traceback (most recent call last)" not in r.text)
 # a buy page for a non-existent spec still renders a shell (client shows a friendly error)

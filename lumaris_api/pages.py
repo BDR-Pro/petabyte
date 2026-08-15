@@ -3,7 +3,9 @@
 Brand: Petabyte — deep-navy background with teal/cyan bioluminescent
 accents and an amber energy accent, Sora (display) + Figtree (body) +
 JetBrains Mono (data). The hexagon node mark (/static/petabyte-logo.png) is the
-signature. Token persists in localStorage as 'pb_token' across pages.
+signature. The session JWT lives in an HttpOnly `pb_session` cookie (never localStorage, so
+XSS can't read it); the readable `pb_csrf` cookie is the double-submit CSRF token and the
+"signed in" hint. api() sends the cookie automatically and adds X-CSRF-Token on writes.
 """
 
 _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
@@ -30,7 +32,7 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
  "sameAs":["https://github.com/BDR-Pro","https://x.com/engcool"]}
 </script>
 <script>(function(){try{var l=localStorage.getItem('pb_lang')||'en';document.documentElement.setAttribute('lang',l);document.documentElement.setAttribute('dir',l==='ar'?'rtl':'ltr');}catch(e){}})();</script>
-<script>(function(){try{document.documentElement.setAttribute('data-auth',localStorage.getItem('pb_token')?'in':'out');}catch(e){}})();</script>
+<script>(function(){try{document.documentElement.setAttribute('data-auth',(document.cookie.indexOf('pb_csrf=')>=0)?'in':'out');}catch(e){}})();</script>
 <script>(function(){try{var t=localStorage.getItem('pb_theme');if(t!=='light'&&t!=='dark')t=(window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';document.documentElement.setAttribute('data-theme',t);document.documentElement.setAttribute('data-bs-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');document.documentElement.setAttribute('data-bs-theme','dark');}})();</script>
 <link rel="icon" type="image/png" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/static/petabyte-mark-180.png">
@@ -417,19 +419,27 @@ _FOOT = """<footer>
 <span>verified compute · escrowed settlement</span>
 </div></footer>"""
 
-# token bootstrap: capture #t=JWT from the OAuth redirect, persist across pages
+# Auth is a browser HttpOnly cookie now (the JWT is NOT in localStorage, so an XSS payload
+# can't read the session). The readable pb_csrf cookie is the double-submit token AND the
+# "signed in" hint. No more #t=JWT fragment capture — the cookie is set server-side on login.
 _AUTHJS = """<script>
-(function(){var h=location.hash.match(/t=([^&]+)/);if(h){localStorage.setItem('pb_token',decodeURIComponent(h[1]));document.documentElement.setAttribute('data-auth','in');history.replaceState(null,'',location.pathname);}})();
 (function(){try{var m=location.search.match(/[?&]ref=([A-Za-z0-9]{4,16})/);if(m){localStorage.setItem('pb_ref',m[1].toUpperCase());}}catch(e){}})();
-function tok(){return localStorage.getItem('pb_token');}
+function pbCookie(n){var m=document.cookie.match(new RegExp('(?:^|; )'+n.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+'=([^;]*)'));return m?decodeURIComponent(m[1]):'';}
+// The JWT lives in an HttpOnly cookie the browser attaches automatically; JS can't read it.
+// tok() is kept only so CLI-facing curl snippets keep a slot; in the browser it is empty.
+function tok(){return '';}
 // HTML-escape any user-controlled value before it goes into innerHTML. Server-side
 // validation (main.py _clean_label) already rejects HTML metachars at write time; this is
 // defence-in-depth at the DOM sink and also neutralises any legacy row stored before that.
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 (function(){try{var p=location.pathname.replace(new RegExp('[/]$'),'')||'/';document.querySelectorAll('.navlinks a').forEach(function(a){if(a.getAttribute('href')===p)a.classList.add('active');});}catch(e){}})();
-function authed(){return !!tok();}
+// signed-in hint = the readable CSRF cookie the server sets beside the HttpOnly session.
+function authed(){return !!pbCookie('pb_csrf');}
 async function api(p,o){o=o||{};o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
- if(tok())o.headers['Authorization']='Bearer '+tok();var r=await fetch(p,o);var b={};try{b=await r.json()}catch(e){}return {ok:r.ok,status:r.status,body:b};}
+ o.credentials='same-origin';                       // send the session cookie on same-origin calls
+ var m=(o.method||'GET').toUpperCase();
+ if(m!=='GET'&&m!=='HEAD'&&m!=='OPTIONS'){var ct=pbCookie('pb_csrf');if(ct)o.headers['X-CSRF-Token']=ct;}  // CSRF double-submit
+ var r=await fetch(p,o);var b={};try{b=await r.json()}catch(e){}return {ok:r.ok,status:r.status,body:b};}
 // Money-screen honesty: any page with a #pbtestmode slot shows a clear TEST-MODE banner while the
 // platform is in sandbox / Stripe test mode — so no one ever mistakes a demo for a real charge.
 async function pbTestBanner(){var el=document.getElementById('pbtestmode');if(!el)return;
@@ -463,7 +473,9 @@ function applyLang(){
 document.addEventListener('DOMContentLoaded', applyLang);
 
 function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-theme')==='light'?'dark':'light';h.setAttribute('data-theme',t);h.setAttribute('data-bs-theme',t);try{localStorage.setItem('pb_theme',t);}catch(e){}}
-function signout(){try{localStorage.removeItem('pb_token');}catch(e){}location.href='/';}
+// The session cookie is HttpOnly, so JS can't delete it — sign-out must hit the server, which
+// clears it (POST /logout is CSRF-exempt). Redirect home regardless of the network outcome.
+function signout(){try{fetch('/logout',{method:'POST',credentials:'same-origin'}).finally(function(){location.href='/';});}catch(e){location.href='/';}}
 (function(){var si=document.getElementById('signinlink'),so=document.getElementById('signoutlink');
  if(authed()){if(si)si.style.display='none';if(so)so.style.display='';}else{if(si)si.style.display='';if(so)so.style.display='none';}})();
 (async function(){try{if(authed()){var cl=document.getElementById('consolelink');if(cl)cl.style.display='';var r=await api('/me');if(r.ok){var m=document.getElementById('mename');if(m){m.textContent='● '+r.body.username;m.style.display='';}
@@ -1780,7 +1792,7 @@ function fd(minor){if(minor===null||minor===undefined)return '—';return '$'+(m
 function fp(rate){if(rate===null||rate===undefined)return '—';return (rate*100).toFixed(1)+'%';}
 function fnum(n){return (n===null||n===undefined)?'—':String(n);}
 async function fboot(){
-  if(!tok()){document.getElementById('fsignin').style.display='block';return;}
+  if(!authed()){document.getElementById('fsignin').style.display='block';return;}
   var w=await api('/admin/whoami');
   if(!w.ok){document.getElementById(w.status===403?'fdenied':'fsignin').style.display='block';return;}
   document.getElementById('fconsole').style.display='block';fload('real');
@@ -1890,7 +1902,7 @@ async function forgot(){
 async function login(u,p,otp){
   var body='username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p);
   if(otp)body+='&otp='+encodeURIComponent(otp);
-  var r = await fetch('/login', {method:'POST',
+  var r = await fetch('/login', {method:'POST', credentials:'same-origin',
     headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:body});
   var b={};try{b=await r.json()}catch(e){}
   return {ok:r.ok, token:b.access_token, code:(b.error&&b.error.code)||null, status:r.status};
@@ -1923,7 +1935,9 @@ async function go(){
       if(res.code==='TOTP_INVALID'){document.getElementById('otprow').style.display='';
         fail("That code is incorrect or expired — try again.");return;}
       fail(mode==="register"?"Account created — but sign-in failed. Try signing in.":"Wrong username or password.");return;}
-    localStorage.setItem('pb_token', res.token);document.documentElement.setAttribute('data-auth','in');
+    // The server set the HttpOnly session + readable pb_csrf cookies on the /login response;
+    // nothing to store in JS (the JWT is deliberately not reachable from JS anymore).
+    document.documentElement.setAttribute('data-auth','in');
     location.href='/console';
   }catch(e){fail("Network error — check your connection and try again.");}
 }
@@ -4034,7 +4048,7 @@ async function clusterShow(j){
 }
 function clOpenManifest(id){location.href='/jobs/manifest/'+id;}
 async function clVpnDownload(id){
- try{var r=await fetch('/jobs/'+id+'/vpn_config',{headers:{'Authorization':'Bearer '+tok()}});
+ try{var r=await fetch('/jobs/'+id+'/vpn_config',{credentials:'same-origin'});
   if(!r.ok){alert('VPN config not available for this cluster.');return;}
   var text=await r.text();var b=new Blob([text],{type:'text/plain'});
   var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='petabyte-cluster-'+id+'.conf';

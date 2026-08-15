@@ -139,10 +139,12 @@ from db import (
     rank_for_agent, register_peer, cluster_peers, cluster_ready,
 )
 import db as dbmod
-from auth import create_access_token, verify_token
+from auth import (create_access_token, verify_token,
+                  SESSION_COOKIE, CSRF_COOKIE, SESSION_MAX_AGE)
 # Shared FastAPI dependencies (auth + DB session) live in deps.py so domain routers can use
 # them without importing main. Every Depends(...) below resolves to these same callables.
-from deps import oauth2_scheme, get_current_user, _username, api_key_user  # noqa: F401
+from deps import (oauth2_scheme, get_current_user, _username, api_key_user,  # noqa: F401
+                  enforce_csrf)
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
                    NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML, LAUNCH_HTML)
@@ -578,6 +580,9 @@ async def _request_context(request: Request, call_next):
     rid = sanitize_incoming_request_id(request.headers.get("X-Request-ID")) or new_request_id()
     request.state.request_id = rid
     method = request.method
+    # CSRF for ambient cookie sessions is enforced inside the AUTH dependency (deps.enforce_csrf,
+    # invoked by get_current_user / seller_actor when auth came from the cookie) — so it applies
+    # exactly to session-protected endpoints and never to public/webhook routes.
     start = time.time()
     obsmod.inc_metric("petabyte_http_in_flight_requests", environment=obsmod.ENVIRONMENT)
     # A SERVER span parented on the incoming W3C trace context (browser/edge), so a single
@@ -650,8 +655,10 @@ async def _request_context(request: Request, call_next):
         "frame-src https://www.youtube.com https://www.youtube-nocookie.com; "
         "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
     )
-    # Never let a browser or proxy cache an authenticated response.
-    if request.headers.get("Authorization") or request.headers.get("X-API-KEY"):
+    # Never let a browser or proxy cache an authenticated response (Bearer, API-key, OR the
+    # browser session cookie).
+    if (request.headers.get("Authorization") or request.headers.get("X-API-KEY")
+            or request.cookies.get(SESSION_COOKIE)):
         response.headers["Cache-Control"] = "private, no-store"
     return response
 
@@ -1336,20 +1343,31 @@ def seller_actor(request: Request, db: Session = Depends(get_db)):
     API key — no username/password on the machine."""
     owner = None
     auth = request.headers.get("Authorization", "")
+    key = request.headers.get("X-API-KEY")
+    # EXPLICIT credentials win over the ambient browser cookie, in this precedence: a Bearer
+    # header (CLI), then an X-API-KEY (node), then finally the HttpOnly session cookie (browser).
+    # This stops a stray cookie from hijacking an explicitly API-key-authenticated node call.
     if auth.startswith("Bearer "):
         try:
             owner = get_user_by_username(db, _username(verify_token(auth[7:])))
         except Exception:
             owner = None
-    if owner is None:
-        key = request.headers.get("X-API-KEY")
-        if key:
-            try:
-                data = decode_api_key(key)
-                if not is_jti_revoked(db, data["jti"]):
-                    owner = get_user_by_username(db, data["u"])
-            except Exception:
-                owner = None
+    elif key:
+        try:
+            data = decode_api_key(key)
+            if not is_jti_revoked(db, data["jti"]):
+                owner = get_user_by_username(db, data["u"])
+        except Exception:
+            owner = None
+    elif request.cookies.get(SESSION_COOKIE):
+        try:
+            owner = get_user_by_username(db, _username(verify_token(request.cookies.get(SESSION_COOKIE))))
+        except Exception:
+            owner = None
+        # A browser (ambient cookie) mutating via seller_actor must pass CSRF, same as any other
+        # cookie-authenticated write. Bearer / API-key callers carry no ambient authority.
+        if owner is not None:
+            enforce_csrf(request)
     if owner is None:
         raise HTTPException(status_code=401, detail="Sign in or provide a valid X-API-KEY")
     if owner.role != "seller":
@@ -2717,7 +2735,7 @@ def google_login(db: Session = Depends(get_db)):
 
 
 @app.get("/auth/google/callback")
-def google_callback(code: str = Query(...), email: Optional[str] = Query(None),
+def google_callback(request: Request, code: str = Query(...), email: Optional[str] = Query(None),
                     db: Session = Depends(get_db)):
     """Exchange the code for the user's email, create-or-login, issue our JWT."""
     # TODO(stub): Google OAuth stub login — NEVER enable in production (stub.md #5)
@@ -2743,7 +2761,38 @@ def google_callback(code: str = Query(...), email: Optional[str] = Query(None),
         email_verified = bool(info.get("email_verified"))
     u = get_or_create_oauth_user(db, user_email, "google", email_verified=email_verified)
     token = create_access_token({"sub": u.username, "role": u.role})
-    return RedirectResponse(url="/console#t=" + token)
+    # Set the session as an HttpOnly cookie (never a URL fragment — a #t=JWT in the address
+    # bar leaks into history, referrers and JS). Clean redirect, no token in the URL.
+    resp = RedirectResponse(url="/console", status_code=303)
+    _set_session_cookies(resp, request, token)
+    return resp
+
+def _set_session_cookies(resp: Response, request: Request, token: str) -> str:
+    """Set the HttpOnly JWT session cookie + the readable double-submit CSRF token (which the
+    browser also treats as its 'signed in' hint). Returns the CSRF token. `Secure` is set on
+    https so the cookies never traverse plaintext in production."""
+    secure = (request.url.scheme == "https")
+    csrf = secrets.token_urlsafe(32)
+    resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_MAX_AGE, httponly=True,
+                    secure=secure, samesite="lax", path="/")
+    resp.set_cookie(CSRF_COOKIE, csrf, max_age=SESSION_MAX_AGE, httponly=False,
+                    secure=secure, samesite="lax", path="/")
+    return csrf
+
+
+def _clear_session_cookies(resp: Response) -> None:
+    resp.delete_cookie(SESSION_COOKIE, path="/")
+    resp.delete_cookie(CSRF_COOKIE, path="/")
+
+
+@app.post("/logout", tags=["account"])
+def logout():
+    """Sign out: clear the browser session cookies. The JWT cookie is HttpOnly, so JS can't
+    delete it — logout must go through the server. Bearer/API clients simply drop their token."""
+    resp = JSONResponse({"ok": True})
+    _clear_session_cookies(resp)
+    return resp
+
 
 @app.post("/login", tags=["account"])
 def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(),
@@ -2803,7 +2852,12 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(),
                       environment=obsmod.ENVIRONMENT)
     audit(db, "auth.login", actor=user, ip=ip)
     token = create_access_token({"sub": user.username, "role": user.role})
-    return {"access_token": token, "token_type": "bearer"}
+    # Return the token in the body (CLI / API clients keep using Authorization: Bearer) AND set
+    # it as an HttpOnly cookie for browsers (so XSS can't read the session). Both are honored by
+    # get_current_user; browsers additionally send the CSRF token on unsafe requests.
+    resp = JSONResponse({"access_token": token, "token_type": "bearer"})
+    _set_session_cookies(resp, request, token)
+    return resp
 
 
 @app.post("/change_role")
@@ -8243,12 +8297,13 @@ def report_log(data: LogModel, agent=Depends(api_key_user),
 
 @app.websocket("/ws/tasks/{task_id}/logs")
 async def task_logs_ws(websocket: WebSocket, task_id: int, token: str = ""):
-    """Live log stream for a task the buyer owns. Auth via ?token=<JWT>."""
+    """Live log stream for a task the buyer owns. Auth via the HttpOnly session cookie (sent
+    automatically on the WS handshake) or, for CLI/API clients, a ?token=<JWT> query param."""
     await websocket.accept()
     db = SessionLocal()
     try:
         try:
-            claims = verify_token(token)
+            claims = verify_token(token or websocket.cookies.get(SESSION_COOKIE, ""))
         except ValueError:
             await websocket.close(code=4401); return
         from db import Task
