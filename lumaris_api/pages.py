@@ -5,6 +5,7 @@ accents and an amber energy accent, Sora (display) + Figtree (body) +
 JetBrains Mono (data). The hexagon node mark (/static/petabyte-logo.png) is the
 signature. Token persists in localStorage as 'pb_token' across pages.
 """
+import re
 
 _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -5307,3 +5308,194 @@ async function miRemove(el){
 }
 miLoad();
 </script>""")
+
+
+# ============================ NATIVE WIKI RENDERER ============================
+# Renders the repo's wiki/*.md guides into the site's own design system (themed,
+# same nav/fonts, no external CDN). A compact, dependency-free Markdown->HTML
+# converter handles headings, bold/italic, inline + fenced code, links (internal
+# .md links are rewritten to on-page anchors), lists, tables, blockquotes and rules.
+
+def _md_esc(s):
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _md_inline(text):
+    codes = []
+    text = re.sub(r"`([^`]+)`", lambda m: codes.append(m.group(1)) or "\x00%d\x00" % (len(codes) - 1), text)
+    text = _md_esc(text)
+
+    def _link(m):
+        label, url = m.group(1), m.group(2).strip()
+        mm = re.match(r"^([\w./-]+?)\.md(#[\w:-]+)?$", url)   # keep internal wiki links on-page
+        if mm:
+            url = "#w-" + mm.group(1).split("/")[-1] + (mm.group(2) or "")
+        return '<a href="%s">%s</a>' % (url, label)
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _link, text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<em>\1</em>", text)
+    text = re.sub(r"(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])", r"<em>\1</em>", text)
+    text = re.sub(r"\x00(\d+)\x00", lambda m: "<code>" + _md_esc(codes[int(m.group(1))]) + "</code>", text)
+    return text
+
+
+def _md_slug(s):
+    s = re.sub(r"<[^>]+>", "", s)
+    s = re.sub(r"[^\w\s-]", "", s).strip().lower()
+    return re.sub(r"\s+", "-", s) or "x"
+
+
+def _md_list(lines, start):
+    n = len(lines)
+    ind = lambda l: len(l) - len(l.lstrip(" "))
+    base = ind(lines[start])
+    tag = "ol" if re.match(r"^\s*\d+\.\s", lines[start]) else "ul"
+    items, i = [], start
+    while i < n:
+        l = lines[i]
+        if l.strip() == "":
+            j = i + 1
+            while j < n and lines[j].strip() == "":
+                j += 1
+            if j < n and re.match(r"^\s*([-*+]|\d+\.)\s+", lines[j]) and ind(lines[j]) >= base:
+                i = j; continue
+            break
+        m = re.match(r"^\s*([-*+]|\d+\.)\s+(.*)$", l)
+        if m and ind(l) > base:
+            sub, i = _md_list(lines, i)
+            if items:
+                items[-1] = (items[-1][0], items[-1][1] + sub)
+            continue
+        if m and ind(l) == base:
+            items.append((_md_inline(m.group(2)), "")); i += 1; continue
+        if m and ind(l) < base:
+            break
+        _blockstart = re.match(r"^\s*(```|#{1,6}\s|>\s?|\|)", l) or re.match(r"^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$", l)
+        if items and l.strip() and ind(l) >= base and not _blockstart:
+            items[-1] = (items[-1][0] + " " + _md_inline(l.strip()), items[-1][1]); i += 1; continue
+        break
+    return "<%s>%s</%s>" % (tag, "".join("<li>%s%s</li>" % (c, s) for c, s in items), tag), i
+
+
+def _md_to_html(md):
+    lines = md.split("\n")
+    out, para, i, n = [], [], 0, len(lines)
+
+    def flush():
+        if para:
+            out.append("<p>" + _md_inline(" ".join(para)) + "</p>"); para.clear()
+
+    while i < n:
+        line = lines[i]
+        if re.match(r"^```(\w*)\s*$", line):
+            flush(); i += 1; buf = []
+            while i < n and not re.match(r"^```\s*$", lines[i]):
+                buf.append(lines[i]); i += 1
+            i += 1
+            out.append("<pre><code>" + _md_esc("\n".join(buf)) + "</code></pre>"); continue
+        m = re.match(r"^(#{1,6})\s+(.*?)\s*#*\s*$", line)
+        if m:
+            flush(); lvl = len(m.group(1)); txt = m.group(2)
+            out.append('<h%d id="h-%s">%s</h%d>' % (lvl, _md_slug(txt), _md_inline(txt), lvl)); i += 1; continue
+        if re.match(r"^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$", line):
+            flush(); out.append("<hr>"); i += 1; continue
+        if line.strip().startswith("|") and i + 1 < n and re.match(r"^\s*\|?[\s:|-]*-[\s:|-]*$", lines[i + 1]):
+            flush()
+            cells = lambda l: [c.strip() for c in l.strip().strip("|").split("|")]
+            header = cells(line); i += 2; rows = []
+            while i < n and lines[i].strip().startswith("|"):
+                rows.append(cells(lines[i])); i += 1
+            h = '<div class="wtable"><table><thead><tr>' + "".join("<th>" + _md_inline(c) + "</th>" for c in header) + "</tr></thead><tbody>"
+            for r in rows:
+                h += "<tr>" + "".join("<td>" + _md_inline(c) + "</td>" for c in r) + "</tr>"
+            out.append(h + "</tbody></table></div>"); continue
+        if re.match(r"^\s*>\s?", line):
+            flush(); buf = []
+            while i < n and re.match(r"^\s*>\s?", lines[i]):
+                buf.append(re.sub(r"^\s*>\s?", "", lines[i])); i += 1
+            out.append("<blockquote>" + _md_inline(" ".join(buf)) + "</blockquote>"); continue
+        if re.match(r"^\s*([-*+]|\d+\.)\s+", line):
+            flush(); html, i = _md_list(lines, i); out.append(html); continue
+        if line.strip() == "":
+            flush(); i += 1; continue
+        para.append(line.strip()); i += 1
+    flush()
+    return "\n".join(out)
+
+
+_WIKI_CSS = """<style>
+.wikiwrap{display:grid;grid-template-columns:250px minmax(0,1fr);gap:36px;align-items:start;max-width:1180px;margin:0 auto;padding:30px 24px 72px}
+.wiki-side{position:sticky;top:80px;max-height:calc(100vh - 100px);overflow:auto;border-right:1px solid var(--line);padding-right:14px}
+.wiki-side .t{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);font-weight:700;margin:0 0 8px}
+.wiki-side a{display:block;text-decoration:none;border-radius:8px;padding:5px 11px;font-size:13.5px;color:var(--mut);line-height:1.35}
+.wiki-side a.top{font-weight:600;color:var(--ink);margin-top:9px}
+.wiki-side a.sub{font-size:12.5px;padding-left:22px}
+.wiki-side a:hover{background:var(--panel2);color:var(--teal)}
+.wiki-side a.active{color:var(--teal);background:var(--panel2)}
+.wiki-main{min-width:0;font-size:15px;line-height:1.72;color:var(--mut)}
+.wiki-sec{scroll-margin-top:86px;padding-bottom:20px;border-bottom:1px solid var(--line);margin-bottom:30px}
+.wiki-sec:last-child{border-bottom:0}
+.wiki-main h1{font-family:var(--disp);font-size:clamp(25px,3.5vw,33px);color:var(--ink);margin:4px 0 14px;letter-spacing:-.01em}
+.wiki-main h2{font-family:var(--disp);font-size:21px;color:var(--ink);margin:28px 0 10px;scroll-margin-top:86px}
+.wiki-main h3{font-size:16.5px;color:var(--ink);margin:20px 0 7px;scroll-margin-top:86px}
+.wiki-main h4{font-size:14px;color:var(--ink);margin:16px 0 6px;text-transform:none}
+.wiki-main p{margin:11px 0}
+.wiki-main strong{color:var(--ink);font-weight:650}
+.wiki-main a{color:var(--teal);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--teal) 34%,transparent)}
+.wiki-main a:hover{border-bottom-color:var(--teal)}
+.wiki-main code{font-family:var(--mono);font-size:.87em;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.wiki-main pre{background:var(--depth2);border:1px solid var(--line2);border-radius:12px;padding:14px 16px;overflow:auto;margin:14px 0}
+.wiki-main pre code{background:none;border:0;padding:0;font-size:12.5px;line-height:1.6;color:var(--ink)}
+.wiki-main ul,.wiki-main ol{margin:10px 0;padding-inline-start:24px}
+.wiki-main li{margin:5px 0}
+.wiki-main blockquote{margin:14px 0;padding:8px 16px;border-inline-start:3px solid var(--teal);background:var(--panel2);border-radius:0 10px 10px 0}
+.wiki-main blockquote p{margin:4px 0}
+.wtable{overflow-x:auto;margin:15px 0;border:1px solid var(--line);border-radius:12px}
+.wtable table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:420px}
+.wtable th,.wtable td{text-align:start;padding:9px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+.wtable th{background:var(--panel2);color:var(--ink);font-weight:600;white-space:nowrap}
+.wtable tr:last-child td{border-bottom:0}
+.wiki-main hr{border:0;border-top:1px solid var(--line);margin:22px 0}
+@media(max-width:900px){
+ .wikiwrap{grid-template-columns:1fr;gap:14px;padding-top:22px}
+ .wiki-side{position:static;max-height:none;overflow:visible;border-right:0;border-bottom:1px solid var(--line);padding:0 0 12px;display:flex;flex-wrap:wrap;gap:6px}
+ .wiki-side .t{width:100%;margin:0}
+ .wiki-side a.sub{display:none}
+ .wiki-side a{border:1px solid var(--line);border-radius:999px;padding:5px 12px}
+ .wiki-side a.top{margin-top:0}
+}
+</style>"""
+
+_WIKI_JS = """<script>
+(function(){
+ var links=[].slice.call(document.querySelectorAll('.wiki-side a'));
+ var map={};links.forEach(function(a){map[a.getAttribute('href').slice(1)]=a;});
+ if(!('IntersectionObserver' in window))return;
+ var obs=new IntersectionObserver(function(es){
+  es.forEach(function(e){ if(e.isIntersecting){
+   var a=map[e.target.id]; if(a){links.forEach(function(x){x.classList.remove('active');});a.classList.add('active');
+   a.scrollIntoView({block:'nearest'});}}});
+ },{rootMargin:'-72px 0px -72% 0px'});
+ document.querySelectorAll('.wiki-sec,.wiki-main [id^="h-"]').forEach(function(el){obs.observe(el);});
+})();
+</script>"""
+
+
+def render_wiki(sections):
+    """sections: list of (name, markdown_text). Returns the full themed /wiki page."""
+    side, body = [], []
+    for name, md in sections:
+        html = _md_to_html(md)
+        mt = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.S)
+        title = re.sub(r"<[^>]+>", "", mt.group(1)).strip() if mt else name.replace("-", " ").title()
+        side.append('<a class="top" href="#w-%s">%s</a>' % (name, title))
+        for hid, label in re.findall(r'<h2 id="(h-[\w-]+)">(.*?)</h2>', html, re.S):
+            side.append('<a class="sub" href="#%s">%s</a>' % (hid, re.sub(r"<[^>]+>", "", label).strip()))
+        body.append('<section id="w-%s" class="wiki-sec">%s</section>' % (name, html))
+    inner = (_WIKI_CSS +
+             '<div class="wikiwrap"><aside class="wiki-side"><div class="t">Guide</div>' +
+             "".join(side) + '</aside><main class="wiki-main">' + "".join(body) + "</main></div>" +
+             _WIKI_JS)
+    return _page("Petabyte — Wiki & Guide", inner,
+                 desc="How Petabyte works: guides for buyers and sellers, the CLI, models, storage, payments, teams and self-hosting.",
+                 path="/wiki")

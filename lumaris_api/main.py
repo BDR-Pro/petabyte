@@ -130,7 +130,8 @@ from auth import create_access_token, verify_token
 from deps import oauth2_scheme, get_current_user, _username, api_key_user  # noqa: F401
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
-                   NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML, LAUNCH_HTML)
+                   NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML, LAUNCH_HTML,
+                   render_wiki)
 from web_routes import router as web_router     # static public pages (extracted router)
 from trust_routes import router as trust_router  # trust/transparency API (extracted router)
 from models_routes import router as models_router  # model hub: discover/pull/manage (extracted router)
@@ -2075,9 +2076,24 @@ def _wiki_markdown() -> str:
     return "\n\n---\n\n".join(parts) or "# Petabyte Wiki\n\nDocumentation is being prepared."
 
 
+def _wiki_sections():
+    """The wiki as ordered (name, markdown) pairs — one entry per guide file that exists."""
+    base = os.path.join(os.path.dirname(__file__), "..", "wiki")
+    out = []
+    for name in _WIKI_ORDER:
+        p = os.path.join(base, name + ".md")
+        if os.path.exists(p):
+            try:
+                out.append((name, open(p, encoding="utf-8").read().strip()))
+            except Exception:  # noqa: BLE001
+                continue
+    return out
+
+
 @app.get("/wiki/openapi.json", include_in_schema=False)
 def wiki_openapi():
-    """A minimal OpenAPI doc whose description IS the wiki — so Scalar renders it like the API docs."""
+    """A minimal OpenAPI doc whose description IS the wiki — kept so the docs environment can
+    also surface the guide, though /wiki itself now renders as a native, CDN-free site page."""
     return JSONResponse({"openapi": "3.1.0", "paths": {}, "tags": [],
                          "info": {"title": "Petabyte — Wiki & Guide", "version": "1.0",
                                   "description": _wiki_markdown()}})
@@ -2085,8 +2101,11 @@ def wiki_openapi():
 
 @app.get("/wiki", include_in_schema=False)
 def wiki_portal():
-    """The new-user wiki, rendered in the same Scalar docs environment as the API reference."""
-    return _scalar_portal("/wiki/openapi.json", "Petabyte — Wiki & Guide")
+    """New-user wiki, rendered into the site's own design system (themed nav/fonts, no CDN)."""
+    sections = _wiki_sections()
+    if not sections:
+        sections = [("index", "# Petabyte Wiki\n\nDocumentation is being prepared.")]
+    return HTMLResponse(render_wiki(sections))
 
 
 @app.exception_handler(BookingsPaused)

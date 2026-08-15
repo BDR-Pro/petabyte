@@ -10,8 +10,8 @@ together, and exactly how to do the common things as a **buyer** (rent compute) 
 
 > **Two ways to read this**
 > - In the repo: browse the Markdown files in `wiki/` (this folder).
-> - In the running app: open **`/wiki`** — the same pages rendered in Petabyte's Scalar docs
->   environment (the one that powers the API reference at `/docs`).
+> - In the running app: open **`/wiki`** — the same pages rendered as a native, themed
+>   page in the site, with a heading-driven sidebar (no external dependencies).
 
 ## Start here
 
