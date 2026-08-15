@@ -293,6 +293,63 @@ def refresh_connected_account(db, ca: ConnectedAccount) -> ConnectedAccount:
     return _sync_from_stripe(db, ca, acct)
 
 
+def ensure_test_payout_ready(db, user: User, *, country: str = "US",
+                             email: str = None) -> ConnectedAccount:
+    """TEST-MODE ONLY: make a seller's connected account payout-ready WITHOUT the manual
+    hosted-onboarding click-through, so the end-to-end demo is genuinely one command.
+
+    Fake gateway  -> flip the in-process account to enabled (complete_onboarding).
+    Real gateway  -> push Stripe's documented TEST verification values + a test external bank
+                     account so the transfers/payouts capabilities go active (test mode only).
+
+    Hard-refuses in live mode (assert_test_mode). This NEVER fabricates readiness in the DB —
+    it drives the gateway and then re-reads authoritative status via refresh_connected_account,
+    so payout_ready() still reflects what Stripe actually reports. Returns the account; the
+    caller should check ca.payout_ready()."""
+    from stripe_gateway import get_gateway as _gg, FakeStripeGateway, assert_test_mode
+    assert_test_mode()   # fail closed: this helper must never run against live Stripe
+    acct = get_or_create_connected_account(db, user, country=country,
+                                           email=email or getattr(user, "email", None)
+                                           or f"{user.username}@example.com")
+    gw = _gg()
+    if isinstance(gw, FakeStripeGateway):
+        gw.complete_onboarding(acct.stripe_account_id, ok=True)
+    else:
+        _stripe_test_force_payout_ready(acct.stripe_account_id, (acct.country or country))
+    return refresh_connected_account(db, acct)
+
+
+def _stripe_test_force_payout_ready(account_id: str, country: str) -> None:
+    """Drive a REAL Stripe *test* connected account to payout-ready via the API, using Stripe's
+    published test verification values so no human has to click through hosted onboarding.
+
+    Test-mode only (the caller asserts it). Best-effort: if Stripe still lists requirements
+    afterwards the caller sees it via refresh_connected_account (payout_ready() stays honest).
+    See https://docs.stripe.com/connect/testing — magic values auto-verify in test mode."""
+    import time as _t
+    import stripe
+    stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
+    # Test external bank account (US magic numbers; Stripe documents these for test payouts).
+    _bank = {"US": {"country": "US", "currency": "usd", "routing_number": "110000000",
+                    "account_number": "000123456789"}}.get(
+        (country or "US").upper(),
+        {"country": (country or "US").upper(), "currency": "usd",
+         "account_number": "000123456789"})
+    stripe.Account.modify(
+        account_id,
+        business_type="individual",
+        business_profile={"url": "https://petabyte.market", "mcc": "5734"},
+        tos_acceptance={"date": int(_t.time()), "ip": "127.0.0.1"},
+        individual={
+            "first_name": "Test", "last_name": "Seller",
+            "email": "test-seller@example.com", "phone": "0000000000",
+            "dob": {"day": 1, "month": 1, "year": 1990},
+            "address": {"line1": "address_full_match", "city": "Beverly Hills",
+                        "state": "CA", "postal_code": "90210", "country": "US"},
+            "ssn_last_4": "0000", "id_number": "000000000"},
+        external_account=_bank)
+
+
 def _sync_from_stripe(db, ca: ConnectedAccount, acct: dict) -> ConnectedAccount:
     caps = acct.get("capabilities", {}) or {}
     reqs = acct.get("requirements", {}) or {}

@@ -6107,6 +6107,64 @@ def payments_receipt(public_id: str, user: dict = Depends(get_current_user),
             "note": "The authorized maximum is a hold; you are charged only the final captured amount."}
 
 
+@app.get("/payments/{public_id}/proof", tags=["payments"])
+def payment_proof(public_id: str, user: dict = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    """The unified END-TO-END proof for one transaction — the single artifact a demo/DD wants:
+
+      * payment  — the Stripe payment (real test-object or live per `mode`): authorized max,
+        captured, refunded, metered seconds;
+      * compute  — the cryptographic per-job receipt (Ed25519 signature over the signed payload,
+        sha256 of the real output bytes, node pubkey) with a LIVE server re-verification;
+      * payout   — the provider payout: seller net, obligation state, and the Stripe transfer id.
+
+    Nothing here is simulated when the server runs the real gateway. Buyer / seller / admin scoped."""
+    import trust as _trust
+    _CAPTURED = ("PAYMENT_CAPTURED", "SELLER_TRANSFER_PENDING", "SELLER_TRANSFERRED", "COMPLETED")
+    me = get_user_by_username(db, _username(user))
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx or (me.id not in (tx.buyer_id, tx.seller_id) and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="transaction not found")
+    task = (db.query(dbmod.Task).filter(dbmod.Task.id == tx.task_id).first()
+            if tx.task_id else None)
+    obl = (db.query(dbmod.PayoutObligation)
+           .filter(dbmod.PayoutObligation.compute_tx_id == tx.id).first())
+    cap = tx.captured_amount or 0
+    identity_holds = (cap == (tx.platform_fee_amount or 0) + (tx.seller_net_amount or 0)
+                      if cap else None)
+    return {
+        "transaction_id": tx.public_id,
+        "status": tx.status,
+        "mode": tx.mode,
+        "is_demo": tx.is_demo,
+        "currency": tx.currency,
+        "payment": {
+            "payment_intent_id": tx.stripe_payment_intent_id,
+            "authorized_maximum_minor": tx.authorization_amount,
+            "captured_minor": tx.captured_amount,
+            "refunded_minor": tx.refunded_amount,
+            "metered_seconds": tx.metering_seconds,
+            "captured": tx.status in _CAPTURED,
+        },
+        "compute": _trust.build_receipt(db, task) if task else None,
+        "payout": {
+            "seller_net_minor": tx.seller_net_amount,
+            "platform_fee_minor": tx.platform_fee_amount,
+            "transferred_minor": tx.transferred_amount,
+            "stripe_transfer_id": tx.stripe_transfer_id,
+            "obligation_state": (obl.state if obl else None),
+            "obligation_mode": (obl.mode if obl else None),
+            "paid": bool(tx.stripe_transfer_id) and (obl.state == "paid" if obl else False),
+            "hold_status": ("released" if (obl and obl.state == "paid")
+                            else "held" if obl else "none"),
+        },
+        "accounting_identity_holds": identity_holds,
+        "note": ("End-to-end proof: a real Stripe payment (test or live per `mode`), a "
+                 "cryptographically signed compute result you can re-verify offline, and the "
+                 "provider payout. Nothing is simulated when run against the real gateway."),
+    }
+
+
 @app.get("/payments/{public_id}/timeline", tags=["payments"])
 def payment_timeline(public_id: str, user: dict = Depends(get_current_user),
                      db: Session = Depends(get_db)):

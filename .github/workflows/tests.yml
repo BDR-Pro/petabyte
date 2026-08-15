@@ -157,6 +157,10 @@ jobs:
         working-directory: lumaris_api
         run: python stripe_e2e_flow_test.py
 
+      - name: demo loop — headless onboard -> capture -> payout transfer -> unified proof
+        working-directory: lumaris_api
+        run: python demo_payout_loop_test.py
+
       - name: payout readiness — provider-agnostic seller eligibility (verified rail, not Connect)
         working-directory: lumaris_api
         run: python payout_readiness_test.py
