@@ -5971,6 +5971,19 @@ def payments_config():
             "test_mode": fake or not live,
             "publishable_key": pk}
 
+@app.get("/payments/coverage", tags=["payments"])
+def payments_coverage(country: str = None):
+    """Public, honest seller-payout coverage. With no args, returns the priority-market
+    capability matrix (the 20 highest-value GPU-supply markets, each resolved to its REAL
+    payout rail / currency / status). With ?country=XX, returns that single country's
+    capability record. Read-only; reveals no secrets. 'active_today' is the only
+    'payable right now' flag — the shipped dataset is honestly 0 until a real end-to-end
+    payout is verified per country."""
+    import payout_capabilities as _cap
+    if country:
+        return _cap.country_capability(country)
+    return _cap.priority_capability_matrix()
+
 @app.post("/payments/quote", tags=["payments"])
 def payments_quote(data: QuoteModel, user: dict = Depends(get_current_user),
                    db: Session = Depends(get_db)):

@@ -48,6 +48,9 @@ jobs:
       - name: payout rails (irreversible USDC gated + fail-closed)
         working-directory: lumaris_api
         run: python payout_rails_test.py
+      - name: priority-market payout capability (per-country, honest)
+        working-directory: lumaris_api
+        run: python priority_country_test.py
       - name: email (mailgun, offline unit)
         working-directory: lumaris_api
         run: python email_test.py
