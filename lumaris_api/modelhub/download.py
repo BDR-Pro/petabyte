@@ -17,6 +17,7 @@ import os
 import socket
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -73,6 +74,12 @@ def download_to(url, dest, *, expected_sha256=None, expected_size=None, headers=
     `on_progress(downloaded, total)` is called as bytes land. `cancel` is a threading.Event-like
     object with .is_set(); when set mid-flight we stop cleanly and leave the .partial for resume."""
     headers = dict(headers or {})
+    # Reject non-http(s) schemes: a remote manifest controls file URLs, so this stops a
+    # file:///etc/passwd or gopher:// entry from being fetched into the cache. (Server-side host/IP
+    # egress is restricted upstream by the models_routes source allowlist.)
+    _scheme = (urllib.parse.urlparse(url).scheme or "").lower()
+    if _scheme not in ("http", "https"):
+        raise DownloadError(f"unsupported URL scheme {_scheme!r} (only http/https allowed)")
     part = dest + ".partial"
     os.makedirs(os.path.dirname(os.path.abspath(dest)) or ".", exist_ok=True)
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import random
+import secrets
 from collections import Counter
 
 import db as dbmod
@@ -65,8 +65,10 @@ def open_check(db, specs, *, difficulty: str = "easy", min_agree: int = None) ->
         raise ValueError(f"need >= {max(2, need)} distinct sellers for a quorum; "
                          f"have {len(distinct)}")
     size = _DIFF_SIZE.get(difficulty, 5000)
-    seed = random.randint(1, 2_000_000_000)                 # noqa: S311 (not crypto)
-    nonce = "%016x" % random.randint(0, 2 ** 63)            # noqa: S311
+    # The seed is the anti-fraud basis of the quorum challenge: predictable seeds let a seller
+    # precompute the expected hash and pass without replicating the work. Use a CSPRNG.
+    seed = secrets.randbelow(2_000_000_000) + 1
+    nonce = "%016x" % secrets.randbits(63)
     expected = compute_test_hash(size, seed)
     subs = {}
     for s in distinct:

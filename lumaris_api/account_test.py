@@ -104,13 +104,22 @@ ok("forgot for account without email still returns 200", c.post(
 booking = {"triggerEvent": "BOOKING_CREATED",
            "payload": {"title": "Petabyte demo", "startTime": "2026-08-10T15:00:00Z",
                        "uid": "bk_123", "attendees": [{"name": "Ada", "email": "ada@corp.com"}]}}
+# fail-closed: without CAL_WEBHOOK_SECRET the endpoint is DISABLED (no accept-unsigned)
 w = c.post("/webhooks/cal", json=booking)
-ok("cal webhook (no secret set) accepts a booking -> 200", w.status_code == 200)
+ok("cal webhook without CAL_WEBHOOK_SECRET is disabled -> 503", w.status_code == 503)
 
 # with a secret configured, an unsigned/bad-signature call is rejected
 os.environ["CAL_WEBHOOK_SECRET"] = "cal-shhh"
 bad = c.post("/webhooks/cal", json=booking)   # no X-Cal-Signature-256 header
 ok("cal webhook rejects a bad signature when secret set -> 401", bad.status_code == 401)
+
+# a correctly HMAC-signed booking is accepted
+import hmac as _hmac, hashlib as _hashlib, json as _json
+_raw = _json.dumps(booking).encode()
+_sig = _hmac.new(b"cal-shhh", _raw, _hashlib.sha256).hexdigest()
+good = c.post("/webhooks/cal", content=_raw,
+              headers={"X-Cal-Signature-256": _sig, "Content-Type": "application/json"})
+ok("cal webhook accepts a correctly-signed booking -> 200", good.status_code == 200)
 os.environ.pop("CAL_WEBHOOK_SECRET", None)
 
 # ---- demo request path notifies the founder without crashing ----

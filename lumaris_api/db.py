@@ -3072,9 +3072,11 @@ _DIFFICULTY_SIZE = {"easy": 5000, "medium": 50000, "hard": 500000}
 def create_test_task(db: Session, spec: "SellerSpec", difficulty: str = "easy",
                      trigger: str = "manual"):
     import json as _json
-    import random as _random
     size = _DIFFICULTY_SIZE.get(difficulty, 5000)
-    seed = _random.randint(1, 2_000_000_000)
+    # The seed IS the security basis of the proof-of-work: a seller who can predict it precomputes
+    # compute_test_hash(size, seed) and passes without doing fresh GPU work. Use a CSPRNG, not the
+    # shared MT19937 global (whose state is recoverable from a handful of observed seeds).
+    seed = secrets.randbelow(2_000_000_000) + 1
     expected = compute_test_hash(size, seed)
     task = Task(spec_id=spec.id, task_type="test",
                 code=_json.dumps({"size": size, "seed": seed}), status="pending")
@@ -3857,11 +3859,11 @@ def record_benchmark_sample(db: Session, spec: "SellerSpec", *, source: str,
 
 def create_benchmark_task(db: Session, spec: "SellerSpec"):
     import json as _json
-    import random as _random
     # A FRESH server challenge rides with every benchmark: the node must return
     # compute_test_hash(size, seed) for THIS seed, proving it actually ran seeded work now —
-    # a pre-canned or replayed benchmark number can't answer a seed it never saw.
-    challenge = {"bench_seed": _random.randint(1, 2_000_000_000), "bench_size": 50000}
+    # a pre-canned or replayed benchmark number can't answer a seed it never saw. Use a CSPRNG so
+    # the seed can't be predicted/precomputed from prior observed seeds.
+    challenge = {"bench_seed": secrets.randbelow(2_000_000_000) + 1, "bench_size": 50000}
     task = Task(spec_id=spec.id, task_type="benchmark", status="pending", priority=5,
                 code=_json.dumps(challenge))
     db.add(task); db.commit(); db.refresh(task)

@@ -29,6 +29,16 @@ try:
 except Exception:                                     # noqa: BLE001 — never block the agent
     _con = None
 
+
+def _safe_ext(v, default="mp4"):
+    """Sanitize a buyer-supplied container/extension before it is joined into a HOST path.
+    Defense-in-depth: the API validates this too, but the agent runs as root, so a value like
+    '../../../etc/cron.d/x' must never reach os.path.join on the seller's filesystem."""
+    import os as _o
+    import re as _r
+    v = _o.path.basename(str(v if v is not None else default)).lstrip(".").lower()
+    return v if _r.match(r"^[a-z0-9]{1,8}$", v) else default
+
 # Console output IS the user feed now, so keep the root logger quiet (WARNING+); the pretty
 # lines carry the routine story, logging carries problems.
 logging.basicConfig(level=logging.WARNING, format="[%(asctime)s] %(levelname)s: %(message)s")
@@ -282,6 +292,35 @@ def _egress_flags(task):
     return ["--network", "none"]               # unknown policy -> closed
 
 
+def _host_ram_bytes():
+    try:
+        import os as _o
+        return _o.sysconf("SC_PAGE_SIZE") * _o.sysconf("SC_PHYS_PAGES")
+    except Exception:                                    # noqa: BLE001
+        return 0
+
+
+def _default_mem_cap():
+    """A conservative RAM cap for a job the server didn't size: total host RAM minus a headroom
+    reserve, so a runaway container can't OOM-kill the agent/host. None on hosts we can't measure
+    (e.g. non-Linux desktop, where Docker Desktop's own VM already bounds container memory)."""
+    total = _host_ram_bytes()
+    if total <= 0:
+        return None
+    reserve = 2 * 1024 ** 3                              # keep ~2 GiB for the host + agent
+    return str(max(1024 ** 3, total - reserve)) + "b"   # never below 1 GiB
+
+
+def _default_cpu_cap():
+    """Leave the host at least one core so a job can't peg every CPU and starve the agent."""
+    try:
+        import os as _o
+        n = _o.cpu_count() or 1
+    except Exception:                                    # noqa: BLE001
+        return None
+    return str(max(1, n - 1))
+
+
 def _isolation_flags(task):
     """Hardening flags applied to EVERY buyer container — this protects the SELLER's
     host from the buyer's workload (see docs/isolation-roadmap.md).
@@ -307,10 +346,13 @@ def _isolation_flags(task):
     flags = ["--cap-drop", "ALL",
              "--security-opt", "no-new-privileges",
              "--pids-limit", str(task.get("pids") or 1024)]
-    mem = task.get("memory")
+    # RAM/CPU caps: sized to the booking when the server sends them; otherwise fall back to a
+    # CONSERVATIVE host-derived default (never "no cap"). Without this a buyer container could
+    # allocate all host RAM and OOM-kill the seller's box + the agent, or pin every CPU (H6).
+    mem = task.get("memory") or _default_mem_cap()
     if mem:
         flags += ["--memory", str(mem), "--memory-swap", str(mem)]   # cap RAM; no swap escape
-    cpus = task.get("cpus")
+    cpus = task.get("cpus") or _default_cpu_cap()
     if cpus:
         flags += ["--cpus", str(cpus)]
     try:
@@ -537,7 +579,7 @@ def _run_transcode(task):
     if not shutil.which("docker"):
         _post("/jobs/result", _signed_result(tid, status="failed")); return
     work = tempfile.mkdtemp(prefix=f"tc-{tid}-")
-    src = _os.path.join(work, "in"); dst = _os.path.join(work, f"out.{task.get('container','mp4')}")
+    src = _os.path.join(work, "in"); dst = _os.path.join(work, f"out.{_safe_ext(task.get('container'))}")
     try:
         g = httpx.post(f"{API_URL}/jobs/input_url", headers=HEADERS, timeout=15,
                        json={"task_id": tid, "ref": task.get("input_ref", "")}).json()
@@ -599,10 +641,10 @@ def _run_stitch(task):
             for i, ref in enumerate(refs):
                 gg = httpx.post(f"{API_URL}/jobs/input_url", headers=HEADERS, timeout=15,
                                 json={"task_id": tid, "ref": ref}).json()
-                p = _os.path.join(work, f"seg{i}.{task.get('container','mp4')}")
+                p = _os.path.join(work, f"seg{i}.{_safe_ext(task.get('container'))}")
                 open(p, "wb").write(httpx.get(gg["download_url"], timeout=600).content)
                 lf.write(f"file '{p}'\n")
-        out = _os.path.join(work, f"final.{task.get('container','mp4')}")
+        out = _os.path.join(work, f"final.{_safe_ext(task.get('container'))}")
         if task.get("kind") == "transcode":
             # The agent already fetched every segment to /work, so the concat container
             # needs NO network — close it (previously stitch ran with default egress,
@@ -657,6 +699,21 @@ def _run_distributed(task):
     job_id = dist.get("job_id")
     backend = dist.get("backend", "nccl")
     _set_ui(status="running", task=f"Distributed rank {rank}/{world} #{tid}")
+    # SECURITY (H5): a distributed rank runs with --network host so it can reach peers over the
+    # WireGuard mesh — that bypasses the per-job DOCKER-USER egress firewall (metadata/LAN DROP), so
+    # it is ONLY safe on a node the operator explicitly opted into VPN isolation. Enforce the gate
+    # the design assumed but never checked; refuse otherwise (server gang semantics refund the buyer).
+    try:
+        import wireguard as _wg
+        _vpn_ok = _wg.vpn_enabled()
+    except Exception:                                    # noqa: BLE001
+        _vpn_ok = False
+    if not _vpn_ok:
+        report_log(tid, "distributed rank refused: AGENT_VPN_ENABLED is not set on this node "
+                        "(--network host for a cluster rank requires VPN isolation)")
+        _post("/jobs/result", _signed_result(tid, status="failed"))
+        _set_ui(status="idle", task=None, fail=True)
+        return
     host = _dist.local_vpn_addr()
     port = int(os.getenv("DIST_RENDEZVOUS_PORT", str(_dist.DEFAULT_RENDEZVOUS_PORT)))
     try:
