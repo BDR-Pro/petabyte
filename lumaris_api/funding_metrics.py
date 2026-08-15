@@ -209,6 +209,40 @@ def funding_snapshot(db, *, scope: str = "real", now=None) -> dict:
     }
 
 
+def public_traction(db, *, now=None) -> dict:
+    """A curated, PUBLIC subset of the real-scope snapshot for the investor traction page.
+
+    Safe to expose to anyone: headline traction counts + ratios only. DELIBERATELY OMITS
+    absolute platform revenue, seller liability, payouts-paid, ARPU and per-entity GMV
+    (internal / competitively sensitive). Inherits the canonical layer's honesty: LIVE money
+    only (TEST + demo excluded), and zeros mean 'no real activity yet', never a fabrication.
+    """
+    s = funding_snapshot(db, scope="real", now=now)
+    m, mk, rt, lq = s["money_minor"], s["marketplace"], s["rates"], s["liquidity"]
+    return {
+        "as_of": s["as_of"],
+        "scope": "real",
+        "has_real_data": s["has_real_data"],
+        "contains_demo_data": s["contains_demo_data"],
+        "currency": s["currency"],
+        "gmv_captured_minor": m["gmv_captured"],
+        "net_gmv_minor": m["net_gmv"],
+        "paid_jobs": mk["paid_transactions"],
+        "settled_jobs": mk["settled_tx"],
+        "active_buyers": mk["active_buyers"],
+        "active_sellers": mk["active_sellers"],
+        "active_gpus_online": mk["active_gpus_online"],
+        "gpu_hours_available": lq["gpu_hours_available"],
+        "take_rate_gross": rt["take_rate_gross"],
+        "job_success_rate": rt["job_success_rate"],
+        "utilization": lq["utilization"],
+        "note": ("Public traction — LIVE money only. TEST and demo activity are excluded and "
+                 "never shown as real traction. Zero means no real transactions yet (the "
+                 "platform runs Stripe in TEST mode until launch), never a fabricated number. "
+                 "Every figure is a live query over the same DB rows the money moves through."),
+    }
+
+
 def _repeat_and_retention(db, ctx_filters, now, windows=(7, 30, 90)) -> dict:
     """Repeat-buyer rate + activity-cohort retention, from captured-tx dates.
 

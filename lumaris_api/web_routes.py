@@ -16,9 +16,10 @@ from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from pages import (
-    TRUST_HTML, STATUS_HTML, METRICS_HTML, BUY_HTML, SELLER_EARNINGS_HTML, TEMPLATES_HTML,
-    DEMO_HTML, CONTACT_HTML, PRICING_HTML, SECURITY_HTML, PRIVACY_HTML, TERMS_HTML, AUP_HTML,
-    REFUNDS_HTML, GPU_DETAIL_HTML, GAMERS_HTML, ARTISTS_HTML, CLUSTER_HTML, CONSOLE_HTML,
+    TRUST_HTML, STATUS_HTML, METRICS_HTML, TRACTION_HTML, BUY_HTML, SELLER_EARNINGS_HTML,
+    TEMPLATES_HTML, DEMO_HTML, CONTACT_HTML, PRICING_HTML, SECURITY_HTML, PRIVACY_HTML,
+    TERMS_HTML, AUP_HTML, REFUNDS_HTML, GPU_DETAIL_HTML, GAMERS_HTML, ARTISTS_HTML,
+    CLUSTER_HTML, CONSOLE_HTML,
 )
 
 router = APIRouter(tags=["web"])
@@ -53,6 +54,12 @@ def status_page():
 def metrics_page():
     """Investor / operations metrics dashboard (data from /metrics/overview)."""
     return HTMLResponse(METRICS_HTML)
+
+
+@router.get("/traction", response_class=HTMLResponse)
+def traction_page():
+    """Public investor traction — live, canonical, honest (data from /metrics/traction)."""
+    return HTMLResponse(TRACTION_HTML)
 
 
 @router.get("/buy/{public_id}", response_class=HTMLResponse)

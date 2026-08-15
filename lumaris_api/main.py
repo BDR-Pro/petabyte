@@ -4127,6 +4127,17 @@ def metrics_definitions():
     return {"definitions": METRIC_DEFINITIONS}
 
 
+@app.get("/metrics/traction", tags=["marketplace"])
+def metrics_traction(db: Session = Depends(get_db)):
+    """PUBLIC investor traction — a curated, honest subset of the CANONICAL funding snapshot
+    (LIVE money only; TEST and demo excluded). Read-only, no auth, no PII, and no sensitive
+    absolutes (platform revenue, seller liability and payouts are omitted; GMV + ratios only).
+    Zeros are honest: the platform runs Stripe in TEST mode until launch, so real GMV is $0
+    by design — never a fabricated number. Powers the public /traction page."""
+    import funding_metrics as _fm
+    return _fm.public_traction(db)
+
+
 # ------------------- ADMIN (platform operators) -------------------
 # Admins are named in the ADMIN_USERS env var (comma-separated usernames or
 # emails). No DB column, no migration; set it at deploy time. Every /admin/*

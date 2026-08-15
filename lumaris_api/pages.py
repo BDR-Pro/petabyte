@@ -1355,6 +1355,18 @@ INVESTORS_HTML = _page("Petabyte — investors", """
     <div class="card" style="padding:16px"><b class="amber" style="font-family:var(--disp);font-size:14px">Idle Fallback</b><p class="mut" style="font-size:12.5px;margin-top:5px">Hard-preempt utilization capture</p></div>
   </div>
 </div>
+<div class="wrap" style="padding:22px 22px 0">
+  <div id="inv_live" class="panel" style="display:none;padding:18px 20px;border-inline-start:3px solid var(--teal);background:linear-gradient(100deg,rgba(79,214,201,.07),rgba(44,158,155,.03))">
+    <div class="lbl">Live traction <span class="mini mut mono" id="inv_asof"></span></div>
+    <div class="stats" style="margin-top:10px">
+      <div class="stat"><div class="n grad-teal" id="inv_gmv">—</div><div class="l">GMV (captured, live)</div></div>
+      <div class="stat"><div class="n teal" id="inv_jobs">—</div><div class="l">Paid jobs</div></div>
+      <div class="stat"><div class="n" id="inv_gpus">—</div><div class="l">GPUs online</div></div>
+      <div class="stat"><div class="n" id="inv_take">—</div><div class="l">Gross take rate</div></div>
+    </div>
+    <p class="mini mut" style="margin-top:8px">Live, LIVE-money-only figures from the ledger. <a class="teal" href="/traction">Full traction →</a></p>
+  </div>
+</div>
 <div class="wrap" style="padding:22px 22px 8px">
   <div class="stats">
     <div class="stat"><div class="n grad-teal">Live</div><div class="l">Core marketplace infra</div></div>
@@ -1362,13 +1374,90 @@ INVESTORS_HTML = _page("Petabyte — investors", """
     <div class="stat"><div class="n teal">&lt;HS</div><div class="l">vs hyperscaler on-demand</div></div>
     <div class="stat"><div class="n teal">Pre</div><div class="l">Revenue stage</div></div>
   </div>
+  <p class="mini mut" style="margin-top:12px;text-align:center">Numbers are wired to the ledger, not the deck — see <a class="teal" href="/traction">live traction</a> and <a class="teal" href="/trust">verifiable receipts</a>.</p>
 </div>
 <div class="wrap" style="padding:22px 22px 8px">
   <div class="card" style="text-align:center;background:linear-gradient(100deg,rgba(245,178,61,.08),rgba(79,214,201,.05));border-color:rgba(79,214,201,.3)">
     <p style="font-family:var(--disp);font-weight:600;font-size:18px">Building the Gulf's compute exchange.</p>
     <p class="mut" style="margin-top:7px">For the deck, model, and a live demo — <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a></p>
   </div>
-</div>""")
+</div>
+<script>
+(async function(){
+  try{
+    var r=await api('/metrics/traction');
+    if(!r||!r.ok||!r.body||!r.body.has_real_data)return;   // pre-revenue: keep the honest static tiles
+    var b=r.body;
+    document.getElementById('inv_gmv').textContent='$'+((b.gmv_captured_minor||0)/100).toLocaleString(undefined,{maximumFractionDigits:0});
+    document.getElementById('inv_jobs').textContent=String(b.paid_jobs||0);
+    document.getElementById('inv_gpus').textContent=String(b.active_gpus_online||0);
+    document.getElementById('inv_take').textContent=(b.take_rate_gross==null)?'—':((b.take_rate_gross*100).toFixed(1)+'%');
+    document.getElementById('inv_asof').textContent='· live '+(b.as_of||'').slice(0,10);
+    document.getElementById('inv_live').style.display='block';
+  }catch(e){}
+})();
+</script>""")
+
+
+TRACTION_HTML = _page("Petabyte — traction", """
+<div class="hero"><div class="wrap" style="padding:52px 22px 8px">
+  <img class="hexbg" src="/static/petabyte-logo.png" alt=""/>
+  <div class="eyebrow"><span class="dot"></span> live traction · public</div>
+  <h1 style="font-size:clamp(28px,5vw,44px);margin:18px 0 10px;max-width:22ch">Traction, <span class="grad-teal">computed live</span> from the ledger.</h1>
+  <p class="mut" style="max-width:74ch">Every number on this page is a live query over the same authoritative database rows the money moves through — never a slide, never fabricated. We show <b class="teal">LIVE money only</b>: test-mode and demo activity are excluded and never counted as real traction. Zeros are honest — the platform runs Stripe in TEST mode until launch.</p>
+</div></div>
+<div class="wrap" style="padding:14px 22px 8px">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <span class="mini mono" id="t_asof">loading…</span>
+    <a class="btn-ghost" href="/trust" style="margin-inline-start:auto">Verify a job receipt →</a>
+    <a class="btn-ghost" href="/investors">Investor overview →</a>
+  </div>
+  <div id="t_banner" class="card" style="display:none;margin-top:12px"></div>
+  <div class="stats" style="margin-top:12px">
+    <div class="stat"><div class="l">GMV (captured, live)</div><div class="n amber" id="t_gmv">—</div><div class="mini" id="t_netgmv"></div></div>
+    <div class="stat"><div class="l">Paid jobs</div><div class="n teal" id="t_jobs">—</div><div class="mini" id="t_settled"></div></div>
+    <div class="stat"><div class="l">GPUs online</div><div class="n" id="t_gpus">—</div><div class="mini" id="t_gpuhrs"></div></div>
+    <div class="stat"><div class="l">Active buyers / sellers</div><div class="n" id="t_parties">—</div><div class="mini" id="t_sellers"></div></div>
+  </div>
+  <div class="panel" style="margin-top:12px;padding:16px 18px;display:flex;flex-wrap:wrap;gap:28px">
+    <div><span class="mini">Gross take rate</span><div class="mono teal" id="t_take" style="font-size:18px">—</div></div>
+    <div><span class="mini">Job success rate</span><div class="mono" id="t_success" style="font-size:18px">—</div></div>
+    <div><span class="mini">GPU utilization</span><div class="mono" id="t_util" style="font-size:18px">—</div></div>
+  </div>
+  <p class="mini mut" id="t_note" style="margin:14px 2px 8px"></p>
+  <div class="card" style="margin:10px 0 34px;background:linear-gradient(100deg,rgba(79,214,201,.06),rgba(44,158,155,.02))">
+    <div class="lbl">How we count</div>
+    <p class="mut" style="max-width:92ch">GMV is captured money on real (LIVE, non-demo) compute transactions — one canonical definition, not a hand-picked figure. Job success, take rate and utilization are ratios over the same rows; a rate with no denominator shows <span class="mono">—</span> (undefined), never a faked 0%. See the <a class="teal" href="/trust">trust page</a> for cryptographic per-job receipts and the double-entry ledger balance.</p>
+  </div>
+</div>
+<script>
+function td(minor){if(minor===null||minor===undefined)return '—';return '$'+(minor/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function tp(rate){if(rate===null||rate===undefined)return '—';return (rate*100).toFixed(1)+'%';}
+function tn(n){return (n===null||n===undefined)?'—':String(n);}
+async function tload(){
+  var r=await api('/metrics/traction');
+  if(!r||!r.ok){document.getElementById('t_asof').textContent='metrics unavailable';return;}
+  var b=r.body;
+  document.getElementById('t_asof').textContent='live · '+(b.as_of||'').slice(0,19).replace('T',' ')+'Z';
+  var ban=document.getElementById('t_banner');
+  if(!b.has_real_data){ban.style.display='block';ban.style.borderColor='rgba(240,180,80,.5)';
+    ban.innerHTML='<div class="lbl" style="color:var(--warn)">Pre-revenue — no live transactions yet</div><p class="mut">Real GMV is $0 by design: the platform runs Stripe in TEST mode until launch, and we never show test or demo activity as real traction. This page will fill in automatically the moment real money moves — the numbers are wired to the ledger, not to a slide.</p>';}
+  else{ban.style.display='none';}
+  document.getElementById('t_gmv').textContent=td(b.gmv_captured_minor);
+  document.getElementById('t_netgmv').textContent='net of refunds '+td(b.net_gmv_minor);
+  document.getElementById('t_jobs').textContent=tn(b.paid_jobs);
+  document.getElementById('t_settled').textContent=tn(b.settled_jobs)+' settled';
+  document.getElementById('t_gpus').textContent=tn(b.active_gpus_online);
+  document.getElementById('t_gpuhrs').textContent=tn(b.gpu_hours_available)+' GPU-hours available';
+  document.getElementById('t_parties').textContent=tn(b.active_buyers)+' / '+tn(b.active_sellers);
+  document.getElementById('t_sellers').textContent='buyers / sellers (real, paid)';
+  document.getElementById('t_take').textContent=tp(b.take_rate_gross);
+  document.getElementById('t_success').textContent=tp(b.job_success_rate);
+  document.getElementById('t_util').textContent=tp(b.utilization);
+  document.getElementById('t_note').textContent=b.note;
+}
+tload();
+</script>""")
 
 
 ADMIN_HTML = _page("Petabyte — admin", """
@@ -2849,6 +2938,7 @@ TRUST_HTML = _page("Petabyte — trust &amp; transparency",
   <div class="eyebrow"><span class="dot"></span> trust &amp; transparency</div>
   <h1 style="font-size:clamp(34px,5vw,54px);margin:16px 0 12px">Don't trust us. <span class="grad">Verify.</span></h1>
   <p class="mut" style="font-size:16px;max-width:64ch">Every number below is a live database aggregate — zeros mean zero, nothing is invented. Each completed job carries a cryptographic receipt you can re-check yourself.</p>
+  <p class="mini" style="margin-top:12px">The same honesty applies to the money: see <a class="teal" href="/traction">live marketplace traction →</a> (LIVE-money-only, computed from the ledger).</p>
 </div></div>
 
 <div class="wrap" style="padding:26px 24px 8px">
