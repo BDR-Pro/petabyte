@@ -221,6 +221,16 @@ ok("public endpoints are not CSRF-gated (no session -> no CSRF)",
    TestClient(main.app).post("/newsletter/subscribe",
                              json={"email": "csrf-check@example.com"}).status_code in (200, 400, 409, 422, 429))
 
+# money-in probing is rate-limited: repeated FAILED /payments/authorize attempts (here: no auth
+# -> 401) eventually get 429 with a Retry-After. Legit SUCCESSFUL launches never consume budget
+# (authorize is not in _RL_COUNT_ALL), so this cannot throttle a real buyer's valid job sweep.
+_rl = TestClient(main.app)
+_authz_codes = [_rl.post("/payments/authorize", json={"spec_id": "nope", "estimated_seconds": 60}).status_code
+                for _ in range(35)]
+ok("failed /payments/authorize probing is rate limited (429 after the cap)", 429 in _authz_codes)
+ok("the authorize rate-limit response carries Retry-After",
+   "Retry-After" in _rl.post("/payments/authorize", json={"spec_id": "nope", "estimated_seconds": 60}).headers)
+
 
 print(f"\n=== security: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
 raise SystemExit(1 if _fail else 0)

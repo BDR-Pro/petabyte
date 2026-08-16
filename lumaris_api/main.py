@@ -675,6 +675,12 @@ _RL_RULES = {           # path -> (max_hits, window_seconds)
     "/route": (60, 60),            # unauth, DB-backed — cap total volume per IP
     "/newsletter/subscribe": (10, 3600),  # public signup — anti-abuse / no email bombing
     "/create_api_key": (30, 3600),  # authed — bound key-minting so a hijacked session can't flood
+    # money-in probing: each failed authorize is a Stripe API call + a rejected reservation
+    # attempt (bad spec / insufficient funds / non-payout-ready seller / validation). Cap the
+    # FAILURE rate so a hijacked session or scripted probe can't hammer it; legitimate,
+    # SUCCESSFUL job launches never consume budget (not in _RL_COUNT_ALL), so a real buyer
+    # running a sweep of valid jobs is never throttled.
+    "/payments/authorize": (30, 3600),
 }
 # Paths where EVERY request (not just failures) consumes budget. Credential endpoints
 # count only failures (brute-force guard); an unauthenticated DB-backed endpoint like
