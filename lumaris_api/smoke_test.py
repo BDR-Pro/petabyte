@@ -318,6 +318,17 @@ ok("webhook valid signature credits", c.post("/webhooks/payment", content=body, 
 ok("webhook credited +25", round(c.get("/wallet", headers=b3h).json()["balance"]-bal0,2)==25.0)
 c.post("/webhooks/payment", content=body, headers={"X-Signature":_sign_wh(body)})   # replay
 ok("duplicate event not re-credited", round(c.get("/wallet", headers=b3h).json()["balance"]-bal0,2)==25.0)
+# replay-bounded (Stripe-style) scheme: sign "<ts>.<body>" + send X-Timestamp; stale ts rejected
+import time as _time
+def _sign_ts(b, ts): return _hmac.new(b"whsec_test", f"{ts}.".encode()+b, _hl.sha256).hexdigest()
+_nw = int(_time.time())
+_bts = json.dumps({"event_id":"evt_ts_1","type":"x","data":{"username":"buyer3","amount":10.0}}).encode()
+ok("webhook with a valid timestamped signature credits",
+   c.post("/webhooks/payment", content=_bts, headers={"X-Signature":_sign_ts(_bts,_nw),"X-Timestamp":str(_nw)}).status_code==200)
+_stale = _nw - 100000
+_bst = json.dumps({"event_id":"evt_ts_2","type":"x","data":{"username":"buyer3","amount":10.0}}).encode()
+ok("webhook with a STALE timestamp is rejected (replay window closed)",
+   c.post("/webhooks/payment", content=_bst, headers={"X-Signature":_sign_ts(_bst,_stale),"X-Timestamp":str(_stale)}).status_code==401)
 
 
 # ---- CONFIDENTIAL COMPUTING (TEE attestation) ----

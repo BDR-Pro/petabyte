@@ -3449,6 +3449,36 @@ def credit_user_by_username(db: Session, username: str, amount: float) -> bool:
     return True
 
 
+def credit_user_from_webhook(db: Session, event_id: str, username: str, amount) -> str:
+    """Claim the webhook event_id AND credit the user in ONE transaction (atomic claim-and-credit).
+
+    The old flow claimed the id and credited in SEPARATE commits, so a crash between them marked
+    the event processed without crediting — and the provider's retry was then silently deduped
+    (lost credit). Here the ProcessedWebhook claim, the balance update, and the ledger legs share a
+    single commit: either all land or none do. Returns 'ok' | 'duplicate' | 'unknown_user'."""
+    amount = q(amount)
+    if amount <= 0:
+        raise ValueError("amount must be positive")
+    db.add(ProcessedWebhook(event_id=event_id))
+    try:
+        db.flush()                       # claim the id (unique constraint dedups)
+    except IntegrityError:
+        db.rollback()
+        return "duplicate"
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        db.rollback()                    # release the claim so a corrected retry can still credit
+        return "unknown_user"
+    user.balance = q(D(user.balance) + amount)
+    db.add(user)
+    post(db, "deposit", legs=[
+        (EXTERNAL_PAYMENTS,   DEBIT,  amount),
+        (acct_buyer(user.id), CREDIT, amount, user.id),
+    ], reference_id=user.id, description="wallet deposit (webhook)", entry_type="deposit")
+    db.commit()
+    return "ok"
+
+
 
 # ------------------ Confidential computing (TEE) attestation ------------------
 

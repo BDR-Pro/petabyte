@@ -5920,22 +5920,28 @@ async def payment_webhook(request: Request, db: Session = Depends(get_db)):
     """
     raw = await request.body()
     sig = request.headers.get("X-Signature", "")
-    if not verify_webhook_signature(PAYMENT_WEBHOOK_SECRET, raw, sig):
+    ts = request.headers.get("X-Timestamp")   # optional: enables replay-bounded verification
+    from utils import verify_payment_webhook
+    if not verify_payment_webhook(PAYMENT_WEBHOOK_SECRET, raw, sig, timestamp=ts):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
     try:
         evt = json.loads(raw)
-        event_id = evt["event_id"]
+        event_id = str(evt["event_id"])
         username = evt["data"]["username"]
-        amount = float(evt["data"]["amount"])
-    except (ValueError, KeyError, TypeError):
+        amount = Decimal(str(evt["data"]["amount"]))   # money is Decimal, never binary float
+    except (ValueError, KeyError, TypeError, ArithmeticError):
         raise HTTPException(status_code=400, detail="Malformed event")
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Invalid amount")
-    if webhook_already_processed(db, event_id):
+    # Atomic claim-and-credit: the event_id claim + the credit share one transaction, so a crash
+    # can't mark the event processed without crediting (or double-credit on retry).
+    from db import credit_user_from_webhook
+    outcome = credit_user_from_webhook(db, event_id, username, amount)
+    if outcome == "duplicate":
         return {"status": "ok", "duplicate": True}     # already credited
-    if not credit_user_by_username(db, username, amount):
+    if outcome == "unknown_user":
         raise HTTPException(status_code=404, detail="Unknown user")
-    return {"status": "ok", "credited": amount, "user": username}
+    return {"status": "ok", "credited": str(amount), "user": username}
 
 
 # =====================================================================
