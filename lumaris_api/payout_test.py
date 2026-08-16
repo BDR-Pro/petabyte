@@ -240,6 +240,90 @@ ok("ledger balances after the batch-payout leg", _bal_ok)
 # a re-run does not create a second batch or double-pay (no available obligations left)
 again = routing.create_and_send_batch(s, dbmod.get_user_by_id(s, sid2), currency="usd")
 ok("re-running aggregation does not double-pay (nothing available)", again is None)
+# NOTE: keep `s` (and `batch`) open — the mode-immutability test below reuses them.
+
+
+# ---------------- clawback auto-netting (flag-gated) ----------------
+# A refund/chargeback on an ALREADY-PAID job leaves the seller owing the platform: a recoverable
+# NEGATIVE seller_payable balance with no reversible transfer (audit killer #6). With
+# PAYOUT_AUTONET_CLAWBACK on, that debt is recovered by paying the seller LESS on their next
+# payout, instead of waiting for a manual operator; with it OFF, the prior behavior is unchanged.
+import os as _os_cb   # noqa: E402
+
+
+def _seed_clawback_debt(seller_id, cap=1000, debt=300):
+    """Reproduce the on-ledger state of a paid-then-refunded job (seller now owes `debt`), plus a
+    fresh available obligation of `cap` with its capture credit, and a needs_review clawback tx."""
+    s2 = dbmod.SessionLocal()
+    # old job A: capture credit -> batch payout debit -> refund clawback debit  => -debt on payable
+    dbmod.post(s2, "compute_transaction", legs=[
+        (dbmod.EXTERNAL_PAYMENTS, dbmod.DEBIT, cap),
+        (dbmod.acct_seller_payable(seller_id), dbmod.CREDIT, cap, seller_id)],
+        reference_id=f"ctx_cb_cap_{seller_id}", entry_type="compute_capture")
+    dbmod.post(s2, "payout_batch", legs=[
+        (dbmod.acct_seller_payable(seller_id), dbmod.DEBIT, cap, seller_id),
+        (dbmod.acct_stripe_payouts(), dbmod.CREDIT, cap)],
+        reference_id=f"pb_cb_paid_{seller_id}", entry_type="payout_settled")
+    dbmod.post(s2, "compute_transaction", legs=[
+        (dbmod.EXTERNAL_PAYMENTS, dbmod.CREDIT, debt),
+        (dbmod.acct_seller_payable(seller_id), dbmod.DEBIT, debt, seller_id)],
+        reference_id=f"ctx_cb_refund_{seller_id}", entry_type="compute_refund")
+    # new job B: a fresh available obligation + its capture credit (so unpaid nets == the credit)
+    dbmod.post(s2, "compute_transaction", legs=[
+        (dbmod.EXTERNAL_PAYMENTS, dbmod.DEBIT, cap),
+        (dbmod.acct_seller_payable(seller_id), dbmod.CREDIT, cap, seller_id)],
+        reference_id=f"ctx_cb_cap2_{seller_id}", entry_type="compute_capture")
+    s2.commit(); s2.close()
+    add_obligation(seller_id, cap)
+    # a needs_review tx carrying the batch-clawback signature (refunded, no reversible transfer)
+    tid = mk_captured_tx(seller_id, net=cap)
+    s3 = dbmod.SessionLocal()
+    t = s3.query(dbmod.ComputeTransaction).filter(dbmod.ComputeTransaction.id == tid).first()
+    t.refunded_amount = debt; t.stripe_transfer_id = None
+    t.reconciliation_status = "needs_review"; s3.add(t); s3.commit(); s3.close()
+    return tid
+
+
+# --- flag ON: the debt is netted out of the payout and the clawback tx reconciles ---
+# (own sessions `cs*` — never touch the aggregation section's still-open `s`/`batch`)
+sid_cb = mk_seller("payout_autonet_on", "US"); approve_sanctions(sid_cb)
+cbtx = _seed_clawback_debt(sid_cb, cap=1000, debt=300)
+cs = dbmod.SessionLocal()
+ok("recoverable debt is computed from the ledger (unpaid nets - payable balance)",
+   dbmod.seller_recoverable_debt_minor(cs, sid_cb) == 300)
+cs.close()
+_os_cb.environ["PAYOUT_AUTONET_CLAWBACK"] = "true"
+cs = dbmod.SessionLocal()
+b_on = routing.create_and_send_batch(cs, dbmod.get_user_by_id(cs, sid_cb),
+                                     currency="usd", min_threshold_minor=100)
+ok("auto-netting reduces the payout by the recoverable debt (1000 - 300 = 700)",
+   b_on is not None and b_on.state == "paid" and b_on.total_amount_minor == 700)
+ok("after netting, the seller owes nothing (recoverable debt cleared)",
+   dbmod.seller_recoverable_debt_minor(cs, sid_cb) == 0)
+ok("after netting, the seller_payable ledger balance is square (0)",
+   int(dbmod.account_balance(cs, dbmod.acct_seller_payable(sid_cb))) == 0)
+_cbtx_row = cs.query(dbmod.ComputeTransaction).filter(dbmod.ComputeTransaction.id == cbtx).first()
+ok("the batch-path clawback tx is flipped needs_review -> reconciled",
+   _cbtx_row.reconciliation_status == "reconciled")
+_onbal, _ = dbmod.ledger_is_balanced(cs)
+ok("ledger balances after clawback auto-netting", _onbal)
+cs.close()
+_os_cb.environ.pop("PAYOUT_AUTONET_CLAWBACK", None)
+
+# --- flag OFF (default): no netting — full payout, debt persists, tx stays needs_review ---
+sid_off = mk_seller("payout_autonet_off", "US"); approve_sanctions(sid_off)
+offtx = _seed_clawback_debt(sid_off, cap=1000, debt=300)
+cs = dbmod.SessionLocal()
+b_off = routing.create_and_send_batch(cs, dbmod.get_user_by_id(cs, sid_off),
+                                      currency="usd", min_threshold_minor=100)
+ok("default OFF: the payout is NOT netted (full 1000 paid)",
+   b_off is not None and b_off.total_amount_minor == 1000)
+ok("default OFF: the recoverable debt persists for manual review",
+   dbmod.seller_recoverable_debt_minor(cs, sid_off) == 300)
+_offtx_row = cs.query(dbmod.ComputeTransaction).filter(dbmod.ComputeTransaction.id == offtx).first()
+ok("default OFF: the clawback tx stays needs_review (unchanged behavior)",
+   _offtx_row.reconciliation_status == "needs_review")
+cs.close()
 # TEST/LIVE mode is immutable — test and live money can never be reclassified/merged
 _immut = False
 try:

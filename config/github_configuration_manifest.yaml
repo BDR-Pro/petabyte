@@ -937,6 +937,12 @@ variables:
     - sandbox
     - test
     - live
+  PAYOUT_AUTONET_CLAWBACK:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: ''
   PAYOUT_CAPABILITIES_PATH:
     required: false
     default: null

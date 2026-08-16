@@ -674,6 +674,30 @@ def account_balance(db: Session, account: str) -> Decimal:
     return q(bal)
 
 
+def seller_recoverable_debt_minor(db: Session, seller_id: int) -> int:
+    """Minor units a seller owes the platform from a post-payout refund clawback — i.e. the amount
+    by which their `seller_payable` ledger balance is MORE negative than their still-unpaid
+    obligations can explain. Zero when the books are square.
+
+    A refund/chargeback on a job whose seller was already paid via the batch path DEBITs
+    seller_payable (the platform fronted the buyer's refund) with no reversible transfer to claw
+    back — leaving a recoverable NEGATIVE balance (see stripe_connect.refund / audit killer #6).
+    Unpaid obligations (accrued/available/batched) are seller_payable CREDITs not yet disbursed, so:
+
+        recoverable_debt = Σ(unpaid obligation nets) − seller_payable_balance   (floored at 0)
+
+    Clawback auto-netting (payout_routing) uses this to recover the debt from the seller's next
+    payout instead of leaving it for manual operator recovery."""
+    from sqlalchemy import func
+    unpaid = (db.query(func.coalesce(func.sum(PayoutObligation.net_amount_minor), 0))
+              .filter(PayoutObligation.seller_id == seller_id,
+                      PayoutObligation.state.in_(["accrued", "available", "batched"]))
+              .scalar()) or 0
+    bal = account_balance(db, acct_seller_payable(seller_id))
+    debt = int(unpaid) - int(bal)
+    return debt if debt > 0 else 0
+
+
 def ledger_is_balanced(db: Session):
     """Every transaction must balance, and the whole ledger must sum to zero.
     Returns (ok, list_of_broken_tx_ids)."""
