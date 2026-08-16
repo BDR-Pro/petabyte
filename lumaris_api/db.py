@@ -4678,7 +4678,11 @@ def get_or_create_oauth_user(db: Session, email: str, provider: str = "google",
     return u
 
 
-init_db()
+# Build the schema on import (create_all + idempotent _ensure_* passes) — the runtime bootstrap.
+# Alembic sets PETABYTE_SKIP_INIT_DB=1 so it can own schema creation during a migration run
+# instead of it happening as an import side-effect. Default (unset) preserves prior behavior.
+if os.getenv("PETABYTE_SKIP_INIT_DB", "").strip().lower() not in ("1", "true", "yes", "on"):
+    init_db()
 
 
 # ---------------------------------------------------------------------------

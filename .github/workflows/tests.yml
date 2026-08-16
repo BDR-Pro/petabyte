@@ -210,6 +210,25 @@ jobs:
           DATABASE_URL: ""
         run: python ../scripts/audit_ledger_test.py
 
+      - name: Alembic migrations run up + down on real Postgres (schema change-management gate)
+        working-directory: lumaris_api
+        # `alembic upgrade head` builds the full schema from the models on an EMPTY DB, then
+        # `downgrade base` drops it, then upgrade again — proving the migration chain is applyable
+        # and reversible on real Postgres (SQLite can't prove FK/constraint DDL). A migration that
+        # doesn't run both ways fails CI here, before it reaches a deploy.
+        env:
+          DATABASE_URL: postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/alembic_ci
+        run: |
+          psql "postgresql://postgres:postgres@127.0.0.1:5432/postgres" -v ON_ERROR_STOP=1 \
+            -c 'DROP DATABASE IF EXISTS alembic_ci' -c 'CREATE DATABASE alembic_ci' \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-16 && \
+                 psql "postgresql://postgres:postgres@127.0.0.1:5432/postgres" -v ON_ERROR_STOP=1 \
+                   -c 'DROP DATABASE IF EXISTS alembic_ci' -c 'CREATE DATABASE alembic_ci'; }
+          alembic upgrade head
+          alembic current | grep -q '0001_baseline' && echo "schema at head"
+          alembic downgrade base
+          alembic upgrade head
+
       - name: DR restore drill — backup → restore into a scratch DB → verify ledger balances
         working-directory: lumaris_api
         # A backup you have never restored is not a backup. Dumps petabyte_test, restores it into a
