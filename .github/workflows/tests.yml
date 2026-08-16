@@ -12,6 +12,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:      # manual trigger — required for the opt-in real Mailgun send job
+  workflow_call:          # callable as a required gate by other workflows (deploy-server.yml)
+                          # so a push to main can NEVER reach production without this suite green
 
 # Least privilege: the whole suite only needs to read the repo. No job pushes, comments,
 # or mutates GitHub state — checkouts below also drop the persisted token.
@@ -498,6 +500,15 @@ jobs:
     # charged" is backed by a REAL server-side capture and does NOT fake GPU work. The real
     # self-hosted GPU hardware proof is a SEPARATE, independent job — see
     # .github/workflows/load_test.yml (smoke-gpu / scripts/smoke_gpu.py).
+    #
+    # Non-blocking (P1 signal, not a P0 release gate): a real-Chromium browser journey is the
+    # single most infra-flake-prone job here, and the deploy workflow reuses this whole workflow
+    # as its production gate (deploy-server.yml). Blocking prod on a browser flake — including a
+    # security hotfix deploy — would be stricter than this repo's own P0/P1 model, which treats
+    # browser E2E as "should pass", not "release-blocking". The independent Browser E2E workflow
+    # (browser-e2e.yml, on every push + a schedule) still runs this as a first-class, visible
+    # signal, so nothing is lost. The money/security/config/schema/Postgres jobs stay HARD gates.
+    continue-on-error: true
     permissions:
       contents: read
     runs-on: ubuntu-latest

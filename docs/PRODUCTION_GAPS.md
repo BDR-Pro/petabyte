@@ -14,21 +14,27 @@ Legend: ✅ addressed in this branch · ⚠️ documented, not yet done.
 - ✅ Broken `/gpu/{id}` links; misleading "fully built" investor copy corrected.
 
 ## Must fix before pilots
-- ⚠️ **Payout worker scheduler.** `tools/payout_worker.py` exists but no systemd
-  timer/cron installs it, so queued withdrawals never send. Ship
-  `lumaris-payout.service` + `.timer` and install in `deploy.sh`. Payouts run in
-  sandbox (`PAYOUT_STUB=true`) by default today.
-- ⚠️ **Deploy safety.** `deploy-server.yml` auto-deploys prod on every push to
-  `main` with no test gate, concurrency guard, or post-deploy health check; the SSH
-  key is written before `chmod` and uses `StrictHostKeyChecking=no`. Gate on tests,
-  add `concurrency:` and a `/healthz` assertion, harden key handling.
-- ⚠️ **TLS by default.** Fresh deploys serve plaintext HTTP until a human runs
-  certbot; JWTs travel in cleartext in that window. Run certbot inside `deploy.sh`
-  when a domain is supplied and ship a 443 template.
-- ⚠️ **Alembic baseline.** Migrations are stale (3 `add_column`, zero `create_table`);
-  `alembic upgrade head` from a clean DB fails. Schema truth is `create_all` +
-  `_ensure_columns` (a CI job proves it builds from empty). Autogenerate a squashed
-  baseline, `alembic stamp` prod, and make CI diff `upgrade head` against `create_all`.
+- ✅ **Payout worker scheduler.** Shipped `deploy/lumaris-payout.service` (oneshot,
+  hardened like the reaper) + `deploy/lumaris-payout.timer` (every 5 min,
+  `Persistent=true`). `deploy.sh` installs and `enable --now`s the timer on fresh boxes,
+  and `update.sh` syncs the units + arms the timer on already-provisioned hosts, so queued
+  withdrawals now send. Safe by default: `PAYOUT_STUB=true` simulates until a real provider
+  is configured.
+- ✅ **Deploy safety.** `deploy-server.yml` now gates prod on the FULL test suite —
+  `deploy` `needs: [tests, configuration-preflight]`, where `tests` reuses `tests.yml`
+  via `workflow_call` (the money/security/config/schema/Postgres jobs are hard blockers;
+  the flake-prone P1 browser-E2E job is `continue-on-error`, independently covered by
+  `browser-e2e.yml`). Concurrency guard (`concurrency: deploy-server`), pinned host key
+  (`StrictHostKeyChecking=yes` + `known_hosts`), post-deploy `/healthz` gate, and env
+  rollback-on-failure were already in place.
+- ✅ **TLS by default.** `deploy.sh` now issues a Let's Encrypt cert automatically the
+  moment the domain resolves to the box (HTTP-01 needs that): it sets the real
+  `server_name`, runs `certbot --nginx … --redirect`, and arms `certbot.timer` for
+  renewal. If DNS isn't pointed here yet it skips without failing the deploy and prints the
+  one manual command — so a fresh box is HTTPS the moment DNS is ready, never silently
+  plaintext once it is.
+- ✅ **Alembic baseline.** A squashed baseline now builds the schema from a clean DB, and
+  a CI `migration` job runs `alembic upgrade head` (and downgrade) on real Postgres.
 - ⚠️ **`/login` app-level rate limit.** Brute-force protection on `/login` is
   nginx-only; add it to the app failure-budget limiter as defence in depth.
 

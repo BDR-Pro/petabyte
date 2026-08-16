@@ -1,0 +1,22 @@
+[Unit]
+Description=Lumaris payout worker (fire due schedules, then send queued payouts)
+# Timer-driven oneshot: it runs, drains the queue, and exits — the timer fires it again.
+# Kept OUT of the API process so a web restart can never drop mid-flight payout work, and
+# so exactly one place moves money out (no double-send across web workers).
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+User=lumaris
+Group=lumaris
+WorkingDirectory=/opt/lumaris
+EnvironmentFile=/etc/lumaris/lumaris.env
+# Safe by default: with PAYOUT_STUB=true (the shipped default) this simulates sends and
+# only drains the queue for real once a payout provider is configured and PAYOUT_STUB=false.
+ExecStart=/opt/lumaris/.venv/bin/python tools/payout_worker.py
+# Never let a transient provider/network error wedge the timer: the next tick retries.
+TimeoutStartSec=300
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
