@@ -34,10 +34,12 @@ def trust_page():
 @router.get("/security.txt", response_class=PlainTextResponse)
 def security_txt():
     """RFC 9116 security contact — the file security researchers look for first."""
+    # Contact is a domain email, not a GitHub advisories URL: the source repo is (or may become)
+    # private, and a github.com/<repo>/security/advisories link 404s for external researchers
+    # without repo access — the opposite of what security.txt is for. mailto works regardless.
     return (
-        "# Petabyte vulnerability disclosure — see /security and the repo SECURITY.md\n"
+        "# Petabyte vulnerability disclosure — see /security\n"
         "Contact: mailto:security@petabyte.market\n"
-        "Contact: https://github.com/BDR-Pro/petabyte/security/advisories/new\n"
         "Policy: https://petabyte.market/security\n"
         "Expires: 2027-08-01T00:00:00Z\n"
         "Preferred-Languages: en\n"
