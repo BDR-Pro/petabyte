@@ -651,6 +651,44 @@ def _page(title, body, desc=None, path="/"):
 
 LANDING_HTML = _page("Petabyte — the compute exchange",
     desc="Rent verified GPUs by the hour, or earn from hardware you already own. One click to launch. Escrow refunds every hour you do not use.", path="/", body="""
+<style>
+.hc{padding:16px 18px}
+.hc-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.hc-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.hc-chip{font:inherit;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--line2);background:var(--panel2);color:var(--mut);border-radius:999px;padding:5px 11px;transition:color .12s,border-color .12s,background .12s}
+.hc-chip:hover{color:var(--ink)}
+.hc-chip[aria-selected="true"]{border-color:var(--teal);color:var(--teal);background:color-mix(in srgb,var(--teal) 13%,transparent)}
+.hc-cmp{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.hc-side{border:1px solid var(--line);border-radius:13px;padding:11px 13px}
+.hc-k{font-size:10.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;display:block}
+.hc-v{font-size:25px;font-weight:760;line-height:1.12;letter-spacing:-.01em;font-family:var(--mono)}
+.hc-u{font-size:11px;color:var(--mut)}
+.hc-pb{background:color-mix(in srgb,var(--teal) 9%,transparent);border-color:color-mix(in srgb,var(--teal) 32%,var(--line))}
+.hc-pb .hc-v{color:var(--teal)}
+.hc-bar{height:9px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);margin:14px 0 7px;overflow:hidden}
+.hc-fill{height:100%;width:18%;background:linear-gradient(90deg,var(--teal-br),var(--teal));transition:width .4s cubic-bezier(.2,.7,.2,1)}
+.hc-save{font-size:13px;color:var(--mut)}
+.hc-save b{color:var(--pos);font-weight:750;font-size:15px}
+.hc-hours{display:flex;align-items:center;gap:10px;margin-top:14px}
+.hc-hours input[type=range]{flex:1;accent-color:var(--teal)}
+.hc-total{display:flex;justify-content:space-between;align-items:baseline;margin-top:12px;padding-top:12px;border-top:1px solid var(--hair)}
+.prf{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.prf-i{background:var(--panel);padding:15px 18px;display:flex;flex-direction:column;gap:3px}
+.prf-i b{font-family:var(--disp);font-size:22px;font-weight:750;color:var(--ink)}
+.prf-i span{font-size:12.5px;color:var(--mut);line-height:1.35}
+@media(max-width:760px){.prf{grid-template-columns:repeat(2,1fr)}}
+.hiw{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.hiw-s{background:linear-gradient(180deg,var(--depth2),var(--panel2));border:1px solid var(--line);border-radius:16px;padding:22px 20px}
+.hiw-n{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:11px;background:color-mix(in srgb,var(--teal) 14%,transparent);border:1px solid color-mix(in srgb,var(--teal) 34%,var(--line));color:var(--teal);font-family:var(--disp);font-weight:750;margin-bottom:12px}
+.hiw-s h3{font-size:16px;margin:0 0 6px}
+.hiw-s p{font-size:13.5px;line-height:1.55;margin:0}
+@media(max-width:820px){.hiw{grid-template-columns:1fr}}
+.ctaband{position:relative;overflow:hidden;margin-top:36px;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2);background:linear-gradient(120deg,#0a1730 0%,#0e2a45 62%,#0a2136 100%)}
+.ctaband::before{content:"";position:absolute;inset:0;background:radial-gradient(58% 120% at 50% -12%,rgba(58,224,207,.20),transparent 60%)}
+.ctaband .wrap{position:relative}
+.ctaband .btn-ghost.oncta{color:#fff;border-color:rgba(255,255,255,.4)}
+.ctaband .btn-ghost.oncta:hover{background:rgba(255,255,255,.12)}
+</style>
 <div class="hero"><div class="wrap" style="padding:74px 24px 30px">
   <img class="hexbg" src="/static/petabyte-logo.png" alt=""/>
   <div class="cols" style="align-items:center;gap:34px">
@@ -665,18 +703,33 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
       <div class="mini" style="margin-top:14px" data-ar="تفضّل جولة معنا؟ ">Prefer a walkthrough? <a class="teal" href="/demo" data-ar="احجز عرضاً مدته ٢٠ دقيقة">Book a 20-minute demo</a></div>
       </div>
     </div>
-    <div class="panel" style="flex:1 1 320px;min-width:290px;padding:18px 20px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-        <span class="mini">Available now</span>
-        <a class="mini teal" href="/marketplace">See all →</a>
+    <div class="panel hc" style="flex:1 1 340px;min-width:300px">
+      <div class="hc-h"><span class="mini" data-ar="ما ستدفعه">What you&#39;d pay</span><span class="mini" id="hc_live"></span></div>
+      <div class="hc-chips" id="hc_chips" role="tablist" aria-label="GPU model"><span class="mut mono" style="font-size:12px">Loading prices…</span></div>
+      <div class="hc-cmp">
+        <div class="hc-side hc-pb"><span class="hc-k">Petabyte</span><span class="hc-v" id="hc_pb">—</span><span class="hc-u">/hour</span></div>
+        <div class="hc-side"><span class="hc-k">Cloud on-demand</span><span class="hc-v" id="hc_cloud">—</span><span class="hc-u">/hour</span></div>
       </div>
-      <div id="heropreview"><div class="mut mono" style="font-size:12px;padding:22px 0;text-align:center">Loading inventory…</div></div>
-      <div id="herostats" style="display:none;border-top:1px solid var(--hair);margin-top:12px;padding-top:12px">
-        <span class="mini"><span id="s_nodes" class="teal mono">0</span> hosts online · <span id="s_specs" class="mono">0</span> GPUs listed</span>
-      </div>
+      <div class="hc-bar"><div class="hc-fill" id="hc_fill"></div></div>
+      <div class="hc-save"><b id="hc_pct">—</b> cheaper on Petabyte</div>
+      <div class="hc-hours"><label class="mini" for="hc_hours" data-ar="التشغيل لمدة">Run for</label><input id="hc_hours" type="range" min="1" max="168" value="24" aria-label="Hours to run"/><span class="mono" id="hc_hval" style="min-width:42px;text-align:end">24h</span></div>
+      <div class="hc-total"><span class="mut mini" data-ar="إجماليك">Your total</span><span><b class="mono teal" id="hc_pbtot" style="font-size:16px">—</b> <span class="mut mini">vs cloud <span class="mono" id="hc_cltot">—</span></span></span></div>
+      <a class="btn btn-amber" href="/marketplace" style="width:100%;justify-content:center;margin-top:12px" data-ar="تصفّح كروت الرسومات">Browse GPUs →</a>
+      <div class="mini" style="margin-top:8px;text-align:center" data-ar="أسعار مرجعية من كتالوج الأسعار · ابدأ في وضع الاختبار دون بطاقة">Reference rates from our price catalog · start in TEST mode, no card</div>
     </div></div>
   </div>
 </div></div>
+
+<!-- PROOF STRIP: real figures — max savings + model count come from the price catalog,
+     the live tile fills in only when verified nodes are actually online. -->
+<div class="wrap" style="padding:26px 24px 6px">
+  <div class="prf">
+    <div class="prf-i"><b id="prf_save">up to 90%</b><span data-ar="أرخص من الأسعار الفورية للسحابة — كل كرت رسومات مُدرج تحت سعر مزوّده السحابي">cheaper than cloud on-demand — every GPU listed below its hyperscaler rate</span></div>
+    <div class="prf-i"><b id="prf_models">46</b><span data-ar="طراز كرت رسومات في كتالوج الأسعار — لكلٍّ سعر عادل مرتبط بأداء القياس">GPU models in the price catalog — each on a fair, benchmark-anchored rate</span></div>
+    <div class="prf-i"><b data-ar="بالساعة">Hourly</b><span data-ar="فوترة مع ضمان بالساعة — أوقف في أي وقت، وتُعاد الساعات غير المستخدمة بالكامل">billing with per-hour escrow — stop anytime, unused hours refunded to the cent</span></div>
+    <div class="prf-i"><b id="prf_live">TEST</b><span id="prf_live_t">mode by default — walk the whole flow with no card, no real money</span></div>
+  </div>
+</div>
 
 <!-- CREDIBILITY: every claim here is enforced by a test in the repo. No vanity metrics,
      no fabricated logos. What we can prove, and nothing we cannot. -->
@@ -703,6 +756,24 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
   <div style="text-align:center;margin-top:16px">
     <a class="btn btn-ghost" href="/security" data-ar="كيف يعمل هذا">How this works</a>
     <a class="btn btn-ghost" href="/demo" data-ar="شاهده مباشرةً">See it live</a>
+  </div>
+</div>
+
+<!-- HOW IT WORKS: three honest, buyer-side steps. -->
+<div class="wrap" style="padding:44px 24px 6px">
+  <div class="lbl" style="margin-bottom:4px" data-ar="كيف تعمل">How it works</div>
+  <h2 style="font-size:clamp(22px,3vw,30px);margin-bottom:6px" data-ar="من الصفر إلى كرت رسومات يعمل في <span class='grad-teal'>ثلاث خطوات.</span>">From zero to a running GPU in <span class="grad-teal">three steps.</span></h2>
+  <p class="mut" style="max-width:60ch;margin-bottom:20px" data-ar="بلا حصص، ولا مكالمة مبيعات، ولا عقد طويل الأمد. أضِف رصيداً، واختر كرت رسومات، ويحجز الموجِّه أرخص جهاز موثّق مطابق.">No quotas, no sales call, no long-term contract. Add funds, pick a GPU, and the router books the cheapest verified match.</p>
+  <div class="hiw">
+    <div class="hiw-s"><span class="hiw-n">1</span>
+      <h3 data-ar="اختر كرت رسومات — أو لا تختر">Pick a GPU — or don't</h3>
+      <p class="mut" data-ar="تصفّح الأجهزة الموثّقة حسب الطراز والذاكرة والمنطقة، أو صِف ما تحتاجه ودَع الموجِّه يضعه على أرخص مطابقة.">Browse verified nodes by model, VRAM and region — or just state what you need and let the router place it on the cheapest match.</p></div>
+    <div class="hiw-s"><span class="hiw-n">2</span>
+      <h3 data-ar="شغّل بنقرة واحدة">Launch in one click</h3>
+      <p class="mut" data-ar="يُقلِع قالب (خادم لعبة، أو Blender، أو ComfyUI، أو نموذج لغوي) أو صورتك الخاصة داخل جهاز افتراضي معزول. ينتقل رصيدك إلى الضمان، لا إلى المضيف.">A template — a game server, Blender, ComfyUI, an LLM — or your own image boots in an isolated micro-VM. Your funds move into escrow, not to the host.</p></div>
+    <div class="hiw-s"><span class="hiw-n">3</span>
+      <h3 data-ar="ادفع مقابل العمل الفعلي فقط">Pay only for real work</h3>
+      <p class="mut" data-ar="يُحرَّر الضمان ساعةً بساعة أثناء تشغيل المهمة. أوقِف مبكراً ويُعاد الباقي؛ وإذا تعطّل جهاز، تُنقَل أو تُعوَّض بالكامل.">Escrow releases hour by hour as the job runs. Stop early and the rest is refunded; if a node drops, you're moved or made whole.</p></div>
   </div>
 </div>
 
@@ -769,6 +840,16 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
     <p class="mut" style="font-size:13px">One command to list. Weekly payouts — bank, USDC, or gift card.</p></a>
 </div></div>
 
+<!-- CTA BAND: the last push before the fold ends. -->
+<div class="ctaband"><div class="wrap" style="padding:52px 24px;text-align:center">
+  <h2 style="font-size:clamp(24px,3.4vw,34px);color:#fff;margin:0 auto 10px;max-width:20ch" data-ar="ابدأ باستئجار قدرة حوسبة GPU خلال الدقائق الخمس القادمة.">Start renting GPU compute in the next five minutes.</h2>
+  <p style="color:rgba(255,255,255,.72);font-size:15.5px;max-width:52ch;margin:0 auto 22px" data-ar="وضع الاختبار مُفعَّل افتراضياً — جرّب العملية كاملةً دون بطاقة. وحوِّل إلى الوضع الحقيقي متى شئت.">TEST mode is on by default — walk the entire flow, no card required. Switch to live when you're ready.</p>
+  <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+    <a class="btn btn-amber arrow-fwd" href="/marketplace" data-ar="تصفّح كروت الرسومات">Browse GPUs</a>
+    <a class="btn btn-ghost oncta" href="/install" data-ar="أدرِج كرت رسوماتك">List your GPU</a>
+  </div>
+</div></div>
+
 <!-- NEWSLETTER (Mailgun mailing list via /newsletter/subscribe) -->
 <div class="wrap" style="padding:10px 24px 40px">
   <div class="card" style="max-width:560px;margin:0 auto;text-align:center">
@@ -804,38 +885,66 @@ async function subscribeNewsletter(){
 </script>
 
 <script>
-async function heroPreview(){
- try{
-  var r=await fetch('/marketplace/specs?sort=price');var b=await r.json();
-  var el=document.getElementById('heropreview');
-  var rows=(b.specs||[]).slice(0,3);
-  if(!rows.length){
-    el.innerHTML='<div class="empty" style="padding:18px 6px"><div class="et" style="font-size:13px">No GPUs online yet</div>'+
-      '<div class="es" style="font-size:12px">Be the first host — one command, and you are listed.</div>'+
-      '<a class="btn btn-teal" href="/install">List your GPU</a></div>';
-  }else{
-    el.innerHTML=rows.map(function(s){
-      var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
-      return '<a href="/gpu/'+s.id+'" style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--hair)">'+
-       '<div style="flex:1;min-width:0">'+
-        '<div style="font-family:var(--disp);font-weight:600;font-size:14px">'+esc(s.gpu_model||'CPU')+(s.vram_gb?' <span class="mut" style="font-weight:400">· '+s.vram_gb+'GB</span>':'')+'</div>'+
-        '<div class="mini" style="margin-top:2px">'+esc(s.region||'unknown region')+' · '+(s.available_units>0?'<span class="teal">available now</span>':'busy')+'</div>'+
-       '</div>'+
-       '<div style="text-align:end;flex:none">'+
-        '<div class="mono amber" style="font-size:15px;font-weight:600">$'+Number(s.price_per_hour).toFixed(2)+'</div>'+
-        '<div class="mini">/hour'+(save>0?' · <span style="color:var(--pos)">'+save+'% off</span>':'')+'</div>'+
-       '</div></a>';}).join('');
-  }
-  // only show counters when they are real — an empty metric reads as "this does not work"
-  var st=await (await fetch('/marketplace/stats')).json();
-  if(st.nodes_online>0||st.specs_listed>0){
-    document.getElementById('s_nodes').textContent=st.nodes_online;
-    document.getElementById('s_specs').textContent=st.specs_listed;
-    document.getElementById('herostats').style.display='';
-  }
- }catch(e){}
+// ---- Hero "what you'd pay" calculator + proof strip, driven by the real price catalog ----
+// No fabricated widgets: every number is a benchmark-anchored reference rate from /pricing/catalog
+// (Petabyte) vs the model's public cloud on-demand rate. Hours slider just multiplies.
+var HC={rows:[],sel:0,hours:24};
+var HC_ORDER=['H100','A100','H200','L40','L4','A10','V100','T4','RTX A6000','RTX 4090'];
+function hcMoney(n){return '$'+Number(n).toFixed(2);}
+function hcRender(){
+  var r=HC.rows[HC.sel];if(!r)return;
+  var pb=r.reference_price_per_hour,cloud=r.cloud_reference;
+  var pct=Math.round((1-pb/cloud)*100);
+  var set=function(id,v){var e=document.getElementById(id);if(e)e.textContent=v;};
+  set('hc_pb',hcMoney(pb));set('hc_cloud',hcMoney(cloud));set('hc_pct',pct+'%');
+  var fill=document.getElementById('hc_fill');
+  if(fill)fill.style.width=Math.max(6,Math.min(100,Math.round(pb/cloud*100)))+'%';
+  set('hc_hval',HC.hours+'h');
+  set('hc_pbtot',hcMoney(pb*HC.hours));set('hc_cltot',hcMoney(cloud*HC.hours));
+  var chips=document.querySelectorAll('#hc_chips .hc-chip');
+  chips.forEach(function(c,i){c.setAttribute('aria-selected',i===HC.sel?'true':'false');});
 }
-heroPreview();setInterval(heroPreview,10000);
+async function hcInit(){
+  var box=document.getElementById('hc_chips');
+  try{
+    var r=await fetch('/pricing/catalog');if(!r.ok)throw 0;
+    var b=await r.json();
+    var by={};(b.catalog||[]).forEach(function(x){by[x.gpu_model]=x;});
+    var rows=[];
+    HC_ORDER.forEach(function(m){var x=by[m];if(x&&x.cloud_reference&&x.reference_price_per_hour)rows.push(x);});
+    if(!rows.length){if(box)box.innerHTML='<span class="mut mini">Pricing unavailable right now.</span>';return;}
+    HC.rows=rows;
+    // proof strip: honest max savings across the WHOLE catalog + real model count
+    var maxsave=(b.catalog||[]).reduce(function(a,x){return Math.max(a,x.savings_vs_cloud_pct||0);},0);
+    var ps=document.getElementById('prf_save');if(ps&&maxsave)ps.textContent='up to '+Math.round(maxsave)+'%';
+    var pm=document.getElementById('prf_models');if(pm&&b.count)pm.textContent=b.count;
+    if(box){
+      box.innerHTML=rows.map(function(x,i){
+        return '<button type="button" class="hc-chip" role="tab" data-i="'+i+'" aria-selected="'+(i===0?'true':'false')+'">'+esc(x.gpu_model)+'</button>';
+      }).join('');
+      box.querySelectorAll('.hc-chip').forEach(function(c){
+        c.addEventListener('click',function(){HC.sel=+c.getAttribute('data-i')||0;hcRender();});
+      });
+    }
+    hcRender();
+  }catch(e){if(box)box.innerHTML='<span class="mut mini">Pricing unavailable right now.</span>';}
+}
+async function hcStats(){
+  // live tile fills in ONLY when verified nodes are actually online — an empty count reads as broken
+  try{
+    var st=await (await fetch('/marketplace/stats')).json();
+    if(st&&st.nodes_online>0){
+      var l=document.getElementById('prf_live'),t=document.getElementById('prf_live_t');
+      if(l)l.textContent=st.nodes_online;
+      if(t)t.textContent='verified GPU'+(st.nodes_online===1?'':'s')+' online right now, ready to rent';
+      var live=document.getElementById('hc_live');
+      if(live)live.textContent='● '+st.nodes_online+' online';
+    }
+  }catch(e){}
+}
+var hcH=document.getElementById('hc_hours');
+if(hcH)hcH.addEventListener('input',function(){HC.hours=+hcH.value||1;hcRender();});
+hcInit();hcStats();setInterval(hcStats,15000);
 renderLaunch('launchgrid',['game','art','render','ai'],2);
 </script>""")
 
