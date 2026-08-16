@@ -257,7 +257,7 @@ def _seed_clawback_debt(seller_id, cap=1000, debt=300):
     s2 = dbmod.SessionLocal()
     # old job A: capture credit -> batch payout debit -> refund clawback debit  => -debt on payable
     dbmod.post(s2, "compute_transaction", legs=[
-        (dbmod.EXTERNAL_PAYMENTS, dbmod.DEBIT, cap),
+        (dbmod.EXTERNAL_PAYMENTS_MINOR, dbmod.DEBIT, cap),
         (dbmod.acct_seller_payable(seller_id), dbmod.CREDIT, cap, seller_id)],
         reference_id=f"ctx_cb_cap_{seller_id}", entry_type="compute_capture")
     dbmod.post(s2, "payout_batch", legs=[
@@ -265,12 +265,12 @@ def _seed_clawback_debt(seller_id, cap=1000, debt=300):
         (dbmod.acct_stripe_payouts(), dbmod.CREDIT, cap)],
         reference_id=f"pb_cb_paid_{seller_id}", entry_type="payout_settled")
     dbmod.post(s2, "compute_transaction", legs=[
-        (dbmod.EXTERNAL_PAYMENTS, dbmod.CREDIT, debt),
+        (dbmod.EXTERNAL_PAYMENTS_MINOR, dbmod.CREDIT, debt),
         (dbmod.acct_seller_payable(seller_id), dbmod.DEBIT, debt, seller_id)],
         reference_id=f"ctx_cb_refund_{seller_id}", entry_type="compute_refund")
     # new job B: a fresh available obligation + its capture credit (so unpaid nets == the credit)
     dbmod.post(s2, "compute_transaction", legs=[
-        (dbmod.EXTERNAL_PAYMENTS, dbmod.DEBIT, cap),
+        (dbmod.EXTERNAL_PAYMENTS_MINOR, dbmod.DEBIT, cap),
         (dbmod.acct_seller_payable(seller_id), dbmod.CREDIT, cap, seller_id)],
         reference_id=f"ctx_cb_cap2_{seller_id}", entry_type="compute_capture")
     s2.commit(); s2.close()

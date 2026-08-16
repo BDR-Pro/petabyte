@@ -25,7 +25,12 @@ import logging
 import os
 from datetime import datetime, timezone, timedelta
 
-from db import (post, DEBIT, CREDIT, EXTERNAL_PAYMENTS, PLATFORM_REVENUE,
+from db import (post, DEBIT, CREDIT,
+                # STD-E: the Stripe-Connect compute path posts integer MINOR UNITS, so it uses the
+                # *_MINOR clearing/revenue accounts — never the DOLLAR-scale wallet/booking accounts
+                # of the same name — so account_balance() is never summed across unit scales.
+                EXTERNAL_PAYMENTS_MINOR as EXTERNAL_PAYMENTS,
+                PLATFORM_REVENUE_MINOR as PLATFORM_REVENUE,
                 acct_seller_payable, acct_stripe_payouts, acct_stripe_fees,
                 ConnectedAccount, ComputeTransaction, ComputeTxEvent,
                 PaymentOperation, StripeWebhookEvent, Settlement,

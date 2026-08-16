@@ -263,7 +263,7 @@ c.post(f"/admin/payments/{tid}/capture", headers=admin)
 s = dbmod.SessionLocal()
 n_cap_entries = s.query(dbmod.LedgerEntry).filter(
     dbmod.LedgerEntry.entry_type == "compute_capture",
-    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS).count()
+    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS_MINOR).count()
 ok("duplicate capture is a no-op (amount unchanged, one capture per tx across suite)",
    GW.payment_intents[pid]["amount_received"] == before)
 s.close()
@@ -287,7 +287,7 @@ def _fee_legs(direction, account):
                     dbmod.LedgerEntry.account == account,
                     dbmod.LedgerEntry.direction == direction).all())
 _dr = _fee_legs(dbmod.DEBIT, dbmod.acct_stripe_fees())
-_cr = _fee_legs(dbmod.CREDIT, dbmod.EXTERNAL_PAYMENTS)
+_cr = _fee_legs(dbmod.CREDIT, dbmod.EXTERNAL_PAYMENTS_MINOR)
 ok("processing fee posted as ONE balanced stripe:fees entry (idempotent across the dup capture)",
    len(_dr) == 1 and len(_cr) == 1 and int(_dr[0].amount) == _exp_fee and int(_cr[0].amount) == _exp_fee)
 ok("net contribution margin is negative on a small job (commission 12 - fee 33)",
@@ -522,7 +522,7 @@ _txoob = sc.get_tx_by_public_id(_s, tid_oob)
 _ooblegs = (_s.query(dbmod.LedgerEntry).join(dbmod.LedgerTx, dbmod.LedgerEntry.tx_id == dbmod.LedgerTx.id)
             .filter(dbmod.LedgerTx.reference_id == tid_oob,
                     dbmod.LedgerEntry.entry_type == "compute_refund",
-                    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS,
+                    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS_MINOR,
                     dbmod.LedgerEntry.direction == dbmod.CREDIT).all())
 _oob_obl = _s.query(dbmod.PayoutObligation).filter(
     dbmod.PayoutObligation.compute_tx_id == _txoob.id).first()
@@ -573,7 +573,7 @@ _sdup = dbmod.SessionLocal()
 _txd = sc.get_tx_by_public_id(_sdup, tid_dup)
 _nref = _sdup.query(dbmod.LedgerEntry).filter(
     dbmod.LedgerEntry.entry_type == "compute_refund",
-    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS,
+    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS_MINOR,
     dbmod.LedgerEntry.booking_id.is_(None)).count()
 _sdup.close()
 ok("duplicate refund posts the refund ledger leg only once",
@@ -695,12 +695,12 @@ bal, broken = dbmod.ledger_is_balanced(s)
 ok("ledger balances across the entire Stripe lifecycle", bal and not broken)
 # duplicate external reference (idempotency_key) is rejected by the ledger
 from sqlalchemy.exc import IntegrityError
-dbmod.post(s, "compute_transaction", legs=[(dbmod.EXTERNAL_PAYMENTS, dbmod.DEBIT, 10),
-           (dbmod.PLATFORM_REVENUE, dbmod.CREDIT, 10)], idempotency_key="dup-key-xyz")
+dbmod.post(s, "compute_transaction", legs=[(dbmod.EXTERNAL_PAYMENTS_MINOR, dbmod.DEBIT, 10),
+           (dbmod.PLATFORM_REVENUE_MINOR, dbmod.CREDIT, 10)], idempotency_key="dup-key-xyz")
 raised = False
 try:
-    dbmod.post(s, "compute_transaction", legs=[(dbmod.EXTERNAL_PAYMENTS, dbmod.DEBIT, 10),
-               (dbmod.PLATFORM_REVENUE, dbmod.CREDIT, 10)], idempotency_key="dup-key-xyz")
+    dbmod.post(s, "compute_transaction", legs=[(dbmod.EXTERNAL_PAYMENTS_MINOR, dbmod.DEBIT, 10),
+               (dbmod.PLATFORM_REVENUE_MINOR, dbmod.CREDIT, 10)], idempotency_key="dup-key-xyz")
     s.commit()
 except IntegrityError:
     raised = True; s.rollback()
@@ -756,7 +756,7 @@ def _legs_for(public_id, entry_type, account=None):
     if account:
         q = q.filter(dbmod.LedgerEntry.account == account)
     return q.count()
-n_cap_legs = _legs_for(tid_cc, "compute_capture", dbmod.EXTERNAL_PAYMENTS)
+n_cap_legs = _legs_for(tid_cc, "compute_capture", dbmod.EXTERNAL_PAYMENTS_MINOR)
 pi_cc = GW.payment_intents[_txcc.stripe_payment_intent_id]
 ok(f"concurrent capture charges once (captured={_txcc.captured_amount}, PI received={pi_cc['amount_received']})",
    _txcc.captured_amount == 250 and pi_cc["amount_received"] == 250)
@@ -1048,6 +1048,34 @@ finally:
         _os_stdc.environ.pop(_v, None)
 
 
+# ============ STD-E: ledger unit scales don't collide on shared accounts ============
+# The wallet/booking path posts Decimal DOLLARS; the Stripe-Connect compute path posts integer
+# MINOR units. They used to share external:payments / platform_revenue, so account_balance() summed
+# $10 (posts 10) with a $10 card capture (posts 1000) into a meaningless 1010. Now the minor path
+# lives on external:payments:minor / platform_revenue:minor, so each scale's balance is isolated.
+_se = dbmod.SessionLocal()
+_ext_d0 = dbmod.account_balance(_se, dbmod.EXTERNAL_PAYMENTS)         # dollar clearing account
+_ext_m0 = dbmod.account_balance(_se, dbmod.EXTERNAL_PAYMENTS_MINOR)   # minor clearing account
+# a $10.00 wallet-scale deposit (DEBIT external:payments by dollars) ...
+dbmod.post(_se, "deposit", legs=[(dbmod.EXTERNAL_PAYMENTS, dbmod.DEBIT, dbmod.D("10")),
+           (dbmod.acct_buyer(999999), dbmod.CREDIT, dbmod.D("10"))],
+           reference_id="stde_dollar_probe", entry_type="deposit")
+# ... and a 1000-minor (= $10.00) compute-capture-scale post (DEBIT external:payments:minor by cents)
+dbmod.post(_se, "compute_transaction",
+           legs=[(dbmod.EXTERNAL_PAYMENTS_MINOR, dbmod.DEBIT, 1000),
+                 (dbmod.acct_seller_payable(999999), dbmod.CREDIT, 1000)],
+           reference_id="stde_minor_probe", entry_type="compute_capture")
+_se.commit()
+ok("STD-E: a $10 wallet deposit moves the DOLLAR external:payments balance by exactly -10 (not -1010)",
+   dbmod.account_balance(_se, dbmod.EXTERNAL_PAYMENTS) - _ext_d0 == dbmod.D("-10"))
+ok("STD-E: a 1000-minor compute capture moves the MINOR external:payments balance by exactly -1000",
+   dbmod.account_balance(_se, dbmod.EXTERNAL_PAYMENTS_MINOR) - _ext_m0 == dbmod.D("-1000"))
+ok("STD-E: the dollar and minor accounts are DISTINCT keys (account_balance never sums cross-scale)",
+   dbmod.EXTERNAL_PAYMENTS != dbmod.EXTERNAL_PAYMENTS_MINOR
+   and dbmod.PLATFORM_REVENUE != dbmod.PLATFORM_REVENUE_MINOR)
+_se.close()
+
+
 # ============ M1: server-authoritative metering window (dispatch -> result) ============
 from datetime import datetime as _dtm1, timedelta as _tdm1, timezone as _tzm1
 class _StubTaskM1:
@@ -1088,7 +1116,7 @@ ok("payout_backlog: non-negative unbatched count + oldest age",
    _pb["unbatched"] >= 0 and _pb["oldest_age_seconds"] >= 0)
 # Inject a single unbalanced leg into an existing tx -> that tx no longer balances.
 _anytx = _fs.query(dbmod.LedgerTx).first()
-_fs.add(dbmod.LedgerEntry(tx_id=_anytx.id, account=dbmod.PLATFORM_REVENUE,
+_fs.add(dbmod.LedgerEntry(tx_id=_anytx.id, account=dbmod.PLATFORM_REVENUE_MINOR,
                           direction=dbmod.CREDIT, amount=1, entry_type="imbalance_probe"))
 _fs.commit()
 _bad = dbmod.financial_integrity(_fs)

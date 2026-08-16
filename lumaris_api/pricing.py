@@ -252,7 +252,7 @@ def estimate_processing_fee_minor(amount_minor: int, currency: str = "usd") -> i
     # Clamp misconfiguration: bps in [0, 10000] (0–100%), fixed non-negative. Then cap the whole
     # estimate at the captured amount — a processing fee can never exceed the charge, and letting
     # it (e.g. STRIPE_FEE_BPS=20000) would post a fee credit larger than the payment and corrupt
-    # the EXTERNAL_PAYMENTS clearing balance.
+    # the external:payments:minor clearing balance (STD-E: the Stripe path's minor-unit account).
     bps = min(10000, max(0, _env_int("STRIPE_FEE_BPS", 290)))
     fixed = max(0, _env_int("STRIPE_FEE_FIXED_MINOR", 30))
     return min(amt, (amt * bps) // 10000 + fixed)

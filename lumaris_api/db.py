@@ -620,8 +620,19 @@ def acct_buyer(uid):      return f"buyer_available:{uid}"
 def acct_escrow(bid):     return f"escrow:{bid}"
 def acct_seller(uid):     return f"seller_earnings:{uid}"
 def acct_org(oid):        return f"org_available:{oid}"
-PLATFORM_REVENUE   = "platform_revenue"
-EXTERNAL_PAYMENTS  = "external:payments"    # the card processor
+# UNIT SCALES (audit STD-E). The platform runs two long-standing money conventions:
+#   * the WALLET/BOOKING path (this module: deposits, escrow, booking capture/settle, data-API,
+#     mining, storage, instant payouts) posts Decimal DOLLARS;
+#   * the STRIPE-CONNECT compute path (stripe_connect.py: capture/refund/processing-fee) posts
+#     integer MINOR UNITS (cents), the unit pricing.py + PayoutObligation.net_amount_minor use.
+# Each individual post() is internally consistent, but summing one account across BOTH scales is
+# meaningless ($10 wallet top-up posts 10; a $10 card capture posts 1000). So the two scales get
+# SEPARATE clearing/revenue accounts and account_balance() is never mixed across scales. The bare
+# names below are the DOLLAR accounts; the *_MINOR names are the Stripe-Connect (cents) accounts.
+PLATFORM_REVENUE   = "platform_revenue"     # DOLLARS: booking/data/mining/storage/payout-fee revenue
+EXTERNAL_PAYMENTS  = "external:payments"    # DOLLARS: wallet/booking card + org top-up clearing
+PLATFORM_REVENUE_MINOR  = "platform_revenue:minor"   # MINOR: Stripe-Connect compute commission
+EXTERNAL_PAYMENTS_MINOR = "external:payments:minor"  # MINOR: Stripe-Connect card clearing
 EXTERNAL_PAYOUTS   = "external:payouts"     # the bank / USDC rail
 EXTERNAL_MINING    = "external:mining"      # NiceHash
 EXTERNAL_STORAGE   = "external:storage"     # decentralized storage network (Storj/BTFS/Sia)

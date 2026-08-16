@@ -79,10 +79,12 @@ def audit(session) -> None:
     captured_txs = (session.query(d.ComputeTransaction)
                     .filter(d.ComputeTransaction.captured_amount > 0).all())
     for tx in captured_txs:
-        got = legs_sum(tx.public_id, "compute_capture", d.EXTERNAL_PAYMENTS, d.DEBIT)
+        # STD-E: the compute path posts MINOR units to external:payments:minor (not the DOLLAR
+        # external:payments account the wallet/booking path uses).
+        got = legs_sum(tx.public_id, "compute_capture", d.EXTERNAL_PAYMENTS_MINOR, d.DEBIT)
         if got != Decimal(tx.captured_amount):
             fail(f"[vs-bookings] tx {tx.public_id}: captured_amount={tx.captured_amount} "
-                 f"but signed compute_capture legs on {d.EXTERNAL_PAYMENTS} sum to {got} "
+                 f"but signed compute_capture legs on {d.EXTERNAL_PAYMENTS_MINOR} sum to {got} "
                  f"(a wrong-direction leg subtracts here)")
 
     # ---- #36 ledger vs payouts ----

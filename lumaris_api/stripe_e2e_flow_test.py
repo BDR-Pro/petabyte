@@ -197,7 +197,7 @@ net = txr.seller_net_amount or 0
 transferred = txr.transferred_amount or 0
 n_cap = s.query(dbmod.LedgerEntry).filter(
     dbmod.LedgerEntry.entry_type == "compute_capture",
-    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS,
+    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS_MINOR,
     dbmod.LedgerTx.reference_id == tx,
     dbmod.LedgerEntry.tx_id == dbmod.LedgerTx.id).count()
 obl = s.query(dbmod.PayoutObligation).filter(
@@ -228,7 +228,7 @@ n3, task_id3 = _task_count()
 s = dbmod.SessionLocal()
 n_cap_after = s.query(dbmod.LedgerEntry).filter(
     dbmod.LedgerEntry.entry_type == "compute_capture",
-    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS,
+    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS_MINOR,
     dbmod.LedgerTx.reference_id == tx,
     dbmod.LedgerEntry.tx_id == dbmod.LedgerTx.id).count()
 txr2 = sc.get_tx_by_public_id(s, tx)
