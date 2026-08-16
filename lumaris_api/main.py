@@ -3512,9 +3512,11 @@ def _auto_settle_compute_tx(db, task):
 
     Guards:
       * opt-out via AUTO_SETTLE_ON_RESULT=false (settlement then stays admin-driven);
-      * FAIL CLOSED for templates whose correctness needs manifest validation that is
-        not yet carried in the result payload (e.g. pytorch-matmul-v1) — never auto-pay
-        a result we cannot validate;
+      * RESULT-VERIFICATION GATE (audit #4/#8, settlement_verification.decide): a verifiable
+        template (server-issued challenge + correctness oracle, e.g. pytorch-matmul-v1) pays ONLY
+        on a VALID verdict — an INVALID verdict FAILS the tx (bills nothing), and a missing
+        challenge/manifest or INCONCLUSIVE verdict DEFERS to admin (fail-closed). Non-verifiable
+        types settle on content-hash binding + async cross-node re-verification;
       * everything downstream is idempotent + FSM-guarded, so a duplicate result or a
         concurrent admin action can't double-charge or double-pay.
     """
@@ -3524,13 +3526,16 @@ def _auto_settle_compute_tx(db, task):
     tx = db.query(ComputeTransaction).filter(ComputeTransaction.task_id == task.id).first()
     if not tx:
         return None                      # legacy booking / unpaid diagnostic job
-    if (getattr(task, "template", "") or "") == "pytorch-matmul-v1":
-        # The matmul manifest isn't part of JobResultModel yet, so we can't run
-        # matmul_validation here. Fail closed: leave capture/transfer to the admin
-        # path rather than pay on an unvalidated numeric result.
-        logger.info("tx %s: %s completed but manifest validation isn't wired; "
-                    "leaving settlement to the admin path (fail-closed)",
-                    tx.public_id, task.template)
+
+    import settlement_verification as _sv
+    _spec = db.query(SellerSpec).filter(SellerSpec.id == tx.spec_id).first() if tx.spec_id else None
+    action, reason = _sv.decide(task, tx, attest_pubkey=getattr(_spec, "attest_pubkey", None))
+    if action == _sv.FAIL:
+        logger.warning("tx %s: result verification FAILED (%s) — failing the tx, billing nothing",
+                       tx.public_id, reason)
+        return _auto_fail_compute_tx(db, task, reason=f"result verification failed: {reason}")
+    if action == _sv.DEFER:
+        logger.info("tx %s: settlement deferred to admin (%s)", tx.public_id, reason)
         return tx.status
     try:
         return _sc.settle_after_result(db, tx, metered_seconds=_observed_seconds(task),

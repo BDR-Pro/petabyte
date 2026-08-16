@@ -1384,6 +1384,12 @@ variables:
     - platform
     description: ''
     format: float
+  SETTLEMENT_REQUIRE_VERIFICATION:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
   STORAGE_STUB:
     required: false
     default: 'false'

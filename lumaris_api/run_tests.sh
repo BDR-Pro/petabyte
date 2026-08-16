@@ -45,6 +45,7 @@ run_suite "priority-market payout capability (per-country, honest)" python prior
 run_suite "demo loop (headless onboard -> capture -> payout transfer -> unified proof)" python demo_payout_loop_test.py
 run_suite "email (mailgun, offline)" python email_test.py
 run_suite "matmul result validation (offline)" python matmul_validation_test.py
+run_suite "settlement verification gate (pay only for verified work)" python settlement_verification_test.py
 run_suite "account (reset + cal webhook + demo notify)" python account_test.py
 run_suite "wallet (add funds via stripe checkout)" python wallet_test.py
 run_suite "seller integrity audits (anti-fraud)" python seller_audit_test.py

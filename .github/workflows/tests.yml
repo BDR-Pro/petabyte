@@ -57,6 +57,9 @@ jobs:
       - name: matmul result validation (offline)
         working-directory: lumaris_api
         run: python matmul_validation_test.py
+      - name: settlement verification gate (pay only for verified work)
+        working-directory: lumaris_api
+        run: python settlement_verification_test.py
       - name: funding metrics (canonical, scope-separated, honest)
         working-directory: lumaris_api
         run: python funding_metrics_test.py
