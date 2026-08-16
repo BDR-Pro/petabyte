@@ -29,6 +29,9 @@ def main() -> int:
                     help="keep only the newest N successful backups (default: BACKUP_RETENTION or 30)")
     ap.add_argument("--verify", action="store_true",
                     help="after uploading, download the object and re-check its SHA-256")
+    ap.add_argument("--check-fresh", action="store_true",
+                    help="don't back up — just check the newest successful backup is within the "
+                         "RPO (BACKUP_RPO_SECONDS). Exits non-zero when stale, for monitoring/cron.")
     args = ap.parse_args()
 
     import db as dbmod          # noqa: E402 — after sys.path setup
@@ -37,6 +40,18 @@ def main() -> int:
     if not bk.backups_enabled():
         sys.stderr.write("database backups are disabled (BACKUP_ENABLED=false)\n")
         return 2
+
+    if args.check_fresh:
+        s = dbmod.SessionLocal()
+        try:
+            fresh = bk.backup_freshness(s)
+        finally:
+            s.close()
+        print(json.dumps(fresh, sort_keys=True))
+        if not fresh.get("fresh"):
+            sys.stderr.write(f"BACKUP STALE: {fresh.get('reason')}\n")
+            return 4
+        return 0
 
     s = dbmod.SessionLocal()
     try:

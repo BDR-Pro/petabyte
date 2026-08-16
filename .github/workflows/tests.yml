@@ -207,6 +207,19 @@ jobs:
           DATABASE_URL: ""
         run: python ../scripts/audit_ledger_test.py
 
+      - name: DR restore drill — backup → restore into a scratch DB → verify ledger balances
+        working-directory: lumaris_api
+        # A backup you have never restored is not a backup. Dumps petabyte_test, restores it into a
+        # THROWAWAY `petabyte_test_restore_drill` DB, and asserts the money ledger balances + row
+        # counts match the source. Fails CI if recovery is broken. Offline object store (S3_STUB).
+        env:
+          DATABASE_URL: postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/petabyte_test
+          S3_STUB: "true"
+          S3_BUCKET: petabyte-ci-drill
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-16
+          python ../scripts/restore_drill.py
+
   config:
     # GitHub-config source of truth: manifest freshness, the validator (defaults,
     # formats, test/live separation, fail-closed secrets), the deploy-env generator's

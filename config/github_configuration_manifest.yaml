@@ -134,6 +134,12 @@ variables:
     scope:
     - platform
     description: ''
+  BACKUP_RPO_SECONDS:
+    required: false
+    default: '7200'
+    scope:
+    - platform
+    description: ''
   BACKUP_S3_PREFIX:
     required: false
     default: db-backups
@@ -1837,6 +1843,12 @@ secrets:
     description: Ed25519 PEM PRIVATE key that signs desktop-agent releases (release-desktop.yml -> scripts/sign_release.py).
       Offline key; generate via the release-keygen workflow. Unset -> the exe publishes UNSIGNED and auto-update
       is fail-closed.
+  RESTORE_DRILL_TARGET_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   SECRET_KEY:
     required: true
     default: null
