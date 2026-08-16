@@ -131,7 +131,7 @@ def _run_notebook(task):
         code = _json.loads(code).get("code", code) if code.strip().startswith("{") else code
     except Exception:
         pass
-    result = run_notebook_code(code)
+    result = run_notebook_code(code, max_runtime_s=task.get("max_runtime_s"))
     try:
         _submit_signed(tid, crypto.sha256_hex(result), result=_to_str(result))
         _set_ui(status="idle", task=None, ok=True)
@@ -543,7 +543,11 @@ def _run_render(task):
             cmd += ["--gpus", "all"]
         cmd += [image, "blender", "-b", "/scene.blend", "--disable-autoexec",
                 "-o", "/out/frame_", "-s", str(fs), "-e", str(fe), "-a"]
-        subprocess.check_call(cmd)
+        # Hard-kill the container at the buyer's AUTHORIZED runtime budget (audit H1): a render
+        # can't consume more of the seller's GPU than the buyer paid to authorize. --rm tears the
+        # container down when the timed-out client is killed.
+        _rt = task.get("max_runtime_s")
+        subprocess.run(cmd, check=True, timeout=(int(_rt) if _rt else None))
         report_progress(tid, 85, "uploading frames")
         # 3) tar the frames and upload via a one-object pre-signed PUT
         bundle = _os.path.join(work, f"frames_{fs}_{fe}.tar")
@@ -604,7 +608,10 @@ def _run_transcode(task):
         elif task.get("bitrate"):
             ff += ["-b:v", task["bitrate"]]
         ff += [f"/work/{_os.path.basename(dst)}"]
-        subprocess.check_call(args + ff)
+        # Audit H1: hard-kill at the buyer's authorized runtime budget so a job can never
+        # consume more of the seller's GPU than was paid to authorize.
+        _rt = task.get("max_runtime_s")
+        subprocess.run(args + ff, check=True, timeout=(int(_rt) if _rt else None))
         report_progress(tid, 80, "uploading")
         grant = httpx.post(f"{API_URL}/jobs/backup_url", headers=HEADERS, timeout=15,
                            json={"task_id": tid, "filename": _os.path.basename(dst)}).json()
@@ -654,7 +661,9 @@ def _run_stitch(task):
             concat += ["-v", f"{work}:/work", image, "-y",
                        "-f", "concat", "-safe", "0", "-i", "/work/list.txt", "-c", "copy",
                        f"/work/{_os.path.basename(out)}"]
-            subprocess.check_call(concat)
+            # Audit H1: bound concat to the authorized runtime budget.
+            _rt = task.get("max_runtime_s")
+            subprocess.run(concat, check=True, timeout=(int(_rt) if _rt else None))
         else:   # render: tar the collected frames
             import tarfile
             with tarfile.open(out, "w") as tf:

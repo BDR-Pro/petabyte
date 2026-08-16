@@ -2769,9 +2769,16 @@ def google_callback(request: Request, code: str = Query(...), email: Optional[st
 
 def _set_session_cookies(resp: Response, request: Request, token: str) -> str:
     """Set the HttpOnly JWT session cookie + the readable double-submit CSRF token (which the
-    browser also treats as its 'signed in' hint). Returns the CSRF token. `Secure` is set on
-    https so the cookies never traverse plaintext in production."""
-    secure = (request.url.scheme == "https")
+    browser also treats as its 'signed in' hint). Returns the CSRF token.
+
+    `Secure` keeps the cookies off plaintext. Behind a TLS-terminating proxy the observed
+    request scheme is often plain http, so relying on it alone would ship the session cookie
+    without Secure in production — force Secure whenever ENVIRONMENT=production or the proxy
+    reports X-Forwarded-Proto: https (audit L3). Local http dev (ENVIRONMENT!=production) is
+    unaffected, so cookies still work over http://localhost."""
+    xf_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    secure = (request.url.scheme == "https" or xf_proto == "https"
+              or os.getenv("ENVIRONMENT", "").lower() == "production")
     csrf = secrets.token_urlsafe(32)
     resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_MAX_AGE, httponly=True,
                     secure=secure, samesite="lax", path="/")
@@ -3349,9 +3356,11 @@ def jobs_next(agent=Depends(api_key_user), db: Session = Depends(get_db)):
     # PRODUCER span across the queue/network boundary: inject the current W3C trace context
     # into the job envelope so the seller agent's execution joins THIS trace end-to-end.
     with obs.span("job.dispatch", kind="producer", task_type=str(task.task_type)):
-        payload = _build_job_payload(task)
+        payload = _build_job_payload(task, db)
         payload["trace_context"] = obs.inject({})
-        tx_pub = getattr(getattr(task, "compute_tx", None), "public_id", None)
+        from db import ComputeTransaction as _ComputeTx
+        _txp = db.query(_ComputeTx).filter(_ComputeTx.task_id == task.id).first()
+        tx_pub = getattr(_txp, "public_id", None)
         # A successful claim is the seller ACCEPTING the job (pull model).
         obsmod.inc_metric("petabyte_seller_job_decisions_total", decision="accepted",
                           environment=obsmod.ENVIRONMENT)
@@ -3374,15 +3383,41 @@ def _record_benchmark_sample(db, spec, *, source, metrics=None, verdict=None,
         logger.debug("benchmark sample record failed (non-fatal)", exc_info=True)
 
 
-def _build_job_payload(task) -> dict:
+def _job_runtime_budget_s(task, db=None):
+    """The runtime budget (seconds) the buyer's authorization pays for — the agent kills the
+    container at this deadline so a job can't consume more of the seller's GPU than was
+    authorized (audit H1). None for jobs with no paid ComputeTransaction (test/benchmark).
+
+    The ORM has no Task->ComputeTransaction relationship, so we look the tx up by task_id from
+    the provided session (falling back to a pre-attached task.compute_tx if a caller set one)."""
+    tx = getattr(task, "compute_tx", None)
+    if tx is None and db is not None:
+        try:
+            from db import ComputeTransaction
+            tx = db.query(ComputeTransaction).filter(
+                ComputeTransaction.task_id == task.id).first()
+        except Exception:
+            tx = None
+    if not tx or not getattr(tx, "authorization_amount", 0) or not tx.pricing_snapshot:
+        return None
+    try:
+        import pricing as _pr
+        return _pr.authorized_seconds(json.loads(tx.pricing_snapshot), tx.authorization_amount)
+    except Exception:
+        return None
+
+
+def _build_job_payload(task, db=None) -> dict:
     """Build the job envelope returned to the agent. Never includes platform secrets or
     full buyer workload inputs beyond what the job type needs to run."""
     _backup = {"backup_enabled": bool(task.backup_enabled),
                "backup_interval_s": task.backup_interval_s,
                "volume": task.volume,
                "restore_from": task.latest_checkpoint_ref}   # restore if a backup exists
+    _rt = _job_runtime_budget_s(task, db)
+    _rt_kw = {"max_runtime_s": _rt} if _rt else {}    # authorized runtime budget (H1); agent enforces
     if task.task_type == "notebook":
-        return {"task_id": task.id, "task_type": "notebook", "code": task.code}
+        return {"task_id": task.id, "task_type": "notebook", "code": task.code, **_rt_kw}
     if task.task_type == "test":
         params = json.loads(task.code or "{}")
         return {"task_id": task.id, "task_type": "test",
@@ -3394,15 +3429,15 @@ def _build_job_payload(task) -> dict:
     if task.task_type == "render":
         rp = json.loads(task.template_params or "{}")
         return {"task_id": task.id, "task_type": "render", "image": RENDER_IMAGE,
-                "gpu": True, **rp, **_backup}
+                "gpu": True, **rp, **_backup, **_rt_kw}
     if task.task_type == "transcode":
         rp = json.loads(task.template_params or "{}")
         return {"task_id": task.id, "task_type": "transcode", "image": FFMPEG_IMAGE,
-                "gpu": bool(rp.get("use_gpu", True)), **rp, **_backup}
+                "gpu": bool(rp.get("use_gpu", True)), **rp, **_backup, **_rt_kw}
     if task.task_type == "stitch":
         rp = json.loads(task.template_params or "{}")
         return {"task_id": task.id, "task_type": "stitch", "image": FFMPEG_IMAGE,
-                **rp, **_backup}
+                **rp, **_backup, **_rt_kw}
     if task.task_type == "distributed":
         # One rank of a multi-node cluster. The agent runs `image`/`command` under torchrun with
         # the rank/world_size below, forming an NCCL/gloo cluster with the other ranks OVER THE
@@ -3444,14 +3479,24 @@ def _build_job_payload(task) -> dict:
 
 
 def _observed_seconds(task) -> int:
-    """Platform-observed wall-clock for a task (dispatch -> result), server-side and
-    not a seller/browser value. Capped later by the pricing snapshot's max duration."""
-    ca = getattr(task, "created_at", None)
-    if ca is None:
+    """Platform-observed billable wall-clock for a task, measured DISPATCH -> RESULT on the
+    server's own clock — never a seller- or browser-supplied duration (audit M1).
+
+    Billing must reflect only the time the node actually held the job, not the queue wait
+    before it was assigned: the window is assigned_at -> completed_at. We fall back
+    conservatively (assigned_at -> now if the result timestamp is missing; created_at only if
+    the task was never assigned) and floor at 1s. record_metering caps this at the snapshot's
+    max_duration_s and settle() further clamps the charge to the buyer's authorized budget, so
+    this value can only ever be an honest LOWER-or-equal bound on what the buyer is charged."""
+    def _aware(dt):
+        if dt is None:
+            return None
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    start = _aware(getattr(task, "assigned_at", None)) or _aware(getattr(task, "created_at", None))
+    if start is None:
         return 1
-    if ca.tzinfo is None:
-        ca = ca.replace(tzinfo=timezone.utc)
-    return max(1, int((datetime.now(timezone.utc) - ca).total_seconds()))
+    end = _aware(getattr(task, "completed_at", None)) or datetime.now(timezone.utc)
+    return max(1, int((end - start).total_seconds()))
 
 
 def _auto_settle_compute_tx(db, task):
@@ -4161,18 +4206,33 @@ def seller_trust(public_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/metrics/overview", tags=["marketplace"])
-def metrics_overview(db: Session = Depends(get_db),
+def metrics_overview(request: Request, db: Session = Depends(get_db),
                      scope: str = "all", since: Optional[str] = None,
                      until: Optional[str] = None):
     """Investor / operations metrics from real DB queries. `scope` = all|demo|real
     keeps seeded demo data separate from real traction; the response states which
     scope produced the numbers so the UI can badge demo data. Definitions:
-    /metrics/definitions and docs/METRIC_DEFINITIONS.md."""
+    /metrics/definitions and docs/METRIC_DEFINITIONS.md.
+
+    Public, but REAL money VOLUMES (gmv / platform_revenue / seller_payouts) are
+    business-confidential once real money flows, so for non-admin callers on the real/all
+    scopes those three absolutes are redacted to null with economics.restricted=true (audit
+    L1). Everyone still sees ratios, counts and buyer savings; the curated public money
+    surface is /metrics/traction. Demo scope is never redacted — it is clearly-labeled
+    synthetic data behind the public demo dashboard."""
     from metrics import compute_metrics
     if scope not in ("all", "demo", "real"):
         raise HTTPException(status_code=400, detail="scope must be all|demo|real")
-    return compute_metrics(db, cloud_reference_for, scope=scope, since=since,
+    data = compute_metrics(db, cloud_reference_for, scope=scope, since=since,
                            until=until, default_reference=float(AWS_REFERENCE_PRICE))
+    if scope != "demo" and not _viewer_is_admin(request, db):
+        econ = data.get("economics")
+        if isinstance(econ, dict):
+            for _k in ("gmv", "platform_revenue", "seller_payouts"):
+                if _k in econ:
+                    econ[_k] = None
+            econ["restricted"] = True
+    return data
 
 
 @app.get("/metrics/definitions", tags=["marketplace"])
@@ -4230,6 +4290,26 @@ def require_admin(user: dict = Depends(get_current_user), db: Session = Depends(
     if not _is_admin(me):
         raise HTTPException(status_code=403, detail="Admin access required")
     return me
+
+
+def _viewer_is_admin(request: Request, db: Session) -> bool:
+    """Best-effort, NON-raising admin check for endpoints that are public but redact
+    confidential fields for anonymous callers (e.g. /metrics/overview money volumes). Resolves
+    a Bearer header or the pb_session cookie if present; returns False for anonymous, invalid,
+    or non-admin callers — it NEVER raises, so it can't turn a public endpoint into a 401."""
+    raw = None
+    ah = request.headers.get("authorization") or ""
+    if ah.lower().startswith("bearer "):
+        raw = ah[7:].strip()
+    if not raw:
+        raw = request.cookies.get(SESSION_COOKIE)
+    if not raw:
+        return False
+    try:
+        claims = verify_token(raw)
+        return _is_admin(get_user_by_username(db, claims.get("sub")))
+    except Exception:
+        return False
 
 
 @app.get("/admin/whoami")

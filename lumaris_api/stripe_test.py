@@ -246,7 +246,7 @@ def run_to_metered(seconds):
     c.post(f"/admin/payments/{tid}/meter", headers=admin, json={"actual_seconds": seconds})
     return tid
 
-spec_c = make_online_spec("seller_a", price=2.50, units=10)
+spec_c = make_online_spec("seller_a", price=2.50, units=20)
 tid = run_to_metered(1800)      # 30 min -> 125 minor
 cap = c.post(f"/admin/payments/{tid}/capture", headers=admin).json()
 ok("partial capture bills ACTUAL metered usage (125), not the 300 authorization",
@@ -502,6 +502,64 @@ _oup = _s.query(dbmod.PayoutObligation).filter(dbmod.PayoutObligation.compute_tx
 ok("full refund of an UNPAID obligation reverses it (never paid out) + reconciles",
    _oup.state == "reversed" and _txup.reconciliation_status == "reconciled")
 _s.close()
+
+# ---- M2: an OUT-OF-BAND refund (charge.refunded webhook — e.g. issued directly in the Stripe
+# Dashboard, or Stripe's own auto-refund) must post the SAME balanced ledger + seller clawback
+# as an admin refund. Previously the webhook only bumped refunded_amount, so the double-entry
+# ledger silently unbalanced and the seller was still due their full share on the batch run. ----
+# (a) BEFORE transfer: the unpaid obligation must be reversed and the ledger must balance.
+tid_oob = run_to_metered(3600)
+c.post(f"/admin/payments/{tid_oob}/capture", headers=admin)
+_s = dbmod.SessionLocal()
+_pi_oob = sc.get_tx_by_public_id(_s, tid_oob).stripe_payment_intent_id
+_s.close()
+_s = dbmod.SessionLocal()
+sc.process_webhook_event(_s, {"id": "evt_oob_full", "type": "charge.refunded",
+    "data": {"object": {"payment_intent": _pi_oob, "amount_refunded": 250}}})
+_s.close()
+_s = dbmod.SessionLocal()
+_txoob = sc.get_tx_by_public_id(_s, tid_oob)
+_ooblegs = (_s.query(dbmod.LedgerEntry).join(dbmod.LedgerTx, dbmod.LedgerEntry.tx_id == dbmod.LedgerTx.id)
+            .filter(dbmod.LedgerTx.reference_id == tid_oob,
+                    dbmod.LedgerEntry.entry_type == "compute_refund",
+                    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS,
+                    dbmod.LedgerEntry.direction == dbmod.CREDIT).all())
+_oob_obl = _s.query(dbmod.PayoutObligation).filter(
+    dbmod.PayoutObligation.compute_tx_id == _txoob.id).first()
+_oob_bal, _ = dbmod.ledger_is_balanced(_s)
+_s.close()
+ok("M2: out-of-band charge.refunded records the full refund + drives tx to REFUNDED",
+   _txoob.refunded_amount == 250 and _txoob.status == "REFUNDED")
+ok("M2: out-of-band refund POSTS the ledger legs (EXTERNAL_PAYMENTS credit) — not just a counter",
+   len(_ooblegs) == 1 and int(_ooblegs[0].amount) == 250)
+ok("M2: out-of-band refund reverses the unpaid seller obligation (seller not overpaid)",
+   _oob_obl is not None and _oob_obl.state == "reversed")
+ok("M2: ledger stays balanced after the out-of-band refund", _oob_bal)
+# idempotent: replaying the SAME event id is a no-op (StripeWebhookEvent at-most-once).
+_s = dbmod.SessionLocal()
+_dup = sc.process_webhook_event(_s, {"id": "evt_oob_full", "type": "charge.refunded",
+    "data": {"object": {"payment_intent": _pi_oob, "amount_refunded": 250}}})
+_s.close()
+ok("M2: a duplicate charge.refunded event is a no-op (at-most-once)", _dup.get("duplicate") is True)
+
+# (b) AFTER transfer: the out-of-band refund must claw the seller net back via a transfer reversal.
+tid_oob2 = run_to_metered(3600)
+c.post(f"/admin/payments/{tid_oob2}/capture", headers=admin)
+c.post(f"/admin/payments/{tid_oob2}/transfer", headers=admin)
+_s = dbmod.SessionLocal()
+_pi_oob2 = sc.get_tx_by_public_id(_s, tid_oob2).stripe_payment_intent_id
+_s.close()
+_s = dbmod.SessionLocal()
+sc.process_webhook_event(_s, {"id": "evt_oob_xfer", "type": "charge.refunded",
+    "data": {"object": {"payment_intent": _pi_oob2, "amount_refunded": 250}}})
+_s.close()
+_s = dbmod.SessionLocal()
+_txoob2 = sc.get_tx_by_public_id(_s, tid_oob2)
+_oob2_bal, _ = dbmod.ledger_is_balanced(_s)
+_s.close()
+ok("M2: out-of-band refund AFTER transfer claws back the seller net via a reversal",
+   _txoob2.reversed_amount > 0 and _txoob2.refunded_amount == 250)
+ok("M2: ledger balanced after the out-of-band post-transfer clawback", _oob2_bal)
 
 # REGRESSION (defect B): a DUPLICATE identical partial refund must NOT double-count.
 # Previously refunded_amount went 100 -> 200 for a single Stripe refund.
@@ -937,6 +995,54 @@ ok("finding B: telemetry failure never blocks settlement (capture completed corr
    and _txB.status == "PAYMENT_CAPTURED")
 ok("finding B: ledger stays balanced despite telemetry raising throughout settlement",
    _balB and not _brokenB)
+
+
+# ============ H1: buyer runtime budget is WIRED into the job payload ============
+# The ORM has no Task->ComputeTransaction relationship, so the budget must be looked up by
+# task_id from the DB session — a regression guard that max_runtime_s is actually emitted (an
+# earlier attempt relied on task.compute_tx, which is always None -> budget silently dropped).
+import json as _json_h1
+_rtid = run_to_metered(3600)
+_rs = dbmod.SessionLocal()
+_rtx = sc.get_tx_by_public_id(_rs, _rtid)
+_rtask = _rs.query(dbmod.Task).filter(dbmod.Task.id == _rtx.task_id).first()
+_budget = main._job_runtime_budget_s(_rtask, _rs)
+import pricing as _pr_h1
+_expect = _pr_h1.authorized_seconds(_json_h1.loads(_rtx.pricing_snapshot), _rtx.authorization_amount)
+ok("H1 wiring: runtime budget is looked up by task_id from the DB (not a missing ORM rel)",
+   isinstance(_budget, int) and _budget > 0 and _budget == _expect)
+_rtask.task_type = "notebook"; _rtask.code = "print(1)"; _rs.add(_rtask); _rs.commit()
+_pl = main._build_job_payload(_rtask, _rs)
+ok("H1 wiring: the notebook job payload carries max_runtime_s (agent hard-kills at the budget)",
+   _pl.get("max_runtime_s") == _budget)
+_rs.close()
+
+
+# ============ M1: server-authoritative metering window (dispatch -> result) ============
+from datetime import datetime as _dtm1, timedelta as _tdm1, timezone as _tzm1
+class _StubTaskM1:
+    def __init__(self, created_at=None, assigned_at=None, completed_at=None):
+        self.created_at = created_at; self.assigned_at = assigned_at; self.completed_at = completed_at
+_bt = _dtm1(2026, 1, 1, tzinfo=_tzm1.utc)
+_m1 = _StubTaskM1(created_at=_bt, assigned_at=_bt + _tdm1(hours=1),
+                  completed_at=_bt + _tdm1(hours=1, seconds=120))
+ok("M1: billable seconds = dispatch->result (120s), NOT created->result (queue wait excluded)",
+   main._observed_seconds(_m1) == 120)
+_m1n = _StubTaskM1(created_at=_dtm1(2026, 1, 1), assigned_at=_dtm1(2026, 1, 1, 0, 0, 0),
+                   completed_at=_dtm1(2026, 1, 1, 0, 1, 30))
+ok("M1: naive timestamps are treated as UTC (90s window)", main._observed_seconds(_m1n) == 90)
+ok("M1: an un-dispatched task falls back conservatively to a >=1s window",
+   main._observed_seconds(_StubTaskM1(created_at=_bt)) >= 1)
+
+
+# ============ L1: /metrics/overview redacts real money volumes for non-admins ============
+_anon_econ = c.get("/metrics/overview?scope=real").json()["economics"]
+ok("L1: anonymous /metrics/overview real-scope redacts the money volumes",
+   _anon_econ.get("restricted") is True and _anon_econ["gmv"] is None
+   and _anon_econ["platform_revenue"] is None and _anon_econ["seller_payouts"] is None)
+_adm_econ = c.get("/metrics/overview?scope=real", headers=admin).json()["economics"]
+ok("L1: an admin sees the real money volumes (not restricted)",
+   not _adm_econ.get("restricted") and _adm_econ["gmv"] is not None)
 
 
 # ============ FINANCIAL-INTEGRITY HEARTBEAT (#286/#287) ============

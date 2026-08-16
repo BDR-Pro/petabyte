@@ -4988,10 +4988,11 @@ async function loadMetrics(){
     tile('Jobs completed',j.completed,DEFS.completion_rate_pct)+
     tile('Jobs failed',j.failed,'Buyer jobs that reported failure')+
     tile('Completion rate',(j.completion_rate_pct==null?'—':j.completion_rate_pct+'%'),DEFS.completion_rate_pct);
+  var mvol=function(v){return e.restricted?'🔒 admin':money(v);};   // money volumes redacted for non-admins (L1)
   document.getElementById('grp_econ').innerHTML=
-    tile('GMV',money(e.gmv),DEFS.gmv)+
-    tile('Platform revenue',money(e.platform_revenue),DEFS.platform_revenue)+
-    tile('Seller payouts',money(e.seller_payouts),DEFS.seller_payouts)+
+    tile('GMV',mvol(e.gmv),DEFS.gmv)+
+    tile('Platform revenue',mvol(e.platform_revenue),DEFS.platform_revenue)+
+    tile('Seller payouts',mvol(e.seller_payouts),DEFS.seller_payouts)+
     tile('Effective take rate',e.effective_take_rate_pct+'%',DEFS.effective_take_rate_pct)+
     tile('Avg $/hr',(e.avg_hourly_price==null?'—':money(e.avg_hourly_price)),'Mean listed hourly price of online nodes')+
     tile('Buyer savings vs cloud',money(e.buyer_savings_vs_cloud),DEFS.buyer_savings_vs_cloud);

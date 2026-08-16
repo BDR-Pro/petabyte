@@ -4115,6 +4115,7 @@ def request_payout(db: Session, user: "User", method: "SellerPayoutMethod",
 
 def set_payout_status(db: Session, payout: "Payout", status: str,
                       provider_ref: str = None, reason: str = None) -> None:
+    prev = payout.status
     payout.status = status
     payout.updated_at = _utcnow()
     if provider_ref:
@@ -4122,9 +4123,27 @@ def set_payout_status(db: Session, payout: "Payout", status: str,
     if reason:
         payout.reason = reason
     db.add(payout); db.commit()
-    if status == "failed":                       # return the money on failure — the GROSS
-        # (net that would have been sent + any instant fee), so the seller is fully made whole.
-        credit_earnings(db, payout.user_id, q(payout.amount_usd) + q(payout.fee_usd or 0))
+    # Return the money on failure, exactly ONCE (guard on prior status so a retried/duplicate
+    # 'failed' can't double-credit).
+    if status == "failed" and prev != "failed":
+        gross = q(payout.amount_usd) + q(payout.fee_usd or 0)   # net that would ship + instant fee
+        net = q(payout.amount_usd)
+        fee = q(payout.fee_usd or 0)
+        # 1) Restore the seller's spendable earnings scalar so they're made whole.
+        credit_earnings(db, payout.user_id, gross)
+        # 2) Post the REVERSING ledger legs (audit M3). request_payout recorded the money as having
+        #    LEFT the system (seller_earnings DEBIT gross, EXTERNAL_PAYOUTS CREDIT net, PLATFORM_REVENUE
+        #    CREDIT fee). A failed payout means nothing actually left the bank rail, so mirror those
+        #    legs back — otherwise the ledger permanently overstates external payouts and diverges
+        #    from both the seller_earnings scalar and reality. Balanced by construction (gross=net+fee).
+        legs = [(acct_seller(payout.user_id), CREDIT, gross, payout.user_id),
+                (EXTERNAL_PAYOUTS,            DEBIT,  net)]
+        if fee > 0:
+            legs.append((PLATFORM_REVENUE, DEBIT, fee))
+        post(db, "payout", legs=legs, reference_id=payout.id,
+             description=f"payout #{payout.id} failed — reversal ({payout.kind})",
+             entry_type="payout_reversal")
+        db.commit()
 
 
 def pending_payouts(db: Session):

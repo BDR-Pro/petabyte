@@ -302,17 +302,29 @@ def ensure_test_payout_ready(db, user: User, *, country: str = "US",
     Real gateway  -> push Stripe's documented TEST verification values + a test external bank
                      account so the transfers/payouts capabilities go active (test mode only).
 
-    Hard-refuses in live mode (assert_test_mode). This NEVER fabricates readiness in the DB —
-    it drives the gateway and then re-reads authoritative status via refresh_connected_account,
-    so payout_ready() still reflects what Stripe actually reports. Returns the account; the
-    caller should check ca.payout_ready()."""
-    from stripe_gateway import get_gateway as _gg, FakeStripeGateway, assert_test_mode
-    assert_test_mode()   # fail closed: this helper must never run against live Stripe
+    Refuses to run against a LIVE Stripe key. assert_test_mode() alone is NOT sufficient — it
+    PERMITS live keys under the production go-live opt-in — but injecting TEST identity/bank
+    magic values against a real connected account would corrupt a live seller, so we additionally
+    require a genuinely non-live gateway: the in-process Fake gateway, OR no live secret key
+    configured (audit L2). This NEVER fabricates readiness in the DB — it drives the gateway and
+    then re-reads authoritative status via refresh_connected_account, so payout_ready() still
+    reflects what Stripe actually reports. Returns the account; the caller should check
+    ca.payout_ready()."""
+    from stripe_gateway import (get_gateway as _gg, FakeStripeGateway,
+                                assert_test_mode, LiveModeForbidden)
+    gw = _gg()
+    is_fake = isinstance(gw, FakeStripeGateway)
+    if not is_fake:
+        assert_test_mode()   # fail-closed on mixed/mislabeled keys
+        if os.getenv("STRIPE_SECRET_KEY", "").startswith(("sk_live_", "rk_live_")):
+            raise LiveModeForbidden(
+                "ensure_test_payout_ready() refuses to run against a LIVE Stripe key: it injects "
+                "TEST verification + bank magic values and must never touch a real connected "
+                "account. This is a test-mode/demo-only helper.")
     acct = get_or_create_connected_account(db, user, country=country,
                                            email=email or getattr(user, "email", None)
                                            or f"{user.username}@example.com")
-    gw = _gg()
-    if isinstance(gw, FakeStripeGateway):
+    if is_fake:
         gw.complete_onboarding(acct.stripe_account_id, ok=True)
     else:
         _stripe_test_force_payout_ready(acct.stripe_account_id, (acct.country or country))
@@ -1236,9 +1248,6 @@ def refund(db, tx: ComputeTransaction, *, amount: int = None, actor: str = "admi
     transition(db, tx, "REFUND_PENDING", reason=reason, allow_same=True) \
         if tx.status != "REFUND_PENDING" else None
 
-    split = refund_split({"capture_amount": tx.captured_amount,
-                          "seller_net_amount": tx.seller_net_amount}, amount)
-
     rkey = idem_key("refund", tx, tx.settlement_version) + f":{amount}"
     op, proceed = _begin_op(db, tx, "refund", rkey)
     # A duplicate/concurrent identical refund (same settlement version + amount) does
@@ -1256,6 +1265,27 @@ def refund(db, tx: ComputeTransaction, *, amount: int = None, actor: str = "admi
         _finish_op(db, op, state="failed", error=str(e))
         raise TransactionError(f"refund failed: {e}")
     tx.refunded_amount += amount
+    return _reconcile_refund_ledger(db, tx, amount, reason=reason)
+
+
+def _reconcile_refund_ledger(db, tx: ComputeTransaction, amount: int, *,
+                             reason: str = "refund") -> ComputeTransaction:
+    """Post the double-entry ledger + reconcile the seller side for a refund of `amount`
+    minor units that has ALREADY happened at the gateway (the caller has already bumped
+    tx.refunded_amount by `amount`).
+
+    Shared by the admin/API refund() path AND the charge.refunded webhook. An out-of-band
+    refund initiated in the Stripe Dashboard (or Stripe's own auto-refund) fires
+    charge.refunded but never runs refund(); previously the webhook only bumped a counter,
+    so the ledger silently unbalanced and the seller still got paid their full share on the
+    batch run — the platform ate the buyer's refund (audit M2). Routing both origins through
+    this one function keeps the books balanced and claws the seller's share back no matter
+    where the refund started. Idempotency is the caller's job (refund() via _begin_op; the
+    webhook via amount_refunded deltas + StripeWebhookEvent at-most-once)."""
+    if amount <= 0:
+        return tx
+    split = refund_split({"capture_amount": tx.captured_amount,
+                          "seller_net_amount": tx.seller_net_amount}, amount)
 
     # Ledger: return money to the card, drawn proportionally from platform + seller payable.
     legs = [(EXTERNAL_PAYMENTS, CREDIT, amount, tx.buyer_id)]
@@ -1448,12 +1478,39 @@ def _handle_event(db, event: dict):
 
     if etype == "charge.refunded":
         tx = _tx_by_pi(db, obj.get("payment_intent"))
-        if tx:
-            # Stripe confirms the refund we initiated; reconcile the amount.
-            refunded = int(obj.get("amount_refunded", tx.refunded_amount))
-            if refunded > tx.refunded_amount:
-                tx.refunded_amount = min(refunded, tx.captured_amount)
-                db.add(tx); db.commit()
+        if tx and tx.captured_amount:
+            # Stripe reports the CUMULATIVE amount refunded on the charge. A refund WE
+            # initiated already bumped tx.refunded_amount AND posted the ledger via refund(),
+            # so there's no delta here and this no-ops. But an OUT-OF-BAND refund (issued in the
+            # Stripe Dashboard, or Stripe's own auto-refund) fires charge.refunded with NO prior
+            # refund() call: previously we only nudged a counter, leaving the double-entry ledger
+            # unbalanced and the seller still due their full share on the batch run — the platform
+            # silently ate the buyer's refund (audit M2). Settle the delta through the SAME
+            # reconciler the admin path uses so the books balance and the seller's share is clawed
+            # back. Idempotent: StripeWebhookEvent is at-most-once and the delta collapses to 0 on
+            # any replay.
+            reported = int(obj.get("amount_refunded", tx.refunded_amount))
+            delta = min(reported, tx.captured_amount) - tx.refunded_amount
+            if delta > 0:
+                # refund() drives its own FSM (-> REFUND_PENDING) before reconciling; the out-of-band
+                # path must do the same so a full refund can finalize to REFUNDED. Only post-capture
+                # states may enter REFUND_PENDING — from anything else, record the amount + flag for
+                # review rather than crashing the webhook into an infinite Stripe retry.
+                _refundable = {"PAYMENT_CAPTURED", "SELLER_TRANSFERRED", "COMPLETED",
+                               "DISPUTED", "REFUND_PENDING"}
+                if tx.status not in _refundable:
+                    tx.refunded_amount = min(reported, tx.captured_amount)
+                    tx.reconciliation_status = "needs_review"
+                    db.add(tx); db.commit()
+                    logger.warning("out-of-band refund on tx %s in non-refundable state %s; "
+                                   "recorded + flagged for review", tx.public_id, tx.status)
+                    return
+                if tx.status != "REFUND_PENDING":
+                    transition(db, tx, "REFUND_PENDING", actor="stripe",
+                               reason="out-of-band refund (charge.refunded)")
+                tx.refunded_amount += delta
+                _reconcile_refund_ledger(db, tx, delta,
+                                         reason="out-of-band refund (charge.refunded)")
         return
 
     if etype in ("charge.dispute.created", "charge.dispute.updated", "charge.dispute.closed"):

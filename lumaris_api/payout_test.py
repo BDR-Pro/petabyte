@@ -691,6 +691,34 @@ ok("the instant fee is booked to PLATFORM_REVENUE as a balanced ledger leg (real
 dbmod.set_payout_status(s, _pi, "failed")
 ok("a FAILED instant payout refunds the GROSS (net + fee), not just the net",
    abs(float(dbmod.get_user_by_id(s, _u.id).earnings) - (40.0 + 40.0)) < 1e-6)
+# M3: the failure must ALSO post a REVERSING ledger transaction — not just bump the scalar —
+# or the double-entry books permanently record the money as having left the payout rail.
+_r3legs = (s.query(LedgerEntry).join(LedgerTx, LedgerEntry.tx_id == LedgerTx.id)
+           .filter(LedgerTx.reference_id == str(_pi.id),
+                   LedgerEntry.entry_type == "payout_reversal").all())
+_r3_seller_credit = sum(float(e.amount) for e in _r3legs
+    if e.account == dbmod.acct_seller(_u.id) and e.direction == dbmod.CREDIT)
+ok("M3: a failed payout posts a reversing leg crediting seller_earnings the GROSS back",
+   abs(_r3_seller_credit - 40.0) < 1e-6)
+# The request_payout CREDIT to EXTERNAL_PAYOUTS (net) and the reversal DEBIT (net) must net to
+# zero — the money never actually left the rail.
+_ext_net = sum((float(e.amount) if e.direction == dbmod.CREDIT else -float(e.amount))
+    for e in s.query(LedgerEntry).join(LedgerTx, LedgerEntry.tx_id == LedgerTx.id)
+      .filter(LedgerTx.reference_id == str(_pi.id),
+              LedgerEntry.account == dbmod.EXTERNAL_PAYOUTS).all())
+ok("M3: net EXTERNAL_PAYOUTS movement for a failed payout is zero (money never left)",
+   abs(_ext_net) < 1e-6)
+_m3_bal, _ = dbmod.ledger_is_balanced(s)
+ok("M3: ledger stays balanced after the failed-payout reversal", _m3_bal)
+# idempotent: re-marking an already-failed payout must NOT double-credit or double-reverse.
+_earn_before = float(dbmod.get_user_by_id(s, _u.id).earnings)
+dbmod.set_payout_status(s, _pi, "failed")
+_n_rev = (s.query(LedgerEntry).join(LedgerTx, LedgerEntry.tx_id == LedgerTx.id)
+          .filter(LedgerTx.reference_id == str(_pi.id),
+                  LedgerEntry.entry_type == "payout_reversal",
+                  LedgerEntry.account == dbmod.acct_seller(_u.id)).count())
+ok("M3: re-marking an already-failed payout is a no-op (no double credit, single reversal)",
+   abs(float(dbmod.get_user_by_id(s, _u.id).earnings) - _earn_before) < 1e-6 and _n_rev == 1)
 
 # guard: an amount at/under the fee is refused for instant (fee must be smaller than amount)
 ok("instant is refused when the fee would meet/exceed the amount (no zero/negative payout)",
