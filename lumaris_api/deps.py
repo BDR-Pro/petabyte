@@ -18,7 +18,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from db import get_db, get_user_by_username, is_jti_revoked
-from auth import verify_token, SESSION_COOKIE, CSRF_COOKIE
+from auth import verify_token, csrf_token_valid, SESSION_COOKIE, CSRF_COOKIE
 from utils import decode_api_key
 
 # Re-exported so importers can do `from deps import get_db` alongside the auth deps.
@@ -44,16 +44,22 @@ def enforce_csrf(request: Request) -> None:
         return
     sent = request.headers.get("X-CSRF-Token", "")
     tok = request.cookies.get(CSRF_COOKIE, "")
-    if not (sent and tok and _secrets.compare_digest(sent, tok)):
+    # Double-submit: cookie must equal header; AND the token must carry a valid server HMAC
+    # (signed double-submit) so an attacker who can only write the cookie can't forge a pair.
+    if not (sent and tok and _secrets.compare_digest(sent, tok) and csrf_token_valid(tok)):
         raise HTTPException(status_code=403, detail="CSRF token missing or invalid")
 
 
 async def get_current_user(request: Request,
-                           token: str = Depends(oauth2_scheme)) -> dict:
+                           token: str = Depends(oauth2_scheme),
+                           db: Session = Depends(get_db)) -> dict:
     """Resolve the caller's JWT to its claims, or 401. The token comes from EITHER the
     Authorization: Bearer header (CLI / API clients) OR the HttpOnly `pb_session` cookie
     (browsers — the token is never exposed to JS). When auth comes from the ambient cookie,
-    an unsafe method is additionally CSRF-checked (double-submit); Bearer auth is not."""
+    an unsafe method is additionally CSRF-checked (double-submit); Bearer auth is not.
+
+    A token whose `jti` is on the revocation denylist (logout / compromise) is rejected even
+    if it's still within its expiry window — so logout is real, not just a cookie delete."""
     raw = token or request.cookies.get(SESSION_COOKIE)
     if not raw:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -61,6 +67,9 @@ async def get_current_user(request: Request,
         claims = verify_token(raw)
     except ValueError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+    jti = claims.get("jti")
+    if jti and is_jti_revoked(db, jti):
+        raise HTTPException(status_code=401, detail="Token has been revoked")
     if not token:                 # authenticated via the ambient cookie -> CSRF applies
         enforce_csrf(request)
     return claims

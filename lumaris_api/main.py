@@ -139,7 +139,7 @@ from db import (
     rank_for_agent, register_peer, cluster_peers, cluster_ready,
 )
 import db as dbmod
-from auth import (create_access_token, verify_token,
+from auth import (create_access_token, verify_token, make_csrf_token,
                   SESSION_COOKIE, CSRF_COOKIE, SESSION_MAX_AGE)
 # Shared FastAPI dependencies (auth + DB session) live in deps.py so domain routers can use
 # them without importing main. Every Depends(...) below resolves to these same callables.
@@ -2785,7 +2785,7 @@ def _set_session_cookies(resp: Response, request: Request, token: str) -> str:
     xf_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
     secure = (request.url.scheme == "https" or xf_proto == "https"
               or os.getenv("ENVIRONMENT", "").lower() == "production")
-    csrf = secrets.token_urlsafe(32)
+    csrf = make_csrf_token()   # signed double-submit (HMAC-bound to the server secret)
     resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_MAX_AGE, httponly=True,
                     secure=secure, samesite="lax", path="/")
     resp.set_cookie(CSRF_COOKIE, csrf, max_age=SESSION_MAX_AGE, httponly=False,
@@ -2799,9 +2799,22 @@ def _clear_session_cookies(resp: Response) -> None:
 
 
 @app.post("/logout", tags=["account"])
-def logout():
-    """Sign out: clear the browser session cookies. The JWT cookie is HttpOnly, so JS can't
-    delete it — logout must go through the server. Bearer/API clients simply drop their token."""
+def logout(request: Request, db: Session = Depends(get_db)):
+    """Sign out: REVOKE the token (jti denylist) so it's dead even before it expires, then clear
+    the browser session cookies. The JWT cookie is HttpOnly, so JS can't delete it — logout must
+    go through the server. Bearer/API clients pass their token in the header; it's revoked too."""
+    from db import revoke_jti
+    raw = request.cookies.get(SESSION_COOKIE)
+    if not raw:
+        ah = request.headers.get("authorization") or ""
+        raw = ah[7:].strip() if ah.lower().startswith("bearer ") else None
+    if raw:
+        try:
+            jti = verify_token(raw).get("jti")
+            if jti:
+                revoke_jti(db, jti)
+        except Exception:      # already-invalid/expired token — nothing to revoke
+            pass
     resp = JSONResponse({"ok": True})
     _clear_session_cookies(resp)
     return resp

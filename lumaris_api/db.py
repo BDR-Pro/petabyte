@@ -1856,7 +1856,7 @@ class PayoutBatch(Base):
     destination_currency = Column(String, nullable=True)
     total_amount_minor = Column(Integer, nullable=False, default=0)
     provider_fee_minor = Column(Integer, nullable=False, default=0)
-    fx_rate = Column(Float, nullable=True)
+    fx_rate = Column(Numeric(20, 8), nullable=True)   # exact rate; never binary float (money rule)
     external_id = Column(String, index=True, nullable=True)
     # created|sent|paid|failed|aborted|reversed|needs_reconciliation.
     # TERMINAL (obligations released, never an idempotent replay): failed, aborted.
@@ -1941,7 +1941,8 @@ def mark_topup_paid_and_credit(db: Session, topup: "WalletTopup", *,
         topup.stripe_payment_intent_id = payment_intent_id
     user = db.query(User).filter(User.id == topup.user_id).first()
     if user:
-        deposit(db, user, topup.amount_minor / 100.0)   # minor -> major (2-dp currencies)
+        # minor -> major in Decimal (never binary float — the money rule the module enforces)
+        deposit(db, user, Decimal(int(topup.amount_minor)) / Decimal(100))
     db.add(topup); db.commit()
     return True
 
@@ -3228,8 +3229,7 @@ def maybe_reward_referral(db: Session, buyer: "User"):
             buyer.referral_rewarded = True; db.add(buyer); db.commit()
             return
         # monthly cap: how many rewards has this referrer already earned this month?
-        import datetime as _dt
-        month_start = _dt.datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        month_start = _utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         already = db.query(LedgerTx).filter(
             LedgerTx.reference_type == "referral_credit",
             LedgerTx.reference_id == str(referrer.id),

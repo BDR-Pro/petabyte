@@ -1599,6 +1599,12 @@ variables:
     - platform
     description: ''
 secrets:
+  ACCESS_TOKEN_EXPIRE_MINUTES:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   AWS_ACCESS_KEY_ID:
     required: false
     default: null

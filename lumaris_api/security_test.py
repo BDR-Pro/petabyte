@@ -200,6 +200,13 @@ ok("cookie-auth POST with a matching X-CSRF-Token is accepted (not 403)",
 ok("cookie-auth POST with a WRONG X-CSRF-Token is blocked (403)",
    _cc.post("/change_role", json={"role": "buyer"},
             headers={"X-CSRF-Token": "not-the-token"}).status_code == 403)
+# SIGNED double-submit: a token that MATCHES (cookie==header) but carries NO valid server HMAC is
+# still rejected — an attacker who can only WRITE the victim's cookie can't mint a valid pair.
+_cc.cookies.set("pb_csrf", "forged.unsigned")
+ok("cookie-auth POST with a matching but UNSIGNED CSRF token is blocked (signed double-submit)",
+   _cc.post("/change_role", json={"role": "buyer"},
+            headers={"X-CSRF-Token": "forged.unsigned"}).status_code == 403)
+_cc.cookies.set("pb_csrf", _csrf)   # restore the valid signed token for later tests
 
 # Bearer auth carries no ambient authority -> NOT CSRF-checked (a stray cookie must not force it)
 _btok = _lg.json()["access_token"]
@@ -214,6 +221,17 @@ _clear = " ".join(_out.headers.get_list("set-cookie")) if hasattr(_out.headers, 
 ok("logout deletes the session cookie", "pb_session=" in _clear)
 _cc.cookies.clear()
 ok("after logout (no cookie) a protected GET is unauthenticated", _cc.get("/me").status_code in (401, 403))
+
+# JWT REVOCATION: logout denylists the token's jti, so the SAME (unexpired) token is dead
+# afterwards — logout is real, not just a client-side cookie delete.
+_rv = TestClient(main.app)
+_rv.post("/register_user", json={"username": "revoke_user", "password": "hunter2-correct-horse"})
+_rtok = _rv.post("/login", data={"username": "revoke_user", "password": "hunter2-correct-horse"}).json()["access_token"]
+_rh = {"Authorization": f"Bearer {_rtok}"}
+ok("bearer token authenticates before logout", _rv.get("/me", headers=_rh).status_code == 200)
+_rv.post("/logout", headers=_rh)
+ok("after logout the SAME bearer token is REVOKED (jti denylist), not just the cookie",
+   _rv.get("/me", headers=_rh).status_code == 401)
 
 # a PUBLIC endpoint is never CSRF-blocked by a stray cookie (CSRF lives in the auth dep, not a
 # blanket middleware): a fresh anonymous client can still POST a public webhook/route.
