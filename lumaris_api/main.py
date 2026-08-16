@@ -3464,7 +3464,7 @@ def _build_job_payload(task, db=None) -> dict:
                                 "selftest": bool(rp.get("selftest")),
                                 "register_url": "/jobs/rendezvous",
                                 "rendezvous_url": f"/jobs/rendezvous/{jid}"},
-                **_backup}
+                **_backup, **_rt_kw}
     if task.task_type == "template":
         tpl = TEMPLATES.get(task.template, {})
         params = json.loads(task.template_params or "{}")

@@ -628,7 +628,9 @@ def _run_distributed(task):
             env=task.get("env") or {}, isolation_flags=_isolation_flags(task),
             egress_flags=_egress_flags(task))
         report_progress(tid, 45, f"launching torchrun rank {rank}/{world}")
-        subprocess.check_call(argv)
+        # Audit H1 parity: bound the rank to the buyer's authorized runtime budget.
+        _rt = task.get("max_runtime_s")
+        subprocess.run(argv, check=True, timeout=(int(_rt) if _rt else None))
         report_progress(tid, 100, f"rank {rank}/{world} finished")
         _post("/jobs/result", _signed_result(
             tid, status="completed", result=f"distributed rank {rank}/{world} complete"))
