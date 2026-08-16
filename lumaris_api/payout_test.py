@@ -572,6 +572,43 @@ ok("exactly one Stripe transfer is created for the owned obligation",
         if t.get("metadata", {}).get("petabyte_tx") == _txok.public_id]) == 1)
 s.close()
 
+# ============= H2: the DIRECT admin transfer enforces the same payout-time gates ==========
+# as the batch path (audit HIGH: transfer_to_seller used to skip sanctions + fraud/review holds).
+# (a) a seller under a fraud/manual-review payout hold is refused by the direct transfer.
+sid_h2h = mk_seller("h2_hold", "US")
+tx_h2h = mk_captured_tx(sid_h2h, 900)
+add_obligation(sid_h2h, 900, compute_tx_id=tx_h2h, state="available")
+s = dbmod.SessionLocal()
+dbmod.place_payout_hold(s, sid_h2h, reason="fraud review")
+_h2_held = False
+try:
+    sc.transfer_to_seller(s, s.get(dbmod.ComputeTransaction, tx_h2h))
+except sc.TransactionError:
+    _h2_held = True
+ok("direct transfer refuses a seller under a payout hold (parity with batch)",
+   _h2_held and s.get(dbmod.ComputeTransaction, tx_h2h).stripe_transfer_id is None)
+# it pays once the hold clears (proves the gate, not a permanent block)
+dbmod.clear_payout_hold(s, sid_h2h)
+sc.transfer_to_seller(s, s.get(dbmod.ComputeTransaction, tx_h2h))
+ok("direct transfer succeeds after the payout hold is cleared",
+   s.get(dbmod.ComputeTransaction, tx_h2h).stripe_transfer_id is not None)
+s.close()
+
+# (b) a sanctioned payout country is refused by the direct transfer.
+sid_h2s = mk_seller("h2_sanctioned", "IR")     # Iran — on the sanctioned block list
+tx_h2s = mk_captured_tx(sid_h2s, 900)
+add_obligation(sid_h2s, 900, compute_tx_id=tx_h2s, state="available")
+s = dbmod.SessionLocal()
+_h2_sanc = False
+try:
+    sc.transfer_to_seller(s, s.get(dbmod.ComputeTransaction, tx_h2s))
+except sc.TransactionError:
+    _h2_sanc = True
+ok("direct transfer refuses a sanctioned seller country (fail closed)",
+   _h2_sanc and s.get(dbmod.ComputeTransaction, tx_h2s).stripe_transfer_id is None)
+s.close()
+
+
 # ---------------- biweekly payout run: 14-day hold + report hold ----------------
 sid_bw = mk_seller("payout_biweekly", "US"); approve_sanctions(sid_bw)
 # two earnings, still WITHIN the 14-day risk hold (available_at in the future) -> accrued

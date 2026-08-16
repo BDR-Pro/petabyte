@@ -836,6 +836,40 @@ def reconcile_captured_without_obligations(db, *, limit: int = 500) -> int:
 
 
 # ----------------------------------------------------------------- transfer
+def _assert_payout_allowed(db, seller_id: int) -> None:
+    """Payout-time compliance gate — enforced on EVERY money-out path, not just the batch.
+
+    The direct (admin) transfer historically skipped these, so a sanctioned or fraud-held
+    seller could be paid via POST /admin/payments/{id}/transfer. Fail closed on:
+      * a fraud / manual-review payout hold (place_payout_hold),
+      * a sanctioned payout country,
+      * (when a sanctions screening provider is configured) a missing/expired APPROVED
+        sanctions decision — mirroring the batch path's compliance_ok.
+    Raises TransactionError to refuse the transfer."""
+    import db as _dbm
+    import payout_capabilities as _cap
+    if _dbm.payout_hold_active(db, seller_id):
+        raise TransactionError("seller is under a payout hold (fraud/manual review); "
+                               "transfer refused (fail closed)")
+    acct = (db.query(_dbm.ConnectedAccount)
+            .filter(_dbm.ConnectedAccount.user_id == seller_id).first())
+    country = getattr(acct, "country", None) if acct else None
+    if not country:
+        raise TransactionError("seller has no recorded payout country; transfer refused "
+                               "(fail closed)")
+    if _cap.is_sanctioned(country):
+        raise TransactionError(f"seller country {country} is sanctioned/prohibited; "
+                               "no payout permitted")
+    # Only require an APPROVED sanctions decision when the platform actually runs screening
+    # (a provider is configured) — mirrors the low-level screen() fail-closed-when-configured
+    # behavior so test/dev without a provider still work, while production has full parity.
+    if os.getenv("SANCTIONS_SCREEN_PROVIDER", "").strip():
+        from payout_routing import compliance_ok
+        ok, why = compliance_ok(db, seller_id)
+        if not ok:
+            raise TransactionError(f"compliance not satisfied: {why}; transfer refused")
+
+
 def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
     """Transfer the seller's net to their connected account. At most once, even under
     retries/crashes/duplicate webhooks/concurrent workers (guarded by the unique
@@ -853,6 +887,9 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
         return transition(db, tx, "COMPLETED", reason="no seller net to transfer")
     if net > tx.captured_amount - tx.transferred_amount:
         raise TransactionError("transfer would exceed captured/available amount")
+    # Compliance parity with the batch path: never pay a sanctioned or fraud-held seller,
+    # even via the direct admin transfer. Fail closed BEFORE claiming/moving money.
+    _assert_payout_allowed(db, tx.seller_id)
 
     # Repair-on-read: a tx captured before its obligation was created has none. Create it
     # now (idempotent) so the earning is recorded and can be marked paid below.
@@ -1277,6 +1314,21 @@ def refund(db, tx: ComputeTransaction, *, amount: int = None, actor: str = "admi
                        .values(state="reversed"))
             db.commit()
             seller_share_settled = (claim.rowcount == 1)
+        elif split["seller_reversal_amount"] > 0:
+            # PARTIAL refund of a not-yet-paid obligation (audit H3): proportionally REDUCE the
+            # obligation's net so the biweekly batch pays the POST-refund amount, not the full
+            # pre-refund net. Guarded + atomic: only an unpaid (accrued/available) obligation with
+            # enough net is decremented, so it can never go negative and a concurrent batch that
+            # already claimed it (batched/transferring/paid) falls through to the review path below.
+            dec = db.execute(_dbm.update(_dbm.PayoutObligation)
+                       .where(_dbm.PayoutObligation.compute_tx_id == tx.id,
+                              _dbm.PayoutObligation.state.in_(["accrued", "available"]),
+                              _dbm.PayoutObligation.net_amount_minor
+                              >= split["seller_reversal_amount"])
+                       .values(net_amount_minor=_dbm.PayoutObligation.net_amount_minor
+                               - split["seller_reversal_amount"]))
+            db.commit()
+            seller_share_settled = (dec.rowcount == 1)
         if not seller_share_settled:
             # Seller ALREADY paid via the batch path (paid/batched/transferring), a partial
             # (not-yet-cumulatively-full) refund of an unpaid obligation, or no reversible

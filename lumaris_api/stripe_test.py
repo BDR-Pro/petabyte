@@ -429,6 +429,17 @@ tid_pr = run_to_metered(3600)
 c.post(f"/admin/payments/{tid_pr}/capture", headers=admin)
 pr = c.post(f"/admin/payments/{tid_pr}/refund", headers=admin, json={"amount": 100, "reason": "partial"}).json()
 ok("partial refund refunds only the requested amount", pr["refunded_amount"] == 100 and pr["status"] != "REFUNDED")
+# H3: a PARTIAL refund of a not-yet-paid obligation must PROPORTIONALLY REDUCE the obligation's
+# net, so the biweekly batch pays the post-refund amount — not the full pre-refund net (which
+# used to let the platform eat the refunded seller share on every partial-refunded job).
+_spr = dbmod.SessionLocal()
+_txpr = sc.get_tx_by_public_id(_spr, tid_pr)
+_oblpr = _spr.query(dbmod.PayoutObligation).filter(
+    dbmod.PayoutObligation.compute_tx_id == _txpr.id).first()
+ok("partial refund REDUCES the unpaid obligation net (batch won't overpay) [H3]",
+   _oblpr is not None and _oblpr.state in ("accrued", "available")
+   and 0 <= _oblpr.net_amount_minor < _txpr.seller_net_amount)
+_spr.close()
 
 # TWO partial refunds that CUMULATIVELY equal the capture must REVERSE the unpaid obligation
 # and reconcile. Regression: the reversal used to gate on a single refund's `amount`, so two
