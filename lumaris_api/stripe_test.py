@@ -1018,6 +1018,36 @@ ok("H1 wiring: the notebook job payload carries max_runtime_s (agent hard-kills 
 _rs.close()
 
 
+# ============ STD-C: operator-gated strict buyer-container isolation ============
+# read-only rootfs / non-root are OPT-IN (AGENT_STRICT_ROOTFS / AGENT_CONTAINER_USER). Forcing them
+# universally would break arbitrary buyer images (s6-overlay servers, cache-writing model servers),
+# so the DEFAULT payload must carry NEITHER — and flipping the env must inject BOTH into the job.
+import os as _os_stdc
+class _StubTaskC:
+    id = 424242; task_type = "transcode"; template_params = "{}"; compute_tx = None
+    backup_enabled = False; backup_interval_s = 0; volume = None; latest_checkpoint_ref = None
+for _v in ("AGENT_STRICT_ROOTFS", "AGENT_CONTAINER_USER"):
+    _os_stdc.environ.pop(_v, None)
+ok("STD-C: strict isolation is OFF by default (empty kwargs)", main._strict_isolation_kw() == {})
+_pl_off = main._build_job_payload(_StubTaskC(), None)
+ok("STD-C: default transcode payload carries no read_only / run_as (image never silently broken)",
+   "read_only" not in _pl_off and "run_as" not in _pl_off)
+_os_stdc.environ["AGENT_STRICT_ROOTFS"] = "true"
+_os_stdc.environ["AGENT_CONTAINER_USER"] = "65534:65534"
+try:
+    _kw = main._strict_isolation_kw()
+    ok("STD-C: AGENT_STRICT_ROOTFS on -> read_only=True in the profile",
+       _kw.get("read_only") is True)
+    ok("STD-C: AGENT_CONTAINER_USER on -> run_as forwarded to the agent",
+       _kw.get("run_as") == "65534:65534")
+    _pl_on = main._build_job_payload(_StubTaskC(), None)
+    ok("STD-C: with the flags on, the transcode payload forwards read_only + run_as to the agent",
+       _pl_on.get("read_only") is True and _pl_on.get("run_as") == "65534:65534")
+finally:
+    for _v in ("AGENT_STRICT_ROOTFS", "AGENT_CONTAINER_USER"):
+        _os_stdc.environ.pop(_v, None)
+
+
 # ============ M1: server-authoritative metering window (dispatch -> result) ============
 from datetime import datetime as _dtm1, timedelta as _tdm1, timezone as _tzm1
 class _StubTaskM1:

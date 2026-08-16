@@ -3426,9 +3426,27 @@ def _job_runtime_budget_s(task, db=None):
         return None
 
 
+def _strict_isolation_kw() -> dict:
+    """Operator-gated CIS-restricted container profile for buyer jobs (audit STD-C).
+
+    OFF by default. A buyer job runs an ARBITRARY image — an s6-overlay server, a model server
+    that writes caches to its rootfs — so forcing a read-only rootfs or a non-root UID universally
+    would break real workloads. Instead the operator flips these on once they've validated their
+    image mix, and the agent's _isolation_flags then adds --read-only (+ a writable /tmp tmpfs,
+    HOME=/tmp) and/or --user. Notebook jobs already run read-only (notebook.py owns that image)."""
+    kw = {}
+    if os.getenv("AGENT_STRICT_ROOTFS", "").strip().lower() in ("1", "true", "yes", "on"):
+        kw["read_only"] = True
+    run_as = os.getenv("AGENT_CONTAINER_USER", "").strip()
+    if run_as:
+        kw["run_as"] = run_as
+    return kw
+
+
 def _build_job_payload(task, db=None) -> dict:
     """Build the job envelope returned to the agent. Never includes platform secrets or
     full buyer workload inputs beyond what the job type needs to run."""
+    _iso = _strict_isolation_kw()   # STD-C: operator-gated read-only/non-root (default: {})
     _backup = {"backup_enabled": bool(task.backup_enabled),
                "backup_interval_s": task.backup_interval_s,
                "volume": task.volume,
@@ -3448,15 +3466,15 @@ def _build_job_payload(task, db=None) -> dict:
     if task.task_type == "render":
         rp = json.loads(task.template_params or "{}")
         return {"task_id": task.id, "task_type": "render", "image": RENDER_IMAGE,
-                "gpu": True, **rp, **_backup, **_rt_kw}
+                "gpu": True, **rp, **_backup, **_rt_kw, **_iso}
     if task.task_type == "transcode":
         rp = json.loads(task.template_params or "{}")
         return {"task_id": task.id, "task_type": "transcode", "image": FFMPEG_IMAGE,
-                "gpu": bool(rp.get("use_gpu", True)), **rp, **_backup, **_rt_kw}
+                "gpu": bool(rp.get("use_gpu", True)), **rp, **_backup, **_rt_kw, **_iso}
     if task.task_type == "stitch":
         rp = json.loads(task.template_params or "{}")
         return {"task_id": task.id, "task_type": "stitch", "image": FFMPEG_IMAGE,
-                **rp, **_backup, **_rt_kw}
+                **rp, **_backup, **_rt_kw, **_iso}
     if task.task_type == "distributed":
         # One rank of a multi-node cluster. The agent runs `image`/`command` under torchrun with
         # the rank/world_size below, forming an NCCL/gloo cluster with the other ranks OVER THE
@@ -3477,7 +3495,7 @@ def _build_job_payload(task, db=None) -> dict:
                                 "selftest": bool(rp.get("selftest")),
                                 "register_url": "/jobs/rendezvous",
                                 "rendezvous_url": f"/jobs/rendezvous/{jid}"},
-                **_backup, **_rt_kw}
+                **_backup, **_rt_kw, **_iso}
     if task.task_type == "template":
         tpl = TEMPLATES.get(task.template, {})
         params = json.loads(task.template_params or "{}")
@@ -3492,7 +3510,7 @@ def _build_job_payload(task, db=None) -> dict:
                 # The agent enforces this. Default CLOSED: if a template forgets to
                 # declare a policy, the workload gets no network rather than the host's.
                 "egress": tpl.get("egress", "none"),
-                "params": params, **_backup}
+                "params": params, **_backup, **_iso}
     return {"task_id": task.id, "task_type": "vm", "vm_type": task.vm_type,
             "cpu": task.cpu, "ram": task.ram, "cuda": task.cuda}
 

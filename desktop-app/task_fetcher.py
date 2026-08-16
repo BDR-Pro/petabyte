@@ -240,7 +240,12 @@ def _isolation_flags(task):
     Kept in parity with the Linux agent (lumaris_agent/task_fetcher.py): drop ALL Linux
     capabilities (so a job can't reconfigure networking, load modules, or escalate),
     no-new-privileges, a pids cap, and memory/CPU caps when the server sends them.
-    GPU device access is unaffected (the NVIDIA runtime injects it via cgroups)."""
+    GPU device access is unaffected (the NVIDIA runtime injects it via cgroups).
+
+    Strict rootfs (opt-in via the server's AGENT_STRICT_ROOTFS / AGENT_CONTAINER_USER): read_only
+    -> --read-only + a writable /tmp tmpfs + HOME=/tmp (caches land on the tmpfs, not the immutable
+    rootfs); run_as -> --user (force non-root). Both default OFF because an arbitrary buyer image
+    may not tolerate them; the notebook sandbox already runs read-only because it owns its image."""
     import subprocess
     flags = ["--cap-drop", "ALL",
              "--security-opt", "no-new-privileges",
@@ -253,6 +258,13 @@ def _isolation_flags(task):
     cpus = task.get("cpus") or _default_cpu_cap()
     if cpus:
         flags += ["--cpus", str(cpus)]
+    if task.get("read_only"):
+        flags += ["--read-only",
+                  "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m",
+                  "-e", "HOME=/tmp"]
+    run_as = task.get("run_as")
+    if run_as:
+        flags += ["--user", str(run_as)]
     try:
         info = subprocess.check_output(["docker", "info", "--format", "{{.Runtimes}}"],
                                        text=True, timeout=5)
@@ -353,6 +365,7 @@ def _run_render(task):
     work = tempfile.mkdtemp(prefix=f"render-{tid}-")
     scene = _os.path.join(work, "scene.blend")
     out_dir = _os.path.join(work, "out"); _os.makedirs(out_dir, exist_ok=True)
+    _os.chmod(out_dir, 0o777)   # a forced non-root container (AGENT_CONTAINER_USER) must write frames here
     try:
         # 1) pull the scene via a pre-signed GET (no standing creds on the node)
         g = httpx.post(f"{API_URL}/jobs/input_url", headers=HEADERS, timeout=15,
@@ -405,6 +418,7 @@ def _run_transcode(task):
     if not shutil.which("docker"):
         _post("/jobs/result", _signed_result(tid, status="failed")); return
     work = tempfile.mkdtemp(prefix=f"tc-{tid}-")
+    _os.chmod(work, 0o777)   # a forced non-root container (AGENT_CONTAINER_USER) must write /work
     src = _os.path.join(work, "in"); dst = _os.path.join(work, f"out.{_safe_ext(task.get('container'))}")
     try:
         g = httpx.post(f"{API_URL}/jobs/input_url", headers=HEADERS, timeout=15,
@@ -462,6 +476,7 @@ def _run_stitch(task):
     if not shutil.which("docker"):
         _post("/jobs/result", _signed_result(tid, status="failed")); return
     work = tempfile.mkdtemp(prefix=f"stitch-{tid}-")
+    _os.chmod(work, 0o777)   # a forced non-root container (AGENT_CONTAINER_USER) must write /work
     try:
         # pull each segment via a restore-style GET, concat with ffmpeg
         listfile = _os.path.join(work, "list.txt")
