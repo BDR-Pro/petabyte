@@ -76,7 +76,7 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 html[data-theme=light]{
  --abyss:#EEF3FA;--depth:#FFFFFF;--depth2:#F6FAFD;--line:#E1EAF3;--line2:#C8D7E5;
  --ink:#0F1C30;--mut:#4E6079;--dim:#8091A8;
- --teal:#0B9C90;--teal-br:#0FBCAE;--deep:#0A7E76;--amber:#AE720F;--amber-br:#D0902A;
+ --teal:#0B9C90;--teal-br:#0FBCAE;--deep:#0A7E76;--amber:#E0A63C;--amber-br:#F0C673;
  --gA:rgba(255,178,36,.10);--gB:rgba(15,188,174,.12);--gV:rgba(124,58,237,.06);
  --navbg:rgba(255,255,255,.80);--hair:#EAF0F6;--panel:#FFFFFF;--panel2:#F5F9FC}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -141,6 +141,10 @@ button:active,.btn:active{transform:translateY(1px)}
 .btn-teal:hover{border-color:var(--teal);box-shadow:0 0 0 4px rgba(53,224,208,.12),0 0 24px -6px rgba(53,224,208,.5)}
 .btn-ghost{background:transparent;color:var(--ink);border:1px solid var(--line2)}
 .btn-ghost:hover{border-color:var(--teal);color:var(--teal)}
+/* filled brand-teal primary — the strong CTA, so orange stays a rare accent not the default */
+.btn-primary{background:linear-gradient(180deg,#8CF2E6,#33DBCB);color:#042521;
+ box-shadow:0 6px 22px -8px rgba(53,224,208,.55),inset 0 1px 0 rgba(255,255,255,.45)}
+.btn-primary:hover{filter:brightness(1.05)}
 /* ---------- labels / structure ---------- */
 .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:var(--teal);display:flex;align-items:center;gap:10px}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--teal);box-shadow:0 0 12px var(--teal);animation:pulse 2.4s infinite}
@@ -382,7 +386,7 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
   <a class="signin" id="signinlink" href="/login">Sign in</a>
   <a class="signin" id="signoutlink" href="#" onclick="signout();return false" style="display:none">Sign out</a>
   <a class="btn btn-ghost" href="/demo" data-ar="احجز عرضاً">Book a demo</a>
-  <a class="btn btn-amber" href="/console">Open console</a>
+  <a class="btn btn-primary" href="/console">Open console</a>
 </div>
 </div>
 </div></nav>"""
@@ -595,7 +599,7 @@ async function renderLaunch(elId,kinds,hours){var el=document.getElementById(elI
    '<div class="lfoot">'+
     '<div class="codeline"><code>'+cmd.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</code>'+
     '<button class="copybtn" data-act="pbCopy" data-a1="'+t.name+'">copy</button></div>'+
-    '<button class="btn btn-amber lbtn" data-act="pbConfirm" data-a1="'+t.name+'" data-a2="'+(hours||2)+'">Launch</button>'+
+    '<button class="btn btn-primary lbtn" data-act="pbConfirm" data-a1="'+t.name+'" data-a2="'+(hours||2)+'">Launch</button>'+
    '</div></div>';}).join('');}
 function _lres(){var e=document.getElementById('launchresult');if(e){e.style.display='';}return e;}
 async function pbLaunch(name,hours){var out=_lres();if(!out)return;
@@ -703,7 +707,7 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
       <p class="mut" style="font-size:17px;max-width:52ch" data-ar="استأجر كرت رسومات (GPU) قوياً — نوع الحواسيب الذي يشغّل ألعاب اليوم والرسوم ثلاثية الأبعاد والفيديو والذكاء الاصطناعي — بالساعة وبجزء بسيط من أسعار السحابة الكبرى. تُحفظ أموالك بأمان ولا تُدفع إلا مع إنجاز العمل؛ وإذا تعطّل جهاز، تُعاد إليك تلقائياً.">Rent a powerful GPU — the kind of computer behind today's games, 3D, video and AI — by the hour, for a fraction of big-cloud prices. Your money is held safely and paid out only as the work gets done; if a machine goes offline, you're paid back automatically.</p>
       <div class="mini" style="margin-top:28px;margin-bottom:10px" data-ar="ما الذي تبحث عنه؟">What are you here for?</div>
       <div style="display:flex;gap:12px;flex-wrap:wrap">
-        <a class="btn btn-amber arrow-fwd" href="/marketplace" data-ar="أحتاج كروت رسومات">I need GPUs </a>
+        <a class="btn btn-primary arrow-fwd" href="/marketplace" data-ar="أحتاج كروت رسومات">I need GPUs </a>
         <a class="btn btn-teal" href="/install" data-ar="لديّ كرت رسومات لتأجيره">I have a GPU to rent out</a>
       <div class="mini" style="margin-top:14px" data-ar="تفضّل جولة معنا؟ ">Prefer a walkthrough? <a class="teal" href="/demo" data-ar="احجز عرضاً مدته ٢٠ دقيقة">Book a 20-minute demo</a></div>
       </div>
@@ -719,7 +723,7 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
       <div class="hc-save"><b id="hc_pct">—</b> cheaper on Petabyte</div>
       <div class="hc-hours"><label class="mini" for="hc_hours" data-ar="التشغيل لمدة">Run for</label><input id="hc_hours" type="range" min="1" max="168" value="24" aria-label="Hours to run"/><span class="mono" id="hc_hval" style="min-width:42px;text-align:end">24h</span></div>
       <div class="hc-total"><span class="mut mini" data-ar="إجماليك">Your total</span><span><b class="mono teal" id="hc_pbtot" style="font-size:16px">—</b> <span class="mut mini"><span data-ar="مقابل السحابة الكبرى">vs big cloud</span> <span class="mono" id="hc_cltot">—</span></span></span></div>
-      <a class="btn btn-amber" href="/marketplace" style="width:100%;justify-content:center;margin-top:12px" data-ar="تصفّح كروت الرسومات">Browse GPUs →</a>
+      <a class="btn btn-primary" href="/marketplace" style="width:100%;justify-content:center;margin-top:12px" data-ar="تصفّح كروت الرسومات">Browse GPUs →</a>
       <div class="mini" style="margin-top:8px;text-align:center" data-ar="أسعار تقريبية · جرّب كل شيء في وضع الاختبار أولاً — دون بطاقة ولا أموال حقيقية">Typical prices · try it all in TEST mode first — no card, no real money</div>
     </div></div>
   </div>
@@ -858,7 +862,7 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
   <h2 style="font-size:clamp(24px,3.4vw,34px);color:#fff;margin:0 auto 10px;max-width:20ch" data-ar="استأجر أول كرت رسومات خلال الدقائق الخمس القادمة.">Rent your first GPU in the next five minutes.</h2>
   <p style="color:rgba(255,255,255,.72);font-size:15.5px;max-width:52ch;margin:0 auto 22px" data-ar="يبدأ في وضع الاختبار — تجربة آمنة دون بطاقة. حوّل إلى الأموال الحقيقية متى شئت فقط.">It starts in TEST mode — a safe practice run with no card. Switch to real money only when you're ready.</p>
   <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-    <a class="btn btn-amber arrow-fwd" href="/marketplace" data-ar="تصفّح كروت الرسومات">Browse GPUs</a>
+    <a class="btn btn-primary arrow-fwd" href="/marketplace" data-ar="تصفّح كروت الرسومات">Browse GPUs</a>
     <a class="btn btn-ghost oncta" href="/install" data-ar="أدرِج كرت رسوماتك">List your GPU</a>
   </div>
 </div></div>
