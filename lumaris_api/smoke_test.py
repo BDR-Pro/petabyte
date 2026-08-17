@@ -291,6 +291,19 @@ ok("refunds & disputes policy is published (escrow protection + dispute SLA)",
 _prv=c.get("/privacy")
 ok("privacy page states the workload data lifecycle (encrypt / not read / not retained)",
    _prv.status_code==200 and "Data lifecycle" in _prv.text)
+# Non-technical UX: plain-language FAQ + a "Get the Windows app" button that is never a dead link.
+_faq=c.get("/faq")
+ok("plain-language FAQ answers non-tech seller+buyer fears (safe on my PC / when do I get paid)",
+   _faq.status_code==200 and "safe" in _faq.text.lower()
+   and "get paid" in _faq.text.lower() and "escrow" in _faq.text.lower())
+# No desktop build/URL configured in tests -> the download route must degrade to the honest
+# early-access page (200), never 404 and never claim a download that isn't there.
+_dl=c.get("/download/windows", follow_redirects=False)
+ok("the Windows-app button degrades honestly (early-access page, not a dead link) when no build exists",
+   _dl.status_code==200 and "early access" in _dl.text.lower() and "one command" in _dl.text.lower())
+_ins=c.get("/install")
+ok("the seller page leads with a friendly app option + links the FAQ",
+   _ins.status_code==200 and "Get the Windows app" in _ins.text and "/faq" in _ins.text)
 
 # REFUND ON REAP: new booking, node dies, settle refunds buyer
 c.post("/heartbeat", headers={"X-API-KEY":s3key}, json={"spec_id":sid3})

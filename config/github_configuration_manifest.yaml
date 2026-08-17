@@ -241,6 +241,12 @@ variables:
     - deployment
     description: Rollout gate. When 'true' the deploy generates the server env from GitHub config and
       pushes it; until then deploys stay code-only. Flip to true after entering all Secrets.
+  DESKTOP_APP_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   DISK_DATA_DIR:
     required: false
     default: /var/lib/petabyte/disk

@@ -12,17 +12,45 @@ routers cleanly requires lifting those dependencies into a `deps.py` FIRST (so a
 import them without importing `main`). This static-page slice needs none of that, so it is the
 safe, self-contained first step that establishes the pattern behind the green test suite.
 """
+import os
+
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, FileResponse
 
 from pages import (
     TRUST_HTML, STATUS_HTML, METRICS_HTML, TRACTION_HTML, BUY_HTML, SELLER_EARNINGS_HTML,
     TEMPLATES_HTML, DEMO_HTML, CONTACT_HTML, PRICING_HTML, SECURITY_HTML, PRIVACY_HTML,
     TERMS_HTML, AUP_HTML, REFUNDS_HTML, GPU_DETAIL_HTML, GAMERS_HTML, ARTISTS_HTML,
-    CLUSTER_HTML, CONSOLE_HTML,
+    CLUSTER_HTML, CONSOLE_HTML, FAQ_HTML, DESKTOP_SOON_HTML,
 )
 
 router = APIRouter(tags=["web"])
+
+
+@router.get("/faq", response_class=HTMLResponse)
+@router.get("/help", response_class=HTMLResponse)
+def faq_page():
+    """Plain-language answers for non-technical sellers and buyers (safety, payouts, trust)."""
+    return HTMLResponse(FAQ_HTML)
+
+
+@router.get("/download/windows")
+@router.get("/download")
+def download_windows():
+    """The 'Get the Windows app' target — never a dead link, never a fabricated download.
+
+    Order of truth: (1) a build bundled on THIS server (private-safe, no GitHub) wins; (2) else a
+    configured DESKTOP_APP_URL (a domain-hosted .exe or a signed public release); (3) else an
+    honest 'early access — start now with one command' page. So the button works the moment a real
+    build exists and tells the truth until then."""
+    local = "/opt/lumaris/installers/PetabyteAgent.exe"
+    if os.path.exists(local):
+        return FileResponse(local, filename="PetabyteAgent.exe",
+                            media_type="application/vnd.microsoft.portable-executable")
+    url = os.getenv("DESKTOP_APP_URL", "").strip()
+    if url:
+        return RedirectResponse(url, status_code=302)
+    return HTMLResponse(DESKTOP_SOON_HTML)
 
 
 @router.get("/trust", response_class=HTMLResponse)

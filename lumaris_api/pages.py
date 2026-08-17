@@ -407,7 +407,7 @@ _FOOT = """<footer>
     <a href="/wiki">Wiki</a><a href="/docs">API reference</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/developers">Quickstart</a><a href="/keys">API keys</a>
   </div>
   <div class="fcol"><div class="fh">Company</div>
-    <a href="/security">Security &amp; trust</a><a href="/investors">About</a><a href="/status">Status</a>
+    <a href="/faq">Help &amp; FAQ</a><a href="/security">Security &amp; trust</a><a href="/investors">About</a><a href="/status">Status</a>
   </div>
   <div class="fcol"><div class="fh">Legal</div>
     <a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/acceptable-use">Acceptable use</a>
@@ -921,9 +921,24 @@ INSTALL_HTML = _page("Petabyte — become a seller",
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px" data-ar="أدرِج كرت رسوماتك بأمرٍ واحد">List your GPU in <span class="grad-teal">one command</span></h1>
   <p class="mut" style="max-width:56ch" data-ar="أي جهاز NVIDIA يمكن أن يصبح عقدة. يتحقق المُثبِّت من عتادك، ويعزل المهام داخل Docker، ويجعلك متصلاً خلال ٣٠ ثانية تقريباً. دون حصرية.">Any NVIDIA machine can become a node. The installer verifies your hardware, sandboxes jobs in Docker, and brings you online in ~30 seconds. No exclusivity.</p>
 </div>
+<!-- choose how to start: the friendly Windows app first, the one-command path second -->
+<div class="wrap" style="padding:6px 22px 0">
+  <div class="cols c2" style="gap:14px">
+    <div class="card" style="border-color:rgba(79,214,201,.35)">
+      <div class="lbl" data-ar="الأسهل · تطبيق ويندوز">Easiest · Windows app <span class="mut">(no terminal)</span></div>
+      <p class="mut" style="margin:2px 0 12px" data-ar="نزّله وشغّله بنقرتين. يتحقق من كرت رسوماتك ويصلك بالمنصة — دون سطر أوامر. قيد الإطلاق التجريبي: إن لم تتوفر نسخة لجهازك بعد، استخدم الإعداد بأمرٍ واحد جهةَ اليسار وسنراسلك عند جاهزية التطبيق.">Download it, double-click, done — it checks your GPU and brings you online with no command line. <b class="teal">Early access:</b> if a build isn't posted for your machine yet, you'll get the 30-second setup shown here and an email when the app is ready.</p>
+      <a class="btn btn-teal arrow-fwd" href="/download/windows" data-ar="نزّل تطبيق ويندوز">Get the Windows app</a>
+    </div>
+    <div class="card">
+      <div class="lbl am" data-ar="أو أمرٌ واحد · يعمل الآن">Or one command · works now <span class="mut">(any OS)</span></div>
+      <p class="mut" style="margin:2px 0 12px" data-ar="الصق محفظتك أدناه واحصل على سطرٍ واحد تنسخه وتلصقه — لينكس أو ويندوز أو ماك. يتصل خلال ٣٠ ثانية، دون أي إعداد.">Paste your wallet just below and copy one line — Linux, Windows or macOS. Online in ~30 seconds, nothing to configure.</p>
+      <a class="btn" href="#start" data-ar="ابدأ بأمرٍ واحد">Use the one-command setup ↓</a>
+    </div>
+  </div>
+</div>
 <!-- PRIMARY path: as easy as starting a miner — paste a wallet, no account needed -->
 <div class="wrap" style="padding:6px 22px 0">
-  <div class="card" style="border-color:rgba(240,180,41,.35);background:linear-gradient(180deg,rgba(240,180,41,.06),transparent)">
+  <div id="start" class="card" style="border-color:rgba(240,180,41,.35);background:linear-gradient(180deg,rgba(240,180,41,.06),transparent)">
     <div class="lbl am" data-ar="ابدأ مثل المُعدِّن · بلا حساب">Start like a miner · no account</div>
     <p class="mut" style="margin-bottom:6px" data-ar="الصق محفظة USDC التي تريد أن تُدفع إليها. هذه هويتك وعنوان استلامك — بلا بريد، بلا كلمة مرور. شغّل الأمر الوحيد الذي نعطيك إياه، ويتصل كرت رسوماتك. (السحب لاحقاً يتطلب تحقق هوية سريع كما يفرض النظام.)">Paste the USDC wallet you want to be paid to. That's your identity <i>and</i> your payout address — no email, no password. Run the one command we hand back and your GPU is online. <b class="teal">Withdrawing later needs a quick identity check</b>, as regulation requires.</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
@@ -988,6 +1003,9 @@ $env:PETABYTE_ACTION="uninstall"; irm https://petabyte.market/manage.ps1 | iex</
   <div class="card" style="margin-top:16px"><div class="lbl am" data-ar="استلم أرباحك">Get paid</div>
     <p class="mut" data-ar="رصيد واحد. اسحب في أي وقت أو وفق جدول أسبوعي — تحويل بنكي أو USDC أو بطاقة هدية. فعّل خيار التعدين عند الخمول لتكسب دخلاً في الخلفية كلما لم يكن جهازك مؤجراً.">One balance. Withdraw anytime or on a weekly schedule — bank, USDC, or gift card. Opt in to idle-fallback and earn a background trickle whenever the node isn't rented. <a class="teal" href="/console">Open the console →</a></p>
   </div>
+  <div class="card" style="margin-top:16px"><div class="lbl" data-ar="أسئلة شائعة">Common questions</div>
+    <p class="mut" data-ar="هل هو آمن على جهازي؟ هل يبطئ ألعابي؟ ماذا لو أساء المستأجر استخدام إنترنتي؟ متى وكيف أُدفَع؟ إجابات واضحة بلا مصطلحات.">Is it safe on my computer? Will it slow my games? What if a renter misuses my internet? When and how do I get paid? Plain answers, no jargon. <a class="teal" href="/faq">Read the FAQ →</a></p>
+  </div>
   <div class="card" style="margin-top:16px"><div class="lbl" data-ar="تفكّر في شراء كرت رسومات؟">Thinking of buying a GPU to rent?</div>
     <p class="mut" data-ar="احسب الأرباح الصافية، ومتى يسترد الكرت ثمنه، والعائد السنوي لكل كرت — بأرقام شفافة يمكنك تعديلها.">See net earnings, payback time and 1-year ROI per card — transparent numbers you can tune to your own electricity and utilization. <a class="teal" href="/roi">Open the ROI calculator →</a></p>
   </div>
@@ -1044,6 +1062,83 @@ async function walletStart(a1, btn){
 (function(){var si=document.getElementById('iksignin'),gn=document.getElementById('ikgen');
   if(authed()){if(gn)gn.style.display='';}else{if(si)si.style.display='';}})();
 </script>""")
+
+
+# Honest landing for the "Get the Windows app" button while the one-click desktop build is not yet
+# published (no GitHub release exists). It never 404s and never pretends a download is there: it
+# points to the working 30-second setup and offers to notify. Once a build ships, set DESKTOP_APP_URL
+# (or serve the .exe from your domain) and /download/windows redirects/serves it instead — see
+# web_routes.download_windows.
+DESKTOP_SOON_HTML = _page("Petabyte — Windows app (early access)",
+    desc="The one-click Petabyte Windows app is in early access. Start earning today with the 30-second one-command setup, and get notified when the app is ready.",
+    path="/download/windows", body="""
+<div class="wrap" style="padding:60px 22px 10px;max-width:720px">
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="تطبيق ويندوز">windows app</span></div>
+  <h1 style="font-size:clamp(28px,5vw,40px);margin:16px 0 10px" data-ar="التطبيق بنقرة واحدة قيد الإطلاق التجريبي">The one-click app is in <span class="grad-teal">early access</span></h1>
+  <p class="mut" style="max-width:60ch" data-ar="نجهّز تطبيق ويندوز الذي تُنزّله وتشغّله بنقرتين. حتى ذلك الحين، أسرع طريقة لإدراج كرت رسوماتك هي الإعداد بأمرٍ واحد — يستغرق نحو ٣٠ ثانية ولا يتطلب حساباً.">We're finishing the double-click Windows app. Until it's posted, the fastest way to bring your GPU online is the one-command setup — about 30 seconds, no account needed. It's the same signed agent the app will install.</p>
+  <div class="card" style="margin-top:22px;border-color:rgba(240,180,41,.35);background:linear-gradient(180deg,rgba(240,180,41,.06),transparent)">
+    <div class="lbl am" data-ar="ابدأ الآن">Start now</div>
+    <p class="mut" style="margin:2px 0 12px" data-ar="الصق محفظتك واحصل على أمرٍ واحد تنسخه — يعمل على ويندوز (عبر WSL) ولينكس وماك.">Paste your wallet and copy one command — works on Windows (via WSL), Linux and macOS.</p>
+    <a class="btn btn-amber arrow-fwd" href="/install#start" data-ar="اذهب إلى الإعداد بأمرٍ واحد">Go to the one-command setup</a>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div class="lbl" data-ar="أخبِرني حين يجهز">Tell me when the app is ready</div>
+    <p class="mut" data-ar="اترك بريدك في نشرة الصفحة الرئيسية وسنراسلك عند نزول تطبيق ويندوز. أو اقرأ الأسئلة الشائعة أولاً.">Leave your email in the newsletter on the <a class="teal" href="/#newsletter">home page</a> and we'll email you when the Windows app lands. New to this? <a class="teal" href="/faq">Read the FAQ →</a></p>
+  </div>
+</div>""")
+
+
+FAQ_HTML = _page("Petabyte — FAQ",
+    desc="Plain-language answers for GPU owners and buyers: is it safe on my computer, will it slow my games, what if a renter misuses my internet, when do I get paid, is my data safe, and is Petabyte a real company.",
+    path="/faq", body="""
+<div class="wrap" style="padding:56px 22px 6px;max-width:820px">
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="الأسئلة الشائعة">plain-language answers</span></div>
+  <h1 style="font-size:clamp(28px,5vw,42px);margin:16px 0 8px" data-ar="أسئلة شائعة">Questions, answered <span class="grad-teal">plainly</span></h1>
+  <p class="mut" style="max-width:62ch" data-ar="بلا مصطلحات تقنية. إن بقي سؤال، راسلنا على support@petabyte.market.">No jargon. If something's still unclear, email <a class="teal" href="mailto:support@petabyte.market">support@petabyte.market</a>.</p>
+</div>
+
+<div class="wrap" style="padding:6px 22px 0;max-width:820px">
+  <h2 style="font-size:20px;margin:22px 0 8px" data-ar="لمالكي كروت الرسومات">If you're renting out your GPU</h2>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">Is it safe to run on my computer?</div>
+    <p class="mut">Yes. Other people's work runs inside an isolated sandbox (a locked-down Docker container) that <b class="teal">cannot see your files, your games, or the rest of your PC</b>. It has no special privileges and is walled off from your home network. You can pause it or remove it completely with one command at any time.</p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">Will it slow down my gaming or spike my power bill?</div>
+    <p class="mut">It only takes work when your machine is idle, and you stay in control of when it runs. You set (or auto-price) your hourly rate, and the <a class="teal" href="/roi">ROI calculator</a> shows your earnings <b>after</b> electricity so you can see the real number before you start.</p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">What if a renter tries to do something illegal over my internet?</div>
+    <p class="mut">They can't use your connection freely. Jobs are network-locked: a firewall on your machine blocks them from your local network and the internet except for what a job openly declares, and batch jobs get <b class="teal">no network at all</b>. The work is sandboxed and attributed, not run loose on your IP.</p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">When and how do I get paid?</div>
+    <p class="mut">Everything lands in one balance. Withdraw anytime or on a weekly schedule, by <b>bank transfer, USDC, or gift card</b>. Earnings clear after a short hold, and — because this is real money — withdrawing requires a quick one-time identity check, as regulation requires.</p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">How do I stop or uninstall?</div>
+    <p class="mut">Pause or remove it in one command — no lock-in, no exclusivity. If we turned on Windows' WSL feature to run the agent, uninstalling turns it back off.</p></div>
+
+  <h2 style="font-size:20px;margin:30px 0 8px" data-ar="للمشترين">If you're renting GPUs to run something</h2>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">Is my code and data safe on a stranger's computer?</div>
+    <p class="mut">Your work is encrypted on the way there, runs in an isolated container, and is removed afterward; every result is cryptographically signed by the exact machine that produced it, so you know it ran where we say. <span class="mut">Honest note: for workloads that need the strongest guarantee, hardware-encrypted (confidential-computing) nodes are on our roadmap — see <a class="teal" href="/security">Security &amp; trust</a>.</span></p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">What if the GPU fails or my job doesn't finish?</div>
+    <p class="mut">Your money sits in <b class="teal">escrow</b> and is released only for work actually delivered — if a machine drops mid-job, you're refunded. See the <a class="teal" href="/refunds">refunds &amp; disputes</a> policy.</p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">How much does it cost, and how do I pay?</div>
+    <p class="mut">You pay by the hour, and every GPU is shown against public cloud prices <b>before</b> you commit, so you can see the saving. You add funds to a wallet and the cost comes out as you run.</p></div>
+
+  <h2 style="font-size:20px;margin:30px 0 8px" data-ar="الثقة والشركة">Trust &amp; the company</h2>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">Is this real — or a scam?</div>
+    <p class="mut">Petabyte is a real company (Petabyte, Inc., operated from Riyadh). Every machine must <b class="teal">cryptographically prove what GPU it actually has</b> before it can earn — unverified nodes are labeled as such. We publish a <a class="teal" href="/security">security policy</a> with a bug-bounty channel, a <a class="teal" href="/refunds">refunds policy</a>, and live <a class="teal" href="/status">status</a> and <a class="teal" href="/metrics">metrics</a>.</p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">Who do I contact if something goes wrong?</div>
+    <p class="mut">Email <a class="teal" href="mailto:support@petabyte.market">support@petabyte.market</a> for help, or <a class="teal" href="mailto:security@petabyte.market">security@petabyte.market</a> to report a vulnerability. You can also <a class="teal" href="/book-a-demo">book a call</a>.</p></div>
+</div>
+
+<div class="wrap" style="padding:10px 22px 40px;max-width:820px">
+  <a class="btn btn-teal arrow-fwd" href="/install">List your GPU</a>
+  <a class="btn" href="/marketplace" style="margin-inline-start:8px">Browse GPUs to rent</a>
+</div>""")
 
 
 ROI_HTML = _page("Petabyte — GPU ROI calculator",
