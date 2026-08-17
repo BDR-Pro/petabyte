@@ -29,7 +29,7 @@ SECRET_EXACT = {
     "NICEHASH_API_KEY", "NICEHASH_API_SECRET", "NICEHASH_ORG_ID",
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "GATEWAY_TOKEN", "CAL_WEBHOOK_SECRET",
     "TEE_TRUSTED_ROOT", "PETABYTE_API_KEY", "PETABYTE_AGENT_KEY",
-    "DEPLOY_SSH_KEY",
+    "DEPLOY_SSH_KEY", "PYPI_API_TOKEN",
     # observability credentials
     "OTEL_EXPORTER_OTLP_HEADERS", "REDIS_URL", "PROMETHEUS_METRICS_TOKEN",
     "GRAFANA_SERVICE_ACCOUNT_TOKEN", "PROMETHEUS_REMOTE_WRITE_PASSWORD",
@@ -195,6 +195,12 @@ AGENT_VARS = {
                                                "time; the API reads it to pin the key into the served "
                                                "install.sh for Linux/WSL signed auto-update. Pairs "
                                                "with RELEASE_SIGNING_KEY."},
+    "PYPI_API_TOKEN": {"required": False, "default": None, "secret": True,
+                       "scope": ["deployment"],
+                       "description": "PyPI API token that release-cli.yml uses to publish the "
+                                      "`petabyte` CLI on a `cli-v*` tag. Unset -> the workflow "
+                                      "builds + verifies the wheel but does NOT publish (no hard "
+                                      "fail). See release-cli.yml for the one-time setup."},
     # browser E2E (GitHub Actions -> test.petabyte.market). Optional: absent personas skip.
     "E2E_BASE_URL": {"required": False, "default": "https://test.petabyte.market",
                      "secret": False, "scope": ["ci"], "format": "url",

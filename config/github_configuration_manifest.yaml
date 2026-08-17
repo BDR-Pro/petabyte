@@ -1865,6 +1865,14 @@ secrets:
     scope:
     - observability
     description: Prometheus remote-write basic-auth user.
+  PYPI_API_TOKEN:
+    required: false
+    default: null
+    scope:
+    - deployment
+    description: PyPI API token that release-cli.yml uses to publish the `petabyte` CLI on a `cli-v*`
+      tag. Unset -> the workflow builds + verifies the wheel but does NOT publish (no hard fail). See
+      release-cli.yml for the one-time setup.
   REDIS_PASSWORD:
     required: false
     default: null

@@ -1,0 +1,83 @@
+name: Release CLI (petabyte on PyPI)
+
+# Build + verify the thin `petabyte` client on every push/PR that touches it, and PUBLISH to PyPI
+# only when you cut a `cli-vX.Y.Z` tag AND a PYPI_API_TOKEN secret is configured. Until you decide
+# to publish (see the note below), this just proves the package builds and the `petabyte` command
+# runs — it never fails for a missing token.
+#
+# One-time to enable publishing:
+#   1. Decide the licensing: the repo LICENSE is proprietary ("no permission granted"). A public
+#      PyPI package needs a license that actually lets people install + run the client. Pick one
+#      (e.g. a permissive client license) and update pyproject.toml `license` before publishing.
+#   2. Reserve the name `petabyte` on PyPI (or choose another; `petabyte` may be taken).
+#   3. Add a PyPI API token as the repo secret PYPI_API_TOKEN (or switch to Trusted Publishing).
+#   4. Bump `version` in pyproject.toml and push a tag: `git tag cli-v0.1.0 && git push --tags`.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "lumaris_api/cli/petabyte.py"
+      - ".github/workflows/release-cli.yml"
+    tags:
+      - "cli-v*"
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "lumaris_api/cli/petabyte.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip build
+          python -m build
+          ls -l dist/
+      - name: Verify the wheel installs and `petabyte` runs
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/pbv
+          /tmp/pbv/bin/pip install dist/*.whl
+          /tmp/pbv/bin/petabyte --help >/dev/null
+          /tmp/pbv/bin/petabyte launch --help | grep -q template
+          echo "petabyte CLI installs and runs"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: petabyte-dist
+          path: dist/*
+
+  publish:
+    needs: build
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/cli-v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: petabyte-dist
+          path: dist
+      - name: Publish to PyPI (skipped if PYPI_API_TOKEN is not set)
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        if: ${{ env.PYPI_TOKEN != '' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+      - name: Note when no token is configured
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        if: ${{ env.PYPI_TOKEN == '' }}
+        run: echo "::notice::Tag pushed but PYPI_API_TOKEN is not set — built + verified, not published. See this workflow's header to enable."

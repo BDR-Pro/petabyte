@@ -1,17 +1,25 @@
 # Petabyte CLI & Dashboard
 
 ## CLI
+Installed from PyPI, the `petabyte` command is a thin client (only needs `httpx` — it just talks
+to the API over HTTPS, so it never pulls in the server):
 ```bash
-pip install httpx
-export PETABYTE_API_URL=http://localhost:8000     # or pass --api
-python cli/petabyte.py register -u alice -p secret
-python cli/petabyte.py login    -u alice -p secret
-python cli/petabyte.py deposit 100
-python cli/petabyte.py specs                       # a readable, cheapest-first GPU table
-python cli/petabyte.py run hello.ipynb --gpu H100 --hours 1
-python cli/petabyte.py wallet
-python cli/petabyte.py doctor                       # check API URL, connectivity, sign-in
+pip install petabyte
+export PETABYTE_API_URL=https://petabyte.market     # default; or pass --api / omit for localhost
+petabyte register -u alice -p secret
+petabyte login    -u alice -p secret
+petabyte deposit 100
+petabyte specs                                       # a readable, cheapest-first GPU table
+petabyte launch ollama --hours 2                     # one-click app: cheapest verified GPU, started
+petabyte run hello.ipynb --gpu H100 --hours 1        # run a notebook/.py on a rented GPU
+petabyte wallet
+petabyte doctor                                      # check API URL, connectivity, sign-in
 ```
+The package is built from this directory (repo-root `pyproject.toml`, `name = "petabyte"`). From a
+source checkout you can still run it directly with `python cli/petabyte.py <cmd>`, or install the
+current tree with `pip install .` from the repo root. The model-hub subcommands (`model`, `pull`)
+need the fuller server checkout and aren't in the thin PyPI client yet — they simply aren't offered
+there.
 `run` books the cheapest matching GPU, escrows funds, dispatches the notebook,
 polls, and prints the result. `.ipynb` (code cells) and `.py` files are supported.
 

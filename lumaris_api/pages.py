@@ -758,7 +758,7 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 <div class="wrap" style="padding:40px 24px 8px">
   <div class="lbl" style="margin-bottom:4px">Launch anything</div>
   <h2 style="font-size:clamp(22px,3vw,30px);margin-bottom:6px">Games, art tools, AI stacks — <span class="grad-teal">one click or one line.</span></h2>
-  <p class="mut" style="max-width:62ch;margin-bottom:18px">Every card is a real workload. Press Launch, or copy the command — either way we book the cheapest verified GPU and hand you the address.</p>
+  <p class="mut" style="max-width:62ch;margin-bottom:18px">Every card is a real workload. Press Launch, or copy the command — either way we book the cheapest verified GPU and hand you the address. Prefer the terminal? <code>pip install petabyte</code>, then paste the command.</p>
   <div id="launchgrid"></div>
   <div id="launchresult" style="display:none"></div>
 </div>

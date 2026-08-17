@@ -1,0 +1,47 @@
+# The `petabyte` CLI — a THIN client for the Petabyte GPU marketplace.
+#
+# This is deliberately separate from the server package (lumaris_api/pyproject.toml, name="api",
+# which pulls in FastAPI/uvicorn/psycopg2/...). Installing the CLI should NOT drag the server in:
+# the client only talks to the API over HTTPS, so its only dependency is httpx. That is what makes
+# `pip install petabyte` && `petabyte launch ollama` reasonable for a non-technical user.
+#
+# It ships the compute CLI (register / login / deposit / specs / run / launch / wallet / vpn /
+# earnings / node). The model-hub subcommands (model / pull) need the modelhub package and are not
+# bundled in this thin client — they degrade gracefully (the command simply isn't offered); use the
+# full server checkout for those until modelhub is published as an optional extra.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "petabyte"
+version = "0.1.0"
+description = "Petabyte CLI — rent verified GPU compute and launch apps from your terminal."
+readme = "lumaris_api/cli/README.md"
+requires-python = ">=3.9"
+license = { text = "Proprietary" }
+authors = [{ name = "Petabyte, Inc." }]
+keywords = ["gpu", "compute", "cloud", "marketplace", "cli", "ai"]
+classifiers = [
+    "License :: Other/Proprietary License",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["httpx>=0.24"]
+
+[project.urls]
+Homepage = "https://petabyte.market"
+Documentation = "https://petabyte.market/wiki"
+Source = "https://github.com/BDR-Pro/petabyte"
+
+[project.scripts]
+petabyte = "petabyte:main"
+
+# Build only the single CLI module out of lumaris_api/cli/ — nothing else in the repo is included.
+[tool.setuptools]
+py-modules = ["petabyte"]
+
+[tool.setuptools.package-dir]
+"" = "lumaris_api/cli"
