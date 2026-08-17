@@ -288,6 +288,9 @@ select{appearance:none;-webkit-appearance:none;background-image:linear-gradient(
 .licon{position:relative;width:46px;height:46px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--teal);
  background:radial-gradient(circle at 30% 25%,rgba(53,224,208,.18),rgba(53,224,208,.04));border:1px solid rgba(53,224,208,.3);border-radius:13px}
 .licon svg{width:25px;height:25px}
+/* filled, brand-coloured tile — original category glyph in white, reads like an app icon */
+.licon.fill{color:#fff;border:0;box-shadow:0 5px 16px -6px rgba(2,10,20,.42),inset 0 1px 0 rgba(255,255,255,.3)}
+.licon.fill svg{width:26px;height:26px;stroke-width:2}
 .lcard:hover .licon::after{content:"";position:absolute;inset:-1px;border-radius:13px;border:1px solid rgba(53,224,208,.6);animation:ping 1s ease-out}
 @keyframes ping{0%{transform:scale(1);opacity:.8}100%{transform:scale(1.7);opacity:0}}
 .lmeta{flex:1;min-width:0}
@@ -488,6 +491,15 @@ window.PBICONS={
 PBICONS["jupyter"]='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="4" r="1.4"/><path d="M4 9c2.6 3 13.4 3 16 0M4 15c2.6 3 13.4 3 16 0"/></svg>';
 PBICONS["pytorch"]='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 6 9a8.5 8.5 0 1 0 12 0z"/><circle cx="15" cy="7.5" r="1.1" fill="currentColor"/></svg>';
 function pbIcon(n){return PBICONS[n]||PBICONS._default;}
+// Per-tool tile COLOURS (colours aren't trademarkable; the glyphs above are our own generic
+// category marks, not anyone's logo). Gives each launch card a distinct, app-icon-style tile.
+window.PBTILE={ollama:['#3a3c44','#565863'],vllm:['#4f46e5','#7c73f0'],comfyui:['#6d28d9','#9257f0'],
+ blender:['#e0620d','#f5883a'],minecraft:['#4e8f34','#6cb047'],valheim:['#3a6b84','#5c93ac'],
+ factorio:['#b4531c','#db7a2f'],"sd-webui":['#8f2fd6','#b95cf0'],"tensorrt-llm":['#3f9e4f','#5fc06e'],
+ jupyter:['#e0722a','#f2934a'],pytorch:['#dd4a2c','#f0684a'],ffmpeg:['#3f8f5a','#59ac74'],
+ _default:['#12a093','#33dbcb']};
+function pbTile(n){var c=PBTILE[n]||PBTILE._default;
+ return '<div class="licon fill" style="background:linear-gradient(140deg,'+c[0]+','+c[1]+')">'+pbIcon(n)+'</div>';}
 function pbEmpty(cols,title,sub,ctaHref,ctaText){
  return '<tr><td colspan='+cols+'><div class="empty">'+
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M8 15h4"/></svg>'+
@@ -593,7 +605,7 @@ async function renderLaunch(elId,kinds,hours){var el=document.getElementById(elI
  el.className='lgrid';
  el.innerHTML=ts.map(function(t){var cmd=pbCmd(t.name,hours);window._PBCMDS[t.name]=cmd;
   return '<div class="lcard">'+
-   '<div class="lhead"><div class="licon">'+pbIcon(t.name)+'</div>'+
+   '<div class="lhead">'+pbTile(t.name)+
    '<div class="lmeta"><div class="lname">'+t.name+'</div><div class="ldesc">'+(t.desc||'')+'</div></div>'+
    (t.port?('<span class="lport">:'+t.port+'</span>'):'<span class="lport">batch</span>')+'</div>'+
    '<div class="lfoot">'+
