@@ -1,14 +1,14 @@
-# The `petabyte` CLI — a THIN client for the Petabyte GPU marketplace.
+# The `petabyte` CLI — the client for the Petabyte GPU marketplace.
 #
-# This is deliberately separate from the server package (lumaris_api/pyproject.toml, name="api",
-# which pulls in FastAPI/uvicorn/psycopg2/...). Installing the CLI should NOT drag the server in:
-# the client only talks to the API over HTTPS, so its only dependency is httpx. That is what makes
-# `pip install petabyte` && `petabyte launch ollama` reasonable for a non-technical user.
+# Deliberately separate from the server package (lumaris_api/pyproject.toml, name="api", which
+# pulls in FastAPI/uvicorn/psycopg2/...). Installing the CLI must NOT drag the server in: it only
+# talks to the API over HTTPS. Its one runtime dependency is httpx (for the compute commands); the
+# bundled model hub is pure standard library, so it adds nothing. That keeps `pip install petabyte`
+# small enough to hand to a non-technical user.
 #
-# It ships the compute CLI (register / login / deposit / specs / run / launch / wallet / vpn /
-# earnings / node). The model-hub subcommands (model / pull) need the modelhub package and are not
-# bundled in this thin client — they degrade gracefully (the command simply isn't offered); use the
-# full server checkout for those until modelhub is published as an optional extra.
+# Ships BOTH command families in one install:
+#   * compute — register / login / deposit / specs / run / launch / wallet / vpn / earnings / node
+#   * model hub — model / pull / run <model-id>  (Ollama/HF-style pull with a verified local cache)
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
@@ -16,12 +16,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "petabyte"
 version = "0.1.0"
-description = "Petabyte CLI — rent verified GPU compute and launch apps from your terminal."
+description = "Petabyte CLI — rent verified GPU compute, launch apps, and pull AI models from your terminal."
 readme = "lumaris_api/cli/README.md"
 requires-python = ">=3.9"
 license = { text = "Proprietary" }
 authors = [{ name = "Petabyte, Inc." }]
-keywords = ["gpu", "compute", "cloud", "marketplace", "cli", "ai"]
+keywords = ["gpu", "compute", "cloud", "marketplace", "cli", "ai", "models"]
 classifiers = [
     "License :: Other/Proprietary License",
     "Environment :: Console",
@@ -39,9 +39,13 @@ Source = "https://github.com/BDR-Pro/petabyte"
 [project.scripts]
 petabyte = "petabyte:main"
 
-# Build only the single CLI module out of lumaris_api/cli/ — nothing else in the repo is included.
+# The CLI module (petabyte.py, from lumaris_api/cli/) + the pure-stdlib model hub package
+# (modelhub, from lumaris_api/modelhub/) — and nothing else in the repo. Bundling modelhub is what
+# makes `petabyte pull` / `petabyte model` work straight from `pip install petabyte`.
 [tool.setuptools]
 py-modules = ["petabyte"]
+packages = ["modelhub", "modelhub.providers"]
 
 [tool.setuptools.package-dir]
 "" = "lumaris_api/cli"
+"modelhub" = "lumaris_api/modelhub"

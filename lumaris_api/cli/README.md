@@ -15,11 +15,17 @@ petabyte run hello.ipynb --gpu H100 --hours 1        # run a notebook/.py on a r
 petabyte wallet
 petabyte doctor                                      # check API URL, connectivity, sign-in
 ```
-The package is built from this directory (repo-root `pyproject.toml`, `name = "petabyte"`). From a
-source checkout you can still run it directly with `python cli/petabyte.py <cmd>`, or install the
-current tree with `pip install .` from the repo root. The model-hub subcommands (`model`, `pull`)
-need the fuller server checkout and aren't in the thin PyPI client yet — they simply aren't offered
-there.
+Model management is included — `petabyte pull <publisher/model>`, `petabyte model list/inspect/remove`,
+and `petabyte run <model-id>` work straight from the pip install (the model hub is pure standard
+library, so it adds no dependency beyond httpx):
+```bash
+petabyte pull Qwen/Qwen3-8B          # verified, resumable download into ~/.petabyte
+petabyte model list                  # what's in your local cache
+petabyte run Qwen/Qwen3-8B           # start a model runtime
+```
+The package is built from the repo-root `pyproject.toml` (`name = "petabyte"`), which bundles this
+CLI module plus the `modelhub` package. From a source checkout you can also run it directly with
+`python cli/petabyte.py <cmd>`, or `pip install .` from the repo root.
 `run` books the cheapest matching GPU, escrows funds, dispatches the notebook,
 polls, and prints the result. `.ipynb` (code cells) and `.py` files are supported.
 
