@@ -327,8 +327,8 @@ html[dir="rtl"] .mono,html[dir="rtl"] code,html[dir="rtl"] .codeline,
 html[dir="rtl"] .tbl td.mono,html[dir="rtl"] input[type="number"]{direction:ltr;text-align:start;unicode-bidi:isolate}
 html[dir="rtl"] .hexbg{transform:scaleX(-1)}
 html[dir="rtl"] .grad{background-position:right}
-[dir] .arrow-fwd::after{content:"\2192"}
-html[dir="rtl"] .arrow-fwd::after{content:"\2190"}
+[dir] .arrow-fwd::after{content:"→"}
+html[dir="rtl"] .arrow-fwd::after{content:"←"}
 
 /* ---------- mobile ----------
    A host checks "is my node earning?" from their phone, in bed. A 7-column table
