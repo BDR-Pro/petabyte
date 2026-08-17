@@ -180,6 +180,31 @@ def cmd_run(a, cfg):
         print("timed out waiting for result", file=sys.stderr)
 
 
+def cmd_launch(a, cfg):
+    """One-click app: auto-pick the cheapest verified node that can run a template, book it
+    (escrow), and start it. The buyer never picks a node — this is the /launch endpoint the
+    website's template cards use, so `petabyte launch ollama` == clicking Launch on ollama."""
+    with _client(cfg) as c:
+        body = {"template": a.template, "hours": a.hours}
+        if getattr(a, "region", None):
+            body["region"] = a.region
+        if getattr(a, "max_price", None):
+            body["max_price_per_hour"] = a.max_price
+        r = c.post("/launch", json=body)
+        if r.status_code != 200:
+            _die(f"could not launch '{a.template}'", r)
+        j = r.json()
+        print(_green(f"✓ launched {j.get('template')} on {j.get('gpu_model') or 'CPU'} "
+                     f"(${j.get('price_per_hour')}/hr × {j.get('hours')}h, "
+                     f"escrow ${j.get('gross_amount')})"))
+        if j.get("routing_explanation"):
+            print(_dim("  " + j["routing_explanation"]))
+        if j.get("url"):
+            print(_green(f"  → {j['url']}") + _dim(f"   ({j.get('connect')})"))
+        else:
+            print(_dim(f"  {j.get('connect')}"))
+
+
 def cmd_vpn(a, cfg):
     """Download (or re-download) the WireGuard client config for a VPN-enabled booking."""
     with _client(cfg) as c:
@@ -295,6 +320,12 @@ def main():
                    help="rent on a private WireGuard VPN and save the client config")
     s.add_argument("--revision"); s.add_argument("--format"); s.add_argument("--quantization")
     s.add_argument("--force", action="store_true")
+    s = sub.add_parser("launch", help="one-click app: book the cheapest verified GPU and start a "
+                                      "template (ollama, vllm, comfyui, sd-webui, minecraft, ...)")
+    s.add_argument("template", help="template name, e.g. ollama, comfyui, sd-webui, minecraft")
+    s.add_argument("--hours", type=int, default=2)
+    s.add_argument("--region")
+    s.add_argument("--max-price", type=float, dest="max_price", help="skip nodes above $/hr")
     s = sub.add_parser("vpn", help="download the WireGuard config for a VPN booking")
     s.add_argument("booking_id", type=int); s.add_argument("-o", "--out")
 
@@ -328,7 +359,7 @@ def main():
             force=a.force, home=None)
         sys.exit(mh_cli.cmd_run(ns) or 0)
     {"register": cmd_register, "login": cmd_login, "deposit": cmd_deposit,
-     "wallet": cmd_wallet, "specs": cmd_specs, "run": cmd_run, "vpn": cmd_vpn,
+     "wallet": cmd_wallet, "specs": cmd_specs, "run": cmd_run, "launch": cmd_launch, "vpn": cmd_vpn,
      "earnings": cmd_earnings, "node": cmd_node}[a.cmd](a, cfg)
 
 
