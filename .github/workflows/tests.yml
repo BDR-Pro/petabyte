@@ -91,6 +91,9 @@ jobs:
       - name: wallet (add funds via stripe checkout)
         working-directory: lumaris_api
         run: python wallet_test.py
+      - name: desktop release (admin-uploadable signed builds; publish/serve/gating)
+        working-directory: lumaris_api
+        run: python desktop_release_test.py
       - name: seller integrity audits (anti-fraud)
         working-directory: lumaris_api
         run: python seller_audit_test.py

@@ -590,7 +590,10 @@ async function pbConfirm(name,hours){
   }
   if(confirm(L.join(String.fromCharCode(10)))) pbLaunch(name,hours);
 }
-function pbCmd(name,hours){var Q=String.fromCharCode(39);return 'curl -sX POST https://petabyte.market/launch -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '+Q+'{"template":"'+name+'","hours":'+(hours||2)+'}'+Q;}
+// The copyable one-liner is the friendly Petabyte CLI command (petabyte launch <template>), not a
+// raw curl with a bearer token — same thing the "Launch" button does, but readable and paste-safe.
+// `petabyte launch` maps to POST /launch (see lumaris_api/cli/petabyte.py). Install: pip install petabyte.
+function pbCmd(name,hours){return 'petabyte launch '+name+' --hours '+(hours||2);}
 async function pbCopy(name,btn){var c=window._PBCMDS[name]||'';try{await navigator.clipboard.writeText(c);}catch(e){
  var ta=document.createElement('textarea');ta.value=c;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');}catch(_){ }document.body.removeChild(ta);}
  if(btn){var o=btn.textContent;btn.textContent='copied';setTimeout(function(){btn.textContent=o;},1200);}}
@@ -1086,6 +1089,64 @@ DESKTOP_SOON_HTML = _page("Petabyte — Windows app (early access)",
     <p class="mut" data-ar="اترك بريدك في نشرة الصفحة الرئيسية وسنراسلك عند نزول تطبيق ويندوز. أو اقرأ الأسئلة الشائعة أولاً.">Leave your email in the newsletter on the <a class="teal" href="/#newsletter">home page</a> and we'll email you when the Windows app lands. New to this? <a class="teal" href="/faq">Read the FAQ →</a></p>
   </div>
 </div>""")
+
+
+DESKTOP_ADMIN_HTML = _page("Petabyte — publish desktop app",
+    desc="Admin-only: upload a new signed Windows desktop build. Serves it to new installs and to existing agents' auto-update, with no CI or terminal.",
+    path="/admin/desktop", body="""
+<div class="wrap" style="padding:56px 22px 10px;max-width:760px">
+  <div class="eyebrow"><span class="dot"></span> <span>admin · desktop releases</span></div>
+  <h1 style="font-size:clamp(26px,4.5vw,38px);margin:14px 0 8px">Publish the <span class="grad-teal">Windows app</span></h1>
+  <p class="mut" style="max-width:64ch">Upload a new build and it goes live immediately — <b>new sellers</b> get it from the Download button, and <b>existing agents</b> auto-update from it (when pointed at this server). No CI run, no server login. Admins only.</p>
+  <p id="dcur" class="mono mut" style="font-size:12.5px;margin-top:8px">checking current version…</p>
+
+  <div class="card" style="margin-top:16px;border-color:rgba(79,214,201,.3)">
+    <div class="lbl">1 · Sign the build (offline, once per release)</div>
+    <p class="mut" style="margin:2px 0 8px">The signing key never touches this server — that's what keeps a stolen admin login from pushing malware. On your build machine, produce the signed manifest:</p>
+    <pre style="white-space:pre-wrap;word-break:break-word">python scripts/sign_release.py --key release_ed25519.pem \\
+  --version 1.4.0 --exe dist/PetabyteAgent.exe --out-dir dist</pre>
+    <p class="mut" style="font-size:12.5px">That writes <span class="mono">PetabyteAgent.exe.manifest.json</span> next to the exe. (CI already does this on a tagged release.)</p>
+  </div>
+
+  <div class="card" style="margin-top:14px;border-color:rgba(240,180,41,.35);background:linear-gradient(180deg,rgba(240,180,41,.06),transparent)">
+    <div class="lbl am">2 · Upload both files</div>
+    <form id="dform" style="margin-top:8px">
+      <div class="field" style="margin-bottom:10px"><span>PetabyteAgent.exe</span>
+        <input id="dexe" type="file" accept=".exe" required/></div>
+      <div class="field" style="margin-bottom:14px"><span>PetabyteAgent.exe.manifest.json</span>
+        <input id="dman" type="file" accept=".json,application/json" required/></div>
+      <button class="btn btn-amber" id="dbtn" type="submit">Publish this build</button>
+      <span id="dmsg" class="mono" style="font-size:12.5px;margin-inline-start:10px"></span>
+    </form>
+    <p class="mut" style="font-size:12px;margin-top:10px">The server refuses the pair unless the exe's checksum matches the signed manifest (and, if a release key is configured here, unless the signature verifies) — so a mismatched or unsigned build is never served.</p>
+  </div>
+  <div style="margin-top:14px"><a class="teal" href="/download/windows">Preview the download page →</a></div>
+</div>
+<script>
+(async function(){try{var r=await fetch('/desktop/latest.json',{credentials:'same-origin'});
+  var el=document.getElementById('dcur');
+  if(r.ok){var j=await r.json();el.textContent='Current published version: '+(j.version||'?');}
+  else{el.textContent='No desktop build published yet.';}}catch(e){}})();
+document.getElementById('dform').addEventListener('submit', async function(ev){
+  ev.preventDefault();
+  var exe=document.getElementById('dexe').files[0], man=document.getElementById('dman').files[0];
+  var msg=document.getElementById('dmsg'), btn=document.getElementById('dbtn');
+  if(!exe||!man){msg.style.color='var(--amber)';msg.textContent='Pick both files.';return;}
+  var fd=new FormData();fd.append('exe',exe);fd.append('manifest',man);
+  var ct=(document.cookie.match(/(?:^|; )pb_csrf=([^;]+)/)||[])[1];
+  btn.disabled=true;var lbl=btn.textContent;btn.textContent='Uploading…';msg.style.color='';msg.textContent='';
+  try{
+    var r=await fetch('/admin/desktop/release',{method:'POST',credentials:'same-origin',
+      headers: ct?{'X-CSRF-Token':decodeURIComponent(ct)}:{}, body:fd});
+    var j=await r.json().catch(function(){return {};});
+    if(r.ok){msg.style.color='var(--teal)';msg.textContent='✓ published v'+(j.version||'?')+' ('+(j.bytes||0)+' bytes) — live now';
+      document.getElementById('dcur').textContent='Current published version: '+(j.version||'?');}
+    else if(r.status===401||r.status===403){msg.style.color='var(--amber)';msg.textContent='Admins only — sign in as a platform admin first.';}
+    else{msg.style.color='var(--amber)';msg.textContent='Rejected: '+((j&&j.detail)||('HTTP '+r.status));}
+  }catch(e){msg.style.color='var(--amber)';msg.textContent='Network error — try again.';}
+  finally{btn.disabled=false;btn.textContent=lbl;}
+});
+</script>""")
 
 
 FAQ_HTML = _page("Petabyte — FAQ",
@@ -1621,6 +1682,7 @@ ADMIN_HTML = _page("Petabyte — admin", """
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <a class="btn btn-ghost" href="/metrics">Marketplace metrics</a>
       <a class="btn btn-ghost" href="/admin/funding-view">Funding metrics</a>
+      <a class="btn btn-ghost" href="/admin/desktop">Publish desktop app</a>
       <a class="btn btn-ghost" href="/status">Public status</a>
     </div>
     <p class="mini" style="margin-top:8px">Full time-series (per-endpoint latency, error rates, background workers) live in Grafana; these tiles are the at-a-glance operational heartbeat, refreshed every 20s.</p>

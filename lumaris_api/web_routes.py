@@ -39,11 +39,13 @@ def faq_page():
 def download_windows():
     """The 'Get the Windows app' target — never a dead link, never a fabricated download.
 
-    Order of truth: (1) a build bundled on THIS server (private-safe, no GitHub) wins; (2) else a
-    configured DESKTOP_APP_URL (a domain-hosted .exe or a signed public release); (3) else an
-    honest 'early access — start now with one command' page. So the button works the moment a real
-    build exists and tells the truth until then."""
-    local = "/opt/lumaris/installers/PetabyteAgent.exe"
+    Order of truth: (1) a build an admin uploaded to THIS server (private-safe, no GitHub) wins —
+    same dir /admin/desktop/release writes to; (2) else a configured DESKTOP_APP_URL (a
+    domain-hosted .exe or a signed public release); (3) else an honest 'early access — start now
+    with one command' page. So the button works the moment a real build exists and tells the truth
+    until then."""
+    local = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "installers", "desktop", "PetabyteAgent.exe")
     if os.path.exists(local):
         return FileResponse(local, filename="PetabyteAgent.exe",
                             media_type="application/vnd.microsoft.portable-executable")

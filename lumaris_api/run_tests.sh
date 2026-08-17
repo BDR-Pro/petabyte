@@ -48,6 +48,7 @@ run_suite "matmul result validation (offline)" python matmul_validation_test.py
 run_suite "settlement verification gate (pay only for verified work)" python settlement_verification_test.py
 run_suite "account (reset + cal webhook + demo notify)" python account_test.py
 run_suite "wallet (add funds via stripe checkout)" python wallet_test.py
+run_suite "desktop release (admin-uploadable signed builds)" python desktop_release_test.py
 run_suite "seller integrity audits (anti-fraud)" python seller_audit_test.py
 run_suite "quorum verification (redundant re-execution)" python quorum_test.py
 run_suite "real-job re-verification (content-hash quorum on real work)" python reverify_test.py

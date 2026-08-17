@@ -1,8 +1,10 @@
 from fastapi import (
     FastAPI, Depends, HTTPException, Query, Header, Security, Request, WebSocket,
-    WebSocketDisconnect, Body, Form,
+    WebSocketDisconnect, Body, Form, UploadFile, File,
 )
-from fastapi.responses import PlainTextResponse, JSONResponse, Response, HTMLResponse, RedirectResponse
+from fastapi.responses import (
+    PlainTextResponse, JSONResponse, Response, HTMLResponse, RedirectResponse, FileResponse,
+)
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, case, or_, and_, distinct, cast, Float
@@ -147,7 +149,8 @@ from deps import (oauth2_scheme, get_current_user, _username, api_key_user,  # n
                   enforce_csrf)
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
-                   NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML, LAUNCH_HTML)
+                   NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML, LAUNCH_HTML,
+                   DESKTOP_ADMIN_HTML)
 from web_routes import router as web_router     # static public pages (extracted router)
 from trust_routes import router as trust_router  # trust/transparency API (extracted router)
 from models_routes import router as models_router  # model hub: discover/pull/manage (extracted router)
@@ -4358,6 +4361,127 @@ def _viewer_is_admin(request: Request, db: Session) -> bool:
 def admin_whoami(me=Depends(require_admin)):
     """200 only for admins — lets the UI reveal the Admin link."""
     return {"admin": True, "username": me.username}
+
+
+# ================= Desktop app releases (admin-uploadable, signed) =================
+# Ship a new Windows desktop build as a browser upload — no CI, no terminal. SECURITY MODEL: the
+# server STORES and SERVES the build; it NEVER signs it. Fleet auto-update is gated by the pinned
+# Ed25519 signature the agent verifies (desktop-app/updater.py), so the trust root is the OFFLINE
+# release key, not this endpoint or an admin account. The admin uploads the exe PLUS its signed
+# manifest (produced offline by scripts/sign_release.py); the pair is refused unless
+# sha256(exe) == manifest.sha256 and — when PETABYTE_RELEASE_PUBKEY is set — the manifest signature
+# verifies, so a bad/unsigned build is never even served.
+_DESKTOP_EXE = "PetabyteAgent.exe"
+_DESKTOP_MANIFEST = "PetabyteAgent.exe.manifest.json"
+_DESKTOP_MAX_EXE_BYTES = 300 * 1024 * 1024   # generous cap for an agent .exe; rejects absurd uploads
+
+
+def _desktop_release_dir() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "installers", "desktop")
+
+
+def _verify_release_manifest(manifest: dict, exe_sha256: str):
+    """(ok, reason). Refuse a mismatched exe/manifest pair, and — when a release pubkey is
+    configured — a manifest whose Ed25519 signature does not verify."""
+    core_keys = ("asset", "version", "sha256")
+    if not all(manifest.get(k) for k in core_keys) or not manifest.get("sig"):
+        return False, "manifest is missing asset/version/sha256/sig"
+    if str(manifest["sha256"]).lower() != exe_sha256.lower():
+        return False, "sha256 mismatch — the uploaded .exe does not match its manifest"
+    b64 = os.getenv("PETABYTE_RELEASE_PUBKEY", "").strip()
+    if b64:
+        try:
+            import base64 as _b64
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            from cryptography.exceptions import InvalidSignature
+            core = {k: manifest[k] for k in core_keys}
+            canon = json.dumps(core, sort_keys=True, separators=(",", ":")).encode()
+            Ed25519PublicKey.from_public_bytes(_b64.b64decode(b64)).verify(
+                _b64.b64decode(manifest["sig"]), canon)
+        except InvalidSignature:
+            return False, "manifest signature does not verify against PETABYTE_RELEASE_PUBKEY"
+        except Exception as e:  # noqa: BLE001
+            return False, f"signature check error: {e}"
+    return True, "ok"
+
+
+@app.post("/admin/desktop/release", tags=["admin"])
+async def admin_desktop_release(exe: UploadFile = File(...), manifest: UploadFile = File(...),
+                                me=Depends(require_admin)):
+    """Publish a new Windows desktop build: upload the .exe and its SIGNED manifest. It is then
+    served at /download/windows (new installs) and /desktop/latest.json (existing agents that point
+    PETABYTE_UPDATE_URL here). Signing stays offline — produce the manifest with
+    `python scripts/sign_release.py --key <offline key> --version X --exe PetabyteAgent.exe`."""
+    raw_manifest = await manifest.read()
+    if len(raw_manifest) > 64 * 1024:
+        raise HTTPException(status_code=400, detail="manifest too large")
+    try:
+        man = json.loads(raw_manifest)
+    except Exception:
+        raise HTTPException(status_code=400, detail="manifest is not valid JSON")
+
+    d = _desktop_release_dir()
+    os.makedirs(d, exist_ok=True)
+    tmp = os.path.join(d, _DESKTOP_EXE + ".incoming")
+    h = hashlib.sha256()
+    total = 0
+    try:
+        with open(tmp, "wb") as f:                     # stream to disk, hash as we go (never RAM-load)
+            while True:
+                chunk = await exe.read(1 << 20)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _DESKTOP_MAX_EXE_BYTES:
+                    raise HTTPException(status_code=413, detail="exe exceeds the size limit")
+                h.update(chunk)
+                f.write(chunk)
+        ok_v, reason = _verify_release_manifest(man, h.hexdigest())
+        if not ok_v:
+            raise HTTPException(status_code=400, detail=reason)
+        os.replace(tmp, os.path.join(d, _DESKTOP_EXE))    # commit only the verified build
+        with open(os.path.join(d, _DESKTOP_MANIFEST), "wb") as f:
+            f.write(raw_manifest)
+        latest = {"tag": str(man["version"]), "version": str(man["version"]),
+                  "exe_url": "/download/windows", "manifest_url": "/download/" + _DESKTOP_MANIFEST,
+                  "sha256": str(man["sha256"])}
+        with open(os.path.join(d, "latest.json"), "w") as f:
+            json.dump(latest, f)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+    logger.info("desktop release %s published by admin %s (%d bytes)",
+                man.get("version"), getattr(me, "username", "?"), total)
+    return {"status": "published", "bytes": total, **latest}
+
+
+@app.get("/desktop/latest.json")
+def desktop_latest():
+    """The domain-hosted 'latest release' the desktop updater reads when PETABYTE_UPDATE_URL points
+    here (private-safe — no GitHub). 404 until an admin publishes a build."""
+    p = os.path.join(_desktop_release_dir(), "latest.json")
+    if not os.path.exists(p):
+        raise HTTPException(status_code=404, detail="no desktop release published yet")
+    return FileResponse(p, media_type="application/json")
+
+
+@app.get("/download/" + _DESKTOP_MANIFEST)
+def desktop_manifest_file():
+    """The signed manifest the updater verifies before applying an update."""
+    p = os.path.join(_desktop_release_dir(), _DESKTOP_MANIFEST)
+    if not os.path.exists(p):
+        raise HTTPException(status_code=404, detail="no desktop release published yet")
+    return FileResponse(p, media_type="application/json")
+
+
+@app.get("/admin/desktop", response_class=HTMLResponse)
+def admin_desktop_page():
+    """Browser upload form for a new desktop build. The page is a plain form; the POST enforces
+    admin, so serving the form itself carries no secret."""
+    return HTMLResponse(DESKTOP_ADMIN_HTML)
 
 
 @app.get("/admin/funding", tags=["admin"])
