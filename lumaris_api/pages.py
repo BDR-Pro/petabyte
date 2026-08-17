@@ -188,6 +188,13 @@ html[data-theme=light] .codeline{background:#0E1A2E}
 .codeline code::-webkit-scrollbar{display:none}
 .copybtn{flex:none;font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--mut);background:rgba(255,255,255,.05);border:1px solid var(--line2);border-radius:7px;padding:5px 10px;cursor:pointer;transition:color .15s,border-color .15s}
 .copybtn:hover{color:var(--teal);border-color:var(--teal)}
+/* launch-command syntax tokens (on the dark code box) */
+.codeline .tk-pr{color:#41597a;font-weight:700;user-select:none}
+.codeline .tk-p{color:#5AECDA;font-weight:600}
+.codeline .tk-c{color:#C4ADFF}
+.codeline .tk-a{color:#EAFBF7}
+.codeline .tk-f{color:#84B6E8}
+.codeline .tk-n{color:#F3C489}
 /* ---------- tables ---------- */
 .tbl{width:100%;border-collapse:collapse;font-size:13px}
 .tbl th{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);text-align:start;padding:13px 16px;border-bottom:1px solid var(--line)}
@@ -297,9 +304,10 @@ select{appearance:none;-webkit-appearance:none;background-image:linear-gradient(
 .lname{font-family:var(--disp);font-weight:600;text-transform:capitalize;font-size:15px}
 .ldesc{font-size:12px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lport{font-family:var(--mono);font-size:9.5px;color:var(--dim);border:1px solid var(--line2);border-radius:999px;padding:2px 9px;flex:none}
-.lbtn{flex:none;padding:8px 16px;font-size:12.5px}
-.lfoot{display:flex;align-items:center;gap:10px;margin-top:11px}
-.lfoot .codeline{margin-top:0;flex:1;min-width:0}
+.lbtn{width:100%;justify-content:center;padding:9px 16px;font-size:12.5px}
+.lfoot{display:flex;flex-direction:column;align-items:stretch;gap:9px;margin-top:11px}
+.lfoot .codeline{margin-top:0;min-width:0}
+.lfoot .codeline code{font-size:10.5px}
 .lres{margin-top:16px;padding:17px 19px;border:1px solid var(--line2);border-radius:var(--r-sm);background:linear-gradient(180deg,var(--depth2),var(--panel2))}
 .lresok{color:var(--pos);font-family:var(--disp);font-weight:600;margin-bottom:6px}
 .lres pre{margin-top:10px;font-size:12px;white-space:pre-wrap}
@@ -348,8 +356,7 @@ html[dir="rtl"] .arrow-fwd::after{content:"←"}
   .filterbar{gap:10px}
   .filterbar .field{flex:1 1 calc(50% - 5px)}
   .lfoot{flex-wrap:wrap}
-  .lfoot .codeline{order:2;flex:1 1 100%}
-  .lbtn{order:1;width:100%;justify-content:center}
+  .lfoot .codeline{flex:1 1 100%}
   .panel{overflow:visible}
   .tbl thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
   .tbl,.tbl tbody,.tbl tr,.tbl td{display:block;width:100%}
@@ -595,7 +602,8 @@ async function pbConfirm(name,hours){
   }
   if(confirm(L.join(String.fromCharCode(10)))) pbLaunch(name,hours);
 }
-function pbCmd(name,hours){var Q=String.fromCharCode(39);return 'curl -sX POST https://petabyte.market/launch -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '+Q+'{"template":"'+name+'","hours":'+(hours||2)+'}'+Q;}
+function pbCmd(name,hours){return 'petabyte launch '+name+' --hours '+(hours||2);}
+function pbCmdHtml(name,hours){return '<span class="tk-p">petabyte</span> <span class="tk-c">launch</span> <span class="tk-a">'+esc(name)+'</span> <span class="tk-f">--hours</span> <span class="tk-n">'+(hours||2)+'</span>';}
 async function pbCopy(name,btn){var c=window._PBCMDS[name]||'';try{await navigator.clipboard.writeText(c);}catch(e){
  var ta=document.createElement('textarea');ta.value=c;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');}catch(_){ }document.body.removeChild(ta);}
  if(btn){var o=btn.textContent;btn.textContent='copied';setTimeout(function(){btn.textContent=o;},1200);}}
@@ -609,7 +617,7 @@ async function renderLaunch(elId,kinds,hours){var el=document.getElementById(elI
    '<div class="lmeta"><div class="lname">'+t.name+'</div><div class="ldesc">'+(t.desc||'')+'</div></div>'+
    (t.port?('<span class="lport">:'+t.port+'</span>'):'<span class="lport">batch</span>')+'</div>'+
    '<div class="lfoot">'+
-    '<div class="codeline"><code>'+cmd.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</code>'+
+    '<div class="codeline"><code><span class="tk-pr">$</span> '+pbCmdHtml(t.name,hours)+'</code>'+
     '<button class="copybtn" data-act="pbCopy" data-a1="'+t.name+'">copy</button></div>'+
     '<button class="btn btn-primary lbtn" data-act="pbConfirm" data-a1="'+t.name+'" data-a2="'+(hours||2)+'">Launch</button>'+
    '</div></div>';}).join('');}

@@ -5,6 +5,7 @@
   petabyte login    -u alice -p secret
   petabyte deposit 100
   petabyte specs
+  petabyte launch ollama --hours 2
   petabyte run notebook.ipynb --gpu H100 --hours 1
   petabyte wallet
 """
@@ -180,6 +181,34 @@ def cmd_run(a, cfg):
         print("timed out waiting for result", file=sys.stderr)
 
 
+def cmd_launch(a, cfg):
+    """Launch a ready-made template (ollama, comfyui, blender, minecraft, …) on the cheapest
+    verified GPU that fits — the CLI twin of the web one-click launcher (`POST /launch`)."""
+    body = {"template": a.template, "hours": a.hours}
+    if getattr(a, "max_price", None) is not None:
+        body["max_price_per_hour"] = a.max_price
+    if getattr(a, "region", None):
+        body["region"] = a.region
+    if getattr(a, "spec", None):
+        body["spec_id"] = str(a.spec)
+    with _client(cfg) as c:
+        r = c.post("/launch", json=body)
+        if r.status_code != 200:
+            _die("launch failed", r)
+        d = r.json()
+        print(_green("✓ launched ") + _bold(a.template) +
+              _dim(f"  · {d.get('gpu_model', '?')} @ ${d.get('price_per_hour', '?')}/hr · {a.hours}h"))
+        print(f"  booking #{d.get('booking_id')}   escrow ${d.get('gross_amount')}")
+        url = d.get("url")
+        addr = url.get("http") if isinstance(url, dict) else url
+        if addr:
+            print("  address  " + _cyan(addr))
+        if isinstance(url, dict) and url.get("ssh"):
+            print("  ssh      " + _dim(url["ssh"]))
+        if d.get("connect"):
+            print("  " + _dim(d["connect"]))
+
+
 def cmd_vpn(a, cfg):
     """Download (or re-download) the WireGuard client config for a VPN-enabled booking."""
     with _client(cfg) as c:
@@ -295,6 +324,13 @@ def main():
                    help="rent on a private WireGuard VPN and save the client config")
     s.add_argument("--revision"); s.add_argument("--format"); s.add_argument("--quantization")
     s.add_argument("--force", action="store_true")
+    s = sub.add_parser("launch",
+                       help="launch a ready-made template (ollama, comfyui, blender, minecraft…) on the cheapest verified GPU")
+    s.add_argument("template", help="template name, e.g. ollama, comfyui, blender, minecraft")
+    s.add_argument("--hours", type=int, default=2)
+    s.add_argument("--region")
+    s.add_argument("--max-price", type=float, dest="max_price", help="cap the $/hour you'll pay")
+    s.add_argument("--spec", type=int, help="pin to a specific host spec id")
     s = sub.add_parser("vpn", help="download the WireGuard config for a VPN booking")
     s.add_argument("booking_id", type=int); s.add_argument("-o", "--out")
 
@@ -328,7 +364,7 @@ def main():
             force=a.force, home=None)
         sys.exit(mh_cli.cmd_run(ns) or 0)
     {"register": cmd_register, "login": cmd_login, "deposit": cmd_deposit,
-     "wallet": cmd_wallet, "specs": cmd_specs, "run": cmd_run, "vpn": cmd_vpn,
+     "wallet": cmd_wallet, "specs": cmd_specs, "run": cmd_run, "launch": cmd_launch, "vpn": cmd_vpn,
      "earnings": cmd_earnings, "node": cmd_node}[a.cmd](a, cfg)
 
 
