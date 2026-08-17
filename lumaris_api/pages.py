@@ -688,14 +688,19 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 .ctaband .wrap{position:relative}
 .ctaband .btn-ghost.oncta{color:#fff;border-color:rgba(255,255,255,.4)}
 .ctaband .btn-ghost.oncta:hover{background:rgba(255,255,255,.12)}
+.plainbox{display:flex;gap:15px;align-items:flex-start;max-width:840px;margin:0 auto;background:color-mix(in srgb,var(--teal) 7%,var(--panel));border:1px solid color-mix(in srgb,var(--teal) 26%,var(--line));border-radius:16px;padding:16px 20px}
+.plaintag{flex:none;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--teal);background:color-mix(in srgb,var(--teal) 14%,transparent);border:1px solid color-mix(in srgb,var(--teal) 30%,var(--line));border-radius:999px;padding:5px 11px;margin-top:1px;white-space:nowrap}
+.plainbox p{margin:0;font-size:14.5px;line-height:1.62;color:var(--mut)}
+.plainbox p b{color:var(--ink);font-weight:640}
+@media(max-width:620px){.plainbox{flex-direction:column;gap:9px;padding:15px 16px}}
 </style>
 <div class="hero"><div class="wrap" style="padding:74px 24px 30px">
   <img class="hexbg" src="/static/petabyte-logo.png" alt=""/>
   <div class="cols" style="align-items:center;gap:34px">
     <div style="flex:1.35 1 420px;min-width:300px">
       <div class="eyebrow"><span class="dot"></span> verified gpu marketplace</div>
-      <h1 style="font-size:clamp(40px,6.8vw,76px);margin:20px 0 16px;max-width:15ch"><span data-ar="قدرة حوسبة بدون أسعار السحابة.">GPU compute <span class="grad">without cloud prices.</span></span></h1>
-      <p class="mut" style="font-size:17px;max-width:52ch" data-ar="استأجر كروت رسومات بالساعة من مضيفين موثّقين، أو اربح من عتاد تملكه بالفعل. تُحفظ أموالك في ضمان حتى ينتهي العمل — وإذا تعطّل الجهاز، تُعاد إليك.">Rent GPUs by the hour from verified hosts, or earn from hardware you already own. Your money sits in escrow until the work is done — if a node drops, you are refunded.</p>
+      <h1 style="font-size:clamp(40px,6.8vw,76px);margin:20px 0 16px;max-width:15ch"><span data-ar="كروت رسومات قوية بلا أسعار السحابة.">Powerful GPUs <span class="grad">without cloud prices.</span></span></h1>
+      <p class="mut" style="font-size:17px;max-width:52ch" data-ar="استأجر كرت رسومات (GPU) قوياً — نوع الحواسيب الذي يشغّل ألعاب اليوم والرسوم ثلاثية الأبعاد والفيديو والذكاء الاصطناعي — بالساعة وبجزء بسيط من أسعار السحابة الكبرى. تُحفظ أموالك بأمان ولا تُدفع إلا مع إنجاز العمل؛ وإذا تعطّل جهاز، تُعاد إليك تلقائياً.">Rent a powerful GPU — the kind of computer behind today's games, 3D, video and AI — by the hour, for a fraction of big-cloud prices. Your money is held safely and paid out only as the work gets done; if a machine goes offline, you're paid back automatically.</p>
       <div class="mini" style="margin-top:28px;margin-bottom:10px" data-ar="ما الذي تبحث عنه؟">What are you here for?</div>
       <div style="display:flex;gap:12px;flex-wrap:wrap">
         <a class="btn btn-amber arrow-fwd" href="/marketplace" data-ar="أحتاج كروت رسومات">I need GPUs </a>
@@ -708,49 +713,57 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
       <div class="hc-chips" id="hc_chips" role="tablist" aria-label="GPU model"><span class="mut mono" style="font-size:12px">Loading prices…</span></div>
       <div class="hc-cmp">
         <div class="hc-side hc-pb"><span class="hc-k">Petabyte</span><span class="hc-v" id="hc_pb">—</span><span class="hc-u">/hour</span></div>
-        <div class="hc-side"><span class="hc-k">Cloud on-demand</span><span class="hc-v" id="hc_cloud">—</span><span class="hc-u">/hour</span></div>
+        <div class="hc-side"><span class="hc-k" data-ar="السحابة الكبرى">Big cloud</span><span class="hc-v" id="hc_cloud">—</span><span class="hc-u">/hour</span></div>
       </div>
       <div class="hc-bar"><div class="hc-fill" id="hc_fill"></div></div>
       <div class="hc-save"><b id="hc_pct">—</b> cheaper on Petabyte</div>
       <div class="hc-hours"><label class="mini" for="hc_hours" data-ar="التشغيل لمدة">Run for</label><input id="hc_hours" type="range" min="1" max="168" value="24" aria-label="Hours to run"/><span class="mono" id="hc_hval" style="min-width:42px;text-align:end">24h</span></div>
-      <div class="hc-total"><span class="mut mini" data-ar="إجماليك">Your total</span><span><b class="mono teal" id="hc_pbtot" style="font-size:16px">—</b> <span class="mut mini">vs cloud <span class="mono" id="hc_cltot">—</span></span></span></div>
+      <div class="hc-total"><span class="mut mini" data-ar="إجماليك">Your total</span><span><b class="mono teal" id="hc_pbtot" style="font-size:16px">—</b> <span class="mut mini"><span data-ar="مقابل السحابة الكبرى">vs big cloud</span> <span class="mono" id="hc_cltot">—</span></span></span></div>
       <a class="btn btn-amber" href="/marketplace" style="width:100%;justify-content:center;margin-top:12px" data-ar="تصفّح كروت الرسومات">Browse GPUs →</a>
-      <div class="mini" style="margin-top:8px;text-align:center" data-ar="أسعار مرجعية من كتالوج الأسعار · ابدأ في وضع الاختبار دون بطاقة">Reference rates from our price catalog · start in TEST mode, no card</div>
+      <div class="mini" style="margin-top:8px;text-align:center" data-ar="أسعار تقريبية · جرّب كل شيء في وضع الاختبار أولاً — دون بطاقة ولا أموال حقيقية">Typical prices · try it all in TEST mode first — no card, no real money</div>
     </div></div>
   </div>
 </div></div>
+
+<!-- PLAIN-ENGLISH EXPLAINER: for first-timers with no technical background. -->
+<div class="wrap" style="padding:20px 24px 2px">
+  <div class="plainbox">
+    <span class="plaintag" data-ar="جديد هنا؟">New to this?</span>
+    <p data-ar="الأجهزة القوية كهذه باهظة الشراء، والسحابة الكبرى تؤجّرها بسعر مرتفع. يصلك <b>Petabyte</b> بأشخاص لديهم كرت رسومات فائض دون استخدام، فتستأجر أجهزتهم <b>بالساعة</b> بسعر أقل بكثير — مع حماية دفعتك طوال الوقت. جرّبه أولاً في وضع الاختبار دون بطاقة.">Powerful machines like these cost a lot to buy, and the big cloud companies rent them out at a premium. <b>Petabyte connects you with people who have a spare GPU sitting idle</b>, so you rent theirs <b>by the hour</b> for much less — with your payment protected the whole time. Try it first in TEST mode, no card needed.</p>
+  </div>
+</div>
 
 <!-- PROOF STRIP: real figures — max savings + model count come from the price catalog,
      the live tile fills in only when verified nodes are actually online. -->
 <div class="wrap" style="padding:26px 24px 6px">
   <div class="prf">
-    <div class="prf-i"><b id="prf_save">up to 90%</b><span data-ar="أرخص من الأسعار الفورية للسحابة — كل كرت رسومات مُدرج تحت سعر مزوّده السحابي">cheaper than cloud on-demand — every GPU listed below its hyperscaler rate</span></div>
-    <div class="prf-i"><b id="prf_models">46</b><span data-ar="طراز كرت رسومات في كتالوج الأسعار — لكلٍّ سعر عادل مرتبط بأداء القياس">GPU models in the price catalog — each on a fair, benchmark-anchored rate</span></div>
-    <div class="prf-i"><b data-ar="بالساعة">Hourly</b><span data-ar="فوترة مع ضمان بالساعة — أوقف في أي وقت، وتُعاد الساعات غير المستخدمة بالكامل">billing with per-hour escrow — stop anytime, unused hours refunded to the cent</span></div>
-    <div class="prf-i"><b id="prf_live">TEST</b><span id="prf_live_t">mode by default — walk the whole flow with no card, no real money</span></div>
+    <div class="prf-i"><b id="prf_save">up to 90%</b><span data-ar="أرخص من السحابة الكبرى — كل كرت رسومات هنا أقل من أسعار كبار المزوّدين">cheaper than the big cloud — every GPU here costs less than the major providers charge</span></div>
+    <div class="prf-i"><b id="prf_models">46</b><span data-ar="أنواع كروت رسومات للاختيار من بينها — لكلٍّ سعر عادل حسب سرعته">kinds of GPU to choose from — each at a fair price based on how fast it is</span></div>
+    <div class="prf-i"><b data-ar="بالساعة">Hourly</b><span data-ar="فوترة — أوقِف في أي وقت، وتُعاد إليك أي ساعات لم تستخدمها">billing — stop anytime, and any hours you don't use come back to you</span></div>
+    <div class="prf-i"><b id="prf_live">TEST</b><span id="prf_live_t">mode by default — a safe practice run, no card and no real money</span></div>
   </div>
 </div>
 
 <!-- CREDIBILITY: every claim here is enforced by a test in the repo. No vanity metrics,
      no fabricated logos. What we can prove, and nothing we cannot. -->
 <div class="wrap" style="padding:6px 24px 4px">
-  <div class="mini" style="text-align:center;margin-bottom:14px" data-ar="ما الذي نضمنه فعلاً — كل بند منها مغطّى باختبار.">What we actually guarantee — every line below is enforced by a test</div>
+  <div class="mini" style="text-align:center;margin-bottom:14px" data-ar="ما نَعِد به — مبنيّ في المنتج فعلاً، وليس مجرّد كلام تسويقي">What we promise — built into the product, not just marketing</div>
   <div class="cols" style="gap:14px;flex-wrap:wrap">
     <div class="card" style="flex:1 1 210px">
-      <div class="lbl">Escrow-protected</div>
-      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="تُحفظ أموالك في ضمان وتُعاد الساعات غير المستخدمة بالسنت.">Your money is held in escrow and released only for work done. Stop early and the unused hours are refunded to the cent.</p>
+      <div class="lbl">Money held safely</div>
+      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="نحتفظ بأموالك بأمان — لا مالك الجهاز — ولا نصرفها إلا مقابل عملٍ أُنجز فعلاً. أوقِف مبكراً وتسترد الباقي.">We hold your money safely — not the machine's owner — and pay it out only for work actually done. Stop early and you get the rest back.</p>
     </div>
     <div class="card" style="flex:1 1 210px">
-      <div class="lbl">Survives a host failure</div>
-      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="إذا تعطّل الجهاز أثناء العمل، ننقلك تلقائياً إلى مضيف آخر.">If a host drops mid-job, we move your instance to another node and you keep going. There is a timeline for every rental that proves it.</p>
+      <div class="lbl">Stays running</div>
+      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="إذا تعطّل الجهاز الذي يشغّل عملك، ننقلك إلى جهازٍ آخر لتواصل بلا انقطاع. ولكل عملية استئجار سجلٌّ زمنيّ يوضّح ما جرى.">If the machine running your work goes offline, we move you to another one so you keep going. Every rental has a timeline that shows exactly what happened.</p>
     </div>
     <div class="card" style="flex:1 1 210px">
-      <div class="lbl">Verified hardware</div>
-      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="لا يقبل أي جهاز عملاً مدفوعاً قبل إثبات عتاده تشفيرياً.">No machine can take paid work until it has cryptographically proven what GPU it actually has. Unverified nodes are marked as such.</p>
+      <div class="lbl">Proven, real GPUs</div>
+      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="على كل جهاز أن يُثبت نوع كرت الرسومات الذي يملكه قبل قبول أي عمل مدفوع — لتحصل دائماً على ما تدفع مقابله. والأجهزة غير المُثبَتة موسومة بوضوح.">Every machine has to prove exactly which GPU it has before it can take paid work — so you always get what you pay for. Machines that haven't proven it are clearly labelled.</p>
     </div>
     <div class="card" style="flex:1 1 210px">
-      <div class="lbl">Isolated workloads</div>
-      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="يعمل كل عبء داخل جهاز افتراضي دقيق، ومنافذه مغلقة افتراضياً لحماية شبكة المضيف.">Each workload runs in its own micro-VM with a default-closed network, so one tenant cannot reach another and a host's home network stays protected.</p>
+      <div class="lbl">Kept private</div>
+      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="يعمل عملك في مساحةٍ خاصةٍ مغلقة — لا يمكن لأيّ مستأجرٍ آخر الوصول إليه، وتبقى شبكة مالك الجهاز المنزلية محميّةً أيضاً.">Your work runs in its own sealed-off space — no other renter can reach it, and the machine owner's home network stays protected too.</p>
     </div>
   </div>
   <div style="text-align:center;margin-top:16px">
@@ -763,17 +776,17 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 <div class="wrap" style="padding:44px 24px 6px">
   <div class="lbl" style="margin-bottom:4px" data-ar="كيف تعمل">How it works</div>
   <h2 style="font-size:clamp(22px,3vw,30px);margin-bottom:6px" data-ar="من الصفر إلى كرت رسومات يعمل في <span class='grad-teal'>ثلاث خطوات.</span>">From zero to a running GPU in <span class="grad-teal">three steps.</span></h2>
-  <p class="mut" style="max-width:60ch;margin-bottom:20px" data-ar="بلا حصص، ولا مكالمة مبيعات، ولا عقد طويل الأمد. أضِف رصيداً، واختر كرت رسومات، ويحجز الموجِّه أرخص جهاز موثّق مطابق.">No quotas, no sales call, no long-term contract. Add funds, pick a GPU, and the router books the cheapest verified match.</p>
+  <p class="mut" style="max-width:60ch;margin-bottom:20px" data-ar="بلا إجراءات معقّدة، ولا مكالمة مبيعات، ولا عقد طويل. أضِف بعض المال، واختر كرت رسومات، ونحجز لك أرخص جهاز موثوق.">No sign-up hoops, no sales call, no long contract. Add a little money, pick a GPU, and we book the cheapest trusted machine for you.</p>
   <div class="hiw">
     <div class="hiw-s"><span class="hiw-n">1</span>
       <h3 data-ar="اختر كرت رسومات — أو لا تختر">Pick a GPU — or don't</h3>
-      <p class="mut" data-ar="تصفّح الأجهزة الموثّقة حسب الطراز والذاكرة والمنطقة، أو صِف ما تحتاجه ودَع الموجِّه يضعه على أرخص مطابقة.">Browse verified nodes by model, VRAM and region — or just state what you need and let the router place it on the cheapest match.</p></div>
+      <p class="mut" data-ar="تصفّح الأجهزة الموثوقة حسب النوع والذاكرة والموقع — أو أخبرنا بما تحتاجه فحسب ونختار لك الأرخص المناسب.">Browse trusted machines by type, memory and location — or just tell us what you need and we'll pick the cheapest one that fits.</p></div>
     <div class="hiw-s"><span class="hiw-n">2</span>
       <h3 data-ar="شغّل بنقرة واحدة">Launch in one click</h3>
-      <p class="mut" data-ar="يُقلِع قالب (خادم لعبة، أو Blender، أو ComfyUI، أو نموذج لغوي) أو صورتك الخاصة داخل جهاز افتراضي معزول. ينتقل رصيدك إلى الضمان، لا إلى المضيف.">A template — a game server, Blender, ComfyUI, an LLM — or your own image boots in an isolated micro-VM. Your funds move into escrow, not to the host.</p></div>
+      <p class="mut" data-ar="شغّل إعداداً جاهزاً — خادم لعبة، أو أداة تصميم ثلاثي الأبعاد، أو روبوت دردشة ذكياً — أو أحضِر إعدادك الخاص، بنقرة واحدة. ينتقل مالُك إلى حفظٍ آمن، لا إلى مالك الجهاز.">Start a ready-made setup — a game server, a 3D design tool, an AI chatbot — or bring your own, in a single click. Your money moves into safe holding, not to the machine's owner.</p></div>
     <div class="hiw-s"><span class="hiw-n">3</span>
       <h3 data-ar="ادفع مقابل العمل الفعلي فقط">Pay only for real work</h3>
-      <p class="mut" data-ar="يُحرَّر الضمان ساعةً بساعة أثناء تشغيل المهمة. أوقِف مبكراً ويُعاد الباقي؛ وإذا تعطّل جهاز، تُنقَل أو تُعوَّض بالكامل.">Escrow releases hour by hour as the job runs. Stop early and the rest is refunded; if a node drops, you're moved or made whole.</p></div>
+      <p class="mut" data-ar="تُحتسب الأجرة ساعةً بساعة أثناء التشغيل. أوقِف مبكراً ويعود إليك الباقي؛ وإذا تعطّل جهاز، ننقلك أو نعيد إليك مالَك.">You're charged hour by hour as it runs. Stop early and the rest comes back; if a machine goes offline, we move you or pay you back.</p></div>
   </div>
 </div>
 
@@ -814,8 +827,8 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 <!-- launch anything: the signature cards, on the front door -->
 <div class="wrap" style="padding:40px 24px 8px">
   <div class="lbl" style="margin-bottom:4px">Launch anything</div>
-  <h2 style="font-size:clamp(22px,3vw,30px);margin-bottom:6px">Games, art tools, AI stacks — <span class="grad-teal">one click or one line.</span></h2>
-  <p class="mut" style="max-width:62ch;margin-bottom:18px">Every card is a real workload. Press Launch, or copy the command — either way we book the cheapest verified GPU and hand you the address.</p>
+  <h2 style="font-size:clamp(22px,3vw,30px);margin-bottom:6px">Games, art tools, AI — <span class="grad-teal">in one click or one line.</span></h2>
+  <p class="mut" style="max-width:62ch;margin-bottom:18px">Each of these is ready to run. Press Launch — or copy the one-line command if you prefer — and we set it up on the cheapest trusted machine and hand you the link.</p>
   <div id="launchgrid"></div>
   <div id="launchresult" style="display:none"></div>
 </div>
@@ -832,8 +845,8 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
     <p class="mut" style="font-size:13px">Blender, ComfyUI, SD — farm-grade GPUs below the big render farms.</p></a>
   <a class="card" href="/developers" style="display:block">
     <div class="lbl">Builders</div>
-    <h2 style="font-size:17px;margin-bottom:6px">Cheaper AI compute</h2>
-    <p class="mut" style="font-size:13px">H100-class below cloud on-demand. State intent — the router places the job.</p></a>
+    <h2 style="font-size:17px;margin-bottom:6px">Cheaper AI power</h2>
+    <p class="mut" style="font-size:13px">Top-tier AI chips for less than the big cloud. Say what you need and we place it for you.</p></a>
   <a class="card" href="/install" style="display:block">
     <div class="lbl am">GPU owners</div>
     <h2 style="font-size:17px;margin-bottom:6px">Turn idle silicon into income</h2>
@@ -842,8 +855,8 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 
 <!-- CTA BAND: the last push before the fold ends. -->
 <div class="ctaband"><div class="wrap" style="padding:52px 24px;text-align:center">
-  <h2 style="font-size:clamp(24px,3.4vw,34px);color:#fff;margin:0 auto 10px;max-width:20ch" data-ar="ابدأ باستئجار قدرة حوسبة GPU خلال الدقائق الخمس القادمة.">Start renting GPU compute in the next five minutes.</h2>
-  <p style="color:rgba(255,255,255,.72);font-size:15.5px;max-width:52ch;margin:0 auto 22px" data-ar="وضع الاختبار مُفعَّل افتراضياً — جرّب العملية كاملةً دون بطاقة. وحوِّل إلى الوضع الحقيقي متى شئت.">TEST mode is on by default — walk the entire flow, no card required. Switch to live when you're ready.</p>
+  <h2 style="font-size:clamp(24px,3.4vw,34px);color:#fff;margin:0 auto 10px;max-width:20ch" data-ar="استأجر أول كرت رسومات خلال الدقائق الخمس القادمة.">Rent your first GPU in the next five minutes.</h2>
+  <p style="color:rgba(255,255,255,.72);font-size:15.5px;max-width:52ch;margin:0 auto 22px" data-ar="يبدأ في وضع الاختبار — تجربة آمنة دون بطاقة. حوّل إلى الأموال الحقيقية متى شئت فقط.">It starts in TEST mode — a safe practice run with no card. Switch to real money only when you're ready.</p>
   <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
     <a class="btn btn-amber arrow-fwd" href="/marketplace" data-ar="تصفّح كروت الرسومات">Browse GPUs</a>
     <a class="btn btn-ghost oncta" href="/install" data-ar="أدرِج كرت رسوماتك">List your GPU</a>
