@@ -145,6 +145,18 @@ button:active,.btn:active{transform:translateY(1px)}
 .btn-primary{background:linear-gradient(180deg,#8CF2E6,#33DBCB);color:#042521;
  box-shadow:0 6px 22px -8px rgba(53,224,208,.55),inset 0 1px 0 rgba(255,255,255,.45)}
 .btn-primary:hover{filter:brightness(1.05)}
+/* toast notifications (success / error / info) */
+#pbtoasts{position:fixed;z-index:9999;bottom:20px;inset-inline-end:20px;display:flex;flex-direction:column;gap:10px;max-width:min(380px,92vw)}
+.pbtoast{display:flex;align-items:flex-start;gap:10px;background:var(--panel);border:1px solid var(--line2);border-inline-start:3px solid var(--mut);border-radius:12px;padding:11px 13px;box-shadow:0 14px 36px -16px rgba(0,0,0,.55);font-size:13.5px;line-height:1.45;color:var(--ink);animation:pbtin .2s cubic-bezier(.2,.7,.2,1)}
+.pbtoast.ok{border-inline-start-color:var(--pos)}
+.pbtoast.err{border-inline-start-color:var(--bad)}
+.pbtoast.info{border-inline-start-color:var(--teal)}
+.pbtoast .tx{flex:1;min-width:0}
+.pbtoast .cl{cursor:pointer;color:var(--mut);flex:none;font-size:16px;line-height:1;background:none;border:0;padding:0 2px}
+.pbtoast .cl:hover{color:var(--ink)}
+.pbtoast.out{animation:pbtout .2s ease forwards}
+@keyframes pbtin{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes pbtout{to{transform:translateY(6px);opacity:0}}
 /* ---------- labels / structure ---------- */
 .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:var(--teal);display:flex;align-items:center;gap:10px}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--teal);box-shadow:0 0 12px var(--teal);animation:pulse 2.4s infinite}
@@ -445,6 +457,22 @@ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'
 function authed(){return !!tok();}
 async function api(p,o){o=o||{};o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
  if(tok())o.headers['Authorization']='Bearer '+tok();var r=await fetch(p,o);var b={};try{b=await r.json()}catch(e){}return {ok:r.ok,status:r.status,body:b};}
+// In-app toast for success/error/info feedback — replaces jarring browser toast(,'err') popups.
+// kind: 'ok' (success) | 'err' (failure) | 'info'. Auto-dismisses; errors linger a little longer.
+function toast(msg,kind){
+  kind=(kind==='ok'||kind==='err'||kind==='info')?kind:'info';
+  var host=document.getElementById('pbtoasts');
+  if(!host){host=document.createElement('div');host.id='pbtoasts';document.body.appendChild(host);}
+  var t=document.createElement('div');t.className='pbtoast '+kind;t.setAttribute('role',kind==='err'?'alert':'status');
+  var tx=document.createElement('div');tx.className='tx';tx.textContent=String(msg==null?'':msg);
+  var cl=document.createElement('button');cl.type='button';cl.className='cl';cl.setAttribute('aria-label','Dismiss');cl.textContent='×';
+  var gone=false,close=function(){if(gone)return;gone=true;t.classList.add('out');setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t);},200);};
+  cl.addEventListener('click',close);
+  t.appendChild(tx);t.appendChild(cl);host.appendChild(t);
+  setTimeout(close,kind==='err'?6000:4000);
+  return t;
+}
+window.toast=toast;
 // Money-screen honesty: any page with a #pbtestmode slot shows a clear TEST-MODE banner while the
 // platform is in sandbox / Stripe test mode — so no one ever mistakes a demo for a real charge.
 async function pbTestBanner(){var el=document.getElementById('pbtestmode');if(!el)return;
@@ -1144,7 +1172,7 @@ async function genInstaller(a1, btn){
   var body=(pt!==''&&pn>0)?JSON.stringify({price:pn}):JSON.stringify({});
   var r=await api('/nodes/install_token',{method:'POST',body:body});
   if(btn){btn.disabled=false;btn.textContent=lbl;}
-  if(!(r.ok&&r.body&&r.body.install)){alert('Could not create your installer — please make sure you are signed in.');return;}
+  if(!(r.ok&&r.body&&r.body.install)){toast('Could not create your installer — please make sure you are signed in.','err');return;}
   _renderCmds(r.body.install.linux, r.body.install.windows);
 }
 // Fill the two command boxes from the server-built one-liners and reveal them. The whole command
@@ -3129,8 +3157,8 @@ async function scLoad(){
   var tb=document.getElementById('earn_rows');var js=b.jobs||[];
   tb.innerHTML=js.length?js.map(function(j){return '<tr><td class="mono">'+j.transaction_id+'</td><td><span class="badge">'+j.status+'</span></td><td class="mono">'+m2(j.captured)+'</td><td class="mono teal">'+m2(j.net)+'</td><td class="mono">'+m2(j.transferred)+(j.stripe_transfer_id?'':'')+'</td></tr>';}).join(''):'<tr><td colspan=5 class="mut mono" style="padding:18px;text-align:center">No paid jobs yet.</td></tr>';
 }
-async function scConnect(){var r=await api('/payments/connect/account',{method:'POST',body:'{}'});if(r.ok)scOnboard();else alert('Could not create account');}
-async function scOnboard(){var r=await api('/payments/connect/onboarding-link',{method:'POST',body:'{}'});if(r.ok&&r.body.url)location.href=r.body.url;else alert('Could not start onboarding');}
+async function scConnect(){var r=await api('/payments/connect/account',{method:'POST',body:'{}'});if(r.ok)scOnboard();else toast('Could not create account','err');}
+async function scOnboard(){var r=await api('/payments/connect/onboarding-link',{method:'POST',body:'{}'});if(r.ok&&r.body.url)location.href=r.body.url;else toast('Could not start onboarding','err');}
 async function scRefresh(){await api('/payments/connect/refresh',{method:'POST',body:'{}'});scLoad();}
 // Your GPUs: online/verified -> visible to buyers -> earning. Answers "my GPU is on,
 // why is nothing running?" with the actual blocker, not a zero.
@@ -3225,10 +3253,10 @@ function n_diskNode(d){return d&&d.node_name?('node '+d.node_name):'';}
 async function diskSave(i){
   var prov=(document.getElementById('disk_prov_'+i)||{}).value;
   var gb=Number((document.getElementById('disk_gb_'+i)||{}).value||0);
-  if(!prov){alert('Pick a storage provider.');return;}
-  if(!(gb>=1)){alert('Enter a GB cap (how much disk to rent).');return;}
+  if(!prov){toast('Pick a storage provider.','err');return;}
+  if(!(gb>=1)){toast('Enter a GB cap (how much disk to rent).','err');return;}
   var r=await api('/nodes/disk',{method:'POST',body:JSON.stringify({spec_id:Number(i),enabled:true,provider:prov,alloc_gb:gb})});
-  if(!r.ok){var m=(r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not enable disk rental.';alert(m);return;}
+  if(!r.ok){var m=(r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not enable disk rental.';toast(m,'err');return;}
   diskStatus(i);
 }
 async function diskPause(i){
@@ -4092,11 +4120,11 @@ async function clusterShow(j){
 function clOpenManifest(id){location.href='/jobs/manifest/'+id;}
 async function clVpnDownload(id){
  try{var r=await fetch('/jobs/'+id+'/vpn_config',{headers:{'Authorization':'Bearer '+tok()}});
-  if(!r.ok){alert('VPN config not available for this cluster.');return;}
+  if(!r.ok){toast('VPN config not available for this cluster.','err');return;}
   var text=await r.text();var b=new Blob([text],{type:'text/plain'});
   var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='petabyte-cluster-'+id+'.conf';
   document.body.appendChild(a);a.click();a.remove();
- }catch(e){alert('Could not download the VPN config.');}
+ }catch(e){toast('Could not download the VPN config.','err');}
 }
 document.addEventListener('DOMContentLoaded',clusterAvail);
 </script>""")
@@ -4614,9 +4642,9 @@ function cVmRows(vms){
   }).join('');
 }
 async function cVmExtend(id){var r=await api('/vm/'+id+'/extend',{method:'POST',body:JSON.stringify({hours:1})});
-  if(!r.ok)alert((r.body&&(r.body.detail||r.body.message))||'Could not extend.');cCompute();cWalletStrip();}
+  if(!r.ok)toast((r.body&&(r.body.detail||r.body.message))||'Could not extend.','err');cCompute();cWalletStrip();}
 async function cVmStop(id){if(!confirm('Stop VM '+id+'? This releases the node.'))return;
-  var r=await api('/vm/'+id+'/stop',{method:'POST'});if(!r.ok)alert('Could not stop.');cCompute();if(CLOADED['overview'])cRunning();}
+  var r=await api('/vm/'+id+'/stop',{method:'POST'});if(!r.ok)toast('Could not stop.','err');cCompute();if(CLOADED['overview'])cRunning();}
 
 function cOut(el,text,cls){var s=document.createElement('span');if(cls)s.className=cls;s.textContent=text;
   el.appendChild(document.createElement('br'));el.appendChild(s);el.scrollTop=el.scrollHeight;}
@@ -4704,7 +4732,7 @@ async function cVolOpen(id){
 async function cVolDelete(id,name){
   if(!confirm('Delete volume "'+name+'"? This removes every snapshot and all stored content. This cannot be undone.'))return;
   var r=await api('/volumes/'+id,{method:'DELETE'});
-  if(!r.ok){alert((r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not delete volume.');return;}
+  if(!r.ok){toast((r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not delete volume.','err');return;}
   var box=document.getElementById('c_vol_detail');if(box)box.style.display='none';
   cStorage();
 }
@@ -4738,20 +4766,20 @@ async function cBilling(){
 }
 async function cDeposit(){
   var amt=parseFloat((document.getElementById('c_dep')||{}).value);
-  if(!amt||amt<=0){alert('Enter an amount.');return;}
+  if(!amt||amt<=0){toast('Enter an amount.','err');return;}
   var r=await api('/deposit',{method:'POST',body:JSON.stringify({amount:amt})});
   if(r.ok){cWalletStrip();cBilling();}
-  else if(r.status===403){alert('In live mode, funds are added at checkout — rent a GPU and pay by card.');}
-  else{alert('Could not add funds.');}
+  else if(r.status===403){toast('In live mode, funds are added at checkout — rent a GPU and pay by card.','info');}
+  else{toast('Could not add funds.','err');}
 }
 async function cWithdraw(){
   var mid=(document.getElementById('c_wmethod')||{}).value;
   var amt=parseFloat((document.getElementById('c_wamt')||{}).value);
-  if(!mid){alert('Add a payout method first (link below the box).');return;}
-  if(!amt||amt<=0){alert('Enter an amount.');return;}
+  if(!mid){toast('Add a payout method first (link below the box).','err');return;}
+  if(!amt||amt<=0){toast('Enter an amount.','err');return;}
   var r=await api('/wallet/withdraw',{method:'POST',body:JSON.stringify({method_id:Number(mid),amount:amt})});
-  if(r.ok){alert('Payout requested: '+cD2(r.body.amount_usd));cWalletStrip();cBilling();}
-  else{alert((r.body&&(r.body.message||r.body.detail))||'Withdrawal failed.');}
+  if(r.ok){toast('Payout requested: '+cD2(r.body.amount_usd),'ok');cWalletStrip();cBilling();}
+  else{toast((r.body&&(r.body.message||r.body.detail))||'Withdrawal failed.','err');}
 }
 async function cReferral(){
   var r=((await api('/referral'))||{}).body||{};
@@ -4826,13 +4854,13 @@ async function cMemberAdd(orgId){
 }
 async function cMemberRole(orgId,username,role){
   var r=await api('/orgs/'+orgId+'/members/'+encodeURIComponent(username),{method:'PUT',body:JSON.stringify({role:role})});
-  if(!r.ok)alert((r.body&&(r.body.detail||r.body.message))||'Could not change role.');
+  if(!r.ok)toast((r.body&&(r.body.detail||r.body.message))||'Could not change role.','err');
   cTeamOpen(orgId);cTeams();
 }
 async function cMemberRemove(orgId,username){
   if(!confirm('Remove '+username+' from this team?'))return;
   var r=await api('/orgs/'+orgId+'/members/'+encodeURIComponent(username),{method:'DELETE'});
-  if(!r.ok)alert((r.body&&(r.body.detail||r.body.message))||'Could not remove member.');
+  if(!r.ok)toast((r.body&&(r.body.detail||r.body.message))||'Could not remove member.','err');
   cTeamOpen(orgId);cTeams();
 }
 document.addEventListener('change',function(e){var s=e.target;
@@ -4869,7 +4897,7 @@ async function c2faLoad(){
 }
 async function c2faSetup(){
   var r=await api('/account/2fa/setup',{method:'POST'});
-  if(!r.ok){alert('Could not start 2FA setup.');return;}
+  if(!r.ok){toast('Could not start 2FA setup.','err');return;}
   var d=r.body||{};var el=document.getElementById('c_2fa');
   var grouped=(d.secret||'').replace(/(.{4})/g,'$1 ').trim();
   el.innerHTML='<div class="lbl">Add this account to your authenticator app</div>'+
@@ -4951,12 +4979,12 @@ async function cKeyCreate(){
   var out=document.getElementById('c_keyout');
   if(r.ok){out.style.display='';out.innerHTML='<div class="lbl">New key — copy it now, it is shown once</div>'+
     '<code class="mono" style="word-break:break-all;color:var(--teal)">'+esc(r.body.api_key)+'</code>';cAccess();}
-  else{alert('Could not create key.');}
+  else{toast('Could not create key.','err');}
 }
 async function cKeyRevoke(jti){
   if(!confirm('Revoke this key? Any agent using it stops working.'))return;
   var r=await api('/keys/'+jti+'/revoke',{method:'POST'});
-  if(r.ok)cAccess();else alert('Could not revoke.');
+  if(r.ok)cAccess();else toast('Could not revoke.','err');
 }
 async function cNotifs(){
   var ns=(((await api('/notifications'))||{}).body||{}).notifications||[];
