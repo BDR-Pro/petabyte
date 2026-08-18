@@ -189,6 +189,32 @@ def reference_peak(gpu_model: str):
     return reference_value(gpu_model, "tflops_fp16")
 
 
+# On-board memory (GB) per GPU model — the published capacity of the common variant. Used to
+# INFER a host's VRAM when it registered a model but never reported vram_gb, so template
+# min-VRAM gates can still make a safe placement decision instead of admitting an unknown host.
+# Where a model shipped in several sizes we take the smaller mainstream one (conservative: we'd
+# rather under-count and skip a host than over-promise and OOM after escrow is reserved).
+_VRAM_GB = {
+    "A10": 24, "A10G": 24, "A30": 24, "A40": 48, "A100": 40,
+    "H100": 80, "H200": 141, "L4": 24, "L40": 48, "L40S": 48,
+    "MI210": 64, "MI250": 128, "MI250X": 128, "MI300X": 192,
+    "P100": 16, "T4": 16, "V100": 16, "TITAN RTX": 24,
+    "RTX 2060": 6, "RTX 2060 SUPER": 8, "RTX 2070": 8, "RTX 2070 SUPER": 8,
+    "RTX 2080": 8, "RTX 2080 SUPER": 8, "RTX 2080 TI": 11,
+    "RTX 3060": 12, "RTX 3060 TI": 8, "RTX 3070": 8, "RTX 3070 TI": 8,
+    "RTX 3080": 10, "RTX 3080 TI": 12, "RTX 3090": 24, "RTX 3090 TI": 24,
+    "RTX 4060": 8, "RTX 4060 TI": 8, "RTX 4070": 12, "RTX 4070 SUPER": 12,
+    "RTX 4070 TI": 12, "RTX 4070 TI SUPER": 16, "RTX 4080": 16, "RTX 4080 SUPER": 16,
+    "RTX 4090": 24, "RTX 5090": 32, "RTX A4000": 16, "RTX A5000": 24, "RTX A6000": 48,
+}
+
+
+def model_vram_gb(gpu_model: str) -> int:
+    """Inferred on-board memory (GB) for a claimed GPU model, or 0 when the model is unknown."""
+    key = normalize_model(gpu_model or "")
+    return int(_VRAM_GB.get(key, 0)) if key else 0
+
+
 def metric_meta(metric: str) -> dict:
     """Public-facing description of a metric (label/source/freezes) for docs/UI."""
     m = _METRICS.get(metric)
