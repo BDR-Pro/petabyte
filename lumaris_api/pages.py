@@ -4161,6 +4161,28 @@ html[data-theme=light] .ctopbar{background:rgba(255,255,255,.82)}
 .csec-h a,.csec-h button{font-size:12.5px;color:var(--teal);background:transparent;border:0;cursor:pointer;padding:0}
 .csec-b{padding:4px 15px 10px}
 .crow{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+.crow.crow-click{cursor:pointer;margin:0 -8px;padding-inline:8px;border-radius:9px;transition:background .12s}
+.crow.crow-click:hover{background:var(--panel2)}
+tr.jrow{cursor:pointer;transition:background .12s}
+tr.jrow:hover{background:var(--panel2)}
+/* job-detail slide-over drawer */
+.cdraw-bk{display:none;position:fixed;inset:0;background:rgba(4,10,20,.55);backdrop-filter:blur(2px);z-index:60}
+.cdraw-bk.open{display:block}
+.cdraw{display:none;position:fixed;top:0;inset-inline-end:0;height:100vh;width:min(440px,94vw);background:var(--panel);border-inline-start:1px solid var(--line2);box-shadow:-24px 0 60px -30px rgba(0,0,0,.55);z-index:61;flex-direction:column}
+.cdraw.open{display:flex;animation:cdrawin .22s cubic-bezier(.2,.7,.2,1)}
+@keyframes cdrawin{from{transform:translateX(7%);opacity:.3}to{transform:translateX(0);opacity:1}}
+.cdraw-h{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 18px;border-bottom:1px solid var(--line)}
+.cdraw-h h3{margin:0;font-family:var(--disp);font-size:15.5px}
+.cdraw-b{padding:16px 18px;overflow:auto;flex:1;min-height:0}
+.jd-amt{display:flex;justify-content:space-between;gap:12px;padding:8px 0;font-size:13.5px;border-bottom:1px solid var(--line)}
+.jd-amt.tot{border-bottom:0;padding-top:11px;font-weight:600}
+.jd-why{margin-top:14px;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:var(--panel2);font-size:12.5px;line-height:1.55;color:var(--mut)}
+.jd-tl{list-style:none;margin:16px 0 0;padding:0}
+.jd-tl li{position:relative;padding:0 0 13px 22px;font-size:12.5px;color:var(--mut)}
+.jd-tl li::before{content:"";position:absolute;inset-inline-start:3px;top:3px;width:9px;height:9px;border-radius:50%;background:var(--line2);z-index:1}
+.jd-tl li.on{color:var(--ink)}
+.jd-tl li.on::before{background:var(--teal);box-shadow:0 0 0 3px color-mix(in srgb,var(--teal) 22%,transparent)}
+.jd-tl li:not(:last-child)::after{content:"";position:absolute;inset-inline-start:7px;top:12px;bottom:0;width:1px;background:var(--line)}
 .crow:last-child{border-bottom:0}
 .crow .rt{font-family:var(--disp);font-weight:600;font-size:13.5px}
 .crow .rs{font-size:12px;color:var(--mut);font-weight:400}
@@ -4235,6 +4257,12 @@ html[dir="rtl"] #c_code,html[dir="rtl"] .c_console{direction:ltr;text-align:left
       <p class="mut" id="c_signedout" style="display:none">Please <a class="teal" href="/login">sign in</a> to open your console.</p>
       <div id="c_main" style="display:none">
         <div class="cpagehead" id="c_pagehead"></div>
+        <!-- job-detail drawer (opened by clicking any job/reservation row) -->
+        <div id="c_jd_bk" class="cdraw-bk" data-act="cJobClose"></div>
+        <aside id="c_jd" class="cdraw" role="dialog" aria-modal="true" aria-label="Job detail">
+          <div class="cdraw-h"><h3 id="c_jd_title">Job</h3><button class="cbtn sm" data-act="cJobClose" aria-label="Close">✕</button></div>
+          <div class="cdraw-b" id="c_jd_body"></div>
+        </aside>
 
         <section id="tab-overview" class="cpanel">
           <div class="cmetrics" id="c_ov_metrics"></div>
@@ -4485,9 +4513,10 @@ async function cOvWallet(){
 async function cOvJobs(){
   var bk=(((await api('/account/bookings'))||{}).body||{}).bookings||[];
   var el=document.getElementById('c_ov_jobs');if(!el)return;
+  window._CJOBS=window._CJOBS||{};bk.forEach(function(b){window._CJOBS[b.id]=b;});
   if(!bk.length){el.innerHTML=cEmpty('No jobs yet','Run your first workload.','compute','Run a job');return;}
   el.innerHTML=bk.slice(0,5).map(function(b){
-    return '<div class="crow"><div style="min-width:0"><div class="rt">'+esc(b.gpu_model||'GPU')+' '+cBadge(b.status)+'</div>'+
+    return '<div class="crow crow-click" data-act="cJobOpen" data-a1="'+b.id+'"><div style="min-width:0"><div class="rt">'+esc(b.gpu_model||'GPU')+' '+cBadge(b.status)+'</div>'+
       '<div class="rs">'+cTs(b.created_at)+' · '+esc(String(b.hours))+'h</div></div>'+
       '<div class="rr mono" style="font-size:13px">'+cD2(b.gross_amount)+'</div></div>';
   }).join('');
@@ -4526,10 +4555,37 @@ async function cOvSeller(){
 }
 async function cJobs(){
   var bs=(((await api('/account/bookings'))||{}).body||{}).bookings||[];
+  window._CJOBS=window._CJOBS||{};bs.forEach(function(b){window._CJOBS[b.id]=b;});
   document.getElementById('c_jobs').innerHTML=bs.length?bs.map(function(b){
-    return '<tr><td data-l="When" class="mono" style="font-size:11px">'+cTs(b.created_at)+'</td><td data-l="GPU" class="mono">'+esc(b.gpu_model||'')+'</td><td data-l="Hours" class="mono">'+esc(String(b.hours))+'</td><td data-l="Amount" class="mono">'+cD2(b.gross_amount)+'</td><td data-l="Status">'+cBadge(b.status)+'</td></tr>';
+    return '<tr class="jrow" data-act="cJobOpen" data-a1="'+b.id+'"><td data-l="When" class="mono" style="font-size:11px">'+cTs(b.created_at)+'</td><td data-l="GPU" class="mono">'+esc(b.gpu_model||'')+'</td><td data-l="Hours" class="mono">'+esc(String(b.hours))+'</td><td data-l="Amount" class="mono">'+cD2(b.gross_amount)+'</td><td data-l="Status">'+cBadge(b.status)+'</td></tr>';
   }).join(''):'<tr><td colspan=5 class="mut mono" style="text-align:center;padding:16px">No reservations yet. <a class="teal" href="/marketplace">Rent a GPU →</a></td></tr>';
 }
+async function cJobOpen(id){
+  var bk=document.getElementById('c_jd_bk'),dr=document.getElementById('c_jd'),body=document.getElementById('c_jd_body'),ttl=document.getElementById('c_jd_title');
+  if(!dr||!body)return;
+  var seed=(window._CJOBS||{})[id]||{};
+  bk.classList.add('open');dr.classList.add('open');
+  if(ttl)ttl.textContent=(seed.gpu_model||'Job')+' · #'+id;
+  body.innerHTML='<p class="mut" style="font-size:13px;padding:8px 0">Loading…</p>';
+  var r=await api('/bookings/'+id);
+  if(!r||!r.ok){body.innerHTML='<p class="mut" style="font-size:13px;padding:12px 0">Could not load this job'+((r&&r.status===404)?' — it may have been removed.':'.')+'</p>';return;}
+  var b=r.body||{};var st=b.status||seed.status||'';
+  var done=(st==='released'||st==='refunded'||st==='complete'||st==='completed');
+  var steps=[['Booked & held in escrow',true],
+             ['Running on a verified node', st==='active'||done],
+             [(st==='refunded'?'Refunded to you (node dropped)':'Released to the host'), done]];
+  body.innerHTML=
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><span style="font-family:var(--disp);font-size:17px">'+esc(seed.gpu_model||'GPU')+'</span>'+cBadge(st)+'</div>'+
+    '<div class="mini" style="margin-bottom:15px">'+cTs(seed.created_at)+' · '+esc(String(seed.hours||''))+'h · booking #'+id+'</div>'+
+    '<div class="jd-amt"><span class="mut">Held in escrow</span><span class="mono">'+cD2(b.gross_amount)+'</span></div>'+
+    '<div class="jd-amt"><span class="mut">Platform fee</span><span class="mono">-'+cD2(b.platform_fee)+'</span></div>'+
+    '<div class="jd-amt tot"><span>Host receives</span><span class="mono teal">'+cD2(b.seller_payout)+'</span></div>'+
+    (b.routing_explanation?('<div class="jd-why"><b style="color:var(--ink)">Why this node</b><br>'+esc(b.routing_explanation)+'</div>'):'')+
+    '<ul class="jd-tl">'+steps.map(function(s){return '<li class="'+(s[1]?'on':'')+'">'+esc(s[0])+'</li>';}).join('')+'</ul>'+
+    (st==='active'?'<div style="margin-top:16px"><button class="cbtn sm" data-act="cGo" data-a1="compute">Manage in Compute →</button></div>':'');
+}
+function cJobClose(){var bk=document.getElementById('c_jd_bk'),dr=document.getElementById('c_jd');if(bk)bk.classList.remove('open');if(dr)dr.classList.remove('open');}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')cJobClose();});
 
 async function cCompute(){
   var specs=(((await api('/specs'))||{}).body||{}).specs||[];
