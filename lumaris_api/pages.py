@@ -473,6 +473,18 @@ function toast(msg,kind){
   return t;
 }
 window.toast=toast;
+// Human-readable duration from decimal hours: 1.99 -> "1h 59m", 0.99 -> "59m", 2 -> "2h".
+// Long horizons collapse to whole hours; sub-minute reads "<1m"; non-finite is ∞.
+function cDur(h){
+  if(h==null)return '—';
+  var mins=Math.round(Number(h)*60);
+  if(!isFinite(mins))return '∞';
+  if(mins<1)return '<1m';
+  var hh=Math.floor(mins/60),mm=mins%60;
+  if(hh>=48)return hh+'h';
+  return hh?(hh+'h'+(mm?' '+mm+'m':'')):(mm+'m');
+}
+window.cDur=cDur;
 // Money-screen honesty: any page with a #pbtestmode slot shows a clear TEST-MODE banner while the
 // platform is in sandbox / Stripe test mode — so no one ever mistakes a demo for a real charge.
 async function pbTestBanner(){var el=document.getElementById('pbtestmode');if(!el)return;
@@ -2326,7 +2338,7 @@ async function loadVMs(){var r=await api('/vm');if(!r.ok)return;var vms=r.body.v
     return '<tr><td class="mono" style="font-size:11px">vm-'+v.vm_id+'</td><td style="text-transform:capitalize">'+(v.template||'')+'</td>'+
       '<td><span class="badge '+(v.status==='running'?'ok':'')+'">'+v.status+'</span></td>'+
       '<td class="mono amber">$'+Number(v.hourly_rate||0).toFixed(2)+'</td>'+
-      '<td class="mono">'+(v.hours_left||0)+'h</td><td>'+act+'</td></tr>';}).join('');}
+      '<td class="mono">'+cDur(v.hours_left||0)+'</td><td>'+act+'</td></tr>';}).join('');}
 // --- VM EVENT TIMELINE. The backend records created -> tunnel_registered ->
 // migrated -> tunnel_registered. That timeline IS the failover proof — the single
 // most convincing thing we can show a buyer — and it was never displayed.
@@ -2506,7 +2518,7 @@ async function loadBurn(){
   document.getElementById('b_bal').textContent=money(b.balance);
   document.getElementById('b_burn').textContent=money(b.burn_rate_per_hour)+'/hr';
   document.getElementById('b_24').textContent=money(b.projected_24h);
-  document.getElementById('b_run').textContent=(b.hours_of_runway!=null?b.hours_of_runway+'h':'—');
+  document.getElementById('b_run').textContent=(b.hours_of_runway!=null?cDur(b.hours_of_runway):'—');
   document.getElementById('b_note').textContent=
     b.active_instances
       ? b.active_instances+' instance'+(b.active_instances===1?'':'s')+' running. '+
@@ -4523,7 +4535,7 @@ async function cRunning(){
   if(!live.length){el.innerHTML=cEmpty('Nothing running','Launch a workload and it shows up here.','compute','Launch compute');return;}
   el.innerHTML=live.slice(0,5).map(function(v){var u=v.url||{};var isrun=(v.status==='running');
     return '<div class="crow"><div style="min-width:0"><div class="rt">'+esc(v.template||'vm')+' '+cBadge(v.status)+'</div>'+
-      '<div class="rs mono" style="font-size:11.5px">'+esc(u.hostname||u.id||'')+(v.hours_left!=null?(' · '+v.hours_left+'h left'):'')+'</div></div>'+
+      '<div class="rs mono" style="font-size:11.5px">'+esc(u.hostname||u.id||'')+(v.hours_left!=null?(' · '+cDur(v.hours_left)+' left'):'')+'</div></div>'+
       '<div class="rr">'+(isrun?('<button class="cbtn sm" data-act="cVmExtend" data-a1="'+esc(v.vm_id)+'">+1h</button><button class="cbtn sm" data-act="cVmStop" data-a1="'+esc(v.vm_id)+'">Stop</button>'):'')+'</div></div>';
   }).join('');
 }
@@ -4535,7 +4547,7 @@ async function cOvWallet(){
     '<div class="cmoney"><span class="mk">Current spend</span><span class="mv amber">'+cD2(sp.burn_rate_per_hour)+'/hr</span></div>'+
     '<div class="cmoney"><span class="mk">Projected 24h</span><span class="mv">'+cD2(sp.projected_24h)+'</span></div>'+
     '<div class="cmoney"><span class="mk">In escrow</span><span class="mv">'+cD2(sp.in_escrow)+'</span></div>'+
-    '<div class="cmoney"><span class="mk">Est. runway</span><span class="mv">'+(sp.hours_of_runway!=null?sp.hours_of_runway+'h':'&#8734;')+'</span></div>'+
+    '<div class="cmoney"><span class="mk">Est. runway</span><span class="mv">'+(sp.hours_of_runway!=null?cDur(sp.hours_of_runway):'&#8734;')+'</span></div>'+
     '<div style="margin-top:12px;display:flex;gap:8px"><button class="cbtn pri sm" data-act="cGo" data-a1="billing">Add funds</button><button class="cbtn sm" data-act="cGo" data-a1="billing">Billing</button></div>';
 }
 async function cOvJobs(){
@@ -4637,7 +4649,7 @@ function cVmRows(vms){
      '<td data-l="Status">'+cBadge(v.status)+'</td>'+
      '<td data-l="Address" class="mono" style="font-size:11px">'+esc(u.hostname||u.id||'')+'</td>'+
      '<td data-l="Failover" class="mono">'+(v.migrations?('moved '+v.migrations+'&times;'):'—')+'</td>'+
-     '<td data-l="Left" class="mono">'+(v.hours_left!=null?v.hours_left+'h':'—')+'</td>'+
+     '<td data-l="Left" class="mono">'+(v.hours_left!=null?cDur(v.hours_left):'—')+'</td>'+
      '<td data-l="">'+(live?('<button class="cbtn sm" data-act="cVmExtend" data-a1="'+esc(v.vm_id)+'">+1h</button> <button class="cbtn sm" data-act="cVmStop" data-a1="'+esc(v.vm_id)+'">Stop</button>'):'—')+'</td></tr>';
   }).join('');
 }
