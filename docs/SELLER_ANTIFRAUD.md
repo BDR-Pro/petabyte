@@ -25,9 +25,11 @@ window** (see `docs/PAYOUT_HOLD_AND_SCHEDULE.md`).
   jobs, a scammer can't tell which job is the test.
 - **Capability floor (recommended next).** Before a spec is bookable, require an
   *attested benchmark* proving the GPU meets the advertised class (e.g. an H100 can't be
-  served by a GTX 1060). The `benchmark` path exists; its harness is still a stub
-  (`task_fetcher._run_benchmark`) — wiring a real one closes "listed an H100, served a
-  potato."
+  served by a GTX 1060). The `benchmark` harness now runs **real measurements** inside
+  the signed proof — `_measure_fp16_tflops()` (FP16 matmul TFLOPS) and
+  `_measure_blender_score()` (official `benchmark-launcher-cli`), server-graded against
+  public reference bands; only `tokens_sec` remains an env stub. This closes most of
+  "listed an H100, served a potato."
 - **Buyer dispute + report.** For interactive/VM rentals the buyer can report a seller
   (`POST /report/seller`); combined with the 14-day hold this freezes payout until an
   admin checks (`docs/PAYOUT_HOLD_AND_SCHEDULE.md`).

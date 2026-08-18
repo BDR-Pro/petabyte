@@ -25,8 +25,9 @@ Replace `yourdomain.com` with your domain and `DROPLET_IP` with your droplet's I
    ```
    This installs Python/nginx/certbot/postgres, creates the `lumaris` service user,
    generates secrets into `/etc/lumaris/lumaris.env` (chmod 600), creates the DB
-   tables, and starts two systemd services: `lumaris-api` (gunicorn behind nginx) and
-   `lumaris-reaper` (refund-on-reap watchdog).
+   tables, and starts three systemd units: `lumaris-api` (gunicorn behind nginx),
+   `lumaris-reaper` (refund-on-reap watchdog), and `lumaris-payout.timer`
+   (drains queued seller withdrawals every 5 min; safe/stub by default).
 5. **Edit `/etc/lumaris/lumaris.env`** for production, then
    `systemctl restart lumaris-api lumaris-reaper`. Set at minimum:
    - `DATABASE_URL=postgresql+psycopg2://…` (your managed Postgres)
@@ -36,15 +37,21 @@ Replace `yourdomain.com` with your domain and `DROPLET_IP` with your droplet's I
    - `GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI` (Google Cloud → OAuth Web client; redirect
      `https://yourdomain.com/auth/google/callback`)
    - keep `PAYMENTS_MODE=sandbox` until you wire live payments
-6. **Tables auto-create on first start** — the app runs `create_all()` on boot, so
-   there's no migration step for a fresh DB. (Alembic migrations under `alembic/` are
-   optional, for altering existing tables later.) For a DigitalOcean **managed** DB,
-   set `DATABASE_URL=postgresql+psycopg2://doadmin:PASS@host:25060/defaultdb?sslmode=require`
+6. **Schema applies automatically** — `deploy.sh` runs `init_db()` (create_all +
+   idempotent ensures) on first deploy, and `update.sh` runs `alembic upgrade head`
+   on redeploys when revisions are present. There is a squashed Alembic baseline
+   (`0001_baseline`) proven up/down on Postgres in CI; adopt Alembic on an existing
+   DB with a one-time `alembic stamp head` (see `docs/MIGRATIONS.md`). For a
+   DigitalOcean **managed** DB, set
+   `DATABASE_URL=postgresql+psycopg2://doadmin:PASS@host:25060/defaultdb?sslmode=require`
    and add the droplet to the DB's Trusted Sources.
-7. **HTTPS.** Point an `A` record `yourdomain.com → DROPLET_IP`, set `server_name`
-   in `/etc/nginx/sites-available/lumaris`, then:
+7. **HTTPS is automatic.** Point an `A` record `yourdomain.com → DROPLET_IP`, set
+   `DEPLOY_DOMAIN=yourdomain.com` (or `BASE_DOMAIN` in `lumaris.env`), and re-run
+   `deploy.sh` — once DNS resolves to the box it runs certbot with the HTTP→HTTPS
+   redirect and arms `certbot.timer` for renewal. Manual fallback if DNS wasn't
+   ready at deploy time:
    ```bash
-   systemctl reload nginx && certbot --nginx -d yourdomain.com
+   sudo certbot --nginx -d yourdomain.com --redirect -m you@yourdomain.com
    ```
 8. **Verify:**
    ```bash
@@ -75,10 +82,12 @@ attest it, mint a key, start heartbeating). Then:
 systemctl status petabyte-agent
 journalctl -u petabyte-agent -f
 ```
-The GPU appears in `/marketplace` within a minute. Auto-update is **off by default**
-because the update channel is not yet cryptographically signed (see
-`docs/PRODUCTION_GAPS.md`); opt in with `PETABYTE_AUTO_UPDATE=true` on the install
-command, or update manually with `petabyte update`.
+The GPU appears in `/marketplace` within a minute. The update channel **is
+Ed25519-signed and fail-closed** — `update.sh` verifies each bundle against a
+pinned public key and refuses anything unsigned (see `docs/RELEASE_SIGNING.md`).
+Auto-update is still **off by default** as a conservative choice; opt in with
+`PETABYTE_AUTO_UPDATE=true` on the install command (enables the 6-hourly timer),
+or update manually with `petabyte update`.
 
 **Windows sellers:** either `irm https://yourdomain.com/install.ps1 | iex` (WSL2
 service) or the double-click desktop app (`desktop-app/` → `PetabyteAgent.exe`), where

@@ -19,6 +19,8 @@ AFFILIATE_ECOFLOW_URL=;
 AFFILIATE_NEWEGG_WRAP=;
 AFFILIATE_PCPARTPICKER_URL=;
 AFFILIATE_WASABI_URL=;
+AGENT_CONTAINER_USER=;
+AGENT_STRICT_ROOTFS=false;
 AGENT_VPN_ENABLED=false;
 AGENT_WG_DIR=/etc/wireguard;
 ALLOWED_ORIGINS=;
@@ -29,6 +31,7 @@ BACKUP_DUMP_TIMEOUT_S=1800;
 BACKUP_ENABLED=true;
 BACKUP_RESCHEDULE_GRACE_S=900;
 BACKUP_RETENTION=30;
+BACKUP_RPO_SECONDS=7200;
 BACKUP_S3_PREFIX=db-backups;
 BASE_DOMAIN=petabyte.market;
 BIND=127.0.0.1:8000;
@@ -42,6 +45,7 @@ DATA_API_PRICE_PER_1K=0.50;
 DATA_API_SANDBOX_KEY=pk_sandbox_petabyte_dev;
 DATA_SNAPSHOT_INTERVAL_S=3600;
 DEFAULT_LANDING_VIDEO_ID=UUSWYaxboDA;
+DESKTOP_APP_URL=;
 DISK_PROVIDER=storj;
 DISK_REFERENCE_USD_PER_TB_MONTH=1.5;
 EARNINGS_HOLD_HOURS=24;
@@ -101,6 +105,7 @@ OTEL_SERVICE_NAMESPACE=petabyte;
 OTEL_TRACE_SAMPLE_RATIO=1.0;
 PAYMENTS_LIVE_ENABLED=false;
 PAYMENTS_MODE=sandbox;
+PAYOUT_AUTONET_CLAWBACK=false;
 PAYOUT_CAPABILITIES_PATH=;
 PAYOUT_COOLING_OFF_H=24;
 PAYOUT_HOLD_DAYS=14;
@@ -113,6 +118,7 @@ PETABYTE_HOST_ROLE=;
 PETABYTE_OFFLINE_TEST=;
 PETABYTE_REGISTRY_URL=;
 PETABYTE_RELEASE_PUBKEY=;
+PETABYTE_SKIP_INIT_DB=;
 PG_DUMP_BIN=;
 PLATFORM_AUTH_MARGIN_BPS=2000;
 PLATFORM_COMMISSION_BPS=;
@@ -156,6 +162,7 @@ SENTRY_MAX_BREADCRUMBS=30;
 SENTRY_PROFILES_SAMPLE_RATE=0.0;
 SENTRY_RELEASE=;
 SENTRY_TRACES_SAMPLE_RATE=0.1;
+SETTLEMENT_REQUIRE_VERIFICATION=true;
 STORAGE_STUB=false;
 STORAGE_STUB_EARNINGS=;
 STORAGE_TAKE_RATE=0.10;
@@ -197,6 +204,7 @@ Create each under **Secrets**. Required ones (🔴) must exist before the first 
 
 ### Platform secrets
 
+- **`ACCESS_TOKEN_EXPIRE_MINUTES`** — ⚪ optional. See the reference doc.
 - **`AWS_ACCESS_KEY_ID`** — ⚪ optional. AWS IAM user with S3 backup access.
 - **`AWS_SECRET_ACCESS_KEY`** — ⚪ optional. AWS IAM user with S3 backup access (the matching secret).
 - **`CAL_WEBHOOK_SECRET`** — ⚪ optional. Cal.com → the demo booking webhook's signing secret.
@@ -221,6 +229,7 @@ Create each under **Secrets**. Required ones (🔴) must exist before the first 
 - **`PROMETHEUS_METRICS_TOKEN`** — ⚪ optional. See the reference doc.
 - **`REDIS_PASSWORD`** — ⚪ optional. See the reference doc.
 - **`REDIS_URL`** — ⚪ optional. See the reference doc.
+- **`RESTORE_DRILL_TARGET_URL`** — ⚪ optional. See the reference doc.
 - **`SECRET_KEY`** — 🔴 required. Generate once: `openssl rand -hex 32`. Rotating it logs everyone out.
 - **`SENDGRID_API_KEY`** — ⚪ optional. SendGrid (only if EMAIL_PROVIDER=sendgrid).
 - **`SERVER_PRIVATE_KEY`** — 🔴 required. Generate a Fernet key: `python -c 'from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())'`. Rotating it makes existing encrypted API keys undecryptable — migrate the current value.
@@ -238,6 +247,7 @@ Create each under **Secrets**. Required ones (🔴) must exist before the first 
 - **`DEPLOY_SSH_KEY`** — 🔴 required. The PRIVATE SSH key authorized on the server (e.g. id_ed25519). Never commit it.
 - **`DROPLET_SSH_KNOWN_HOSTS`** — 🔴 required. Pinned SSH host key(s) for the deploy target. Generate with `ssh-keyscan -t ed25519,rsa <host>`, then VERIFY the fingerprint out-of-band before pinning — compare `ssh-keygen -lf` of the scanned key against the fingerprint from the droplet's own console (e.g. `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` over the provider console). ssh-keyscan output is unauthenticated and can be MITM'd, so pinning it unverified only trusts-on-first-use. Verifies the server before any secret is transferred; the deploy fails closed if unset.
 - **`DROPLET_SSH_KNOWN_HOSTS_OBSERV`** — ⚪ optional. Pinned SSH host key(s) for the observability VM. REQUIRED by deploy-observability.yml, which fails closed without it (no trust-on-first-use). Generate with `ssh-keyscan -t ed25519,rsa <observ-host>` and verify the fingerprint out-of-band (provider console) before pinning.
+- **`PYPI_API_TOKEN`** — ⚪ optional. PyPI API token that release-cli.yml uses to publish the `petabyte` CLI on a `cli-v*` tag. Unset -> the workflow builds + verifies the wheel but does NOT publish (no hard fail). See release-cli.yml for the one-time setup.
 - **`RELEASE_SIGNING_KEY`** — ⚪ optional. Ed25519 PEM PRIVATE key that signs desktop-agent releases (release-desktop.yml -> scripts/sign_release.py). Offline key; generate via the release-keygen workflow. Unset -> the exe publishes UNSIGNED and auto-update is fail-closed.
 
 ## 4. GPU node (seller agent) — configured on the node, not the platform

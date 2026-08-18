@@ -35,33 +35,38 @@ Legend: ✅ addressed in this branch · ⚠️ documented, not yet done.
   plaintext once it is.
 - ✅ **Alembic baseline.** A squashed baseline now builds the schema from a clean DB, and
   a CI `migration` job runs `alembic upgrade head` (and downgrade) on real Postgres.
-- ⚠️ **`/login` app-level rate limit.** Brute-force protection on `/login` is
-  nginx-only; add it to the app failure-budget limiter as defence in depth.
+- ✅ **`/login` app-level rate limit.** `login()` enforces an app-level
+  per-(IP, username) failure budget (`LOGIN_MAX_FAILS`/`LOGIN_WINDOW_S`, Redis-backed
+  with in-proc fallback → 429) in addition to the nginx zone.
 
 ## Must fix before handling real money
 - ⚠️ **KYC/AML/sanctions.** `screen()` now fails closed in live mode, but no real
   provider (Chainalysis/TRM) or KYC (Persona/Sumsub) is integrated. Legal + compliance
   review of the payout and any idle-mining revenue flow is required.
-- ⚠️ **Live payment provider review.** Stripe-in and provider payouts are written as
-  real adapters but unexercised; swap the generic webhook check for
-  `stripe.Webhook.construct_event` and security-review each provider relationship
-  (`docs/stub.md` #4, #5).
+- ⚠️ **Live payment provider review.** The real Stripe Connect webhook already verifies
+  via `stripe.Webhook.construct_event` (`stripe_gateway.construct_event`); what remains
+  is live-mode exercise and a security review of each provider relationship
+  (`docs/stub.md` #4, #5). The legacy internal-wallet webhook still uses the generic HMAC.
 - ⚠️ **Secret handling in deploy.** `deploy.sh` passes env via `env $(… | xargs)`,
   exposing secrets in the process table; switch to `EnvironmentFile`/`set -a`.
 - ⚠️ **Rotate historically committed secrets** before any real deploy (`SECURITY.md`).
 
 ## Must fix before executing untrusted customer workloads (at scale)
-- ⚠️ **Signed agent updates.** The auto-update channel is not cryptographically
-  signed. It is now opt-in, the unit is hardened, and `update.sh` has a pinned-key
-  verify hook — but the release-signing pipeline (Ed25519 for the tarball,
-  Authenticode for the `.exe`) must be built before fleet-wide auto-update is enabled.
-- ⚠️ **Sandbox-escape verification.** Container isolation flags are coded (strongest
-  on the notebook path); escape resistance must be tested on a real Docker+GPU host
-  (`docs/RLtest.md` §17). Template/render/transcode paths need cap-drop/read-only
-  parity with the notebook path.
-- ⚠️ **Desktop agent parity.** `desktop-app/` is a drifted fork of `lumaris_agent/`;
-  the shipped Windows copy lost isolation flags and binds containers to all
-  interfaces. Extract a shared core package so isolation logic lives in one place.
+- ✅ **Signed agent updates.** The update channel is Ed25519-signed and fail-closed:
+  `update.sh` verifies each bundle against a pinned key (no unsigned fallback), and the
+  desktop `updater.py` verifies a signed manifest + SHA-256 with anti-replay. Producer
+  side is `scripts/sign_release.py` + `release-desktop.yml`/`release-keygen.yml`
+  (manifest-signature model rather than raw Authenticode). Auto-update stays opt-in.
+- ⚠️ **Sandbox-escape verification.** Every buyer container gets cap-drop parity via the
+  shared `_isolation_flags` (cap-drop ALL, no-new-privileges, PID/mem/CPU caps, gVisor
+  when installed); read-only rootfs + forced UID are opt-in
+  (`AGENT_STRICT_ROOTFS`/`AGENT_CONTAINER_USER`, the notebook path hard-codes read-only).
+  Remaining: make strict read-only the default, and test escape resistance on a real
+  Docker+GPU host (`docs/RLtest.md` §26).
+- ⚠️ **Desktop agent parity.** The shipped `desktop-app/` copy now applies the isolation
+  flags (`--cap-drop ALL`, no-new-privileges, opt-in read-only) and binds containers to
+  `127.0.0.1` only. Remaining: extract a shared core package so the isolation logic lives
+  in one place instead of a mirrored fork of `lumaris_agent/`.
 - ⚠️ **Micro-VM isolation.** Firecracker/QEMU + GPU passthrough is roadmap; the
   placeholder backends now `raise NotImplementedError` (they previously returned fake
   "running" endpoints).

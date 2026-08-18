@@ -415,8 +415,10 @@ window the same address resolves to node B with the last snapshot's state.
 (crash-consistent, not zero-loss — set that expectation with users).
 
 ## 26. Isolation runtime (gVisor now, Firecracker later) 🔌🔌 — needs real nodes + adversarial testing
-**Status:** hardening from `docs/isolation-roadmap.md` is **not yet in the agent**.
-Today jobs run under stock Docker on the node.
+**Status:** the Phase-1 hardening from `docs/isolation-roadmap.md` **is applied by the
+agent today** — `task_fetcher._isolation_flags` adds cap-drop ALL, no-new-privileges,
+PID/mem/CPU caps to every buyer container and prepends `--runtime runsc` when gVisor is
+installed. What still needs real nodes is the **adversarial validation** below.
 **Phase 1 real test (gVisor):** run the agent with `--runtime=runsc` + the hardening
 flags; run adversarial buyer payloads (container-escape attempts, host FS probes,
 resource bombs) and confirm containment; confirm GPU still works under gVisor.

@@ -13,7 +13,6 @@ petabyte specs                                       # a readable, cheapest-firs
 petabyte launch ollama --hours 2                     # one-click app: cheapest verified GPU, started
 petabyte run hello.ipynb --gpu H100 --hours 1        # run a notebook/.py on a rented GPU
 petabyte wallet
-petabyte doctor                                      # check API URL, connectivity, sign-in
 ```
 Model management is included — `petabyte pull <publisher/model>`, `petabyte model list/inspect/remove`,
 and `petabyte run <model-id>` work straight from the pip install (the model hub is pure standard
@@ -30,18 +29,18 @@ CLI module plus the `modelhub` package. From a source checkout you can also run 
 `run` books the cheapest matching GPU, escrows funds, dispatches the notebook,
 polls, and prints the result. `.ipynb` (code cells) and `.py` files are supported.
 
-### Output modes
-- **Human (default):** semantic colour (green=ok, yellow=pending, red=error, cyan=info),
-  aligned tables and key/value panels. Colour turns **off** automatically when stdout is a
-  pipe or `NO_COLOR` is set — safe for scripts and CI.
-- **Machine-readable:** add `--json` to any command for stable JSON on stdout (no colour,
-  no log noise). `PETABYTE_JSON=1` does the same globally.
-- `petabyte doctor` exits non-zero when the API is unreachable, so it works as a health gate.
-- `PETABYTE_CONFIG=/path/cli.json` isolates the saved token/API (handy in CI or tests).
+### Output & config
+- **Human output:** semantic colour (green=ok, yellow=pending, red=error, cyan=info) with
+  aligned tables. Colour turns **off** automatically when stdout is not a TTY or `NO_COLOR`
+  is set — safe for scripts and CI. The buyer `petabyte` client uses its own small inline
+  colour helpers (no dependency beyond `httpx`); it does **not** import `cli_ui.py`.
+- `PETABYTE_API_URL` (or `--api`) selects the API; `PETABYTE_CONFIG=/path/cli.json`
+  isolates the saved token/API (handy in CI or tests).
 
-The presentation layer lives in `cli/cli_ui.py` (pure stdlib, no dependencies) and is
-shared verbatim with the seller agent and the desktop app so every surface looks the same.
-It is covered by `cli/cli_ui_test.py` and `cli/cli_petabyte_test.py`.
+> Note: a stable `--json`/`PETABYTE_JSON` machine-readable mode and a `doctor`
+> health-gate command exist in the **seller agent CLI** (`lumaris_agent/agent_cli.py`),
+> not in this buyer client. The shared `cli_ui.py` presentation layer is likewise used
+> by the agent and desktop app, not by `petabyte.py`.
 
 ## Dashboard
 Served by the API at `/` (same-origin, no CORS setup). Start the API and open

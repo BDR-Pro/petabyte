@@ -46,17 +46,35 @@ Make it **private**, enable **versioning** and **default encryption**, add a **l
 
 ## Scheduling (cron / systemd)
 
-Run the CLI on the API host, where `DATABASE_URL` + `S3_*` are already in the environment:
+Run the backup on the API host, where `DATABASE_URL` + `S3_*` are already in the environment.
+Which command depends on how you deployed:
+
+**A. Repo checkout / production Docker image** (the image ships `pg_dump` and the full repo, so
+`scripts/backup_database.py` is present). Drive the CLI directly — it expects to sit next to
+`lumaris_api/`, so run it from the checkout root:
 
 ```cron
 # /etc/cron.d/petabyte-db-backup  — hourly
 0 * * * *  petabyte  . /etc/lumaris/lumaris.env && \
-    /opt/petabyte/venv/bin/python /opt/petabyte/scripts/backup_database.py --verify \
+    cd /path/to/petabyte && .venv/bin/python scripts/backup_database.py --verify \
     >> /var/log/petabyte-backup.log 2>&1
 ```
 
-`--verify` re-downloads the object and re-checks its SHA-256 after upload. The CLI exits non-zero on
-failure so cron/systemd records it. You can also trigger one on demand: `POST /admin/backups/run`.
+**B. `deploy.sh` droplet** — that path rsyncs only `lumaris_api/` into `/opt/lumaris`, so the
+repo-root `scripts/` CLI is **not** deployed there. Drive the admin endpoint from any scheduler
+instead:
+
+```cron
+0 * * * *  root  curl -fsS -X POST -H "Authorization: Bearer $PETABYTE_ADMIN_TOKEN" \
+    https://yourdomain.com/admin/backups/run \
+    >> /var/log/petabyte-backup.log 2>&1
+```
+
+`POST /admin/backups/run` is admin-gated and takes an optional `retention` query param; it returns
+the backup summary (or 503 with the reason, which also records a `status=failed` row so alerts fire).
+Integrity-verify a stored backup with the follow-up call `POST /admin/backups/{backup_id}/verify`.
+The CLI's `--verify` flag does the equivalent in one shot (download + re-check SHA-256) and exits
+non-zero on failure so cron/systemd records it.
 
 The production Docker image ships **`postgresql-client-16`** (`pg_dump` on `PATH`), so the endpoint
 and CLI work in-container out of the box. `pg_dump` refuses to dump a server **newer** than the

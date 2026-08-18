@@ -4,9 +4,10 @@
 Designed to be driven by cron or a systemd timer on the API host, where DATABASE_URL and the
 S3_* credentials are already in the environment:
 
-    # /etc/cron.d/petabyte-db-backup  — hourly, with the app's env file
+    # /etc/cron.d/petabyte-db-backup  — hourly, with the app's env file.
+    # Run from a repo checkout root (this script expects to sit next to lumaris_api/):
     0 * * * *  petabyte  . /etc/lumaris/lumaris.env && \
-        /opt/petabyte/venv/bin/python /opt/petabyte/scripts/backup_database.py >> /var/log/petabyte-backup.log 2>&1
+        cd /path/to/petabyte && .venv/bin/python scripts/backup_database.py >> /var/log/petabyte-backup.log 2>&1
 
 Exits 0 on success, non-zero on failure (so cron / the timer records the failure and a
 'no successful backup in N hours' alert can fire off the recorded status=failed row + the

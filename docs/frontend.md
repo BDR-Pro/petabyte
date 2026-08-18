@@ -10,11 +10,15 @@ no separate frontend service, no build step). Pages are plain HTML strings in
 |-------|------|------|
 | `/` | Landing (hero, live stats, seller/buyer CTAs) | public |
 | `/marketplace` | Public GPU inventory browser (badges, prices) | public |
-| `/install` | Become a seller — Linux / Windows one-liners | public |
+| `/install` | Become a seller — **download-first** (Windows app button + no-account wallet quickstart) then the Linux/Windows one-liners | public |
+| `/download`, `/download/windows` | Get the desktop app (serves the bundled `.exe`, redirects to `DESKTOP_APP_URL`, or shows the early-access page) | public |
+| `/faq`, `/help` | Plain-language FAQ | public |
 | `/developers` | Curated API reference + link to `/docs` | public |
 | `/investors` | Investor relations one-pager — **no numbers** | public |
 | `/keys` | Generate / list / revoke API keys | needs sign-in |
-| `/app` | The dashboard (browse, deposit, run a job) | needs sign-in |
+| `/console` | The dashboard (browse, deposit, run a job; buyer + seller) | needs sign-in |
+| `/app` | Permanent redirect to `/console` (back-compat) | — |
+| `/admin/desktop` | Admin: publish a new desktop release from the browser | admin |
 | `/docs` | Auto-generated interactive API schema (FastAPI) | public |
 
 ## What it uses

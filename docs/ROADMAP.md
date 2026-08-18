@@ -4,23 +4,31 @@ Sequenced by what most strengthens the product and the investment case. Dates ar
 relative to funding close; scope, not commitments. Cross-referenced to
 PRODUCTION_GAPS for the "why".
 
-## Now (this branch)
+## Now (this branch) — landed
 - Deterministic investor demo (`make investor-demo`) with labelled data + reset.
 - Explainable, auditable routing (`RoutingDecision` records).
 - Honest trust ladder; corrected savings math and marketing claims.
 - Investor/ops metrics dashboard (real queries, demo/real separated).
 - P0 fixes: maintenance worker startup, payout screen fail-closed, volume
-  path-traversal validation, VM stub honesty, opt-in signed-update path, uninstall fix.
+  path-traversal validation, VM stub honesty, uninstall fix.
 - CI: demo suite, clean-DB migration check, lint, dependency + secret scanning.
+- **Payout worker systemd timer**; **TLS-by-default** in deploy; **deploy test-gate**
+  (`deploy` `needs: [tests, …]`) + health check + rollback.
+- **Squashed Alembic baseline** + CI up/down `migration` job on real Postgres.
+- **Isolation flags applied to every buyer container** (cap-drop/no-new-privs/pids/
+  mem/cpu + gVisor when present); shipped desktop agent hardened + loopback-only bind.
+- **Ed25519-signed, fail-closed agent/desktop update channel** (`sign_release.py` +
+  `release-desktop.yml`); auto-update remains opt-in.
+- **`petabyte-client` pip package** (`petabyte launch`, bundled model hub) + PyPI
+  release workflow; browser-uploadable desktop releases (`/admin/desktop`).
+- **JWT `jti`/revocation + entropy gate, signed-double-submit CSRF, optional TOTP 2FA**;
+  app-level `/login` rate limit; backup/restore DR drill + freshness gauge.
 
 ## 0–3 months (pilot-ready)
-- Payout worker systemd timer; TLS-by-default in deploy; deploy test-gate + health
-  check + rollback.
-- Squashed Alembic baseline + CI diff against `create_all`.
-- Template/render/transcode isolation parity with the notebook path; sandbox-escape
-  test run on a real Docker+GPU host (RLtest §17).
-- Signed agent release pipeline (Ed25519 tarball + Authenticode `.exe`), then re-enable
-  auto-update by default.
+- Make strict read-only rootfs the default; sandbox-escape test on a real Docker+GPU
+  host (RLtest §26).
+- Extract a shared agent core so `desktop-app/` is no longer a mirrored fork.
+- Schedule the biweekly Connect obligation batch (`run_biweekly_payouts.py`) as a unit.
 - 3–5 design-partner sellers and 2–3 pilot buyers on a controlled testnet; capture
   real reliability and routing data.
 
