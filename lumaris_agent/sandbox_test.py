@@ -49,8 +49,10 @@ ok("isolation drops ALL capabilities", "--cap-drop" in base and "ALL" in base)
 ok("isolation sets no-new-privileges",
    "no-new-privileges" in base and "--security-opt" in base)
 ok("isolation caps pids", "--pids-limit" in base)
-ok("isolation adds NO memory/cpu cap when the booking sends none",
-   "--memory" not in base and "--cpus" not in base)
+# Fail-safe: with no server-sized limits, a CONSERVATIVE host-derived default cap is applied
+# (never "no cap"), so a buyer container can't OOM-kill the host/agent or pin every CPU (audit H6).
+ok("isolation applies a fail-safe memory+cpu cap when the booking sends none",
+   "--memory" in base and "--cpus" in base)
 
 sized = tf._isolation_flags({"memory": "8g", "cpus": 2, "pids": 512})
 ok("isolation caps memory + disables swap escape when sized",

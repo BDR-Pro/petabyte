@@ -151,12 +151,16 @@ def main():
     key_path = os.getenv("PETABYTE_AGENT_KEY", crypto.KEY_PATH)
     env_path = os.getenv("AGENT_ENV", "/etc/petabyte/agent.env")
     os.makedirs(os.path.dirname(env_path), exist_ok=True)
-    with open(env_path, "w") as f:
+    # agent.env holds the node's encrypted API key. Create it 0600 FROM THE START (O_CREAT with
+    # mode) instead of open()-then-chmod, which leaves a brief window where the key file is
+    # world/group-readable at the default umask.
+    _fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(_fd, "w") as f:
         f.write(f"PETABYTE_API_URL={API}\n"
                 f"PETABYTE_API_KEY={KEY}\n"
                 f"PETABYTE_SPEC_ID={spec_id}\n"
                 f"PETABYTE_AGENT_KEY={key_path}\n")
-    os.chmod(env_path, 0o600)
+    os.chmod(env_path, 0o600)   # belt-and-suspenders if the file pre-existed with looser perms
     ui.blank()
     ui.success("Node provisioned and online", **{
         "Spec": f"#{spec_id}",

@@ -2248,14 +2248,29 @@ def _create_all_resilient():
         except (ProgrammingError, IntegrityError, OperationalError) as e:
             if "already exists" not in str(e).lower():
                 raise
-            # Drop the orphaned sequence ONLY when the table itself is genuinely absent, then retry.
-            try:
-                with engine.begin() as conn:
-                    if not _inspect(conn).has_table(table.name):
-                        conn.execute(_text(f'DROP SEQUENCE IF EXISTS "{table.name}_id_seq" CASCADE'))
-                table.create(bind=engine, checkfirst=True)
-            except Exception:  # noqa: BLE001
-                log.warning("schema: could not create table %s (continuing): %s", table.name, e)
+            # Benign "already exists": most often an ORPHANED SERIAL sequence (the sequence is
+            # present but its table is absent, from a create that failed mid-way). Drop the orphan
+            # ONLY when the table is genuinely missing, then retry the create. Any failure in the
+            # drop or the retry now PROPAGATES — we must not swallow it and boot on a half-built
+            # schema.
+            log.warning("schema: healing orphaned sequence for %s and retrying create: %s",
+                        table.name, e)
+            with engine.begin() as conn:
+                if not _inspect(conn).has_table(table.name):
+                    # RESTRICT (the default — no CASCADE): a genuinely orphaned SERIAL sequence has
+                    # no dependents, so it drops cleanly. If something else DOES depend on it (e.g.
+                    # another table's column default references this sequence name), RESTRICT refuses
+                    # and the error propagates — we fail closed rather than silently dropping another
+                    # table's default and changing the schema contract.
+                    conn.execute(_text(f'DROP SEQUENCE IF EXISTS "{table.name}_id_seq"'))
+            table.create(bind=engine, checkfirst=True)
+            # Fail closed: if recovery still did not produce the table, that is terminal. Returning
+            # here would let init_db() "succeed" with the table absent, so later queries error out
+            # and writes are silently discarded — worse than failing loudly at boot.
+            if not _inspect(engine).has_table(table.name):
+                raise RuntimeError(
+                    f"schema: table {table.name!r} is still missing after orphan-sequence "
+                    "recovery; refusing to start with an incomplete schema") from e
 
 
 def _backfill_public_ids():
@@ -3057,9 +3072,11 @@ _DIFFICULTY_SIZE = {"easy": 5000, "medium": 50000, "hard": 500000}
 def create_test_task(db: Session, spec: "SellerSpec", difficulty: str = "easy",
                      trigger: str = "manual"):
     import json as _json
-    import random as _random
     size = _DIFFICULTY_SIZE.get(difficulty, 5000)
-    seed = _random.randint(1, 2_000_000_000)
+    # The seed IS the security basis of the proof-of-work: a seller who can predict it precomputes
+    # compute_test_hash(size, seed) and passes without doing fresh GPU work. Use a CSPRNG, not the
+    # shared MT19937 global (whose state is recoverable from a handful of observed seeds).
+    seed = secrets.randbelow(2_000_000_000) + 1
     expected = compute_test_hash(size, seed)
     task = Task(spec_id=spec.id, task_type="test",
                 code=_json.dumps({"size": size, "seed": seed}), status="pending")
@@ -3842,11 +3859,11 @@ def record_benchmark_sample(db: Session, spec: "SellerSpec", *, source: str,
 
 def create_benchmark_task(db: Session, spec: "SellerSpec"):
     import json as _json
-    import random as _random
     # A FRESH server challenge rides with every benchmark: the node must return
     # compute_test_hash(size, seed) for THIS seed, proving it actually ran seeded work now —
-    # a pre-canned or replayed benchmark number can't answer a seed it never saw.
-    challenge = {"bench_seed": _random.randint(1, 2_000_000_000), "bench_size": 50000}
+    # a pre-canned or replayed benchmark number can't answer a seed it never saw. Use a CSPRNG so
+    # the seed can't be predicted/precomputed from prior observed seeds.
+    challenge = {"bench_seed": secrets.randbelow(2_000_000_000) + 1, "bench_size": 50000}
     task = Task(spec_id=spec.id, task_type="benchmark", status="pending", priority=5,
                 code=_json.dumps(challenge))
     db.add(task); db.commit(); db.refresh(task)

@@ -5,7 +5,18 @@ outside a provider should know whether a model came from Hugging Face, a mirror,
 """
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
+
+
+def require_http_url(url):
+    """Reject non-http(s) URL schemes (file:, ftp:, gopher:, data:, ...). A remote manifest can name
+    a file's URL, so this stops a `file:///etc/passwd` / `gopher://` fetch from ever leaving urllib.
+    (Host/IP egress restriction for the SERVER is enforced upstream via the source allowlist in
+    models_routes; the CLI legitimately reaches arbitrary public hosts.)"""
+    scheme = (urllib.parse.urlparse(url).scheme or "").lower()
+    if scheme not in ("http", "https"):
+        raise ProviderError(f"unsupported URL scheme {scheme!r} (only http/https allowed)")
 
 
 class ProviderError(Exception):
@@ -75,6 +86,7 @@ class ModelProvider:
 
 # ---- shared HTTP helper (stdlib, no dependency) ----
 def get_json(url, headers=None, timeout=20):
+    require_http_url(url)
     req = urllib.request.Request(url, headers=dict(headers or {}))
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:

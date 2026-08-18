@@ -549,6 +549,7 @@ jobs:
             -e SECRET_KEY=ci-insecure -e SERVER_PRIVATE_KEY=HjosLuZJfl-Qo_pSU5b61P_E5202al_7t9va97hjYBE= \
             -e PAYMENT_WEBHOOK_SECRET=ci -e WG_PUBLIC_KEY=x -e WG_ENDPOINT=y \
             -e GOOGLE_OAUTH_STUB=true -e ENVIRONMENT=development -e PAYMENTS_MODE=sandbox \
+            -e STRIPE_GATEWAY=fake \
             petabyte-api:ci
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1; then echo "healthy"; ok=1; break; fi
