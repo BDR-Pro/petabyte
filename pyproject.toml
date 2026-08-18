@@ -3,7 +3,7 @@
 # Deliberately separate from the server package (lumaris_api/pyproject.toml, name="api", which
 # pulls in FastAPI/uvicorn/psycopg2/...). Installing the CLI must NOT drag the server in: it only
 # talks to the API over HTTPS. Its one runtime dependency is httpx (for the compute commands); the
-# bundled model hub is pure standard library, so it adds nothing. That keeps `pip install petabyte`
+# bundled model hub is pure standard library, so it adds nothing. That keeps `pip install petabyte-client`
 # small enough to hand to a non-technical user.
 #
 # Ships BOTH command families in one install:
@@ -14,7 +14,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "petabyte"
+# Distribution name is `petabyte-client` (the plain `petabyte` name is taken on PyPI). The installed
+# COMMAND and the import module stay `petabyte` — users run `petabyte ...` after `pip install petabyte-client`.
+name = "petabyte-client"
 version = "0.1.0"
 description = "Petabyte CLI — rent verified GPU compute, launch apps, and pull AI models from your terminal."
 readme = "lumaris_api/cli/README.md"
@@ -41,7 +43,7 @@ petabyte = "petabyte:main"
 
 # The CLI module (petabyte.py, from lumaris_api/cli/) + the pure-stdlib model hub package
 # (modelhub, from lumaris_api/modelhub/) — and nothing else in the repo. Bundling modelhub is what
-# makes `petabyte pull` / `petabyte model` work straight from `pip install petabyte`.
+# makes `petabyte pull` / `petabyte model` work straight from `pip install petabyte-client`.
 [tool.setuptools]
 py-modules = ["petabyte"]
 packages = ["modelhub", "modelhub.providers"]

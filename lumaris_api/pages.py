@@ -592,7 +592,7 @@ async function pbConfirm(name,hours){
 }
 // The copyable one-liner is the friendly Petabyte CLI command (petabyte launch <template>), not a
 // raw curl with a bearer token — same thing the "Launch" button does, but readable and paste-safe.
-// `petabyte launch` maps to POST /launch (see lumaris_api/cli/petabyte.py). Install: pip install petabyte.
+// `petabyte launch` maps to POST /launch (see lumaris_api/cli/petabyte.py). Install: pip install petabyte-client.
 function pbCmd(name,hours){return 'petabyte launch '+name+' --hours '+(hours||2);}
 async function pbCopy(name,btn){var c=window._PBCMDS[name]||'';try{await navigator.clipboard.writeText(c);}catch(e){
  var ta=document.createElement('textarea');ta.value=c;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');}catch(_){ }document.body.removeChild(ta);}
@@ -758,7 +758,7 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 <div class="wrap" style="padding:40px 24px 8px">
   <div class="lbl" style="margin-bottom:4px">Launch anything</div>
   <h2 style="font-size:clamp(22px,3vw,30px);margin-bottom:6px">Games, art tools, AI stacks — <span class="grad-teal">one click or one line.</span></h2>
-  <p class="mut" style="max-width:62ch;margin-bottom:18px">Every card is a real workload. Press Launch, or copy the command — either way we book the cheapest verified GPU and hand you the address. Prefer the terminal? <code>pip install petabyte</code>, then paste the command.</p>
+  <p class="mut" style="max-width:62ch;margin-bottom:18px">Every card is a real workload. Press Launch, or copy the command — either way we book the cheapest verified GPU and hand you the address. Prefer the terminal? <code>pip install petabyte-client</code>, then paste the command.</p>
   <div id="launchgrid"></div>
   <div id="launchresult" style="display:none"></div>
 </div>

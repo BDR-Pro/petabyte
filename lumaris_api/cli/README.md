@@ -4,7 +4,7 @@
 Installed from PyPI, the `petabyte` command is a thin client (only needs `httpx` — it just talks
 to the API over HTTPS, so it never pulls in the server):
 ```bash
-pip install petabyte
+pip install petabyte-client                          # the command it installs is `petabyte`
 export PETABYTE_API_URL=https://petabyte.market     # default; or pass --api / omit for localhost
 petabyte register -u alice -p secret
 petabyte login    -u alice -p secret
@@ -23,7 +23,8 @@ petabyte pull Qwen/Qwen3-8B          # verified, resumable download into ~/.peta
 petabyte model list                  # what's in your local cache
 petabyte run Qwen/Qwen3-8B           # start a model runtime
 ```
-The package is built from the repo-root `pyproject.toml` (`name = "petabyte"`), which bundles this
+The package is built from the repo-root `pyproject.toml` (`name = "petabyte-client"`; the command
+stays `petabyte`), which bundles this
 CLI module plus the `modelhub` package. From a source checkout you can also run it directly with
 `python cli/petabyte.py <cmd>`, or `pip install .` from the repo root.
 `run` books the cheapest matching GPU, escrows funds, dispatches the notebook,
