@@ -145,7 +145,8 @@ from auth import create_access_token, verify_token
 from deps import oauth2_scheme, get_current_user, _username, api_key_user  # noqa: F401
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
-                   NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML, LAUNCH_HTML)
+                   NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML, LAUNCH_HTML,
+                   render_wiki)
 from web_routes import router as web_router     # static public pages (extracted router)
 from trust_routes import router as trust_router  # trust/transparency API (extracted router)
 from models_routes import router as models_router  # model hub: discover/pull/manage (extracted router)
@@ -2123,9 +2124,24 @@ def _wiki_markdown() -> str:
     return "\n\n---\n\n".join(parts) or "# Petabyte Wiki\n\nDocumentation is being prepared."
 
 
+def _wiki_sections():
+    """The wiki as ordered (name, markdown) pairs — one entry per guide file that exists."""
+    base = os.path.join(os.path.dirname(__file__), "..", "wiki")
+    out = []
+    for name in _WIKI_ORDER:
+        p = os.path.join(base, name + ".md")
+        if os.path.exists(p):
+            try:
+                out.append((name, open(p, encoding="utf-8").read().strip()))
+            except Exception:  # noqa: BLE001
+                continue
+    return out
+
+
 @app.get("/wiki/openapi.json", include_in_schema=False)
 def wiki_openapi():
-    """A minimal OpenAPI doc whose description IS the wiki — so Scalar renders it like the API docs."""
+    """A minimal OpenAPI doc whose description IS the wiki — kept so the docs environment can
+    also surface the guide, though /wiki itself now renders as a native, CDN-free site page."""
     return JSONResponse({"openapi": "3.1.0", "paths": {}, "tags": [],
                          "info": {"title": "Petabyte — Wiki & Guide", "version": "1.0",
                                   "description": _wiki_markdown()}})
@@ -2133,8 +2149,11 @@ def wiki_openapi():
 
 @app.get("/wiki", include_in_schema=False)
 def wiki_portal():
-    """The new-user wiki, rendered in the same Scalar docs environment as the API reference."""
-    return _scalar_portal("/wiki/openapi.json", "Petabyte — Wiki & Guide")
+    """New-user wiki, rendered into the site's own design system (themed nav/fonts, no CDN)."""
+    sections = _wiki_sections()
+    if not sections:
+        sections = [("index", "# Petabyte Wiki\n\nDocumentation is being prepared.")]
+    return HTMLResponse(render_wiki(sections))
 
 
 @app.exception_handler(BookingsPaused)
@@ -3952,6 +3971,18 @@ class EstimateModel(BaseModel):
     hours: int = Field(1, ge=1, le=720)
 
 
+def _spec_effective_vram(spec) -> int:
+    """A host's usable VRAM in GB for eligibility: the value it reported, or — when it never
+    reported one — a conservative figure inferred from its GPU model. Returns 0 only when both
+    are unknown, so a min-VRAM template is never silently placed on a host we can't size."""
+    import gpu_benchmark
+    try:
+        v = int(spec.vram_gb or 0)
+    except (TypeError, ValueError):
+        v = 0
+    return v if v > 0 else gpu_benchmark.model_vram_gb(spec.gpu_model or "")
+
+
 @app.post("/estimate", tags=["marketplace"])
 def estimate_cost(data: EstimateModel, db: Session = Depends(get_db)):
     """What will this actually cost me? Answered BEFORE the buyer commits.
@@ -3972,14 +4003,14 @@ def estimate_cost(data: EstimateModel, db: Session = Depends(get_db)):
             tpl = TEMPLATES.get(data.template)
             if tpl and tpl.get("gpu"):
                 cands = [s for s in cands if s.gpu_model]
-            # Price the host placement will actually use: a template with a VRAM
-            # recommendation is only ever placed on a host that meets it, so a
-            # known-too-small GPU must not set the quoted price. Hosts that never
-            # reported VRAM are left in (we can't prove them too small — same as
-            # before this gate existed) to stay consistent with /launch.
+            # Price the host placement will actually use: a template with a VRAM floor is only
+            # ever placed on a host that meets it, so a too-small GPU must not set the quoted
+            # price. A host that never reported vram_gb has it INFERRED from its GPU model, so a
+            # host we genuinely can't size (unknown model + no report) is excluded, not admitted
+            # — the same gate /launch applies, so an estimate never quotes a host launch rejects.
             mv = template_min_vram(data.template)
             if mv:
-                cands = [s for s in cands if (not s.vram_gb) or s.vram_gb >= mv]
+                cands = [s for s in cands if _spec_effective_vram(s) >= mv]
         spec = min(cands, key=lambda s: D(s.price_per_hour)) if cands else None
 
     if not spec:
@@ -7579,12 +7610,12 @@ def quick_launch(data: QuickLaunchModel, user: dict = Depends(get_current_user),
             continue
         if needs_gpu and not spec.gpu_model:
             continue
-        # Never place a memory-hungry template (vLLM, TensorRT-LLM, …) on a GPU we KNOW
-        # is too small. This gates both auto-placement and an explicitly pinned host: a
-        # pinned host that fails here is simply absent from candidates, producing a clear
-        # 409 before any funds are reserved. A host that never reported vram_gb is left in
-        # (we can't prove it too small — same as before this gate existed).
-        if min_vram and spec.vram_gb and spec.vram_gb < min_vram:
+        # Never place a memory-hungry template (vLLM, TensorRT-LLM, …) on a GPU too small for
+        # it. This gates both auto-placement and an explicitly pinned host: a pinned host that
+        # fails here is simply absent from candidates, producing a clear 409 before any funds
+        # are reserved. A host that never reported vram_gb has it INFERRED from its GPU model,
+        # so an unsized host (unknown model + no report) is excluded rather than admitted.
+        if min_vram and _spec_effective_vram(spec) < min_vram:
             continue
         if data.region and ((spec.region or "") != data.region):
             continue

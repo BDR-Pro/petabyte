@@ -1226,7 +1226,7 @@ ok("nav is narrowed to core product (no Artists/Gamers in primary nav)", ">Artis
 ok("nav surfaces Pricing/Security/Developers", all(x in _home for x in [">Pricing</a>", ">Security</a>", ">Developers</a>"]))
 ok("use cases still reachable from footer", "/artists" in _home and "/gamers" in _home)
 ok("no empty '—' stat row on landing", "s_jobs" not in _home and "s_gmv" not in _home)
-ok("landing shows real inventory preview", "heropreview" in _home)
+ok("landing shows the live rent-vs-cloud pricing widget", "hc_chips" in _home and "hcInit(" in _home)
 # new credibility pages
 for _p,_needle in [("/pricing","Cloud reference"),("/security","What we verify"),("/privacy","What we collect"),
                    ("/terms","What we are"),("/acceptable-use","Hosts may not"),("/status","System status")]:
@@ -1664,8 +1664,8 @@ ok("book-a-demo sits ALONGSIDE self-serve, not replacing it (still one-click)",
 # --- CREDIBILITY built from true, test-backed claims (no fabricated logos/metrics) ---
 _home = c.get("/").text
 ok("landing states only what we can prove (escrow, failover, verified, isolated)",
-   "Escrow-protected" in _home and "Survives a host failure" in _home
-   and "Verified hardware" in _home)
+   "Money held safely" in _home and "Stays running" in _home
+   and "Proven, real GPUs" in _home)
 ok("no fabricated customer/partner logos on the landing page",
    "customer-logo" not in _home and "Trusted by 100" not in _home)
 
@@ -2453,6 +2453,12 @@ _vmid=_lv["vm_id"]; _url0=_lv["url"]["ssh"]
 ok("launch returns a stable vm URL (subdomain: user is free)", _url0==f"ssh root@{_vmid}.petabyte.market")
 ok("username-routing fallback is offered too", _lv["url"]["ssh_username_fallback"]==f"ssh vm-{_vmid}@petabyte.market")
 ok("VM lands on cheapest node A", dbmod.get_vm_route(dbmod.SessionLocal(),_vmid).current_spec_id==_asp)
+# node A (an L4) never reported vram_gb, yet comfyui (12GB floor) still placed on it — VRAM is
+# inferred from the GPU model. The gate stays honest: a too-small or unsizable host is excluded.
+import gpu_benchmark as _gb
+ok("VRAM inferred from GPU model when host didn't report it (L4 -> 24GB)", _gb.model_vram_gb("L4") == 24)
+ok("a small GPU infers below a high floor (T4 -> <24GB, gated off vLLM)", 0 < _gb.model_vram_gb("T4") < 24)
+ok("an unrecognised GPU infers 0 (excluded from any min-VRAM template)", _gb.model_vram_gb("totally-made-up-gpu") == 0)
 ok("hosting node registers tunnel -> running", c.post("/vm/register_tunnel", headers=_ah, json={"vm_id":_vmid,"tunnel_port":7001}).json().get("vm_status")=="running")
 ok("non-hosting seller can't register tunnel", c.post("/vm/register_tunnel", headers=_bh, json={"vm_id":_vmid,"tunnel_port":9}).status_code==403)
 ok("gateway route needs token", c.get(f"/vm/{_vmid}/route").status_code==403)

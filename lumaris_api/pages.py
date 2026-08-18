@@ -5,6 +5,7 @@ accents and an amber energy accent, Sora (display) + Figtree (body) +
 JetBrains Mono (data). The hexagon node mark (/static/petabyte-logo.png) is the
 signature. Token persists in localStorage as 'pb_token' across pages.
 """
+import re
 
 _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -75,7 +76,7 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 html[data-theme=light]{
  --abyss:#EEF3FA;--depth:#FFFFFF;--depth2:#F6FAFD;--line:#E1EAF3;--line2:#C8D7E5;
  --ink:#0F1C30;--mut:#4E6079;--dim:#8091A8;
- --teal:#0B9C90;--teal-br:#0FBCAE;--deep:#0A7E76;--amber:#AE720F;--amber-br:#D0902A;
+ --teal:#0B9C90;--teal-br:#0FBCAE;--deep:#0A7E76;--amber:#E0A63C;--amber-br:#F0C673;
  --gA:rgba(255,178,36,.10);--gB:rgba(15,188,174,.12);--gV:rgba(124,58,237,.06);
  --navbg:rgba(255,255,255,.80);--hair:#EAF0F6;--panel:#FFFFFF;--panel2:#F5F9FC}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -140,6 +141,22 @@ button:active,.btn:active{transform:translateY(1px)}
 .btn-teal:hover{border-color:var(--teal);box-shadow:0 0 0 4px rgba(53,224,208,.12),0 0 24px -6px rgba(53,224,208,.5)}
 .btn-ghost{background:transparent;color:var(--ink);border:1px solid var(--line2)}
 .btn-ghost:hover{border-color:var(--teal);color:var(--teal)}
+/* filled brand-teal primary — the strong CTA, so orange stays a rare accent not the default */
+.btn-primary{background:linear-gradient(180deg,#8CF2E6,#33DBCB);color:#042521;
+ box-shadow:0 6px 22px -8px rgba(53,224,208,.55),inset 0 1px 0 rgba(255,255,255,.45)}
+.btn-primary:hover{filter:brightness(1.05)}
+/* toast notifications (success / error / info) */
+#pbtoasts{position:fixed;z-index:9999;bottom:20px;inset-inline-end:20px;display:flex;flex-direction:column;gap:10px;max-width:min(380px,92vw)}
+.pbtoast{display:flex;align-items:flex-start;gap:10px;background:var(--panel);border:1px solid var(--line2);border-inline-start:3px solid var(--mut);border-radius:12px;padding:11px 13px;box-shadow:0 14px 36px -16px rgba(0,0,0,.55);font-size:13.5px;line-height:1.45;color:var(--ink);animation:pbtin .2s cubic-bezier(.2,.7,.2,1)}
+.pbtoast.ok{border-inline-start-color:var(--pos)}
+.pbtoast.err{border-inline-start-color:var(--bad)}
+.pbtoast.info{border-inline-start-color:var(--teal)}
+.pbtoast .tx{flex:1;min-width:0}
+.pbtoast .cl{cursor:pointer;color:var(--mut);flex:none;font-size:16px;line-height:1;background:none;border:0;padding:0 2px}
+.pbtoast .cl:hover{color:var(--ink)}
+.pbtoast.out{animation:pbtout .2s ease forwards}
+@keyframes pbtin{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes pbtout{to{transform:translateY(6px);opacity:0}}
 /* ---------- labels / structure ---------- */
 .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:var(--teal);display:flex;align-items:center;gap:10px}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--teal);box-shadow:0 0 12px var(--teal);animation:pulse 2.4s infinite}
@@ -183,6 +200,13 @@ html[data-theme=light] .codeline{background:#0E1A2E}
 .codeline code::-webkit-scrollbar{display:none}
 .copybtn{flex:none;font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--mut);background:rgba(255,255,255,.05);border:1px solid var(--line2);border-radius:7px;padding:5px 10px;cursor:pointer;transition:color .15s,border-color .15s}
 .copybtn:hover{color:var(--teal);border-color:var(--teal)}
+/* launch-command syntax tokens (on the dark code box) */
+.codeline .tk-pr{color:#41597a;font-weight:700;user-select:none}
+.codeline .tk-p{color:#5AECDA;font-weight:600}
+.codeline .tk-c{color:#C4ADFF}
+.codeline .tk-a{color:#EAFBF7}
+.codeline .tk-f{color:#84B6E8}
+.codeline .tk-n{color:#F3C489}
 /* ---------- tables ---------- */
 .tbl{width:100%;border-collapse:collapse;font-size:13px}
 .tbl th{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);text-align:start;padding:13px 16px;border-bottom:1px solid var(--line)}
@@ -283,15 +307,19 @@ select{appearance:none;-webkit-appearance:none;background-image:linear-gradient(
 .licon{position:relative;width:46px;height:46px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--teal);
  background:radial-gradient(circle at 30% 25%,rgba(53,224,208,.18),rgba(53,224,208,.04));border:1px solid rgba(53,224,208,.3);border-radius:13px}
 .licon svg{width:25px;height:25px}
+/* filled, brand-coloured tile — original category glyph in white, reads like an app icon */
+.licon.fill{color:#fff;border:0;box-shadow:0 5px 16px -6px rgba(2,10,20,.42),inset 0 1px 0 rgba(255,255,255,.3)}
+.licon.fill svg{width:26px;height:26px;stroke-width:2}
 .lcard:hover .licon::after{content:"";position:absolute;inset:-1px;border-radius:13px;border:1px solid rgba(53,224,208,.6);animation:ping 1s ease-out}
 @keyframes ping{0%{transform:scale(1);opacity:.8}100%{transform:scale(1.7);opacity:0}}
 .lmeta{flex:1;min-width:0}
 .lname{font-family:var(--disp);font-weight:600;text-transform:capitalize;font-size:15px}
 .ldesc{font-size:12px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lport{font-family:var(--mono);font-size:9.5px;color:var(--dim);border:1px solid var(--line2);border-radius:999px;padding:2px 9px;flex:none}
-.lbtn{flex:none;padding:8px 16px;font-size:12.5px}
-.lfoot{display:flex;align-items:center;gap:10px;margin-top:11px}
-.lfoot .codeline{margin-top:0;flex:1;min-width:0}
+.lbtn{width:100%;justify-content:center;padding:9px 16px;font-size:12.5px}
+.lfoot{display:flex;flex-direction:column;align-items:stretch;gap:9px;margin-top:11px}
+.lfoot .codeline{margin-top:0;min-width:0}
+.lfoot .codeline code{font-size:10.5px}
 .lres{margin-top:16px;padding:17px 19px;border:1px solid var(--line2);border-radius:var(--r-sm);background:linear-gradient(180deg,var(--depth2),var(--panel2))}
 .lresok{color:var(--pos);font-family:var(--disp);font-weight:600;margin-bottom:6px}
 .lres pre{margin-top:10px;font-size:12px;white-space:pre-wrap}
@@ -326,8 +354,8 @@ html[dir="rtl"] .mono,html[dir="rtl"] code,html[dir="rtl"] .codeline,
 html[dir="rtl"] .tbl td.mono,html[dir="rtl"] input[type="number"]{direction:ltr;text-align:start;unicode-bidi:isolate}
 html[dir="rtl"] .hexbg{transform:scaleX(-1)}
 html[dir="rtl"] .grad{background-position:right}
-[dir] .arrow-fwd::after{content:"\2192"}
-html[dir="rtl"] .arrow-fwd::after{content:"\2190"}
+[dir] .arrow-fwd::after{content:"→"}
+html[dir="rtl"] .arrow-fwd::after{content:"←"}
 
 /* ---------- mobile ----------
    A host checks "is my node earning?" from their phone, in bed. A 7-column table
@@ -340,8 +368,7 @@ html[dir="rtl"] .arrow-fwd::after{content:"\2190"}
   .filterbar{gap:10px}
   .filterbar .field{flex:1 1 calc(50% - 5px)}
   .lfoot{flex-wrap:wrap}
-  .lfoot .codeline{order:2;flex:1 1 100%}
-  .lbtn{order:1;width:100%;justify-content:center}
+  .lfoot .codeline{flex:1 1 100%}
   .panel{overflow:visible}
   .tbl thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
   .tbl,.tbl tbody,.tbl tr,.tbl td{display:block;width:100%}
@@ -381,7 +408,7 @@ _NAV = """<nav class="navbar navbar-expand-lg sticky-top"><div class="wrap">
   <a class="signin" id="signinlink" href="/login">Sign in</a>
   <a class="signin" id="signoutlink" href="#" onclick="signout();return false" style="display:none">Sign out</a>
   <a class="btn btn-ghost" href="/demo" data-ar="احجز عرضاً">Book a demo</a>
-  <a class="btn btn-amber" href="/console">Open console</a>
+  <a class="btn btn-primary" href="/console">Open console</a>
 </div>
 </div>
 </div></nav>"""
@@ -430,6 +457,34 @@ function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'
 function authed(){return !!tok();}
 async function api(p,o){o=o||{};o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
  if(tok())o.headers['Authorization']='Bearer '+tok();var r=await fetch(p,o);var b={};try{b=await r.json()}catch(e){}return {ok:r.ok,status:r.status,body:b};}
+// In-app toast for success/error/info feedback — replaces jarring browser toast(,'err') popups.
+// kind: 'ok' (success) | 'err' (failure) | 'info'. Auto-dismisses; errors linger a little longer.
+function toast(msg,kind){
+  kind=(kind==='ok'||kind==='err'||kind==='info')?kind:'info';
+  var host=document.getElementById('pbtoasts');
+  if(!host){host=document.createElement('div');host.id='pbtoasts';document.body.appendChild(host);}
+  var t=document.createElement('div');t.className='pbtoast '+kind;t.setAttribute('role',kind==='err'?'alert':'status');
+  var tx=document.createElement('div');tx.className='tx';tx.textContent=String(msg==null?'':msg);
+  var cl=document.createElement('button');cl.type='button';cl.className='cl';cl.setAttribute('aria-label','Dismiss');cl.textContent='×';
+  var gone=false,close=function(){if(gone)return;gone=true;t.classList.add('out');setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t);},200);};
+  cl.addEventListener('click',close);
+  t.appendChild(tx);t.appendChild(cl);host.appendChild(t);
+  setTimeout(close,kind==='err'?6000:4000);
+  return t;
+}
+window.toast=toast;
+// Human-readable duration from decimal hours: 1.99 -> "1h 59m", 0.99 -> "59m", 2 -> "2h".
+// Long horizons collapse to whole hours; sub-minute reads "<1m"; non-finite is ∞.
+function cDur(h){
+  if(h==null)return '—';
+  var mins=Math.round(Number(h)*60);
+  if(!isFinite(mins))return '∞';
+  if(mins<1)return '<1m';
+  var hh=Math.floor(mins/60),mm=mins%60;
+  if(hh>=48)return hh+'h';
+  return hh?(hh+'h'+(mm?' '+mm+'m':'')):(mm+'m');
+}
+window.cDur=cDur;
 // Money-screen honesty: any page with a #pbtestmode slot shows a clear TEST-MODE banner while the
 // platform is in sandbox / Stripe test mode — so no one ever mistakes a demo for a real charge.
 async function pbTestBanner(){var el=document.getElementById('pbtestmode');if(!el)return;
@@ -483,6 +538,15 @@ window.PBICONS={
 PBICONS["jupyter"]='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="4" r="1.4"/><path d="M4 9c2.6 3 13.4 3 16 0M4 15c2.6 3 13.4 3 16 0"/></svg>';
 PBICONS["pytorch"]='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 6 9a8.5 8.5 0 1 0 12 0z"/><circle cx="15" cy="7.5" r="1.1" fill="currentColor"/></svg>';
 function pbIcon(n){return PBICONS[n]||PBICONS._default;}
+// Per-tool tile COLOURS (colours aren't trademarkable; the glyphs above are our own generic
+// category marks, not anyone's logo). Gives each launch card a distinct, app-icon-style tile.
+window.PBTILE={ollama:['#3a3c44','#565863'],vllm:['#4f46e5','#7c73f0'],comfyui:['#6d28d9','#9257f0'],
+ blender:['#e0620d','#f5883a'],minecraft:['#4e8f34','#6cb047'],valheim:['#3a6b84','#5c93ac'],
+ factorio:['#b4531c','#db7a2f'],"sd-webui":['#8f2fd6','#b95cf0'],"tensorrt-llm":['#3f9e4f','#5fc06e'],
+ jupyter:['#e0722a','#f2934a'],pytorch:['#dd4a2c','#f0684a'],ffmpeg:['#3f8f5a','#59ac74'],
+ _default:['#12a093','#33dbcb']};
+function pbTile(n){var c=PBTILE[n]||PBTILE._default;
+ return '<div class="licon fill" style="background:linear-gradient(140deg,'+c[0]+','+c[1]+')">'+pbIcon(n)+'</div>';}
 function pbEmpty(cols,title,sub,ctaHref,ctaText){
  return '<tr><td colspan='+cols+'><div class="empty">'+
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M8 15h4"/></svg>'+
@@ -578,7 +642,8 @@ async function pbConfirm(name,hours){
   }
   if(confirm(L.join(String.fromCharCode(10)))) pbLaunch(name,hours);
 }
-function pbCmd(name,hours){var Q=String.fromCharCode(39);return 'curl -sX POST https://petabyte.market/launch -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '+Q+'{"template":"'+name+'","hours":'+(hours||2)+'}'+Q;}
+function pbCmd(name,hours){return 'petabyte launch '+name+' --hours '+(hours||2);}
+function pbCmdHtml(name,hours){return '<span class="tk-p">petabyte</span> <span class="tk-c">launch</span> <span class="tk-a">'+esc(name)+'</span> <span class="tk-f">--hours</span> <span class="tk-n">'+(hours||2)+'</span>';}
 async function pbCopy(name,btn){var c=window._PBCMDS[name]||'';try{await navigator.clipboard.writeText(c);}catch(e){
  var ta=document.createElement('textarea');ta.value=c;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');}catch(_){ }document.body.removeChild(ta);}
  if(btn){var o=btn.textContent;btn.textContent='copied';setTimeout(function(){btn.textContent=o;},1200);}}
@@ -588,13 +653,13 @@ async function renderLaunch(elId,kinds,hours){var el=document.getElementById(elI
  el.className='lgrid';
  el.innerHTML=ts.map(function(t){var cmd=pbCmd(t.name,hours);window._PBCMDS[t.name]=cmd;
   return '<div class="lcard">'+
-   '<div class="lhead"><div class="licon">'+pbIcon(t.name)+'</div>'+
+   '<div class="lhead">'+pbTile(t.name)+
    '<div class="lmeta"><div class="lname">'+t.name+'</div><div class="ldesc">'+(t.desc||'')+'</div></div>'+
    (t.port?('<span class="lport">:'+t.port+'</span>'):'<span class="lport">batch</span>')+'</div>'+
    '<div class="lfoot">'+
-    '<div class="codeline"><code>'+cmd.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</code>'+
+    '<div class="codeline"><code><span class="tk-pr">$</span> '+pbCmdHtml(t.name,hours)+'</code>'+
     '<button class="copybtn" data-act="pbCopy" data-a1="'+t.name+'">copy</button></div>'+
-    '<button class="btn btn-amber lbtn" data-act="pbConfirm" data-a1="'+t.name+'" data-a2="'+(hours||2)+'">Launch</button>'+
+    '<button class="btn btn-primary lbtn" data-act="pbConfirm" data-a1="'+t.name+'" data-a2="'+(hours||2)+'">Launch</button>'+
    '</div></div>';}).join('');}
 function _lres(){var e=document.getElementById('launchresult');if(e){e.style.display='';}return e;}
 async function pbLaunch(name,hours){var out=_lres();if(!out)return;
@@ -650,58 +715,142 @@ def _page(title, body, desc=None, path="/"):
 
 LANDING_HTML = _page("Petabyte — the compute exchange",
     desc="Rent verified GPUs by the hour, or earn from hardware you already own. One click to launch. Escrow refunds every hour you do not use.", path="/", body="""
+<style>
+.hc{padding:16px 18px}
+.hc-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.hc-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.hc-chip{font:inherit;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--line2);background:var(--panel2);color:var(--mut);border-radius:999px;padding:5px 11px;transition:color .12s,border-color .12s,background .12s}
+.hc-chip:hover{color:var(--ink)}
+.hc-chip[aria-selected="true"]{border-color:var(--teal);color:var(--teal);background:color-mix(in srgb,var(--teal) 13%,transparent)}
+.hc-cmp{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.hc-side{border:1px solid var(--line);border-radius:13px;padding:11px 13px}
+.hc-k{font-size:10.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;display:block}
+.hc-v{font-size:25px;font-weight:760;line-height:1.12;letter-spacing:-.01em;font-family:var(--mono)}
+.hc-u{font-size:11px;color:var(--mut)}
+.hc-pb{background:color-mix(in srgb,var(--teal) 9%,transparent);border-color:color-mix(in srgb,var(--teal) 32%,var(--line))}
+.hc-pb .hc-v{color:var(--teal)}
+.hc-bar{height:9px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);margin:14px 0 7px;overflow:hidden}
+.hc-fill{height:100%;width:18%;background:linear-gradient(90deg,var(--teal-br),var(--teal));transition:width .4s cubic-bezier(.2,.7,.2,1)}
+.hc-save{font-size:13px;color:var(--mut)}
+.hc-save b{color:var(--pos);font-weight:750;font-size:15px}
+.hc-hours{display:flex;align-items:center;gap:10px;margin-top:14px}
+.hc-hours input[type=range]{flex:1;accent-color:var(--teal)}
+.hc-total{display:flex;justify-content:space-between;align-items:baseline;margin-top:12px;padding-top:12px;border-top:1px solid var(--hair)}
+.prf{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.prf-i{background:var(--panel);padding:15px 18px;display:flex;flex-direction:column;gap:3px}
+.prf-i b{font-family:var(--disp);font-size:22px;font-weight:750;color:var(--ink)}
+.prf-i span{font-size:12.5px;color:var(--mut);line-height:1.35}
+@media(max-width:760px){.prf{grid-template-columns:repeat(2,1fr)}}
+.hiw{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.hiw-s{background:linear-gradient(180deg,var(--depth2),var(--panel2));border:1px solid var(--line);border-radius:16px;padding:22px 20px}
+.hiw-n{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:11px;background:color-mix(in srgb,var(--teal) 14%,transparent);border:1px solid color-mix(in srgb,var(--teal) 34%,var(--line));color:var(--teal);font-family:var(--disp);font-weight:750;margin-bottom:12px}
+.hiw-s h3{font-size:16px;margin:0 0 6px}
+.hiw-s p{font-size:13.5px;line-height:1.55;margin:0}
+@media(max-width:820px){.hiw{grid-template-columns:1fr}}
+.ctaband{position:relative;overflow:hidden;margin-top:36px;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2);background:linear-gradient(120deg,#0a1730 0%,#0e2a45 62%,#0a2136 100%)}
+.ctaband::before{content:"";position:absolute;inset:0;background:radial-gradient(58% 120% at 50% -12%,rgba(58,224,207,.20),transparent 60%)}
+.ctaband .wrap{position:relative}
+.ctaband .btn-ghost.oncta{color:#fff;border-color:rgba(255,255,255,.4)}
+.ctaband .btn-ghost.oncta:hover{background:rgba(255,255,255,.12)}
+.plainbox{display:flex;gap:15px;align-items:flex-start;max-width:840px;margin:0 auto;background:color-mix(in srgb,var(--teal) 7%,var(--panel));border:1px solid color-mix(in srgb,var(--teal) 26%,var(--line));border-radius:16px;padding:16px 20px}
+.plaintag{flex:none;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--teal);background:color-mix(in srgb,var(--teal) 14%,transparent);border:1px solid color-mix(in srgb,var(--teal) 30%,var(--line));border-radius:999px;padding:5px 11px;margin-top:1px;white-space:nowrap}
+.plainbox p{margin:0;font-size:14.5px;line-height:1.62;color:var(--mut)}
+.plainbox p b{color:var(--ink);font-weight:640}
+@media(max-width:620px){.plainbox{flex-direction:column;gap:9px;padding:15px 16px}}
+</style>
 <div class="hero"><div class="wrap" style="padding:74px 24px 30px">
   <img class="hexbg" src="/static/petabyte-logo.png" alt=""/>
   <div class="cols" style="align-items:center;gap:34px">
     <div style="flex:1.35 1 420px;min-width:300px">
       <div class="eyebrow"><span class="dot"></span> verified gpu marketplace</div>
-      <h1 style="font-size:clamp(40px,6.8vw,76px);margin:20px 0 16px;max-width:15ch"><span data-ar="قدرة حوسبة بدون أسعار السحابة.">GPU compute <span class="grad">without cloud prices.</span></span></h1>
-      <p class="mut" style="font-size:17px;max-width:52ch" data-ar="استأجر كروت رسومات بالساعة من مضيفين موثّقين، أو اربح من عتاد تملكه بالفعل. تُحفظ أموالك في ضمان حتى ينتهي العمل — وإذا تعطّل الجهاز، تُعاد إليك.">Rent GPUs by the hour from verified hosts, or earn from hardware you already own. Your money sits in escrow until the work is done — if a node drops, you are refunded.</p>
+      <h1 style="font-size:clamp(40px,6.8vw,76px);margin:20px 0 16px;max-width:15ch"><span data-ar="كروت رسومات قوية بلا أسعار السحابة.">Powerful GPUs <span class="grad">without cloud prices.</span></span></h1>
+      <p class="mut" style="font-size:17px;max-width:52ch" data-ar="استأجر كرت رسومات (GPU) قوياً — نوع الحواسيب الذي يشغّل ألعاب اليوم والرسوم ثلاثية الأبعاد والفيديو والذكاء الاصطناعي — بالساعة وبجزء بسيط من أسعار السحابة الكبرى. تُحفظ أموالك بأمان ولا تُدفع إلا مع إنجاز العمل؛ وإذا تعطّل جهاز، تُعاد إليك تلقائياً.">Rent a powerful GPU — the kind of computer behind today's games, 3D, video and AI — by the hour, for a fraction of big-cloud prices. Your money is held safely and paid out only as the work gets done; if a machine goes offline, you're paid back automatically.</p>
       <div class="mini" style="margin-top:28px;margin-bottom:10px" data-ar="ما الذي تبحث عنه؟">What are you here for?</div>
       <div style="display:flex;gap:12px;flex-wrap:wrap">
-        <a class="btn btn-amber arrow-fwd" href="/marketplace" data-ar="أحتاج كروت رسومات">I need GPUs </a>
+        <a class="btn btn-primary arrow-fwd" href="/marketplace" data-ar="أحتاج كروت رسومات">I need GPUs </a>
         <a class="btn btn-teal" href="/install" data-ar="لديّ كرت رسومات لتأجيره">I have a GPU to rent out</a>
       <div class="mini" style="margin-top:14px" data-ar="تفضّل جولة معنا؟ ">Prefer a walkthrough? <a class="teal" href="/demo" data-ar="احجز عرضاً مدته ٢٠ دقيقة">Book a 20-minute demo</a></div>
       </div>
     </div>
-    <div class="panel" style="flex:1 1 320px;min-width:290px;padding:18px 20px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-        <span class="mini">Available now</span>
-        <a class="mini teal" href="/marketplace">See all →</a>
+    <div class="panel hc" style="flex:1 1 340px;min-width:300px">
+      <div class="hc-h"><span class="mini" data-ar="ما ستدفعه">What you&#39;d pay</span><span class="mini" id="hc_live"></span></div>
+      <div class="hc-chips" id="hc_chips" role="tablist" aria-label="GPU model"><span class="mut mono" style="font-size:12px">Loading prices…</span></div>
+      <div class="hc-cmp">
+        <div class="hc-side hc-pb"><span class="hc-k">Petabyte</span><span class="hc-v" id="hc_pb">—</span><span class="hc-u">/hour</span></div>
+        <div class="hc-side"><span class="hc-k" data-ar="السحابة الكبرى">Big cloud</span><span class="hc-v" id="hc_cloud">—</span><span class="hc-u">/hour</span></div>
       </div>
-      <div id="heropreview"><div class="mut mono" style="font-size:12px;padding:22px 0;text-align:center">Loading inventory…</div></div>
-      <div id="herostats" style="display:none;border-top:1px solid var(--hair);margin-top:12px;padding-top:12px">
-        <span class="mini"><span id="s_nodes" class="teal mono">0</span> hosts online · <span id="s_specs" class="mono">0</span> GPUs listed</span>
-      </div>
+      <div class="hc-bar"><div class="hc-fill" id="hc_fill"></div></div>
+      <div class="hc-save"><b id="hc_pct">—</b> cheaper on Petabyte</div>
+      <div class="hc-hours"><label class="mini" for="hc_hours" data-ar="التشغيل لمدة">Run for</label><input id="hc_hours" type="range" min="1" max="168" value="24" aria-label="Hours to run"/><span class="mono" id="hc_hval" style="min-width:42px;text-align:end">24h</span></div>
+      <div class="hc-total"><span class="mut mini" data-ar="إجماليك">Your total</span><span><b class="mono teal" id="hc_pbtot" style="font-size:16px">—</b> <span class="mut mini"><span data-ar="مقابل السحابة الكبرى">vs big cloud</span> <span class="mono" id="hc_cltot">—</span></span></span></div>
+      <a class="btn btn-primary" href="/marketplace" style="width:100%;justify-content:center;margin-top:12px" data-ar="تصفّح كروت الرسومات">Browse GPUs →</a>
+      <div class="mini" style="margin-top:8px;text-align:center" data-ar="أسعار تقريبية · جرّب كل شيء في وضع الاختبار أولاً — دون بطاقة ولا أموال حقيقية">Typical prices · try it all in TEST mode first — no card, no real money</div>
     </div></div>
   </div>
 </div></div>
 
+<!-- PLAIN-ENGLISH EXPLAINER: for first-timers with no technical background. -->
+<div class="wrap" style="padding:20px 24px 2px">
+  <div class="plainbox">
+    <span class="plaintag" data-ar="جديد هنا؟">New to this?</span>
+    <p data-ar="الأجهزة القوية كهذه باهظة الشراء، والسحابة الكبرى تؤجّرها بسعر مرتفع. يصلك <b>Petabyte</b> بأشخاص لديهم كرت رسومات فائض دون استخدام، فتستأجر أجهزتهم <b>بالساعة</b> بسعر أقل بكثير — مع حماية دفعتك طوال الوقت. جرّبه أولاً في وضع الاختبار دون بطاقة.">Powerful machines like these cost a lot to buy, and the big cloud companies rent them out at a premium. <b>Petabyte connects you with people who have a spare GPU sitting idle</b>, so you rent theirs <b>by the hour</b> for much less — with your payment protected the whole time. Try it first in TEST mode, no card needed.</p>
+  </div>
+</div>
+
+<!-- PROOF STRIP: real figures — max savings + model count come from the price catalog,
+     the live tile fills in only when verified nodes are actually online. -->
+<div class="wrap" style="padding:26px 24px 6px">
+  <div class="prf">
+    <div class="prf-i"><b id="prf_save">up to 90%</b><span data-ar="أرخص من السحابة الكبرى — كل كرت رسومات هنا أقل من أسعار كبار المزوّدين">cheaper than the big cloud — every GPU here costs less than the major providers charge</span></div>
+    <div class="prf-i"><b id="prf_models">46</b><span data-ar="أنواع كروت رسومات للاختيار من بينها — لكلٍّ سعر عادل حسب سرعته">kinds of GPU to choose from — each at a fair price based on how fast it is</span></div>
+    <div class="prf-i"><b data-ar="بالساعة">Hourly</b><span data-ar="فوترة — أوقِف في أي وقت، وتُعاد إليك أي ساعات لم تستخدمها">billing — stop anytime, and any hours you don't use come back to you</span></div>
+    <div class="prf-i"><b id="prf_live">TEST</b><span id="prf_live_t">mode by default — a safe practice run, no card and no real money</span></div>
+  </div>
+</div>
+
 <!-- CREDIBILITY: every claim here is enforced by a test in the repo. No vanity metrics,
      no fabricated logos. What we can prove, and nothing we cannot. -->
 <div class="wrap" style="padding:6px 24px 4px">
-  <div class="mini" style="text-align:center;margin-bottom:14px" data-ar="ما الذي نضمنه فعلاً — كل بند منها مغطّى باختبار.">What we actually guarantee — every line below is enforced by a test</div>
+  <div class="mini" style="text-align:center;margin-bottom:14px" data-ar="ما نَعِد به — مبنيّ في المنتج فعلاً، وليس مجرّد كلام تسويقي">What we promise — built into the product, not just marketing</div>
   <div class="cols" style="gap:14px;flex-wrap:wrap">
     <div class="card" style="flex:1 1 210px">
-      <div class="lbl">Escrow-protected</div>
-      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="تُحفظ أموالك في ضمان وتُعاد الساعات غير المستخدمة بالسنت.">Your money is held in escrow and released only for work done. Stop early and the unused hours are refunded to the cent.</p>
+      <div class="lbl">Money held safely</div>
+      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="نحتفظ بأموالك بأمان — لا مالك الجهاز — ولا نصرفها إلا مقابل عملٍ أُنجز فعلاً. أوقِف مبكراً وتسترد الباقي.">We hold your money safely — not the machine's owner — and pay it out only for work actually done. Stop early and you get the rest back.</p>
     </div>
     <div class="card" style="flex:1 1 210px">
-      <div class="lbl">Survives a host failure</div>
-      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="إذا تعطّل الجهاز أثناء العمل، ننقلك تلقائياً إلى مضيف آخر.">If a host drops mid-job, we move your instance to another node and you keep going. There is a timeline for every rental that proves it.</p>
+      <div class="lbl">Stays running</div>
+      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="إذا تعطّل الجهاز الذي يشغّل عملك، ننقلك إلى جهازٍ آخر لتواصل بلا انقطاع. ولكل عملية استئجار سجلٌّ زمنيّ يوضّح ما جرى.">If the machine running your work goes offline, we move you to another one so you keep going. Every rental has a timeline that shows exactly what happened.</p>
     </div>
     <div class="card" style="flex:1 1 210px">
-      <div class="lbl">Verified hardware</div>
-      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="لا يقبل أي جهاز عملاً مدفوعاً قبل إثبات عتاده تشفيرياً.">No machine can take paid work until it has cryptographically proven what GPU it actually has. Unverified nodes are marked as such.</p>
+      <div class="lbl">Proven, real GPUs</div>
+      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="على كل جهاز أن يُثبت نوع كرت الرسومات الذي يملكه قبل قبول أي عمل مدفوع — لتحصل دائماً على ما تدفع مقابله. والأجهزة غير المُثبَتة موسومة بوضوح.">Every machine has to prove exactly which GPU it has before it can take paid work — so you always get what you pay for. Machines that haven't proven it are clearly labelled.</p>
     </div>
     <div class="card" style="flex:1 1 210px">
-      <div class="lbl">Isolated workloads</div>
-      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="يعمل كل عبء داخل جهاز افتراضي دقيق، ومنافذه مغلقة افتراضياً لحماية شبكة المضيف.">Each workload runs in its own micro-VM with a default-closed network, so one tenant cannot reach another and a host's home network stays protected.</p>
+      <div class="lbl">Kept private</div>
+      <p class="mut" style="font-size:13px;margin-top:6px" data-ar="يعمل عملك في مساحةٍ خاصةٍ مغلقة — لا يمكن لأيّ مستأجرٍ آخر الوصول إليه، وتبقى شبكة مالك الجهاز المنزلية محميّةً أيضاً.">Your work runs in its own sealed-off space — no other renter can reach it, and the machine owner's home network stays protected too.</p>
     </div>
   </div>
   <div style="text-align:center;margin-top:16px">
     <a class="btn btn-ghost" href="/security" data-ar="كيف يعمل هذا">How this works</a>
     <a class="btn btn-ghost" href="/demo" data-ar="شاهده مباشرةً">See it live</a>
+  </div>
+</div>
+
+<!-- HOW IT WORKS: three honest, buyer-side steps. -->
+<div class="wrap" style="padding:44px 24px 6px">
+  <div class="lbl" style="margin-bottom:4px" data-ar="كيف تعمل">How it works</div>
+  <h2 style="font-size:clamp(22px,3vw,30px);margin-bottom:6px" data-ar="من الصفر إلى كرت رسومات يعمل في <span class='grad-teal'>ثلاث خطوات.</span>">From zero to a running GPU in <span class="grad-teal">three steps.</span></h2>
+  <p class="mut" style="max-width:60ch;margin-bottom:20px" data-ar="بلا إجراءات معقّدة، ولا مكالمة مبيعات، ولا عقد طويل. أضِف بعض المال، واختر كرت رسومات، ونحجز لك أرخص جهاز موثوق.">No sign-up hoops, no sales call, no long contract. Add a little money, pick a GPU, and we book the cheapest trusted machine for you.</p>
+  <div class="hiw">
+    <div class="hiw-s"><span class="hiw-n">1</span>
+      <h3 data-ar="اختر كرت رسومات — أو لا تختر">Pick a GPU — or don't</h3>
+      <p class="mut" data-ar="تصفّح الأجهزة الموثوقة حسب النوع والذاكرة والموقع — أو أخبرنا بما تحتاجه فحسب ونختار لك الأرخص المناسب.">Browse trusted machines by type, memory and location — or just tell us what you need and we'll pick the cheapest one that fits.</p></div>
+    <div class="hiw-s"><span class="hiw-n">2</span>
+      <h3 data-ar="شغّل بنقرة واحدة">Launch in one click</h3>
+      <p class="mut" data-ar="شغّل إعداداً جاهزاً — خادم لعبة، أو أداة تصميم ثلاثي الأبعاد، أو روبوت دردشة ذكياً — أو أحضِر إعدادك الخاص، بنقرة واحدة. ينتقل مالُك إلى حفظٍ آمن، لا إلى مالك الجهاز.">Start a ready-made setup — a game server, a 3D design tool, an AI chatbot — or bring your own, in a single click. Your money moves into safe holding, not to the machine's owner.</p></div>
+    <div class="hiw-s"><span class="hiw-n">3</span>
+      <h3 data-ar="ادفع مقابل العمل الفعلي فقط">Pay only for real work</h3>
+      <p class="mut" data-ar="تُحتسب الأجرة ساعةً بساعة أثناء التشغيل. أوقِف مبكراً ويعود إليك الباقي؛ وإذا تعطّل جهاز، ننقلك أو نعيد إليك مالَك.">You're charged hour by hour as it runs. Stop early and the rest comes back; if a machine goes offline, we move you or pay you back.</p></div>
   </div>
 </div>
 
@@ -742,8 +891,8 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 <!-- launch anything: the signature cards, on the front door -->
 <div class="wrap" style="padding:40px 24px 8px">
   <div class="lbl" style="margin-bottom:4px">Launch anything</div>
-  <h2 style="font-size:clamp(22px,3vw,30px);margin-bottom:6px">Games, art tools, AI stacks — <span class="grad-teal">one click or one line.</span></h2>
-  <p class="mut" style="max-width:62ch;margin-bottom:18px">Every card is a real workload. Press Launch, or copy the command — either way we book the cheapest verified GPU and hand you the address.</p>
+  <h2 style="font-size:clamp(22px,3vw,30px);margin-bottom:6px">Games, art tools, AI — <span class="grad-teal">in one click or one line.</span></h2>
+  <p class="mut" style="max-width:62ch;margin-bottom:18px">Each of these is ready to run. Press Launch — or copy the one-line command if you prefer — and we set it up on the cheapest trusted machine and hand you the link.</p>
   <div id="launchgrid"></div>
   <div id="launchresult" style="display:none"></div>
 </div>
@@ -760,12 +909,22 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
     <p class="mut" style="font-size:13px">Blender, ComfyUI, SD — farm-grade GPUs below the big render farms.</p></a>
   <a class="card" href="/developers" style="display:block">
     <div class="lbl">Builders</div>
-    <h2 style="font-size:17px;margin-bottom:6px">Cheaper AI compute</h2>
-    <p class="mut" style="font-size:13px">H100-class below cloud on-demand. State intent — the router places the job.</p></a>
+    <h2 style="font-size:17px;margin-bottom:6px">Cheaper AI power</h2>
+    <p class="mut" style="font-size:13px">Top-tier AI chips for less than the big cloud. Say what you need and we place it for you.</p></a>
   <a class="card" href="/install" style="display:block">
     <div class="lbl am">GPU owners</div>
     <h2 style="font-size:17px;margin-bottom:6px">Turn idle silicon into income</h2>
     <p class="mut" style="font-size:13px">One command to list. Weekly payouts — bank, USDC, or gift card.</p></a>
+</div></div>
+
+<!-- CTA BAND: the last push before the fold ends. -->
+<div class="ctaband"><div class="wrap" style="padding:52px 24px;text-align:center">
+  <h2 style="font-size:clamp(24px,3.4vw,34px);color:#fff;margin:0 auto 10px;max-width:20ch" data-ar="استأجر أول كرت رسومات خلال الدقائق الخمس القادمة.">Rent your first GPU in the next five minutes.</h2>
+  <p style="color:rgba(255,255,255,.72);font-size:15.5px;max-width:52ch;margin:0 auto 22px" data-ar="يبدأ في وضع الاختبار — تجربة آمنة دون بطاقة. حوّل إلى الأموال الحقيقية متى شئت فقط.">It starts in TEST mode — a safe practice run with no card. Switch to real money only when you're ready.</p>
+  <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+    <a class="btn btn-primary arrow-fwd" href="/marketplace" data-ar="تصفّح كروت الرسومات">Browse GPUs</a>
+    <a class="btn btn-ghost oncta" href="/install" data-ar="أدرِج كرت رسوماتك">List your GPU</a>
+  </div>
 </div></div>
 
 <!-- NEWSLETTER (Mailgun mailing list via /newsletter/subscribe) -->
@@ -803,38 +962,66 @@ async function subscribeNewsletter(){
 </script>
 
 <script>
-async function heroPreview(){
- try{
-  var r=await fetch('/marketplace/specs?sort=price');var b=await r.json();
-  var el=document.getElementById('heropreview');
-  var rows=(b.specs||[]).slice(0,3);
-  if(!rows.length){
-    el.innerHTML='<div class="empty" style="padding:18px 6px"><div class="et" style="font-size:13px">No GPUs online yet</div>'+
-      '<div class="es" style="font-size:12px">Be the first host — one command, and you are listed.</div>'+
-      '<a class="btn btn-teal" href="/install">List your GPU</a></div>';
-  }else{
-    el.innerHTML=rows.map(function(s){
-      var save=(s.cloud_reference&&s.price_per_hour<s.cloud_reference)?Math.round((1-s.price_per_hour/s.cloud_reference)*100):0;
-      return '<a href="/gpu/'+s.id+'" style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--hair)">'+
-       '<div style="flex:1;min-width:0">'+
-        '<div style="font-family:var(--disp);font-weight:600;font-size:14px">'+esc(s.gpu_model||'CPU')+(s.vram_gb?' <span class="mut" style="font-weight:400">· '+s.vram_gb+'GB</span>':'')+'</div>'+
-        '<div class="mini" style="margin-top:2px">'+esc(s.region||'unknown region')+' · '+(s.available_units>0?'<span class="teal">available now</span>':'busy')+'</div>'+
-       '</div>'+
-       '<div style="text-align:end;flex:none">'+
-        '<div class="mono amber" style="font-size:15px;font-weight:600">$'+Number(s.price_per_hour).toFixed(2)+'</div>'+
-        '<div class="mini">/hour'+(save>0?' · <span style="color:var(--pos)">'+save+'% off</span>':'')+'</div>'+
-       '</div></a>';}).join('');
-  }
-  // only show counters when they are real — an empty metric reads as "this does not work"
-  var st=await (await fetch('/marketplace/stats')).json();
-  if(st.nodes_online>0||st.specs_listed>0){
-    document.getElementById('s_nodes').textContent=st.nodes_online;
-    document.getElementById('s_specs').textContent=st.specs_listed;
-    document.getElementById('herostats').style.display='';
-  }
- }catch(e){}
+// ---- Hero "what you'd pay" calculator + proof strip, driven by the real price catalog ----
+// No fabricated widgets: every number is a benchmark-anchored reference rate from /pricing/catalog
+// (Petabyte) vs the model's public cloud on-demand rate. Hours slider just multiplies.
+var HC={rows:[],sel:0,hours:24};
+var HC_ORDER=['H100','A100','H200','L40','L4','A10','V100','T4','RTX A6000','RTX 4090'];
+function hcMoney(n){return '$'+Number(n).toFixed(2);}
+function hcRender(){
+  var r=HC.rows[HC.sel];if(!r)return;
+  var pb=r.reference_price_per_hour,cloud=r.cloud_reference;
+  var pct=Math.round((1-pb/cloud)*100);
+  var set=function(id,v){var e=document.getElementById(id);if(e)e.textContent=v;};
+  set('hc_pb',hcMoney(pb));set('hc_cloud',hcMoney(cloud));set('hc_pct',pct+'%');
+  var fill=document.getElementById('hc_fill');
+  if(fill)fill.style.width=Math.max(6,Math.min(100,Math.round(pb/cloud*100)))+'%';
+  set('hc_hval',HC.hours+'h');
+  set('hc_pbtot',hcMoney(pb*HC.hours));set('hc_cltot',hcMoney(cloud*HC.hours));
+  var chips=document.querySelectorAll('#hc_chips .hc-chip');
+  chips.forEach(function(c,i){c.setAttribute('aria-selected',i===HC.sel?'true':'false');});
 }
-heroPreview();setInterval(heroPreview,10000);
+async function hcInit(){
+  var box=document.getElementById('hc_chips');
+  try{
+    var r=await fetch('/pricing/catalog');if(!r.ok)throw 0;
+    var b=await r.json();
+    var by={};(b.catalog||[]).forEach(function(x){by[x.gpu_model]=x;});
+    var rows=[];
+    HC_ORDER.forEach(function(m){var x=by[m];if(x&&x.cloud_reference&&x.reference_price_per_hour)rows.push(x);});
+    if(!rows.length){if(box)box.innerHTML='<span class="mut mini">Pricing unavailable right now.</span>';return;}
+    HC.rows=rows;
+    // proof strip: honest max savings across the WHOLE catalog + real model count
+    var maxsave=(b.catalog||[]).reduce(function(a,x){return Math.max(a,x.savings_vs_cloud_pct||0);},0);
+    var ps=document.getElementById('prf_save');if(ps&&maxsave)ps.textContent='up to '+Math.round(maxsave)+'%';
+    var pm=document.getElementById('prf_models');if(pm&&b.count)pm.textContent=b.count;
+    if(box){
+      box.innerHTML=rows.map(function(x,i){
+        return '<button type="button" class="hc-chip" role="tab" data-i="'+i+'" aria-selected="'+(i===0?'true':'false')+'">'+esc(x.gpu_model)+'</button>';
+      }).join('');
+      box.querySelectorAll('.hc-chip').forEach(function(c){
+        c.addEventListener('click',function(){HC.sel=+c.getAttribute('data-i')||0;hcRender();});
+      });
+    }
+    hcRender();
+  }catch(e){if(box)box.innerHTML='<span class="mut mini">Pricing unavailable right now.</span>';}
+}
+async function hcStats(){
+  // live tile fills in ONLY when verified nodes are actually online — an empty count reads as broken
+  try{
+    var st=await (await fetch('/marketplace/stats')).json();
+    if(st&&st.nodes_online>0){
+      var l=document.getElementById('prf_live'),t=document.getElementById('prf_live_t');
+      if(l)l.textContent=st.nodes_online;
+      if(t)t.textContent='verified GPU'+(st.nodes_online===1?'':'s')+' online right now, ready to rent';
+      var live=document.getElementById('hc_live');
+      if(live)live.textContent='● '+st.nodes_online+' online';
+    }
+  }catch(e){}
+}
+var hcH=document.getElementById('hc_hours');
+if(hcH)hcH.addEventListener('input',function(){HC.hours=+hcH.value||1;hcRender();});
+hcInit();hcStats();setInterval(hcStats,15000);
 renderLaunch('launchgrid',['game','art','render','ai'],2);
 </script>""")
 
@@ -997,7 +1184,7 @@ async function genInstaller(a1, btn){
   var body=(pt!==''&&pn>0)?JSON.stringify({price:pn}):JSON.stringify({});
   var r=await api('/nodes/install_token',{method:'POST',body:body});
   if(btn){btn.disabled=false;btn.textContent=lbl;}
-  if(!(r.ok&&r.body&&r.body.install)){alert('Could not create your installer — please make sure you are signed in.');return;}
+  if(!(r.ok&&r.body&&r.body.install)){toast('Could not create your installer — please make sure you are signed in.','err');return;}
   _renderCmds(r.body.install.linux, r.body.install.windows);
 }
 // Fill the two command boxes from the server-built one-liners and reveal them. The whole command
@@ -2151,7 +2338,7 @@ async function loadVMs(){var r=await api('/vm');if(!r.ok)return;var vms=r.body.v
     return '<tr><td class="mono" style="font-size:11px">vm-'+v.vm_id+'</td><td style="text-transform:capitalize">'+(v.template||'')+'</td>'+
       '<td><span class="badge '+(v.status==='running'?'ok':'')+'">'+v.status+'</span></td>'+
       '<td class="mono amber">$'+Number(v.hourly_rate||0).toFixed(2)+'</td>'+
-      '<td class="mono">'+(v.hours_left||0)+'h</td><td>'+act+'</td></tr>';}).join('');}
+      '<td class="mono">'+cDur(v.hours_left||0)+'</td><td>'+act+'</td></tr>';}).join('');}
 // --- VM EVENT TIMELINE. The backend records created -> tunnel_registered ->
 // migrated -> tunnel_registered. That timeline IS the failover proof — the single
 // most convincing thing we can show a buyer — and it was never displayed.
@@ -2331,7 +2518,7 @@ async function loadBurn(){
   document.getElementById('b_bal').textContent=money(b.balance);
   document.getElementById('b_burn').textContent=money(b.burn_rate_per_hour)+'/hr';
   document.getElementById('b_24').textContent=money(b.projected_24h);
-  document.getElementById('b_run').textContent=(b.hours_of_runway!=null?b.hours_of_runway+'h':'—');
+  document.getElementById('b_run').textContent=(b.hours_of_runway!=null?cDur(b.hours_of_runway):'—');
   document.getElementById('b_note').textContent=
     b.active_instances
       ? b.active_instances+' instance'+(b.active_instances===1?'':'s')+' running. '+
@@ -2982,8 +3169,8 @@ async function scLoad(){
   var tb=document.getElementById('earn_rows');var js=b.jobs||[];
   tb.innerHTML=js.length?js.map(function(j){return '<tr><td class="mono">'+j.transaction_id+'</td><td><span class="badge">'+j.status+'</span></td><td class="mono">'+m2(j.captured)+'</td><td class="mono teal">'+m2(j.net)+'</td><td class="mono">'+m2(j.transferred)+(j.stripe_transfer_id?'':'')+'</td></tr>';}).join(''):'<tr><td colspan=5 class="mut mono" style="padding:18px;text-align:center">No paid jobs yet.</td></tr>';
 }
-async function scConnect(){var r=await api('/payments/connect/account',{method:'POST',body:'{}'});if(r.ok)scOnboard();else alert('Could not create account');}
-async function scOnboard(){var r=await api('/payments/connect/onboarding-link',{method:'POST',body:'{}'});if(r.ok&&r.body.url)location.href=r.body.url;else alert('Could not start onboarding');}
+async function scConnect(){var r=await api('/payments/connect/account',{method:'POST',body:'{}'});if(r.ok)scOnboard();else toast('Could not create account','err');}
+async function scOnboard(){var r=await api('/payments/connect/onboarding-link',{method:'POST',body:'{}'});if(r.ok&&r.body.url)location.href=r.body.url;else toast('Could not start onboarding','err');}
 async function scRefresh(){await api('/payments/connect/refresh',{method:'POST',body:'{}'});scLoad();}
 // Your GPUs: online/verified -> visible to buyers -> earning. Answers "my GPU is on,
 // why is nothing running?" with the actual blocker, not a zero.
@@ -3078,10 +3265,10 @@ function n_diskNode(d){return d&&d.node_name?('node '+d.node_name):'';}
 async function diskSave(i){
   var prov=(document.getElementById('disk_prov_'+i)||{}).value;
   var gb=Number((document.getElementById('disk_gb_'+i)||{}).value||0);
-  if(!prov){alert('Pick a storage provider.');return;}
-  if(!(gb>=1)){alert('Enter a GB cap (how much disk to rent).');return;}
+  if(!prov){toast('Pick a storage provider.','err');return;}
+  if(!(gb>=1)){toast('Enter a GB cap (how much disk to rent).','err');return;}
   var r=await api('/nodes/disk',{method:'POST',body:JSON.stringify({spec_id:Number(i),enabled:true,provider:prov,alloc_gb:gb})});
-  if(!r.ok){var m=(r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not enable disk rental.';alert(m);return;}
+  if(!r.ok){var m=(r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not enable disk rental.';toast(m,'err');return;}
   diskStatus(i);
 }
 async function diskPause(i){
@@ -3945,11 +4132,11 @@ async function clusterShow(j){
 function clOpenManifest(id){location.href='/jobs/manifest/'+id;}
 async function clVpnDownload(id){
  try{var r=await fetch('/jobs/'+id+'/vpn_config',{headers:{'Authorization':'Bearer '+tok()}});
-  if(!r.ok){alert('VPN config not available for this cluster.');return;}
+  if(!r.ok){toast('VPN config not available for this cluster.','err');return;}
   var text=await r.text();var b=new Blob([text],{type:'text/plain'});
   var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='petabyte-cluster-'+id+'.conf';
   document.body.appendChild(a);a.click();a.remove();
- }catch(e){alert('Could not download the VPN config.');}
+ }catch(e){toast('Could not download the VPN config.','err');}
 }
 document.addEventListener('DOMContentLoaded',clusterAvail);
 </script>""")
@@ -4014,6 +4201,28 @@ html[data-theme=light] .ctopbar{background:rgba(255,255,255,.82)}
 .csec-h a,.csec-h button{font-size:12.5px;color:var(--teal);background:transparent;border:0;cursor:pointer;padding:0}
 .csec-b{padding:4px 15px 10px}
 .crow{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+.crow.crow-click{cursor:pointer;margin:0 -8px;padding-inline:8px;border-radius:9px;transition:background .12s}
+.crow.crow-click:hover{background:var(--panel2)}
+tr.jrow{cursor:pointer;transition:background .12s}
+tr.jrow:hover{background:var(--panel2)}
+/* job-detail slide-over drawer */
+.cdraw-bk{display:none;position:fixed;inset:0;background:rgba(4,10,20,.55);backdrop-filter:blur(2px);z-index:60}
+.cdraw-bk.open{display:block}
+.cdraw{display:none;position:fixed;top:0;inset-inline-end:0;height:100vh;width:min(440px,94vw);background:var(--panel);border-inline-start:1px solid var(--line2);box-shadow:-24px 0 60px -30px rgba(0,0,0,.55);z-index:61;flex-direction:column}
+.cdraw.open{display:flex;animation:cdrawin .22s cubic-bezier(.2,.7,.2,1)}
+@keyframes cdrawin{from{transform:translateX(7%);opacity:.3}to{transform:translateX(0);opacity:1}}
+.cdraw-h{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 18px;border-bottom:1px solid var(--line)}
+.cdraw-h h3{margin:0;font-family:var(--disp);font-size:15.5px}
+.cdraw-b{padding:16px 18px;overflow:auto;flex:1;min-height:0}
+.jd-amt{display:flex;justify-content:space-between;gap:12px;padding:8px 0;font-size:13.5px;border-bottom:1px solid var(--line)}
+.jd-amt.tot{border-bottom:0;padding-top:11px;font-weight:600}
+.jd-why{margin-top:14px;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:var(--panel2);font-size:12.5px;line-height:1.55;color:var(--mut)}
+.jd-tl{list-style:none;margin:16px 0 0;padding:0}
+.jd-tl li{position:relative;padding:0 0 13px 22px;font-size:12.5px;color:var(--mut)}
+.jd-tl li::before{content:"";position:absolute;inset-inline-start:3px;top:3px;width:9px;height:9px;border-radius:50%;background:var(--line2);z-index:1}
+.jd-tl li.on{color:var(--ink)}
+.jd-tl li.on::before{background:var(--teal);box-shadow:0 0 0 3px color-mix(in srgb,var(--teal) 22%,transparent)}
+.jd-tl li:not(:last-child)::after{content:"";position:absolute;inset-inline-start:7px;top:12px;bottom:0;width:1px;background:var(--line)}
 .crow:last-child{border-bottom:0}
 .crow .rt{font-family:var(--disp);font-weight:600;font-size:13.5px}
 .crow .rs{font-size:12px;color:var(--mut);font-weight:400}
@@ -4088,6 +4297,12 @@ html[dir="rtl"] #c_code,html[dir="rtl"] .c_console{direction:ltr;text-align:left
       <p class="mut" id="c_signedout" style="display:none">Please <a class="teal" href="/login">sign in</a> to open your console.</p>
       <div id="c_main" style="display:none">
         <div class="cpagehead" id="c_pagehead"></div>
+        <!-- job-detail drawer (opened by clicking any job/reservation row) -->
+        <div id="c_jd_bk" class="cdraw-bk" data-act="cJobClose"></div>
+        <aside id="c_jd" class="cdraw" role="dialog" aria-modal="true" aria-label="Job detail">
+          <div class="cdraw-h"><h3 id="c_jd_title">Job</h3><button class="cbtn sm" data-act="cJobClose" aria-label="Close">✕</button></div>
+          <div class="cdraw-b" id="c_jd_body"></div>
+        </aside>
 
         <section id="tab-overview" class="cpanel">
           <div class="cmetrics" id="c_ov_metrics"></div>
@@ -4320,7 +4535,7 @@ async function cRunning(){
   if(!live.length){el.innerHTML=cEmpty('Nothing running','Launch a workload and it shows up here.','compute','Launch compute');return;}
   el.innerHTML=live.slice(0,5).map(function(v){var u=v.url||{};var isrun=(v.status==='running');
     return '<div class="crow"><div style="min-width:0"><div class="rt">'+esc(v.template||'vm')+' '+cBadge(v.status)+'</div>'+
-      '<div class="rs mono" style="font-size:11.5px">'+esc(u.hostname||u.id||'')+(v.hours_left!=null?(' · '+v.hours_left+'h left'):'')+'</div></div>'+
+      '<div class="rs mono" style="font-size:11.5px">'+esc(u.hostname||u.id||'')+(v.hours_left!=null?(' · '+cDur(v.hours_left)+' left'):'')+'</div></div>'+
       '<div class="rr">'+(isrun?('<button class="cbtn sm" data-act="cVmExtend" data-a1="'+esc(v.vm_id)+'">+1h</button><button class="cbtn sm" data-act="cVmStop" data-a1="'+esc(v.vm_id)+'">Stop</button>'):'')+'</div></div>';
   }).join('');
 }
@@ -4332,15 +4547,16 @@ async function cOvWallet(){
     '<div class="cmoney"><span class="mk">Current spend</span><span class="mv amber">'+cD2(sp.burn_rate_per_hour)+'/hr</span></div>'+
     '<div class="cmoney"><span class="mk">Projected 24h</span><span class="mv">'+cD2(sp.projected_24h)+'</span></div>'+
     '<div class="cmoney"><span class="mk">In escrow</span><span class="mv">'+cD2(sp.in_escrow)+'</span></div>'+
-    '<div class="cmoney"><span class="mk">Est. runway</span><span class="mv">'+(sp.hours_of_runway!=null?sp.hours_of_runway+'h':'&#8734;')+'</span></div>'+
+    '<div class="cmoney"><span class="mk">Est. runway</span><span class="mv">'+(sp.hours_of_runway!=null?cDur(sp.hours_of_runway):'&#8734;')+'</span></div>'+
     '<div style="margin-top:12px;display:flex;gap:8px"><button class="cbtn pri sm" data-act="cGo" data-a1="billing">Add funds</button><button class="cbtn sm" data-act="cGo" data-a1="billing">Billing</button></div>';
 }
 async function cOvJobs(){
   var bk=(((await api('/account/bookings'))||{}).body||{}).bookings||[];
   var el=document.getElementById('c_ov_jobs');if(!el)return;
+  window._CJOBS=window._CJOBS||{};bk.forEach(function(b){window._CJOBS[b.id]=b;});
   if(!bk.length){el.innerHTML=cEmpty('No jobs yet','Run your first workload.','compute','Run a job');return;}
   el.innerHTML=bk.slice(0,5).map(function(b){
-    return '<div class="crow"><div style="min-width:0"><div class="rt">'+esc(b.gpu_model||'GPU')+' '+cBadge(b.status)+'</div>'+
+    return '<div class="crow crow-click" data-act="cJobOpen" data-a1="'+b.id+'"><div style="min-width:0"><div class="rt">'+esc(b.gpu_model||'GPU')+' '+cBadge(b.status)+'</div>'+
       '<div class="rs">'+cTs(b.created_at)+' · '+esc(String(b.hours))+'h</div></div>'+
       '<div class="rr mono" style="font-size:13px">'+cD2(b.gross_amount)+'</div></div>';
   }).join('');
@@ -4379,10 +4595,37 @@ async function cOvSeller(){
 }
 async function cJobs(){
   var bs=(((await api('/account/bookings'))||{}).body||{}).bookings||[];
+  window._CJOBS=window._CJOBS||{};bs.forEach(function(b){window._CJOBS[b.id]=b;});
   document.getElementById('c_jobs').innerHTML=bs.length?bs.map(function(b){
-    return '<tr><td data-l="When" class="mono" style="font-size:11px">'+cTs(b.created_at)+'</td><td data-l="GPU" class="mono">'+esc(b.gpu_model||'')+'</td><td data-l="Hours" class="mono">'+esc(String(b.hours))+'</td><td data-l="Amount" class="mono">'+cD2(b.gross_amount)+'</td><td data-l="Status">'+cBadge(b.status)+'</td></tr>';
+    return '<tr class="jrow" data-act="cJobOpen" data-a1="'+b.id+'"><td data-l="When" class="mono" style="font-size:11px">'+cTs(b.created_at)+'</td><td data-l="GPU" class="mono">'+esc(b.gpu_model||'')+'</td><td data-l="Hours" class="mono">'+esc(String(b.hours))+'</td><td data-l="Amount" class="mono">'+cD2(b.gross_amount)+'</td><td data-l="Status">'+cBadge(b.status)+'</td></tr>';
   }).join(''):'<tr><td colspan=5 class="mut mono" style="text-align:center;padding:16px">No reservations yet. <a class="teal" href="/marketplace">Rent a GPU →</a></td></tr>';
 }
+async function cJobOpen(id){
+  var bk=document.getElementById('c_jd_bk'),dr=document.getElementById('c_jd'),body=document.getElementById('c_jd_body'),ttl=document.getElementById('c_jd_title');
+  if(!dr||!body)return;
+  var seed=(window._CJOBS||{})[id]||{};
+  bk.classList.add('open');dr.classList.add('open');
+  if(ttl)ttl.textContent=(seed.gpu_model||'Job')+' · #'+id;
+  body.innerHTML='<p class="mut" style="font-size:13px;padding:8px 0">Loading…</p>';
+  var r=await api('/bookings/'+id);
+  if(!r||!r.ok){body.innerHTML='<p class="mut" style="font-size:13px;padding:12px 0">Could not load this job'+((r&&r.status===404)?' — it may have been removed.':'.')+'</p>';return;}
+  var b=r.body||{};var st=b.status||seed.status||'';
+  var done=(st==='released'||st==='refunded'||st==='complete'||st==='completed');
+  var steps=[['Booked & held in escrow',true],
+             ['Running on a verified node', st==='active'||done],
+             [(st==='refunded'?'Refunded to you (node dropped)':'Released to the host'), done]];
+  body.innerHTML=
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><span style="font-family:var(--disp);font-size:17px">'+esc(seed.gpu_model||'GPU')+'</span>'+cBadge(st)+'</div>'+
+    '<div class="mini" style="margin-bottom:15px">'+cTs(seed.created_at)+' · '+esc(String(seed.hours||''))+'h · booking #'+id+'</div>'+
+    '<div class="jd-amt"><span class="mut">Held in escrow</span><span class="mono">'+cD2(b.gross_amount)+'</span></div>'+
+    '<div class="jd-amt"><span class="mut">Platform fee</span><span class="mono">-'+cD2(b.platform_fee)+'</span></div>'+
+    '<div class="jd-amt tot"><span>Host receives</span><span class="mono teal">'+cD2(b.seller_payout)+'</span></div>'+
+    (b.routing_explanation?('<div class="jd-why"><b style="color:var(--ink)">Why this node</b><br>'+esc(b.routing_explanation)+'</div>'):'')+
+    '<ul class="jd-tl">'+steps.map(function(s){return '<li class="'+(s[1]?'on':'')+'">'+esc(s[0])+'</li>';}).join('')+'</ul>'+
+    (st==='active'?'<div style="margin-top:16px"><button class="cbtn sm" data-act="cGo" data-a1="compute">Manage in Compute →</button></div>':'');
+}
+function cJobClose(){var bk=document.getElementById('c_jd_bk'),dr=document.getElementById('c_jd');if(bk)bk.classList.remove('open');if(dr)dr.classList.remove('open');}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')cJobClose();});
 
 async function cCompute(){
   var specs=(((await api('/specs'))||{}).body||{}).specs||[];
@@ -4406,14 +4649,14 @@ function cVmRows(vms){
      '<td data-l="Status">'+cBadge(v.status)+'</td>'+
      '<td data-l="Address" class="mono" style="font-size:11px">'+esc(u.hostname||u.id||'')+'</td>'+
      '<td data-l="Failover" class="mono">'+(v.migrations?('moved '+v.migrations+'&times;'):'—')+'</td>'+
-     '<td data-l="Left" class="mono">'+(v.hours_left!=null?v.hours_left+'h':'—')+'</td>'+
+     '<td data-l="Left" class="mono">'+(v.hours_left!=null?cDur(v.hours_left):'—')+'</td>'+
      '<td data-l="">'+(live?('<button class="cbtn sm" data-act="cVmExtend" data-a1="'+esc(v.vm_id)+'">+1h</button> <button class="cbtn sm" data-act="cVmStop" data-a1="'+esc(v.vm_id)+'">Stop</button>'):'—')+'</td></tr>';
   }).join('');
 }
 async function cVmExtend(id){var r=await api('/vm/'+id+'/extend',{method:'POST',body:JSON.stringify({hours:1})});
-  if(!r.ok)alert((r.body&&(r.body.detail||r.body.message))||'Could not extend.');cCompute();cWalletStrip();}
+  if(!r.ok)toast((r.body&&(r.body.detail||r.body.message))||'Could not extend.','err');cCompute();cWalletStrip();}
 async function cVmStop(id){if(!confirm('Stop VM '+id+'? This releases the node.'))return;
-  var r=await api('/vm/'+id+'/stop',{method:'POST'});if(!r.ok)alert('Could not stop.');cCompute();if(CLOADED['overview'])cRunning();}
+  var r=await api('/vm/'+id+'/stop',{method:'POST'});if(!r.ok)toast('Could not stop.','err');cCompute();if(CLOADED['overview'])cRunning();}
 
 function cOut(el,text,cls){var s=document.createElement('span');if(cls)s.className=cls;s.textContent=text;
   el.appendChild(document.createElement('br'));el.appendChild(s);el.scrollTop=el.scrollHeight;}
@@ -4501,7 +4744,7 @@ async function cVolOpen(id){
 async function cVolDelete(id,name){
   if(!confirm('Delete volume "'+name+'"? This removes every snapshot and all stored content. This cannot be undone.'))return;
   var r=await api('/volumes/'+id,{method:'DELETE'});
-  if(!r.ok){alert((r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not delete volume.');return;}
+  if(!r.ok){toast((r.body&&r.body.error&&r.body.error.message)||(r.body&&typeof r.body.detail==='string'&&r.body.detail)||'Could not delete volume.','err');return;}
   var box=document.getElementById('c_vol_detail');if(box)box.style.display='none';
   cStorage();
 }
@@ -4535,20 +4778,20 @@ async function cBilling(){
 }
 async function cDeposit(){
   var amt=parseFloat((document.getElementById('c_dep')||{}).value);
-  if(!amt||amt<=0){alert('Enter an amount.');return;}
+  if(!amt||amt<=0){toast('Enter an amount.','err');return;}
   var r=await api('/deposit',{method:'POST',body:JSON.stringify({amount:amt})});
   if(r.ok){cWalletStrip();cBilling();}
-  else if(r.status===403){alert('In live mode, funds are added at checkout — rent a GPU and pay by card.');}
-  else{alert('Could not add funds.');}
+  else if(r.status===403){toast('In live mode, funds are added at checkout — rent a GPU and pay by card.','info');}
+  else{toast('Could not add funds.','err');}
 }
 async function cWithdraw(){
   var mid=(document.getElementById('c_wmethod')||{}).value;
   var amt=parseFloat((document.getElementById('c_wamt')||{}).value);
-  if(!mid){alert('Add a payout method first (link below the box).');return;}
-  if(!amt||amt<=0){alert('Enter an amount.');return;}
+  if(!mid){toast('Add a payout method first (link below the box).','err');return;}
+  if(!amt||amt<=0){toast('Enter an amount.','err');return;}
   var r=await api('/wallet/withdraw',{method:'POST',body:JSON.stringify({method_id:Number(mid),amount:amt})});
-  if(r.ok){alert('Payout requested: '+cD2(r.body.amount_usd));cWalletStrip();cBilling();}
-  else{alert((r.body&&(r.body.message||r.body.detail))||'Withdrawal failed.');}
+  if(r.ok){toast('Payout requested: '+cD2(r.body.amount_usd),'ok');cWalletStrip();cBilling();}
+  else{toast((r.body&&(r.body.message||r.body.detail))||'Withdrawal failed.','err');}
 }
 async function cReferral(){
   var r=((await api('/referral'))||{}).body||{};
@@ -4623,13 +4866,13 @@ async function cMemberAdd(orgId){
 }
 async function cMemberRole(orgId,username,role){
   var r=await api('/orgs/'+orgId+'/members/'+encodeURIComponent(username),{method:'PUT',body:JSON.stringify({role:role})});
-  if(!r.ok)alert((r.body&&(r.body.detail||r.body.message))||'Could not change role.');
+  if(!r.ok)toast((r.body&&(r.body.detail||r.body.message))||'Could not change role.','err');
   cTeamOpen(orgId);cTeams();
 }
 async function cMemberRemove(orgId,username){
   if(!confirm('Remove '+username+' from this team?'))return;
   var r=await api('/orgs/'+orgId+'/members/'+encodeURIComponent(username),{method:'DELETE'});
-  if(!r.ok)alert((r.body&&(r.body.detail||r.body.message))||'Could not remove member.');
+  if(!r.ok)toast((r.body&&(r.body.detail||r.body.message))||'Could not remove member.','err');
   cTeamOpen(orgId);cTeams();
 }
 document.addEventListener('change',function(e){var s=e.target;
@@ -4666,7 +4909,7 @@ async function c2faLoad(){
 }
 async function c2faSetup(){
   var r=await api('/account/2fa/setup',{method:'POST'});
-  if(!r.ok){alert('Could not start 2FA setup.');return;}
+  if(!r.ok){toast('Could not start 2FA setup.','err');return;}
   var d=r.body||{};var el=document.getElementById('c_2fa');
   var grouped=(d.secret||'').replace(/(.{4})/g,'$1 ').trim();
   el.innerHTML='<div class="lbl">Add this account to your authenticator app</div>'+
@@ -4748,12 +4991,12 @@ async function cKeyCreate(){
   var out=document.getElementById('c_keyout');
   if(r.ok){out.style.display='';out.innerHTML='<div class="lbl">New key — copy it now, it is shown once</div>'+
     '<code class="mono" style="word-break:break-all;color:var(--teal)">'+esc(r.body.api_key)+'</code>';cAccess();}
-  else{alert('Could not create key.');}
+  else{toast('Could not create key.','err');}
 }
 async function cKeyRevoke(jti){
   if(!confirm('Revoke this key? Any agent using it stops working.'))return;
   var r=await api('/keys/'+jti+'/revoke',{method:'POST'});
-  if(r.ok)cAccess();else alert('Could not revoke.');
+  if(r.ok)cAccess();else toast('Could not revoke.','err');
 }
 async function cNotifs(){
   var ns=(((await api('/notifications'))||{}).body||{}).notifications||[];
@@ -5307,3 +5550,194 @@ async function miRemove(el){
 }
 miLoad();
 </script>""")
+
+
+# ============================ NATIVE WIKI RENDERER ============================
+# Renders the repo's wiki/*.md guides into the site's own design system (themed,
+# same nav/fonts, no external CDN). A compact, dependency-free Markdown->HTML
+# converter handles headings, bold/italic, inline + fenced code, links (internal
+# .md links are rewritten to on-page anchors), lists, tables, blockquotes and rules.
+
+def _md_esc(s):
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _md_inline(text):
+    codes = []
+    text = re.sub(r"`([^`]+)`", lambda m: codes.append(m.group(1)) or "\x00%d\x00" % (len(codes) - 1), text)
+    text = _md_esc(text)
+
+    def _link(m):
+        label, url = m.group(1), m.group(2).strip()
+        mm = re.match(r"^([\w./-]+?)\.md(#[\w:-]+)?$", url)   # keep internal wiki links on-page
+        if mm:
+            url = "#w-" + mm.group(1).split("/")[-1] + (mm.group(2) or "")
+        return '<a href="%s">%s</a>' % (url, label)
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _link, text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<em>\1</em>", text)
+    text = re.sub(r"(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])", r"<em>\1</em>", text)
+    text = re.sub(r"\x00(\d+)\x00", lambda m: "<code>" + _md_esc(codes[int(m.group(1))]) + "</code>", text)
+    return text
+
+
+def _md_slug(s):
+    s = re.sub(r"<[^>]+>", "", s)
+    s = re.sub(r"[^\w\s-]", "", s).strip().lower()
+    return re.sub(r"\s+", "-", s) or "x"
+
+
+def _md_list(lines, start):
+    n = len(lines)
+    ind = lambda l: len(l) - len(l.lstrip(" "))
+    base = ind(lines[start])
+    tag = "ol" if re.match(r"^\s*\d+\.\s", lines[start]) else "ul"
+    items, i = [], start
+    while i < n:
+        l = lines[i]
+        if l.strip() == "":
+            j = i + 1
+            while j < n and lines[j].strip() == "":
+                j += 1
+            if j < n and re.match(r"^\s*([-*+]|\d+\.)\s+", lines[j]) and ind(lines[j]) >= base:
+                i = j; continue
+            break
+        m = re.match(r"^\s*([-*+]|\d+\.)\s+(.*)$", l)
+        if m and ind(l) > base:
+            sub, i = _md_list(lines, i)
+            if items:
+                items[-1] = (items[-1][0], items[-1][1] + sub)
+            continue
+        if m and ind(l) == base:
+            items.append((_md_inline(m.group(2)), "")); i += 1; continue
+        if m and ind(l) < base:
+            break
+        _blockstart = re.match(r"^\s*(```|#{1,6}\s|>\s?|\|)", l) or re.match(r"^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$", l)
+        if items and l.strip() and ind(l) >= base and not _blockstart:
+            items[-1] = (items[-1][0] + " " + _md_inline(l.strip()), items[-1][1]); i += 1; continue
+        break
+    return "<%s>%s</%s>" % (tag, "".join("<li>%s%s</li>" % (c, s) for c, s in items), tag), i
+
+
+def _md_to_html(md):
+    lines = md.split("\n")
+    out, para, i, n = [], [], 0, len(lines)
+
+    def flush():
+        if para:
+            out.append("<p>" + _md_inline(" ".join(para)) + "</p>"); para.clear()
+
+    while i < n:
+        line = lines[i]
+        if re.match(r"^```(\w*)\s*$", line):
+            flush(); i += 1; buf = []
+            while i < n and not re.match(r"^```\s*$", lines[i]):
+                buf.append(lines[i]); i += 1
+            i += 1
+            out.append("<pre><code>" + _md_esc("\n".join(buf)) + "</code></pre>"); continue
+        m = re.match(r"^(#{1,6})\s+(.*?)\s*#*\s*$", line)
+        if m:
+            flush(); lvl = len(m.group(1)); txt = m.group(2)
+            out.append('<h%d id="h-%s">%s</h%d>' % (lvl, _md_slug(txt), _md_inline(txt), lvl)); i += 1; continue
+        if re.match(r"^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$", line):
+            flush(); out.append("<hr>"); i += 1; continue
+        if line.strip().startswith("|") and i + 1 < n and re.match(r"^\s*\|?[\s:|-]*-[\s:|-]*$", lines[i + 1]):
+            flush()
+            cells = lambda l: [c.strip() for c in l.strip().strip("|").split("|")]
+            header = cells(line); i += 2; rows = []
+            while i < n and lines[i].strip().startswith("|"):
+                rows.append(cells(lines[i])); i += 1
+            h = '<div class="wtable"><table><thead><tr>' + "".join("<th>" + _md_inline(c) + "</th>" for c in header) + "</tr></thead><tbody>"
+            for r in rows:
+                h += "<tr>" + "".join("<td>" + _md_inline(c) + "</td>" for c in r) + "</tr>"
+            out.append(h + "</tbody></table></div>"); continue
+        if re.match(r"^\s*>\s?", line):
+            flush(); buf = []
+            while i < n and re.match(r"^\s*>\s?", lines[i]):
+                buf.append(re.sub(r"^\s*>\s?", "", lines[i])); i += 1
+            out.append("<blockquote>" + _md_inline(" ".join(buf)) + "</blockquote>"); continue
+        if re.match(r"^\s*([-*+]|\d+\.)\s+", line):
+            flush(); html, i = _md_list(lines, i); out.append(html); continue
+        if line.strip() == "":
+            flush(); i += 1; continue
+        para.append(line.strip()); i += 1
+    flush()
+    return "\n".join(out)
+
+
+_WIKI_CSS = """<style>
+.wikiwrap{display:grid;grid-template-columns:250px minmax(0,1fr);gap:36px;align-items:start;max-width:1180px;margin:0 auto;padding:30px 24px 72px}
+.wiki-side{position:sticky;top:80px;max-height:calc(100vh - 100px);overflow:auto;border-right:1px solid var(--line);padding-right:14px}
+.wiki-side .t{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);font-weight:700;margin:0 0 8px}
+.wiki-side a{display:block;text-decoration:none;border-radius:8px;padding:5px 11px;font-size:13.5px;color:var(--mut);line-height:1.35}
+.wiki-side a.top{font-weight:600;color:var(--ink);margin-top:9px}
+.wiki-side a.sub{font-size:12.5px;padding-left:22px}
+.wiki-side a:hover{background:var(--panel2);color:var(--teal)}
+.wiki-side a.active{color:var(--teal);background:var(--panel2)}
+.wiki-main{min-width:0;font-size:15px;line-height:1.72;color:var(--mut)}
+.wiki-sec{scroll-margin-top:86px;padding-bottom:20px;border-bottom:1px solid var(--line);margin-bottom:30px}
+.wiki-sec:last-child{border-bottom:0}
+.wiki-main h1{font-family:var(--disp);font-size:clamp(25px,3.5vw,33px);color:var(--ink);margin:4px 0 14px;letter-spacing:-.01em}
+.wiki-main h2{font-family:var(--disp);font-size:21px;color:var(--ink);margin:28px 0 10px;scroll-margin-top:86px}
+.wiki-main h3{font-size:16.5px;color:var(--ink);margin:20px 0 7px;scroll-margin-top:86px}
+.wiki-main h4{font-size:14px;color:var(--ink);margin:16px 0 6px;text-transform:none}
+.wiki-main p{margin:11px 0}
+.wiki-main strong{color:var(--ink);font-weight:650}
+.wiki-main a{color:var(--teal);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--teal) 34%,transparent)}
+.wiki-main a:hover{border-bottom-color:var(--teal)}
+.wiki-main code{font-family:var(--mono);font-size:.87em;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.wiki-main pre{background:var(--depth2);border:1px solid var(--line2);border-radius:12px;padding:14px 16px;overflow:auto;margin:14px 0}
+.wiki-main pre code{background:none;border:0;padding:0;font-size:12.5px;line-height:1.6;color:var(--ink)}
+.wiki-main ul,.wiki-main ol{margin:10px 0;padding-inline-start:24px}
+.wiki-main li{margin:5px 0}
+.wiki-main blockquote{margin:14px 0;padding:8px 16px;border-inline-start:3px solid var(--teal);background:var(--panel2);border-radius:0 10px 10px 0}
+.wiki-main blockquote p{margin:4px 0}
+.wtable{overflow-x:auto;margin:15px 0;border:1px solid var(--line);border-radius:12px}
+.wtable table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:420px}
+.wtable th,.wtable td{text-align:start;padding:9px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+.wtable th{background:var(--panel2);color:var(--ink);font-weight:600;white-space:nowrap}
+.wtable tr:last-child td{border-bottom:0}
+.wiki-main hr{border:0;border-top:1px solid var(--line);margin:22px 0}
+@media(max-width:900px){
+ .wikiwrap{grid-template-columns:1fr;gap:14px;padding-top:22px}
+ .wiki-side{position:static;max-height:none;overflow:visible;border-right:0;border-bottom:1px solid var(--line);padding:0 0 12px;display:flex;flex-wrap:wrap;gap:6px}
+ .wiki-side .t{width:100%;margin:0}
+ .wiki-side a.sub{display:none}
+ .wiki-side a{border:1px solid var(--line);border-radius:999px;padding:5px 12px}
+ .wiki-side a.top{margin-top:0}
+}
+</style>"""
+
+_WIKI_JS = """<script>
+(function(){
+ var links=[].slice.call(document.querySelectorAll('.wiki-side a'));
+ var map={};links.forEach(function(a){map[a.getAttribute('href').slice(1)]=a;});
+ if(!('IntersectionObserver' in window))return;
+ var obs=new IntersectionObserver(function(es){
+  es.forEach(function(e){ if(e.isIntersecting){
+   var a=map[e.target.id]; if(a){links.forEach(function(x){x.classList.remove('active');});a.classList.add('active');
+   a.scrollIntoView({block:'nearest'});}}});
+ },{rootMargin:'-72px 0px -72% 0px'});
+ document.querySelectorAll('.wiki-sec,.wiki-main [id^="h-"]').forEach(function(el){obs.observe(el);});
+})();
+</script>"""
+
+
+def render_wiki(sections):
+    """sections: list of (name, markdown_text). Returns the full themed /wiki page."""
+    side, body = [], []
+    for name, md in sections:
+        html = _md_to_html(md)
+        mt = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.S)
+        title = re.sub(r"<[^>]+>", "", mt.group(1)).strip() if mt else name.replace("-", " ").title()
+        side.append('<a class="top" href="#w-%s">%s</a>' % (name, title))
+        for hid, label in re.findall(r'<h2 id="(h-[\w-]+)">(.*?)</h2>', html, re.S):
+            side.append('<a class="sub" href="#%s">%s</a>' % (hid, re.sub(r"<[^>]+>", "", label).strip()))
+        body.append('<section id="w-%s" class="wiki-sec">%s</section>' % (name, html))
+    inner = (_WIKI_CSS +
+             '<div class="wikiwrap"><aside class="wiki-side"><div class="t">Guide</div>' +
+             "".join(side) + '</aside><main class="wiki-main">' + "".join(body) + "</main></div>" +
+             _WIKI_JS)
+    return _page("Petabyte — Wiki & Guide", inner,
+                 desc="How Petabyte works: guides for buyers and sellers, the CLI, models, storage, payments, teams and self-hosting.",
+                 path="/wiki")
