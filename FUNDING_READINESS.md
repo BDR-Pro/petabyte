@@ -1,14 +1,51 @@
 # Petabyte — Funding Readiness Gap Analysis
 
-**Date:** 2026-08-11 · **Branch:** `claude/petabyte-funding-readiness-fun2q6` · **Base commit audited:** `30f03ec`
+**Original audit:** 2026-08-11 (commit `30f03ec`) · **Last updated:** 2026-08-18 · **Branch:** `claude/petabyte-funding-readiness-fun2q6`
 
-**Method.** This assessment was produced by verifying the *implementation* — not the docs — across five parallel code investigations (money-flow/ledger, security/authz, workload isolation/agent trust, marketplace/scheduler, infrastructure/CI/DR/tests). Every finding below is anchored to `file:line` in the repository as it stands today. Where the existing docs over-claim relative to the code, this document supersedes them. Scores are deliberately *not* inflated.
+**Method.** The original assessment was produced by verifying the *implementation* — not the docs — across five parallel code investigations (money-flow/ledger, security/authz, workload isolation/agent trust, marketplace/scheduler, infrastructure/CI/DR/tests). Every finding is anchored to `file:line`. Scores are deliberately *not* inflated. **Read this document top-down: the "Current status" box immediately below reflects the branch as it stands today; the §1 scorecard and §2 blocker list that follow are the *original 2026-08-11 baseline*, kept unedited for the audit trail. Where they disagree, the Current status box and the §5 Execution table are authoritative.**
 
-> **One-line verdict:** Petabyte has an unusually strong *transaction-level* engine (guarded settlement FSM, idempotency via DB unique constraints, TEST/LIVE isolation, real observability, honest evidence tooling) wrapped around **six independently fundable-blocking gaps** at the seams — a trivial admin-privilege-escalation, no database backups on a single box, an unsigned fleet auto-updater, payment for unverified results, unit economics that lose money on small jobs, and refund clawback that doesn't cover the default payout path. The bones are real; the blockers are concrete and mostly cheap to close.
+> **Current verdict (2026-08-18):** All six code-level BLOCKERs from the original audit are **closed in code** — one (GPU-work result verification) only *partially*, because it is hardware-dependent by design. What now stands between Petabyte and a raise is **no longer code**: (a) the production infrastructure move — managed, backed-up Postgres off the single box (the backup engine, tested restore drill, and Alembic chain are already built and CI-gated; the infra cut-over is founder-owned); (b) a committed **real-GPU + real-Stripe-TEST E2E evidence bundle** (the harness exists and honestly refuses to fake a pass; it needs real hardware to run); and (c) **actual marketplace traction** — real sellers, real buyers, real GMV — which no code can manufacture. The transaction engine, security posture, and honest evidence tooling are now genuinely diligence-grade; the gap is execution and demand, not the codebase.
+
+> **Original one-line verdict (2026-08-11, historical):** Petabyte has an unusually strong *transaction-level* engine wrapped around six independently fundable-blocking gaps — a trivial admin-privilege-escalation, no database backups on a single box, an unsigned fleet auto-updater, payment for unverified results, unit economics that lose money on small jobs, and refund clawback that doesn't cover the default payout path. *(All six have since been addressed in code — see the Current status box above and §5.)*
 
 ---
 
-## 1. Scorecard (0–10)
+## 0. Current status (2026-08-18) — what actually changed
+
+Blocker-by-blocker against the original audit. "Code" = shipped with regression tests and green CI (see §5 for commit/test pointers); "Founder" = requires an action code cannot perform.
+
+| Original BLOCKER / CRITICAL | Status now | What remains |
+|---|---|---|
+| #1 Admin privilege escalation | ✅ **Closed (code)** | `_is_admin` requires a *verified* email; `/account/email` resets verification; OAuth honors `email_verified`. |
+| #2 No DB backups / single box | ⚙️ **Code done; infra founder-owned** | S3 backup engine + **tested restore drill** + RPO/RTO in CI. Remaining: move Postgres off the single box to managed/backed-up infra (cut-over is a founder step). |
+| #3 Unsigned fleet auto-update (RCE) | ✅ **Closed (code)** | Ed25519 signed-manifest verify, fail-closed, both agents; `sign_release.py` producer. Founder: generate + pin the release key and sign in CI. |
+| #4 Pay for unverified results | 🟡 **Partially closed** | Verifiable job types are **settlement-gated on a VALID verdict** (fail → bills nothing; can't-verify → defers fail-closed). The full GPU-work verification + real-GPU E2E is **hardware-dependent and open by design**. |
+| #5/#20 Loss-making unit economics | ✅ **Closed (visibility)** | Processing fee recorded per-tx + as a `stripe:fees` ledger leg; net margin visible (and correctly negative on tiny jobs). Founder: set `PLATFORM_FIXED_FEE_MINOR` (a pricing decision). |
+| #6 Clawback misses default payout path | ✅ **Closed (code)** | Batch-path clawback + `charge.refunded` reconciler + opt-in auto-netting (`PAYOUT_AUTONET_CLAWBACK`). |
+| #7 Ledger split-brain (batch payout) | ✅ **Closed (code)** | Batch payout now `post()`s the `seller_payable`→`stripe_payouts` leg; `audit_ledger.py` invariant #37 enforces it. |
+| #8 Unverified GPU claims | 🟡 **Open (hardware)** | Same hardware dependency as #4 — real silicon verification needs a real-GPU run. |
+| #9 Failed Stripe job stuck `RUNNING` | ✅ **Closed (code)** | `fail_job` → `JOB_FAILED`, frees reservation, voids hold. |
+| #12 Schema not migration-managed | ✅ **Closed (code)** | Squashed Alembic baseline, up/down proven on Postgres in CI. |
+| #13 Financial invariants app-only | ✅ **Closed (code)** | DB `CHECK` constraints: `amount>0`, valid `direction`, non-negative balance/earnings. |
+| #14 Cross-tenant IDOR | ✅ **Closed (code)** | Tenant-prefix isolation at bind-time + mint-time backstop; red-teamed. |
+| #17 Prod safety gate opt-in | ✅ **Closed (code)** | Stub-safety gate fires on any live-money signal, not just `ENVIRONMENT=production`. |
+| Auth (JWT `jti`/revocation), `/login` limiter, CSRF, 2FA | ✅ **Closed (code)** | jti + revocation denylist + entropy gate; app-level `/login` limiter; signed CSRF; optional TOTP. |
+| Deploy safety (test-gate, TLS, payout timer) | ✅ **Closed (code)** | Prod deploy gated on the full suite; TLS-by-default; payout systemd timer installed. |
+
+**The honest remaining list (not code):**
+1. **Infra cut-over** — managed/backed-up Postgres off the single box (everything code-side is ready for it).
+2. **Real-GPU + real-money(TEST) E2E evidence** — run the existing harness on real hardware and commit the bundle (#4/#8).
+3. **Traction** — first real sellers/buyers and real GMV; the canonical metrics layer (`funding_metrics.py`) is built and will show it honestly once it exists.
+4. **Non-repo raise inputs** — team/co-founder story, deck, wedge/ICP, incorporation & data room.
+
+---
+
+## 1. Scorecard (0–10) — *2026-08-11 baseline (historical; see §0 for current state)*
+
+> **This scorecard is the original 2026-08-11 snapshot at commit `30f03ec`, preserved unedited.**
+> Many of the BLOCKER-dominated rows below (Security, AuthN, Reliability, DR, Fraud economics,
+> Marketplace economics, Data protection) have since been addressed in code — see §0 and §5.
+> Do **not** read the 4.3/10 as today's verdict.
 
 Scores reflect *verified* implementation state, weighted for a fund performing aggressive technical, security, and financial diligence. "Sev" = investor severity of the dominant gap.
 
@@ -49,7 +86,13 @@ Scores reflect *verified* implementation state, weighted for a fund performing a
 
 ---
 
-## 2. Top reasons I would NOT invest today
+## 2. Top reasons I would NOT invest today — *2026-08-11 baseline (historical)*
+
+> These were the disqualifiers **as of the original audit**. Per §0, the code-level items
+> (#1, #3, #4-partial, #5, #6, #7, #9, #12, #13, #14, #15, #17) have since been addressed;
+> the ones that remain are the founder infra move (#2 infra half), GPU-work verification
+> + real-GPU E2E (#4/#8, hardware-dependent), and demonstrated traction (#10, #11). Kept
+> verbatim for the audit trail.
 
 Classified BLOCKER / CRITICAL / HIGH, each with the evidence that drove the classification.
 
@@ -139,9 +182,15 @@ These require real users and real money, not code. **None are currently measurab
 
 ---
 
-## 4. Preliminary Investment Committee read (to be re-run after remediation)
+## 4. Preliminary Investment Committee read — *2026-08-11 baseline (historical)*
 
-**Current state: INTERESTING BUT NOT READY.**
+> **Update (2026-08-18):** the P0 remediation this section anticipated has largely been
+> executed — see §0 and §5. The current IC read is: *the enumerated technical blockers are
+> closed in code; the decision now hinges on the founder infra cut-over, a real-GPU/real-money
+> E2E evidence bundle, and — above all — real traction and team.* The original baseline read
+> is preserved below.
+
+**Original state (2026-08-11): INTERESTING BUT NOT READY.**
 
 - **The 5 things most likely to kill Petabyte today:** (1) the admin-escalation compromise; (2) total data loss on single-box, unbackuped Postgres; (3) unsigned fleet auto-update RCE; (4) paying for unverified GPU work + unverified GPU claims (fraud economics); (5) losing money per transaction with no unit-economics visibility.
 - **The 5 strongest technical assets:** (1) a genuinely guarded settlement FSM with idempotency enforced by DB unique constraints and TEST/LIVE-immutable money records; (2) race-safe capacity via atomic conditional decrements; (3) real, emitted, correlated observability with CI-validated dashboards; (4) honest evidence tooling that refuses to fake GPU/real-money passes; (5) broad DB-integration test depth including money-conservation-under-concurrency.

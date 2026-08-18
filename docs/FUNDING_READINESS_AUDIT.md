@@ -1,5 +1,10 @@
 # Funding-Readiness Audit — Petabyte
 
+> ⚠️ **Superseded (2026-08-18).** This is a 2026-08-04 point-in-time snapshot kept for the
+> audit trail. For current state read [`../FUNDING_READINESS.md`](../FUNDING_READINESS.md)
+> (§0 "Current status" + §5 "Execution status") — most gaps flagged below have since been
+> closed in code.
+
 Date: 2026-08-04 · Branch: `claude/petabyte-funding-readiness-fun2q6`
 Method: full source read of `lumaris_api/`, `lumaris_agent/`, `desktop-app/`,
 `lumaris_gateway/`, `.github/workflows/`, `deploy/`, `docs/`; baseline test runs on
