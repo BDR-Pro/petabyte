@@ -6,9 +6,9 @@ name: Release CLI (petabyte on PyPI)
 # runs — it never fails for a missing token.
 #
 # One-time to enable publishing:
-#   1. Decide the licensing: the repo LICENSE is proprietary ("no permission granted"). A public
-#      PyPI package needs a license that actually lets people install + run the client. Pick one
-#      (e.g. a permissive client license) and update pyproject.toml `license` before publishing.
+#   1. Licensing: the CLIENT is MIT (lumaris_api/cli/LICENSE) — only the petabyte module + bundled
+#      modelhub that ship in this wheel; the server/rest of the repo stay proprietary (root LICENSE).
+#      Nothing to change before publishing.
 #   2. The distribution name is `petabyte-client` (`petabyte` is taken on PyPI); the installed
 #      command stays `petabyte`. Make sure your PyPI account owns/can claim `petabyte-client`.
 #   3. Add a PyPI API token as the repo secret PYPI_API_TOKEN (or switch to Trusted Publishing).

@@ -21,11 +21,15 @@ version = "0.1.0"
 description = "Petabyte CLI — rent verified GPU compute, launch apps, and pull AI models from your terminal."
 readme = "lumaris_api/cli/README.md"
 requires-python = ">=3.9"
-license = { text = "Proprietary" }
+# The CLIENT is MIT (see lumaris_api/cli/LICENSE). Only the code that ships in THIS wheel — the
+# petabyte module + the bundled modelhub package — is MIT; the server and the rest of the repo stay
+# under the repository-root proprietary LICENSE. license-files is pinned to the client LICENSE so
+# the proprietary root LICENSE is never bundled into the published wheel.
+license = { text = "MIT" }
 authors = [{ name = "Petabyte, Inc." }]
 keywords = ["gpu", "compute", "cloud", "marketplace", "cli", "ai", "models"]
 classifiers = [
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: MIT License",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
@@ -47,6 +51,9 @@ petabyte = "petabyte:main"
 [tool.setuptools]
 py-modules = ["petabyte"]
 packages = ["modelhub", "modelhub.providers"]
+# Ship ONLY the client's MIT license — override setuptools' default LICENSE* glob so the
+# repository-root proprietary LICENSE is never packaged into this MIT wheel.
+license-files = ["lumaris_api/cli/LICENSE"]
 
 [tool.setuptools.package-dir]
 "" = "lumaris_api/cli"
