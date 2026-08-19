@@ -1,0 +1,8 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Keep automated review focused on code: exclude prose/docs so large PRs stay under
+# CodeRabbit's reviewable-file limit and review credits go to security-relevant files.
+reviews:
+  path_filters:
+    - "!docs/**"
+    - "!**/*.md"
+    - "!**/LICENSE"
