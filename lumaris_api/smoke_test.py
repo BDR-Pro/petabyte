@@ -360,6 +360,61 @@ _csp=c.get("/edge").headers.get("Content-Security-Policy","")
 ok("edge on-device is opt-in: default CSP stays locked (no wasm-unsafe-eval / no external connect-src)",
    "wasm-unsafe-eval" not in _csp and "huggingface.co" not in _csp and "connect-src 'self';" in _csp)
 
+# --- Pay-per-token inference API (OpenAI-compatible /v1/chat/completions) ---
+import os as _os2
+# a funded caller with an inference-scoped key (isolated from buyer1's balance assertions)
+c.post("/register_user", json={"username":"infuser","password":"hunter2-correct-horse"})
+_iuh={"Authorization":f"Bearer {login('infuser')}"}
+c.post("/deposit", headers=_iuh, json={"amount":1000.0})
+_ikey=c.post("/create_api_key", headers=_iuh, params={"scopes":"inference"}).json()["api_key"]
+_ih={"X-API-KEY":_ikey}
+# auth (a dependency) runs before the body, so an invalid key is 401 regardless of upstream
+ok("/v1/chat/completions rejects an invalid key (401)",
+   c.post("/v1/chat/completions", headers={"X-API-KEY":"pk_not_a_real_key"}, json={"prompt":"hi"}).status_code==401)
+# with a VALID key but no upstream configured -> 503
+_pu=_os2.environ.pop("EDGE_INFER_UPSTREAM_URL",None)
+ok("/v1/chat/completions is 503 until an inference upstream is configured",
+   c.post("/v1/chat/completions", headers=_ih, json={"prompt":"hi"}).status_code==503)
+# configure + mock the upstream (an ollama/vLLM node); returns an OpenAI-shaped reply + usage
+_os2.environ["EDGE_INFER_UPSTREAM_URL"]="http://pool.local:11434"; _os2.environ["EDGE_INFER_MODEL"]="llama3.2"
+def _fake_chat(base, key, payload, timeout=30.0):
+    return {"model": payload["model"],
+            "choices":[{"message":{"role":"assistant","content":"Petabyte is a verified GPU marketplace."}}],
+            "usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20}}
+_orig_chat=main._edge_chat_upstream; main._edge_chat_upstream=_fake_chat
+try:
+    _os2.environ["INFERENCE_PRICE_PER_MTOK_IN"]="0"; _os2.environ["INFERENCE_PRICE_PER_MTOK_OUT"]="0"
+    _fr=c.post("/v1/chat/completions", headers=_ih,
+               json={"messages":[{"role":"user","content":"what is petabyte?"}]}); _frj=_fr.json()
+    ok("/v1/chat/completions returns a REAL OpenAI-shaped answer (free tier, not billed)",
+       _fr.status_code==200 and _frj["choices"][0]["message"]["content"].startswith("Petabyte")
+       and _frj["x_petabyte"]["billed"] is False and _frj["x_petabyte"]["tokens"]==20)
+    from db import SessionLocal as _SL, LedgerEntry as _LE, PLATFORM_REVENUE as _PR, CREDIT as _CR
+    from decimal import Decimal as _D
+    def _infrev():
+        s=_SL()
+        try:
+            return sum((_D(str(e.amount)) for e in s.query(_LE).filter(
+                _LE.entry_type=="inference", _LE.direction==_CR, _LE.account==_PR).all()), _D(0))
+        finally: s.close()
+    _rev0=_infrev()
+    _os2.environ["INFERENCE_PRICE_PER_MTOK_OUT"]="1000000"    # $1 / output token -> 8 tokens = $8
+    _pr=c.post("/v1/chat/completions", headers=_ih, json={"prompt":"cost this"}); _prj=_pr.json()
+    ok("/v1/chat/completions bills per token and books inference revenue to the ledger",
+       _pr.status_code==200 and _prj["x_petabyte"]["billed"] is True
+       and abs(_prj["x_petabyte"]["charged"]-8.0)<1e-6 and float(_infrev()-_rev0)>=8.0)
+    # a caller whose wallet can't cover the upper-bound estimate is refused BEFORE the model runs
+    c.post("/register_user", json={"username":"infbroke","password":"hunter2-correct-horse"})
+    _bk=c.post("/create_api_key", headers={"Authorization":f"Bearer {login('infbroke')}"},
+               params={"scopes":"inference"}).json()["api_key"]
+    ok("/v1/chat/completions returns 402 when the wallet can't cover the token estimate",
+       c.post("/v1/chat/completions", headers={"X-API-KEY":_bk}, json={"prompt":"x"}).status_code==402)
+finally:
+    main._edge_chat_upstream=_orig_chat
+    _os2.environ.pop("EDGE_INFER_UPSTREAM_URL",None) if _pu is None else _os2.environ.__setitem__("EDGE_INFER_UPSTREAM_URL",_pu)
+    for _k in ("EDGE_INFER_MODEL","INFERENCE_PRICE_PER_MTOK_IN","INFERENCE_PRICE_PER_MTOK_OUT"):
+        _os2.environ.pop(_k,None)
+
 # REFUND ON REAP: new booking, node dies, settle refunds buyer
 c.post("/heartbeat", headers={"X-API-KEY":s3key}, json={"spec_id":sid3})
 bkid2=c.post("/request_vm", headers=b3h, json={"spec_id":sid3,"hours":2}).json()["booking_id"]

@@ -1483,6 +1483,13 @@ def charge_wallet(db: Session, user_id: int, amount, *, reference_type: str,
         (acct_buyer(user_id), DEBIT,  amt, user_id),
         (PLATFORM_REVENUE,    CREDIT, amt),
     ], reference_id=user_id, description=description or reference_type, entry_type=reference_type)
+    # Keep the Platform.revenue scalar in lockstep with the PLATFORM_REVENUE ledger account,
+    # exactly like the booking-settlement paths — otherwise every metered charge (data API,
+    # inference) would break the "platform revenue == ledger" reconciliation invariant.
+    plat = db.query(Platform).first()
+    if plat is None:
+        plat = Platform(revenue=Decimal(0)); db.add(plat); db.flush()
+    plat.revenue = q(D(plat.revenue) + amt)
     db.commit()
     return True
 
@@ -1547,6 +1554,43 @@ def data_api_revenue(db: Session) -> dict:
         "calls_month": sum(int(r.calls or 0) for r in month),
         "paying_accounts_month": sum(1 for r in month if (r.billed_calls or 0) > 0),
     }
+
+
+def meter_tokens(db: Session, user_id: int, *, prompt_tokens: int, completion_tokens: int,
+                 price_in_per_mtok, price_out_per_mtok) -> dict:
+    """Bill ONE inference request by token count against the wallet, reusing the monthly
+    ApiUsage row + charge_wallet, and tagging revenue ``entry_type='inference'`` in the ledger.
+
+    Charge = prompt_tokens/1e6 * price_in + completion_tokens/1e6 * price_out (USD). Pricing 0
+    keeps it free. The caller MUST pre-check the balance against an upper-bound estimate before
+    running the model (the work is already done by the time we get here), so a False result is
+    only the rare concurrent-spend race — surface it as billed:false, not a hard failure."""
+    period = _period()
+    row = (db.query(ApiUsage)
+           .filter(ApiUsage.user_id == user_id, ApiUsage.period == period).first())
+    if row is None:
+        row = ApiUsage(user_id=user_id, period=period, calls=0, billed_calls=0,
+                       amount_usd=Decimal(0))
+        db.add(row); db.flush()
+    p = max(0, int(prompt_tokens or 0)); c = max(0, int(completion_tokens or 0))
+    total = p + c
+    charge = q((D(p) * D(str(price_in_per_mtok)) + D(c) * D(str(price_out_per_mtok)))
+               / Decimal(1_000_000))
+    row.calls += 1
+    if charge <= 0:
+        row.updated_at = _utcnow(); db.commit()
+        return {"ok": True, "billed": False, "charged": 0.0, "tokens": total,
+                "prompt_tokens": p, "completion_tokens": c, "period": period}
+    if not charge_wallet(db, user_id, charge, reference_type="inference",
+                         description=f"inference {total} tokens"):
+        db.commit()
+        return {"ok": False, "reason": "insufficient_balance", "charge": float(charge),
+                "tokens": total, "prompt_tokens": p, "completion_tokens": c, "period": period}
+    row.billed_calls += 1
+    row.amount_usd = q(D(row.amount_usd) + charge)
+    row.updated_at = _utcnow(); db.commit()
+    return {"ok": True, "billed": True, "charged": float(charge), "tokens": total,
+            "prompt_tokens": p, "completion_tokens": c, "period": period}
 
 
 def usage_summary(db: Session, user_id: int, *, free_quota: int) -> dict:

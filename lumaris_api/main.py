@@ -8021,6 +8021,126 @@ def data_usage(user=Depends(data_api_caller), db: Session = Depends(get_db)):
     return usage_summary(db, user.id, free_quota=DATA_API_FREE_CALLS_MONTH)
 
 
+# ------------------- Inference API (pay-per-token, OpenAI-compatible) -------------------
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatCompletionRequest(BaseModel):
+    model: Optional[str] = None
+    messages: Optional[list[ChatMessage]] = None
+    prompt: Optional[str] = None          # convenience: a bare prompt becomes one user message
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+
+
+def _inference_prices():
+    """(price_in, price_out) in USD per 1M tokens, from config. Default 0 => free."""
+    def _f(name):
+        try:
+            return max(0.0, float(os.getenv(name, "0") or 0))
+        except ValueError:
+            return 0.0
+    return _f("INFERENCE_PRICE_PER_MTOK_IN"), _f("INFERENCE_PRICE_PER_MTOK_OUT")
+
+
+@app.post("/v1/chat/completions", tags=["inference"])
+def inference_chat_completions(data: ChatCompletionRequest, request: Request,
+                               user=Depends(data_api_caller), db: Session = Depends(get_db)):
+    """OpenAI-compatible chat completions, **billed per token** against your wallet.
+
+    Send a prompt, get an answer, pay for the tokens used — the managed-inference side of the
+    marketplace (buyers pay per token; sellers are still settled per hour for the GPU capacity
+    behind the warm pool). Point an OpenAI SDK at `<base>/v1` and use an `inference`-scoped key
+    as `X-API-KEY`. Pricing is `INFERENCE_PRICE_PER_MTOK_IN/OUT` (USD per 1M tokens; 0 = free);
+    the model runs on the configured `EDGE_INFER_UPSTREAM_URL` pool. See docs/INFERENCE_API.md."""
+    upstream = os.getenv("EDGE_INFER_UPSTREAM_URL", "").strip()
+    if not upstream:
+        raise HTTPException(status_code=503, detail="inference not available (no upstream configured)")
+    if not upstream.startswith(("http://", "https://")):
+        raise HTTPException(status_code=500, detail="EDGE_INFER_UPSTREAM_URL must be http(s)")
+
+    # light abuse cap on top of the per-token wallet throttle
+    ip = _client_ip(request) or "?"
+    if _rl_blocked(f"infer:{ip}", 600, 3600):
+        raise HTTPException(status_code=429, detail="rate limit: too many inference requests")
+    _rl_record_failure(f"infer:{ip}", 3600)
+
+    sandbox = getattr(user, "is_sandbox", False)
+    if not sandbox:
+        require_scope(user, "inference")
+
+    # Build OpenAI messages (accept either `messages` or a bare `prompt`).
+    if data.messages:
+        msgs = [{"role": m.role, "content": m.content} for m in data.messages]
+    elif data.prompt and data.prompt.strip():
+        msgs = [{"role": "user", "content": data.prompt.strip()}]
+    else:
+        raise HTTPException(status_code=400, detail="provide `messages` or `prompt`")
+    text_len = sum(len(m["content"] or "") for m in msgs)
+    if text_len == 0:
+        raise HTTPException(status_code=400, detail="empty prompt")
+    if text_len > 32000:
+        raise HTTPException(status_code=413, detail="prompt too long (32000 char cap)")
+
+    model = (data.model or "").strip()[:120] or os.getenv("EDGE_INFER_MODEL", "").strip() or "default"
+    max_tokens = max(1, min(int(data.max_tokens or 512), 4096))
+    price_in, price_out = _inference_prices()
+
+    # Pre-check the wallet against an UPPER-BOUND estimate BEFORE running the model, so unpaid
+    # work is never given away (charge the ACTUAL usage after). Free (price 0) skips this.
+    if not sandbox and (price_in > 0 or price_out > 0):
+        est_prompt = max(1, text_len // 4)               # ~4 chars/token heuristic
+        from decimal import Decimal as _D
+        est_max = float((_D(est_prompt) * _D(str(price_in)) + _D(max_tokens) * _D(str(price_out)))
+                        / _D(1_000_000))
+        me_row = get_user_by_id(db, user.id)
+        if not me_row or float(me_row.balance or 0) < est_max:
+            raise HTTPException(status_code=402, detail={
+                "code": "INSUFFICIENT_BALANCE",
+                "message": "Add funds to your wallet to run inference.",
+                "estimated_max_usd": round(est_max, 6)})
+
+    payload = {"model": model, "messages": msgs, "max_tokens": max_tokens, "stream": False}
+    if data.temperature is not None:
+        payload["temperature"] = data.temperature
+    try:
+        j = _edge_chat_upstream(upstream, os.getenv("EDGE_INFER_UPSTREAM_TOKEN", "").strip() or None,
+                                payload)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("inference upstream failed: %s", e.__class__.__name__)
+        raise HTTPException(status_code=502, detail="inference upstream failed")
+
+    usage = (j.get("usage") if isinstance(j, dict) else None) or {}
+    ptok = int(usage.get("prompt_tokens") or (text_len // 4) or 1)
+    ctok = int(usage.get("completion_tokens") or 0)
+    if not ctok:
+        try:
+            ctok = max(1, len(j["choices"][0]["message"]["content"] or "") // 4)
+        except (KeyError, IndexError, TypeError):
+            ctok = 0
+
+    if sandbox:
+        billing = {"billed": False, "sandbox": True, "charged": 0.0,
+                   "prompt_tokens": ptok, "completion_tokens": ctok, "tokens": ptok + ctok}
+    else:
+        from db import meter_tokens
+        m = meter_tokens(db, user.id, prompt_tokens=ptok, completion_tokens=ctok,
+                         price_in_per_mtok=price_in, price_out_per_mtok=price_out)
+        billing = {"billed": bool(m.get("billed")), "charged": m.get("charged", 0.0),
+                   "prompt_tokens": ptok, "completion_tokens": ctok, "tokens": ptok + ctok,
+                   "price_per_mtok_in": price_in, "price_per_mtok_out": price_out}
+        if not m.get("ok"):
+            billing["warning"] = "charge failed after generation (balance race) — not billed"
+
+    if isinstance(j, dict):
+        j["x_petabyte"] = billing
+        return j
+    return {"model": model, "choices": [], "x_petabyte": billing}
+
+
 @app.post("/admin/data/snapshot", tags=["admin"])
 def admin_data_snapshot(me=Depends(require_admin), db: Session = Depends(get_db)):
     """Admin: capture a price-index snapshot now (the maintenance loop also does this hourly)."""

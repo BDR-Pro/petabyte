@@ -600,6 +600,18 @@ variables:
     - gpu
     description: Enable idle NiceHash mining when no paid job is running.
     format: bool
+  INFERENCE_PRICE_PER_MTOK_IN:
+    required: false
+    default: '0'
+    scope:
+    - platform
+    description: ''
+  INFERENCE_PRICE_PER_MTOK_OUT:
+    required: false
+    default: '0'
+    scope:
+    - platform
+    description: ''
   INSTANT_PAYOUT_FEE_MIN:
     required: false
     default: '0.50'

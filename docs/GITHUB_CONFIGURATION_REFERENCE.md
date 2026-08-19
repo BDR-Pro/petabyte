@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (227)
+## Variables (non-sensitive) (229)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -97,6 +97,8 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `HEARTBEAT_TIMEOUT_S` | no | platform | `60` | `60` | api/db.py | format: int | Seconds before a silent node is reaped. |
 | `HF_ENDPOINT` | no | platform | `https://huggingface.co` | `https://huggingface.co` | api/modelhub/providers/huggingface.py | — | — |
 | `IDLE_MINING` | no | gpu | `false` | `false` | agent/task_fetcher.py | format: bool | Enable idle NiceHash mining when no paid job is running. |
+| `INFERENCE_PRICE_PER_MTOK_IN` | no | platform | `0` | `0` | — | — | — |
+| `INFERENCE_PRICE_PER_MTOK_OUT` | no | platform | `0` | `0` | — | — | — |
 | `INSTANT_PAYOUT_FEE_MIN` | no | platform | `0.50` | `0.50` | api/db.py | — | — |
 | `INSTANT_PAYOUT_FEE_PCT` | no | platform | `0.015` | `0.015` | api/db.py | — | — |
 | `JOB_POLL_INTERVAL` | no | gpu | `5` | `5` | agent/task_fetcher.py | format: int | Seconds between /jobs/next polls. |
