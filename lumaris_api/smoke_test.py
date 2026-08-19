@@ -414,6 +414,11 @@ finally:
     _os2.environ.pop("EDGE_INFER_UPSTREAM_URL",None) if _pu is None else _os2.environ.__setitem__("EDGE_INFER_UPSTREAM_URL",_pu)
     for _k in ("EDGE_INFER_MODEL","INFERENCE_PRICE_PER_MTOK_IN","INFERENCE_PRICE_PER_MTOK_OUT"):
         _os2.environ.pop(_k,None)
+# the developer docs page surfaces the new Inference API + Edge SDK + browser GPU test
+_dev=c.get("/developers")
+ok("/developers surfaces the Inference API, Edge SDK and browser GPU test",
+   _dev.status_code==200 and "/v1/chat/completions" in _dev.text and "/edge" in _dev.text
+   and "/mysystem" in _dev.text and "inference" in _dev.text.lower())
 
 # REFUND ON REAP: new booking, node dies, settle refunds buyer
 c.post("/heartbeat", headers={"X-API-KEY":s3key}, json={"spec_id":sid3})

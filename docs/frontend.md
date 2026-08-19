@@ -13,7 +13,9 @@ no separate frontend service, no build step). Pages are plain HTML strings in
 | `/install` | Become a seller — **download-first** (Windows app button + no-account wallet quickstart) then the Linux/Windows one-liners | public |
 | `/download`, `/download/windows` | Get the desktop app (serves the bundled `.exe`, redirects to `DESKTOP_APP_URL`, or shows the early-access page) | public |
 | `/faq`, `/help` | Plain-language FAQ | public |
-| `/developers` | Curated API reference + link to `/docs` | public |
+| `/mysystem`, `/test-gpu` | In-browser WebGPU self-benchmark (indicative) → install funnel | public |
+| `/edge` | Edge-Inference SDK demo (on-device WebGPU + metered API fallback) | public |
+| `/developers` | Curated API reference (Developer / Data / **Inference** APIs) + link to `/docs` | public |
 | `/investors` | Investor relations one-pager — **no numbers** | public |
 | `/keys` | Generate / list / revoke API keys | needs sign-in |
 | `/console` | The dashboard (browse, deposit, run a job; buyer + seller) | needs sign-in |

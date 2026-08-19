@@ -1578,7 +1578,7 @@ function roiRecalc(){
 
 
 DEVELOPERS_HTML = _page("Petabyte — developers",
-    desc="Two APIs: rent GPUs and run jobs (Developer API), or buy live GPU-market data (Data API). Interactive Scalar references, scoped keys, try-free sandbox.", path="/developers", body="""
+    desc="Three APIs: rent GPUs and run jobs (Developer API), buy live GPU-market data (Data API), or send a prompt and pay per token (Inference API, OpenAI-compatible). Scoped keys, try-free sandbox.", path="/developers", body="""
 <div class="wrap" style="padding:48px 22px 10px">
   <div class="eyebrow"><span class="dot"></span> API reference</div>
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px">Build on the <span class="grad-teal">exchange</span></h1>
@@ -1597,8 +1597,14 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
       <a class="btn btn-teal arrow-fwd" href="/data">Open the Data API reference </a>
     </div>
   </div>
+  <div class="card" style="margin-top:14px;border-color:rgba(79,214,201,.4);background:linear-gradient(180deg,rgba(79,214,201,.08),transparent)">
+    <div class="lbl">Inference API <span class="mut">· pay-per-token · OpenAI-compatible · new</span></div>
+    <p class="mut" style="font-size:13.5px;margin:6px 0 10px">Send a prompt, get an answer, <b class="teal">pay per token</b>. Point any OpenAI SDK at <code class="teal">/v1</code>. It runs on the marketplace's warm GPU pool and bills your wallet per token (input + output). Scoped key carries <code class="teal">inference</code>.</p>
+    <div class="codeline" style="margin:2px 0 10px"><code>curl -s https://petabyte.market/v1/chat/completions -H "X-API-KEY: pk_…" -H "Content-Type: application/json" -d '{"model":"llama3.2","messages":[{"role":"user","content":"hello"}]}'</code></div>
+    <p class="mut" style="font-size:12px;margin:0">Prefer to run it on your users' own GPUs for free? The <a class="teal" href="/edge">Edge-Inference SDK</a> runs the model in the browser via WebGPU and falls back to this API automatically. New here? <a class="teal" href="/mysystem">Test your GPU in the browser →</a></p>
+  </div>
   <div class="card" style="margin-top:14px;border-color:rgba(255,255,255,.10)">
-    <p class="mut" style="font-size:12.5px;margin:0"><b>Two products, two references — they share no endpoint.</b> Nothing in the Data API appears in the Developer API, and vice-versa. The Data API is gated to <code class="teal">data</code>-scoped keys — a <code class="teal">node</code>/<code class="teal">jobs</code> key is refused there (403). Full combined schema at <a class="teal" href="/docs">/docs</a>.</p>
+    <p class="mut" style="font-size:12.5px;margin:0"><b>Three products, separate references.</b> The Developer API (rent GPUs / run jobs), the Data API (buy market data), and the Inference API (pay-per-token LLM calls) each carry their own key scope — <code class="teal">node</code>/<code class="teal">jobs</code>, <code class="teal">data</code>, and <code class="teal">inference</code> respectively — and a key is refused (403) outside its scope. Full combined schema at <a class="teal" href="/docs">/docs</a>.</p>
   </div>
 </div>
 <div class="wrap" style="padding:20px 22px 6px">
@@ -1655,6 +1661,11 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
       GET /api/v1/data/benchmarks <span class="mut">authenticity dataset</span><br>
       GET /api/v1/data/usage <span class="mut">your quota (free)</span></p>
       <p class="mut" style="font-size:12px;margin-top:8px">Needs a <code class="teal">data</code>-scoped key. A free monthly quota, then pay-as-you-go from your wallet balance. Datasets are aggregate/anonymized — no seller identity.</p></div>
+    <div class="card" style="border-color:rgba(79,214,201,.3)"><div class="lbl">Inference API <span class="mut">· pay-per-token</span></div>
+      <p class="mono" style="font-size:12.5px;line-height:2.05">
+      POST /v1/chat/completions <span class="mut">OpenAI-compatible chat</span><br>
+      POST /edge/infer <span class="mut">Edge-SDK fallback endpoint</span></p>
+      <p class="mut" style="font-size:12px;margin-top:8px">Needs an <code class="teal">inference</code>-scoped key; billed per token from your wallet (priced by <code>INFERENCE_PRICE_PER_MTOK_*</code>). Any OpenAI SDK works against <code class="teal">/v1</code>. See <a class="teal" href="https://github.com/BDR-Pro/petabyte/blob/main/docs/INFERENCE_API.md">INFERENCE_API.md</a>.</p></div>
     <div class="card" style="border-color:rgba(79,214,201,.3);background:linear-gradient(180deg,rgba(79,214,201,.05),transparent)">
       <div class="lbl">Try it free <span class="mut">· no signup</span></div>
       <p class="mut" style="font-size:12.5px;margin:2px 0 10px">Two ways to explore before you spend a cent:</p>
@@ -1669,6 +1680,7 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
   <div style="margin-top:18px;display:flex;gap:12px;flex-wrap:wrap">
     <a class="btn btn-amber" href="/devs">Developer API reference →</a>
     <a class="btn btn-teal" href="/data">Data API reference →</a>
+    <a class="btn btn-teal" href="/edge">Edge-Inference SDK →</a>
     <a class="btn" href="/docs" style="border:1px solid rgba(255,255,255,.18)">Full schema (/docs) →</a>
   </div>
 </div>""")
