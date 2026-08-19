@@ -315,42 +315,35 @@ def run(pw, buyer_t, seller_t, pub, role_t):
            "; ".join(m for k, m in errs if _serious(m))[:120])
         page.close()
 
-        # ---------- SELLER value prop: the earnings calculator is LIVE + correct ----------
-        print("\n-- seller: NiceHash-style earnings calculator responds to the slider --")
+        # ---------- SELLER value prop: the ROI/earnings calculator is LIVE ----------
+        # (The redesign moved the inline /install calculator (#calc_*) to the dedicated /roi
+        # page — /install links to it, and /roi computes per-GPU earnings/payback from the
+        # server's hardware-reference data with a live rented-hours slider.)
+        print("\n-- seller: ROI calculator renders live numbers and tracks the hours slider --")
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         errs = []
         _attach_error_capture(page, errs)
         page.goto(B + "/install", wait_until="domcontentloaded")
-        page.wait_for_selector("#calc_month", timeout=15000)
-        page.fill("#calc_price", "2.00")
-
-        def month_at(util):
-            page.eval_on_selector(
-                "#calc_util",
-                "(el, v) => { el.value = String(v); el.dispatchEvent(new Event('input', {bubbles:true})); }",
-                util)
-            txt = (page.text_content("#calc_month") or "$0").replace("$", "").replace(",", "")
-            try:
-                return int(txt)
-            except ValueError:
-                return 0
-
-        high = month_at(100)
-        low = month_at(25)
-        ok("calculator shows a non-zero monthly estimate", high > 0, str(high))
-        ok("dragging utilization up increases earnings (slider is live)", high > low, f"{high} vs {low}")
-        ok("earnings scale correctly with utilization (100% == 4x25%)",
-           abs(high - low * 4) <= 5, f"{high} vs {low}*4")
-        label = page.text_content("#calc_util_val") or ""
-        ok("the utilization % label tracks the slider", "25%" in label or "100%" in label, label)
-        # 'Suggest a price' pulls a server-derived rate into the calculator
-        page.fill("#pgpu", "H100")
-        page.click("button:has-text('Suggest a price')")
+        ok("install page points sellers at the ROI calculator",
+           page.locator('a[href="/roi"]').count() >= 1)
+        page.goto(B + "/roi", wait_until="domcontentloaded")
         page.wait_for_function(
-            "() => { var p = document.getElementById('calc_price'); return p && parseFloat(p.value) > 0; }",
-            timeout=10000)
-        ok("'Suggest a price' fills a server-derived rate",
-           float(page.input_value("#calc_price")) > 0)
+            "() => { var e=document.getElementById('roirows');"
+            " return e && /\\$/.test(e.textContent) && !/Loading/.test(e.textContent); }",
+            timeout=15000)
+        ok("ROI table renders per-GPU dollar figures", "$" in (page.text_content("#roirows") or ""))
+
+        def rows_at(hours):
+            page.eval_on_selector(
+                "#hours",
+                "(el, v) => { el.value = String(v); el.dispatchEvent(new Event('input', {bubbles:true})); }",
+                hours)
+            return page.text_content("#roirows") or ""
+
+        at24 = rows_at(24)
+        at2 = rows_at(2)
+        ok("the rented-hours slider is LIVE (numbers change with hours)", at24 != at2)
+        ok("the hours label tracks the slider", "2 h" in (page.text_content("#hoursv") or ""))
         page.set_viewport_size({"width": 390, "height": 844})
         ok("calculator [mobile]: output grid does not overflow", _no_overflow(page))
         ok("calculator: no serious JS errors", not [m for k, m in errs if _serious(m)],
