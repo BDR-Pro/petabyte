@@ -30,8 +30,9 @@ but it collides with the two things Petabyte is built on:
   with a loud "indicative only, can't identify your GPU" caveat and an `/install` CTA. No CSP
   change, no external anything.
 - **Edge-Inference SDK** — `lumaris_api/static/petabyte-edge.js`, demo at `/edge`, fallback
-  `POST /edge/infer` (prototype responder), on-device path gated behind `EDGE_INFERENCE_ENABLED`
-  (default off; see `docs/EDGE_INFERENCE.md` for the CSP rationale).
+  `POST /edge/infer` (real completions when `EDGE_INFER_UPSTREAM_URL` points at a launched
+  ollama/vLLM node; labelled placeholder otherwise), on-device path gated behind
+  `EDGE_INFERENCE_ENABLED` (default off; see `docs/EDGE_INFERENCE.md`).
 
 ## Guardrails that must not regress
 

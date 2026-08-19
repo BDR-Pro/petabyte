@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (225)
+## Variables (non-sensitive) (227)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -71,6 +71,8 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `E2E_SELLER_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e seller login (TEST account). |
 | `EARNINGS_HOLD_HOURS` | no | platform | `24` | `24` | api/db.py | — | — |
 | `EDGE_INFERENCE_ENABLED` | no | platform | `false` | `false` | api/main.py | — | — |
+| `EDGE_INFER_MODEL` | no | platform | *(empty)* | `…` | api/main.py | — | — |
+| `EDGE_INFER_UPSTREAM_URL` | no | platform | *(empty)* | `…` | api/main.py | — | — |
 | `EMAIL_FROM` | no | platform | `no-reply@petabyte.market` | `no-reply@petabyte.market` | api/notify_providers.py | — | — |
 | `EMAIL_PROVIDER` | no | platform | `mailgun` | `mailgun` | api/notify_providers.py | one of: mailgun / ses / sendgrid / postmark | Notification email provider. |
 | `EMAIL_TOKEN_TTL_MIN` | no | platform | `15` | `15` | api/db.py | format: int | — |
@@ -238,7 +240,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `WG_INTERFACE` | no | platform | `wg0` | `wg0` | api/utils.py | — | — |
 | `WG_PUBLIC_KEY` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 
-## Secrets (credentials — never printed, no defaults) (58)
+## Secrets (credentials — never printed, no defaults) (59)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -258,6 +260,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `E2E_BUYER_ZERO_PASSWORD` | no | ci | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | browser-e2e zero-balance-buyer password (TEST). |
 | `E2E_SELLER_B_PASSWORD` | no | ci | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | browser-e2e second-seller password (TEST). |
 | `E2E_SELLER_PASSWORD` | no | ci | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | browser-e2e seller password (TEST account). |
+| `EDGE_INFER_UPSTREAM_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
 | `GATEWAY_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, gateway/gateway.py | — | — |
 | `GOOGLE_CLIENT_ID` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
 | `GOOGLE_CLIENT_SECRET` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |

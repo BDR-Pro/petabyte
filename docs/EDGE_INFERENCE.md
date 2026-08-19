@@ -1,8 +1,11 @@
 # Edge Inference SDK (`petabyte-edge.js`)
 
-> **Status: developer preview / prototype.** The client SDK and the browser demo are real; the
-> paid fallback endpoint (`POST /edge/infer`) returns a clearly-labelled placeholder until it is
-> wired to a rented GPU (see "Production fallback wiring"). Nothing here fakes a real completion.
+> **Status: developer preview.** The client SDK and the browser demo are real. The paid fallback
+> (`POST /edge/infer`) **returns real completions when an operator points it at an
+> OpenAI-compatible upstream** (`EDGE_INFER_UPSTREAM_URL` — e.g. a Petabyte-launched ollama/vLLM
+> node); with no upstream configured it returns a clearly-labelled placeholder. Nothing here
+> fakes a real completion. The remaining production step is per-token **billing** of the site's
+> developer account (see below).
 
 ## What it is
 
@@ -79,20 +82,37 @@ Set it per environment via `ENV_VARS` (it's in `config/github_configuration_mani
 `template.env`). Turning it on is a deliberate CSP trade-off — do it on the surface that needs it,
 and prefer a dedicated subdomain if you want to keep the main app's CSP tight.
 
-## Production fallback wiring (TODO)
+## Fallback: real inference via a configured upstream (implemented)
 
-`POST /edge/infer` currently validates + rate-limits (60/hr/IP) and returns a labelled
-placeholder. To make it real:
+`POST /edge/infer` validates + rate-limits (60/hr/IP, 8000-char cap), then:
 
-1. Keep a small pool of warm `ollama`/`vllm` template nodes (they already expose an
-   OpenAI-compatible API — see `templates_registry.py`).
-2. On a fallback call, route to one (reuse `payments`/`launch` metering) and **proxy** the
-   model's `/v1/chat/completions`, streaming tokens back.
-3. Meter per token/second and bill the site's account (developer key from `/keys`); apply the
-   same TEST/LIVE isolation as the rest of the money path.
+- **If `EDGE_INFER_UPSTREAM_URL` is set** → it POSTs an OpenAI-compatible chat completion to
+  `<upstream>/v1/chat/completions` (`{model, messages, max_tokens≤2048, stream:false}`), with an
+  optional `Authorization: Bearer <EDGE_INFER_UPSTREAM_TOKEN>`, and returns the **real** result
+  (`{source:'petabyte', prototype:false, model, text, usage}`). The upstream URL is **operator
+  config, never client-supplied**, so it is not an SSRF sink; the client only supplies `prompt`
+  and `model` (validated). Upstream errors return `502` and never leak the URL/token.
+- **If it's unset** → it returns the labelled placeholder (`prototype:true`).
 
-Until then, treat `/edge/infer` responses as a contract stub: shape is stable
-(`{source, model, text, prototype, production}`), content is a placeholder.
+### Point it at a Petabyte-launched ollama node
+
+```bash
+petabyte launch ollama --hours 4            # book the cheapest verified GPU, start ollama
+# then, in the API env (ENV_VARS):
+EDGE_INFER_UPSTREAM_URL=<the node's OpenAI-compatible base URL>   # ollama exposes /v1/chat/completions
+EDGE_INFER_MODEL=llama3.2                    # default model when the caller doesn't specify
+EDGE_INFER_UPSTREAM_TOKEN=                   # (secret) only if the node requires a bearer
+```
+
+Any OpenAI-compatible server works (ollama, vLLM, or a hosted endpoint) — this is the seam that
+makes on-device *and* server inference share one client call.
+
+### Remaining production step — per-token billing
+
+The proxy path is live, but it does **not yet meter/charge** the site's developer account. To
+close the loop: resolve the caller's developer key (`/keys`), meter tokens/seconds from the
+`usage` block, post the charge through the existing ledger with TEST/LIVE isolation, and (for a
+Petabyte-native pool) auto-launch/keep-warm nodes instead of a single static upstream.
 
 ## Security notes
 

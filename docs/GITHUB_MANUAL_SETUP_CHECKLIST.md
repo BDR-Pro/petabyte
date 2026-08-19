@@ -50,6 +50,8 @@ DISK_PROVIDER=storj;
 DISK_REFERENCE_USD_PER_TB_MONTH=1.5;
 EARNINGS_HOLD_HOURS=24;
 EDGE_INFERENCE_ENABLED=false;
+EDGE_INFER_MODEL=;
+EDGE_INFER_UPSTREAM_URL=;
 EMAIL_FROM=no-reply@petabyte.market;
 EMAIL_PROVIDER=mailgun;
 EMAIL_TOKEN_TTL_MIN=15;
@@ -212,6 +214,7 @@ Create each under **Secrets**. Required ones (🔴) must exist before the first 
 - **`CIRCLE_API_KEY`** — ⚪ optional. Circle dashboard (only if using USDC payouts).
 - **`CIRCLE_WALLET_ID`** — ⚪ optional. Circle dashboard (only if using USDC payouts).
 - **`DATABASE_URL`** — 🔴 required. postgresql+psycopg2://USER:PASS@HOST:5432/DB. One-time migration: read the current value from /etc/lumaris/lumaris.env on the server so sessions/data survive.
+- **`EDGE_INFER_UPSTREAM_TOKEN`** — ⚪ optional. See the reference doc.
 - **`GATEWAY_TOKEN`** — ⚪ optional. Generate: `openssl rand -hex 16` (VM gateway route resolution).
 - **`GOOGLE_CLIENT_ID`** — ⚪ optional. Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 client.
 - **`GOOGLE_CLIENT_SECRET`** — ⚪ optional. Google Cloud Console → the same OAuth client's secret.

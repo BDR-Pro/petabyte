@@ -329,6 +329,31 @@ _eij=_ei.json() if _ei.status_code==200 else {}
 ok("POST /edge/infer returns a labelled prototype fallback (never fakes a real completion)",
    _ei.status_code==200 and _eij.get("source")=="petabyte-fallback" and _eij.get("prototype") is True)
 ok("POST /edge/infer rejects an empty prompt", c.post("/edge/infer", json={"prompt":"  "}).status_code==400)
+# When an operator configures an OpenAI-compatible upstream (a launched ollama/vLLM node),
+# /edge/infer proxies the prompt and returns a REAL completion (source 'petabyte', prototype
+# False) — the upstream call is isolated in main._edge_chat_upstream so we mock it here.
+import os as _os
+_prev_up, _prev_model = _os.environ.get("EDGE_INFER_UPSTREAM_URL"), _os.environ.get("EDGE_INFER_MODEL")
+_os.environ["EDGE_INFER_UPSTREAM_URL"]="http://ollama.local:11434"
+_os.environ["EDGE_INFER_MODEL"]="llama3.2"
+_cap={}
+def _fake_upstream(base, key, payload, timeout=30.0):
+    _cap["base"]=base; _cap["payload"]=payload
+    return {"model": payload["model"],
+            "choices":[{"message":{"role":"assistant","content":"Petabyte rents verified GPUs by the hour."}}],
+            "usage":{"total_tokens":9}}
+_orig_up=main._edge_chat_upstream; main._edge_chat_upstream=_fake_upstream
+try:
+    _er=c.post("/edge/infer", json={"prompt":"what is petabyte?"}); _erj=_er.json()
+finally:
+    main._edge_chat_upstream=_orig_up
+    for _k,_v in (("EDGE_INFER_UPSTREAM_URL",_prev_up),("EDGE_INFER_MODEL",_prev_model)):
+        _os.environ.pop(_k,None) if _v is None else _os.environ.__setitem__(_k,_v)
+ok("POST /edge/infer proxies a configured upstream and returns a REAL completion (not a stub)",
+   _er.status_code==200 and _erj.get("source")=="petabyte" and _erj.get("prototype") is False
+   and "verified GPUs" in _erj.get("text","") and _erj.get("model")=="llama3.2"
+   and _cap.get("base")=="http://ollama.local:11434"
+   and _cap["payload"]["messages"][0]["content"]=="what is petabyte?")
 # On-device inference (and its CSP widening) is OFF by default -> the CSP the browser gets must
 # stay locked down: no wasm-eval, no external model host in connect-src.
 _csp=c.get("/edge").headers.get("Content-Security-Policy","")

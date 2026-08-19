@@ -1789,16 +1789,32 @@ class EdgeInferModel(BaseModel):
     max_tokens: Optional[int] = None
 
 
+def _edge_chat_upstream(base_url: str, api_key: Optional[str], payload: dict, timeout: float = 30.0):
+    """POST an OpenAI-compatible chat-completion to `base_url` (a Petabyte-launched `ollama`/
+    `vllm` node, or any OpenAI-compatible server) and return the parsed JSON. Isolated so tests
+    can monkeypatch it. `base_url` is OPERATOR config (never client-supplied), so this is not an
+    SSRF sink — the caller validates the scheme."""
+    import httpx
+    url = base_url.rstrip("/") + "/v1/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
+    r = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
+
+
 @app.post("/edge/infer", tags=["edge"])
 def edge_infer(data: EdgeInferModel, request: Request):
     """Paid fallback for the Edge-Inference SDK (`/static/petabyte-edge.js`): the SDK runs a
     model on the visitor's own WebGPU for free and calls this only when the visitor has no
     capable GPU (or on-device inference is disabled). Public + per-IP rate-limited.
 
-    PROTOTYPE: returns a clearly-labelled placeholder — it never passes a canned string off as
-    a real model completion. Production wiring: route to a rented Petabyte GPU running
-    `data.model` (launch the `ollama`/`vllm` template, then proxy its OpenAI-compatible API)
-    and bill per token/second. See docs/EDGE_INFERENCE.md."""
+    When an operator sets `EDGE_INFER_UPSTREAM_URL` (the OpenAI-compatible endpoint of a
+    Petabyte-launched `ollama`/`vllm` node — see docs/EDGE_INFERENCE.md), this proxies the
+    prompt there and returns a REAL completion. Until then it returns a clearly-labelled
+    `prototype` placeholder — it never passes a canned string off as a real model output.
+    (Per-token billing of the site's developer account is the remaining money-path step.)"""
     ip = _client_ip(request) or "?"
     key = f"edge:{ip}"
     retry = _rl_blocked(key, 60, 3600)          # 60 fallback calls / hour / IP
@@ -1810,18 +1826,45 @@ def edge_infer(data: EdgeInferModel, request: Request):
         raise HTTPException(status_code=400, detail="prompt required")
     if len(prompt) > 8000:
         raise HTTPException(status_code=413, detail="prompt too long (8000 char cap)")
-    model = (data.model or "").strip()[:120] or "default"
+    default_model = os.getenv("EDGE_INFER_MODEL", "").strip()
+    model = (data.model or "").strip()[:120] or default_model or "default"
+    max_tokens = max(1, min(int(data.max_tokens or 256), 2048))
+
+    upstream = os.getenv("EDGE_INFER_UPSTREAM_URL", "").strip()
+    if upstream:
+        if not upstream.startswith(("http://", "https://")):
+            raise HTTPException(status_code=500,
+                                detail="EDGE_INFER_UPSTREAM_URL must start with http:// or https://")
+        payload = {"model": model,
+                   "messages": [{"role": "user", "content": prompt}],
+                   "max_tokens": max_tokens, "stream": False}
+        try:
+            j = _edge_chat_upstream(upstream, os.getenv("EDGE_INFER_UPSTREAM_TOKEN", "").strip() or None,
+                                    payload)
+        except Exception as e:  # noqa: BLE001
+            # Never leak the upstream URL/key in the client-facing error.
+            logger.warning("edge upstream inference failed: %s", e.__class__.__name__)
+            raise HTTPException(status_code=502, detail="edge upstream inference failed")
+        text = ""
+        try:
+            text = j["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            text = j.get("text", "") if isinstance(j, dict) else ""
+        return {"source": "petabyte", "model": (isinstance(j, dict) and j.get("model")) or model,
+                "text": text, "prototype": False, "usage": (isinstance(j, dict) and j.get("usage")) or None}
+
     return {
         "source": "petabyte-fallback",
         "model": model,
         "prototype": True,
         "text": (f"[Petabyte fallback · prototype] No WebGPU on this device (or on-device "
-                 f"inference is off), so in production this prompt would be served by a rented "
-                 f"Petabyte GPU running '{model}', billed per token. Received {len(prompt)} "
-                 f"characters. Wire /edge/infer to a launched ollama/vLLM node to return real "
+                 f"inference is off), and no upstream GPU is configured, so this is a "
+                 f"placeholder. Received {len(prompt)} characters for '{model}'. Set "
+                 f"EDGE_INFER_UPSTREAM_URL to a launched ollama/vLLM node to return real "
                  f"completions."),
-        "production": ("routes to a metered Petabyte GPU: launch the model as a template and "
-                       "proxy its OpenAI-compatible API; billed per token/second"),
+        "production": ("set EDGE_INFER_UPSTREAM_URL to a Petabyte-launched ollama/vLLM node's "
+                       "OpenAI-compatible endpoint; per-token billing of the developer account "
+                       "is the remaining step"),
     }
 
 

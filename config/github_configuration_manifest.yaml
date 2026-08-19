@@ -383,6 +383,18 @@ variables:
     scope:
     - platform
     description: ''
+  EDGE_INFER_MODEL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  EDGE_INFER_UPSTREAM_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   EMAIL_FROM:
     required: false
     default: no-reply@petabyte.market
@@ -1727,6 +1739,12 @@ secrets:
     scope:
     - ci
     description: browser-e2e seller password (TEST account).
+  EDGE_INFER_UPSTREAM_TOKEN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   GATEWAY_TOKEN:
     required: false
     default: null
