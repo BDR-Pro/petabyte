@@ -545,7 +545,8 @@ def _run_render(task):
     work = tempfile.mkdtemp(prefix=f"render-{tid}-")
     scene = _os.path.join(work, "scene.blend")
     out_dir = _os.path.join(work, "out"); _os.makedirs(out_dir, exist_ok=True)
-    _os.chmod(out_dir, 0o777)   # a forced non-root container (AGENT_CONTAINER_USER) must write frames here
+    _os.chmod(out_dir, 0o777)   # forced non-root container writes frames; the 0700 parent tmpdir
+    # keeps this world-writable leaf unreachable by any other host account
     try:
         # 1) pull the scene via a pre-signed GET (no standing creds on the node)
         g = httpx.post(f"{API_URL}/jobs/input_url", headers=HEADERS, timeout=15,
@@ -603,8 +604,12 @@ def _run_transcode(task):
     import shutil, subprocess, os as _os, tempfile
     if not shutil.which("docker"):
         _post("/jobs/result", _signed_result(tid, status="failed")); return
-    work = tempfile.mkdtemp(prefix=f"tc-{tid}-")
-    _os.chmod(work, 0o777)   # a forced non-root container (AGENT_CONTAINER_USER) must write /work
+    outer = tempfile.mkdtemp(prefix=f"tc-{tid}-")   # 0700: only the agent user can traverse it
+    work = _os.path.join(outer, "work"); _os.makedirs(work)
+    # The forced non-root container user (AGENT_CONTAINER_USER) must write /work, so the
+    # leaf is 0777 — but it is reachable only through the 0700 parent, so no other host
+    # account can read buyer inputs or swap outputs before they are hashed + uploaded.
+    _os.chmod(work, 0o777)
     src = _os.path.join(work, "in"); dst = _os.path.join(work, f"out.{_safe_ext(task.get('container'))}")
     try:
         g = httpx.post(f"{API_URL}/jobs/input_url", headers=HEADERS, timeout=15,
@@ -649,7 +654,7 @@ def _run_transcode(task):
         _post("/jobs/result", _signed_result(tid, status="failed"))
         _set_ui(status="idle", task=None, fail=True)
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(outer, ignore_errors=True)
 
 
 def _run_stitch(task):
@@ -662,8 +667,12 @@ def _run_stitch(task):
     import shutil, subprocess, os as _os, tempfile
     if not shutil.which("docker"):
         _post("/jobs/result", _signed_result(tid, status="failed")); return
-    work = tempfile.mkdtemp(prefix=f"stitch-{tid}-")
-    _os.chmod(work, 0o777)   # a forced non-root container (AGENT_CONTAINER_USER) must write /work
+    outer = tempfile.mkdtemp(prefix=f"stitch-{tid}-")   # 0700: only the agent user can traverse it
+    work = _os.path.join(outer, "work"); _os.makedirs(work)
+    # The forced non-root container user (AGENT_CONTAINER_USER) must write /work, so the
+    # leaf is 0777 — but it is reachable only through the 0700 parent, so no other host
+    # account can read buyer inputs or swap outputs before they are hashed + uploaded.
+    _os.chmod(work, 0o777)
     try:
         # pull each segment via a restore-style GET, concat with ffmpeg
         listfile = _os.path.join(work, "list.txt")
@@ -704,7 +713,7 @@ def _run_stitch(task):
         report_log(tid, f"assemble failed: {e}")
         _post("/jobs/result", _signed_result(tid, status="failed"))
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(outer, ignore_errors=True)
 
 
 def _run_distributed(task):

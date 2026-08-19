@@ -278,10 +278,12 @@ def _prepare_pg_scratch():
     override = os.getenv("RESTORE_DRILL_TARGET_URL")
     if override:
         return override
-    from sqlalchemy.engine import make_url
     src = dbmod.engine.url
     scratch = (src.database or "petabyte") + "_restore_drill"
-    admin = make_url(str(src)).set(database="postgres")
+    # URL.set() clones the URL object with the REAL password. Never round-trip through
+    # str(url)/make_url(str(url)): str() masks the password as '***', which psql then
+    # sends literally and auth fails on any password-protected server (as in CI).
+    admin = src.set(database="postgres")
     psql = shutil.which("psql")
     if not psql:
         raise RuntimeError("psql not found on PATH — install postgresql-client or set RESTORE_DRILL_TARGET_URL")
@@ -291,7 +293,7 @@ def _prepare_pg_scratch():
                            capture_output=True, timeout=60)
         if p.returncode != 0:
             raise RuntimeError(f"scratch DB setup failed: {(p.stderr or b'').decode('utf-8','replace')[:300]}")
-    return str(make_url(str(src)).set(database=scratch))
+    return src.set(database=scratch).render_as_string(hide_password=False)
 
 
 def _restored_integrity(target_url_str: str) -> dict:

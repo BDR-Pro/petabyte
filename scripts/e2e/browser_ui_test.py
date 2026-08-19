@@ -75,12 +75,14 @@ def _no_overflow(page) -> bool:
         "() => (document.documentElement.scrollWidth - document.documentElement.clientWidth) <= 2")
 
 
-def _auth(page, token):
-    # Cookie session (the JWT is HttpOnly now, not localStorage) + a readable pb_csrf hint;
-    # api() echoes the same pb_csrf cookie as X-CSRF-Token so our own writes pass the check.
-    page.context.add_cookies([
-        {"name": "pb_session", "value": token, "url": B},
-        {"name": "pb_csrf", "value": "e2e-csrf", "url": B}])
+def _auth(page, username):
+    # Sign the browser in through the real POST /login: the server sets the HttpOnly
+    # pb_session cookie + the SIGNED pb_csrf cookie. enforce_csrf verifies the HMAC, so a
+    # fabricated pb_csrf value would 403 every write the UI makes.
+    page.context.clear_cookies()
+    r = page.context.request.post(B + "/login", form={"username": username, "password": PW})
+    if r.status != 200:
+        raise RuntimeError(f"browser /login failed for {username}: HTTP {r.status}")
     page.goto(B + "/")
 
 
@@ -164,7 +166,7 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         errs = []
         _attach_error_capture(page, errs)
-        _auth(page, buyer_t)
+        _auth(page, "buyer1")
         page.goto(B + "/buy/" + pub, wait_until="domcontentloaded")
         page.wait_for_selector("#buy_pay", state="visible", timeout=20000)
         ok("buy: Rent & run button is visible", page.locator("#buy_pay").is_visible())
@@ -184,7 +186,7 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         errs = []
         _attach_error_capture(page, errs)
         page.on("dialog", lambda d: d.accept("E2E launch template"))  # save-as-template prompt()
-        _auth(page, buyer_t)
+        _auth(page, "buyer1")
         # template-first
         page.goto(B + "/launch", wait_until="domcontentloaded")
         page.wait_for_selector("#tgrid .pick", timeout=20000)
@@ -251,7 +253,7 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         errs = []
         _attach_error_capture(page, errs)
-        _auth(page, seller_t)
+        _auth(page, "seller1")
         page.goto(B + "/seller/payouts", wait_until="domcontentloaded")
         page.wait_for_selector("#nodes_box", timeout=20000)
         page.wait_for_function(
@@ -288,7 +290,7 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         errs = []
         _attach_error_capture(page, errs)
-        _auth(page, role_t)
+        _auth(page, "roleswitch_web")
         page.goto(B + "/account", wait_until="domcontentloaded")
         page.wait_for_selector("#roleswitch", state="visible", timeout=20000)
         label = page.text_content("#roleswitch") or ""

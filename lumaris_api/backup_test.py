@@ -173,6 +173,42 @@ os.environ["BACKUP_ENABLED"] = "true"
 ok("BACKUP_ENABLED=false refuses to run", _disabled_raised)
 s.close()
 
+# ---- the pg scratch DB helper must keep the REAL password ----
+# str(URL) masks the password as '***'; a round-trip through make_url(str(url)) made psql
+# send the literal '***' and fail auth on any password-protected server (the CI drill).
+from sqlalchemy.engine import make_url  # noqa: E402
+
+_calls = []
+
+
+def _fake_run(args, **kw):
+    _calls.append(args)
+
+    class _P:
+        returncode = 0
+        stderr = b""
+    return _P()
+
+
+_real_engine, _real_run, _real_which = dbmod.engine, bk.subprocess.run, bk.shutil.which
+try:
+    class _Eng:
+        url = make_url("postgresql+psycopg2://postgres:s3cret@127.0.0.1:5432/petabyte_test")
+    dbmod.engine = _Eng()
+    bk.subprocess.run = _fake_run
+    bk.shutil.which = lambda name: "/usr/bin/psql"
+    _scratch_url = bk._prepare_pg_scratch()
+    _admin_uris = [next((x.split("--dbname=", 1)[1] for x in c if x.startswith("--dbname=")), "")
+                   for c in _calls]
+    ok("scratch admin psql URI carries the real password (not '***')",
+       all("s3cret" in u and "***" not in u for u in _admin_uris) and len(_admin_uris) == 2)
+    ok("returned scratch URL carries the real password (not '***')",
+       "s3cret" in _scratch_url and "***" not in _scratch_url)
+    ok("scratch URL targets the _restore_drill sibling database",
+       _scratch_url.endswith("/petabyte_test_restore_drill"))
+finally:
+    dbmod.engine, bk.subprocess.run, bk.shutil.which = _real_engine, _real_run, _real_which
+
 shutil.rmtree(_STUB_ROOT, ignore_errors=True)
 for f in ("backup_test.db", "backup_test.db-wal", "backup_test.db-shm"):
     if os.path.exists(f):

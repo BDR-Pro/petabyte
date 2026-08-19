@@ -74,7 +74,9 @@ jobs:
         env:
           PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         if: ${{ env.PYPI_TOKEN != '' }}
-        uses: pypa/gh-action-pypi-publish@release/v1
+        # Pinned to the v1.14.2 commit: this step receives the long-lived PyPI token, so a
+        # movable tag (release/v1) must never choose the code that sees it (supply-chain).
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
       - name: Note when no token is configured
