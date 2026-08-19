@@ -76,8 +76,12 @@ def _no_overflow(page) -> bool:
 
 
 def _auth(page, token):
+    # Cookie session (the JWT is HttpOnly now, not localStorage) + a readable pb_csrf hint;
+    # api() echoes the same pb_csrf cookie as X-CSRF-Token so our own writes pass the check.
+    page.context.add_cookies([
+        {"name": "pb_session", "value": token, "url": B},
+        {"name": "pb_csrf", "value": "e2e-csrf", "url": B}])
     page.goto(B + "/")
-    page.evaluate("t => localStorage.setItem('pb_token', t)", token)
 
 
 def _bearer(t):

@@ -28,17 +28,38 @@ All other 65 state/data routes require `get_current_user` (JWT), `api_key_user`
 HMAC-verified).
 
 ## 3. AuthN / AuthZ
-- JWT (UTC expiry, fail-fast on missing `SECRET_KEY`) for users; encrypted, revocable,
-  **scoped** API keys for nodes (`require_scope`).
+- **User sessions:** JWT (UTC expiry, fail-fast on missing `SECRET_KEY`, plus a
+  production **entropy gate** that refuses a weak/default key). Tokens carry `iat`/`jti`
+  and are checked against a **revocation denylist**, so `POST /logout` kills a session
+  token before it expires. A **signed double-submit CSRF** token
+  (`auth.make_csrf_token`/`csrf_token_valid`, HMAC-bound to the server secret) is
+  enforced on unsafe methods for cookie-authenticated requests (`deps.enforce_csrf`).
+  Optional **TOTP 2FA** (with backup codes) is enforced at login when enabled.
+- **Node API keys:** encrypted, revocable, **scoped** (`require_scope`).
 - **Ownership boundaries enforced and tested**: nodes claim jobs only for specs they
   own; buyers act only on their own tasks/bookings/checkpoints; org actions gated by
   role; a node can't attest/benchmark/back-up/checkpoint another node's spec. These
   are covered by explicit negative tests in the suite.
 
 ## 4. Remote code execution surface (agent)
-- Untrusted buyer code runs ONLY in a Docker sandbox: `--network none`, `--cap-drop
-  ALL`, `--no-new-privileges`, read-only rootfs, mem/CPU/PID limits, **no host
-  fallback** (refuses if Docker absent). Same for templates/render/transcode.
+- Untrusted buyer code runs ONLY in a Docker sandbox, **no host fallback** (refuses if
+  Docker absent). The shared `_isolation_flags` applies to **every** buyer container:
+  `--cap-drop ALL`, `--no-new-privileges`, PID/mem/CPU limits, and `--runtime runsc`
+  (gVisor) when it is installed on the node.
+- **Network egress is per-path, not uniformly `--network none`:**
+  - `_run_render` / `_run_transcode` / `_run_stitch` are hard `--network none` (batch
+    work needs nothing → no exfil / LAN access).
+  - Templates (`_run_template`) follow the template's **egress policy**
+    (`_egress_flags`: `none` / `limited` / `host`); an unknown policy fails closed to
+    `none`. A `host`-network template relies on the node's DOCKER-USER firewall
+    (installed by `install.sh`) to block cloud-metadata + LAN, which the container
+    can't undo because `_isolation_flags` drops `NET_ADMIN`/`RAW`.
+  - Distributed cluster ranks use `--network host` (peer traffic) and require VPN
+    isolation.
+- **Read-only rootfs and a forced non-root UID are opt-in** via the server's
+  `AGENT_STRICT_ROOTFS` / `AGENT_CONTAINER_USER` (default **off**), so an operator can
+  turn them on once they've validated their images — **except** the notebook path,
+  which hard-codes `--read-only`.
 - The agent never shells out with a string; all container invocations are argv lists.
 - **Residual:** sandbox-escape resistance must be verified on a real Docker host
   (RLtest §17) — the isolation flags are coded but a live daemon is needed to attack.
@@ -47,7 +68,9 @@ HMAC-verified).
 - **Attestation & proof-of-work:** Ed25519; results bind to the attested key; forged/
   expired signatures rejected and recorded as fraud (tested).
 - **Payment webhook:** HMAC-SHA256 over the raw body, constant-time compare,
-  idempotent on `event_id` (tested).
+  idempotent on `event_id` (tested). With an `X-Timestamp` the signed material is
+  `"<ts>.<body>"` and a timestamp outside ±300s is rejected (replay-bounded,
+  Stripe-style); crediting is a single claim-and-credit transaction.
 - **Per-task backup keys** sealed at rest with the server key (Fernet); backups
   client-side encrypted before leaving the node.
 - **TEE:** stub verifier is a real Ed25519 check; the real vendor chain (NRAS/SEV-SNP)

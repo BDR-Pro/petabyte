@@ -9,6 +9,13 @@ ENV_DIR=/etc/lumaris
 ENV_FILE=$ENV_DIR/lumaris.env
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"   # bundle root
 
+# TLS-by-default: certbot runs automatically when the domain already resolves to THIS box
+# (HTTP-01 needs that), issuing a cert + HTTP->HTTPS redirect so a fresh deploy never serves
+# JWTs over plaintext. Override the domain/email here or via the environment; leave DEPLOY_DOMAIN
+# empty to fall back to BASE_DOMAIN from the generated env.
+DEPLOY_DOMAIN="${DEPLOY_DOMAIN:-}"       # e.g. petabyte.market — the cert's hostname
+CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"       # Let's Encrypt account/expiry-notice email
+
 echo "==> Installing system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
@@ -208,12 +215,26 @@ echo "==> Creating database tables"
 echo "==> Installing systemd services"
 cp "$APP_DIR/deploy/lumaris-api.service" /etc/systemd/system/
 cp "$APP_DIR/deploy/lumaris-reaper.service" /etc/systemd/system/
+# Payout worker on a timer: without this, queued seller withdrawals never send. Safe by
+# default (PAYOUT_STUB=true simulates until a provider is configured), so we always install it.
+cp "$APP_DIR/deploy/lumaris-payout.service" /etc/systemd/system/
+cp "$APP_DIR/deploy/lumaris-payout.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now lumaris-api lumaris-reaper
+systemctl enable --now lumaris-payout.timer
 
 echo "==> Configuring nginx"
 cp "$APP_DIR/deploy/nginx-lumaris.conf" /etc/nginx/sites-available/lumaris
 [ -f /etc/nginx/proxy_params ] || cp "$APP_DIR/deploy/proxy_params" /etc/nginx/proxy_params
+
+# Resolve the site domain: explicit override wins, else BASE_DOMAIN from the generated env.
+SITE_DOMAIN="$DEPLOY_DOMAIN"
+[ -z "$SITE_DOMAIN" ] && SITE_DOMAIN="$(sed -n 's/^BASE_DOMAIN=//p' "$ENV_FILE" 2>/dev/null | tr -d '[:space:]')"
+# Point the server block at the real domain (was hard-coded) so certbot --nginx can match it.
+if [ -n "$SITE_DOMAIN" ]; then
+  sed -i "s/server_name .*/server_name ${SITE_DOMAIN};/" /etc/nginx/sites-available/lumaris
+fi
+
 ln -sf /etc/nginx/sites-available/lumaris /etc/nginx/sites-enabled/lumaris
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
@@ -223,13 +244,47 @@ ufw allow OpenSSH >/dev/null 2>&1 || true
 ufw allow 'Nginx Full' >/dev/null 2>&1 || true
 yes | ufw enable >/dev/null 2>&1 || true
 
+# --- TLS by default (Let's Encrypt) --------------------------------------------------------
+# Auto-issue a cert + install the HTTP->HTTPS redirect the moment the domain actually points
+# here. HTTP-01 validation requires the A/AAAA record to resolve to THIS server's public IP,
+# so we verify that first; if DNS isn't ready yet (fresh box, record not propagated) we skip
+# without failing the deploy and print the one manual command to run once DNS is set. certbot
+# installs its own renewal timer; we make sure it's enabled.
+echo "==> TLS / HTTPS"
+TLS_EMAIL="$CERTBOT_EMAIL"
+[ -z "$TLS_EMAIL" ] && TLS_EMAIL="$(sed -n 's/^ADMIN_USERS=//p' "$ENV_FILE" 2>/dev/null | cut -d, -f1 | tr -d '[:space:]')"
+if [ -z "$SITE_DOMAIN" ]; then
+  echo "    no domain set (DEPLOY_DOMAIN / BASE_DOMAIN empty) — serving HTTP only for now."
+elif command -v certbot >/dev/null 2>&1; then
+  MY_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS --max-time 5 ifconfig.me 2>/dev/null || echo '')"
+  DNS_IP="$(getent ahostsv4 "$SITE_DOMAIN" 2>/dev/null | awk 'NR==1{print $1}')"
+  if [ -n "$MY_IP" ] && [ "$DNS_IP" = "$MY_IP" ]; then
+    echo "    $SITE_DOMAIN -> $DNS_IP matches this host; requesting a certificate"
+    # Prefer a real contact email (expiry warnings); fall back to no-email registration.
+    if [ -n "$TLS_EMAIL" ]; then CERTBOT_ACCT=(-m "$TLS_EMAIL"); else CERTBOT_ACCT=(--register-unsafely-without-email); fi
+    if certbot --nginx -d "$SITE_DOMAIN" --non-interactive --agree-tos --redirect "${CERTBOT_ACCT[@]}"; then
+      systemctl enable --now certbot.timer >/dev/null 2>&1 || true
+      echo "    ✅ HTTPS enabled and auto-renewal armed (certbot.timer)"
+    else
+      echo "    !! certbot failed (rate limit / validation) — site stays on HTTP; re-run:"
+      echo "       sudo certbot --nginx -d $SITE_DOMAIN --redirect -m <you@domain>"
+    fi
+  else
+    echo "    DNS for $SITE_DOMAIN (${DNS_IP:-none}) does not yet point at this host (${MY_IP:-unknown})."
+    echo "    Point the A record here, then run: sudo certbot --nginx -d $SITE_DOMAIN --redirect -m <you@domain>"
+  fi
+else
+  echo "    certbot not installed; skipping TLS."
+fi
+
 echo ""
 echo "✅ Deployed. Check: systemctl status lumaris-api"
 echo "   Smoke:  curl -s http://localhost/healthz"
 echo ""
 echo "Next:"
 echo "  1) Point your domain's A record at this droplet."
-echo "  2) Edit server_name in /etc/nginx/sites-available/lumaris, reload nginx."
+echo "  2) Re-run this script (or 'sudo certbot --nginx -d <domain> --redirect') to enable HTTPS"
+echo "     once DNS resolves here — TLS is issued automatically when the record points at this box."
 
 # --- Create + harden the backup bucket if S3_BUCKET is set and creds are present ---
 set +e
@@ -269,7 +324,8 @@ if [ -n "${S3_BUCKET:-}" ] && [ "${AWS_ACCESS_KEY_ID:-__SET_ME__}" != "__SET_ME_
 fi
 set -e
 
-echo "  3) Enable HTTPS:  certbot --nginx -d yourdomain.com"
+echo "  3) HTTPS is enabled automatically when the domain resolves here; otherwise:"
+echo "     sudo certbot --nginx -d <yourdomain> --redirect -m <you@domain>"
 
 # ---------------------------------------------------------------------------
 # Environment health report — shows what this box will really do (LIVE/STUB/

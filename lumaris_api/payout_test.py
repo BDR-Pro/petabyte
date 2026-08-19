@@ -240,6 +240,90 @@ ok("ledger balances after the batch-payout leg", _bal_ok)
 # a re-run does not create a second batch or double-pay (no available obligations left)
 again = routing.create_and_send_batch(s, dbmod.get_user_by_id(s, sid2), currency="usd")
 ok("re-running aggregation does not double-pay (nothing available)", again is None)
+# NOTE: keep `s` (and `batch`) open — the mode-immutability test below reuses them.
+
+
+# ---------------- clawback auto-netting (flag-gated) ----------------
+# A refund/chargeback on an ALREADY-PAID job leaves the seller owing the platform: a recoverable
+# NEGATIVE seller_payable balance with no reversible transfer (audit killer #6). With
+# PAYOUT_AUTONET_CLAWBACK on, that debt is recovered by paying the seller LESS on their next
+# payout, instead of waiting for a manual operator; with it OFF, the prior behavior is unchanged.
+import os as _os_cb   # noqa: E402
+
+
+def _seed_clawback_debt(seller_id, cap=1000, debt=300):
+    """Reproduce the on-ledger state of a paid-then-refunded job (seller now owes `debt`), plus a
+    fresh available obligation of `cap` with its capture credit, and a needs_review clawback tx."""
+    s2 = dbmod.SessionLocal()
+    # old job A: capture credit -> batch payout debit -> refund clawback debit  => -debt on payable
+    dbmod.post(s2, "compute_transaction", legs=[
+        (dbmod.EXTERNAL_PAYMENTS_MINOR, dbmod.DEBIT, cap),
+        (dbmod.acct_seller_payable(seller_id), dbmod.CREDIT, cap, seller_id)],
+        reference_id=f"ctx_cb_cap_{seller_id}", entry_type="compute_capture")
+    dbmod.post(s2, "payout_batch", legs=[
+        (dbmod.acct_seller_payable(seller_id), dbmod.DEBIT, cap, seller_id),
+        (dbmod.acct_stripe_payouts(), dbmod.CREDIT, cap)],
+        reference_id=f"pb_cb_paid_{seller_id}", entry_type="payout_settled")
+    dbmod.post(s2, "compute_transaction", legs=[
+        (dbmod.EXTERNAL_PAYMENTS_MINOR, dbmod.CREDIT, debt),
+        (dbmod.acct_seller_payable(seller_id), dbmod.DEBIT, debt, seller_id)],
+        reference_id=f"ctx_cb_refund_{seller_id}", entry_type="compute_refund")
+    # new job B: a fresh available obligation + its capture credit (so unpaid nets == the credit)
+    dbmod.post(s2, "compute_transaction", legs=[
+        (dbmod.EXTERNAL_PAYMENTS_MINOR, dbmod.DEBIT, cap),
+        (dbmod.acct_seller_payable(seller_id), dbmod.CREDIT, cap, seller_id)],
+        reference_id=f"ctx_cb_cap2_{seller_id}", entry_type="compute_capture")
+    s2.commit(); s2.close()
+    add_obligation(seller_id, cap)
+    # a needs_review tx carrying the batch-clawback signature (refunded, no reversible transfer)
+    tid = mk_captured_tx(seller_id, net=cap)
+    s3 = dbmod.SessionLocal()
+    t = s3.query(dbmod.ComputeTransaction).filter(dbmod.ComputeTransaction.id == tid).first()
+    t.refunded_amount = debt; t.stripe_transfer_id = None
+    t.reconciliation_status = "needs_review"; s3.add(t); s3.commit(); s3.close()
+    return tid
+
+
+# --- flag ON: the debt is netted out of the payout and the clawback tx reconciles ---
+# (own sessions `cs*` — never touch the aggregation section's still-open `s`/`batch`)
+sid_cb = mk_seller("payout_autonet_on", "US"); approve_sanctions(sid_cb)
+cbtx = _seed_clawback_debt(sid_cb, cap=1000, debt=300)
+cs = dbmod.SessionLocal()
+ok("recoverable debt is computed from the ledger (unpaid nets - payable balance)",
+   dbmod.seller_recoverable_debt_minor(cs, sid_cb) == 300)
+cs.close()
+_os_cb.environ["PAYOUT_AUTONET_CLAWBACK"] = "true"
+cs = dbmod.SessionLocal()
+b_on = routing.create_and_send_batch(cs, dbmod.get_user_by_id(cs, sid_cb),
+                                     currency="usd", min_threshold_minor=100)
+ok("auto-netting reduces the payout by the recoverable debt (1000 - 300 = 700)",
+   b_on is not None and b_on.state == "paid" and b_on.total_amount_minor == 700)
+ok("after netting, the seller owes nothing (recoverable debt cleared)",
+   dbmod.seller_recoverable_debt_minor(cs, sid_cb) == 0)
+ok("after netting, the seller_payable ledger balance is square (0)",
+   int(dbmod.account_balance(cs, dbmod.acct_seller_payable(sid_cb))) == 0)
+_cbtx_row = cs.query(dbmod.ComputeTransaction).filter(dbmod.ComputeTransaction.id == cbtx).first()
+ok("the batch-path clawback tx is flipped needs_review -> reconciled",
+   _cbtx_row.reconciliation_status == "reconciled")
+_onbal, _ = dbmod.ledger_is_balanced(cs)
+ok("ledger balances after clawback auto-netting", _onbal)
+cs.close()
+_os_cb.environ.pop("PAYOUT_AUTONET_CLAWBACK", None)
+
+# --- flag OFF (default): no netting — full payout, debt persists, tx stays needs_review ---
+sid_off = mk_seller("payout_autonet_off", "US"); approve_sanctions(sid_off)
+offtx = _seed_clawback_debt(sid_off, cap=1000, debt=300)
+cs = dbmod.SessionLocal()
+b_off = routing.create_and_send_batch(cs, dbmod.get_user_by_id(cs, sid_off),
+                                      currency="usd", min_threshold_minor=100)
+ok("default OFF: the payout is NOT netted (full 1000 paid)",
+   b_off is not None and b_off.total_amount_minor == 1000)
+ok("default OFF: the recoverable debt persists for manual review",
+   dbmod.seller_recoverable_debt_minor(cs, sid_off) == 300)
+_offtx_row = cs.query(dbmod.ComputeTransaction).filter(dbmod.ComputeTransaction.id == offtx).first()
+ok("default OFF: the clawback tx stays needs_review (unchanged behavior)",
+   _offtx_row.reconciliation_status == "needs_review")
+cs.close()
 # TEST/LIVE mode is immutable — test and live money can never be reclassified/merged
 _immut = False
 try:
@@ -572,6 +656,43 @@ ok("exactly one Stripe transfer is created for the owned obligation",
         if t.get("metadata", {}).get("petabyte_tx") == _txok.public_id]) == 1)
 s.close()
 
+# ============= H2: the DIRECT admin transfer enforces the same payout-time gates ==========
+# as the batch path (audit HIGH: transfer_to_seller used to skip sanctions + fraud/review holds).
+# (a) a seller under a fraud/manual-review payout hold is refused by the direct transfer.
+sid_h2h = mk_seller("h2_hold", "US")
+tx_h2h = mk_captured_tx(sid_h2h, 900)
+add_obligation(sid_h2h, 900, compute_tx_id=tx_h2h, state="available")
+s = dbmod.SessionLocal()
+dbmod.place_payout_hold(s, sid_h2h, reason="fraud review")
+_h2_held = False
+try:
+    sc.transfer_to_seller(s, s.get(dbmod.ComputeTransaction, tx_h2h))
+except sc.TransactionError:
+    _h2_held = True
+ok("direct transfer refuses a seller under a payout hold (parity with batch)",
+   _h2_held and s.get(dbmod.ComputeTransaction, tx_h2h).stripe_transfer_id is None)
+# it pays once the hold clears (proves the gate, not a permanent block)
+dbmod.clear_payout_hold(s, sid_h2h)
+sc.transfer_to_seller(s, s.get(dbmod.ComputeTransaction, tx_h2h))
+ok("direct transfer succeeds after the payout hold is cleared",
+   s.get(dbmod.ComputeTransaction, tx_h2h).stripe_transfer_id is not None)
+s.close()
+
+# (b) a sanctioned payout country is refused by the direct transfer.
+sid_h2s = mk_seller("h2_sanctioned", "IR")     # Iran — on the sanctioned block list
+tx_h2s = mk_captured_tx(sid_h2s, 900)
+add_obligation(sid_h2s, 900, compute_tx_id=tx_h2s, state="available")
+s = dbmod.SessionLocal()
+_h2_sanc = False
+try:
+    sc.transfer_to_seller(s, s.get(dbmod.ComputeTransaction, tx_h2s))
+except sc.TransactionError:
+    _h2_sanc = True
+ok("direct transfer refuses a sanctioned seller country (fail closed)",
+   _h2_sanc and s.get(dbmod.ComputeTransaction, tx_h2s).stripe_transfer_id is None)
+s.close()
+
+
 # ---------------- biweekly payout run: 14-day hold + report hold ----------------
 sid_bw = mk_seller("payout_biweekly", "US"); approve_sanctions(sid_bw)
 # two earnings, still WITHIN the 14-day risk hold (available_at in the future) -> accrued
@@ -654,6 +775,34 @@ ok("the instant fee is booked to PLATFORM_REVENUE as a balanced ledger leg (real
 dbmod.set_payout_status(s, _pi, "failed")
 ok("a FAILED instant payout refunds the GROSS (net + fee), not just the net",
    abs(float(dbmod.get_user_by_id(s, _u.id).earnings) - (40.0 + 40.0)) < 1e-6)
+# M3: the failure must ALSO post a REVERSING ledger transaction — not just bump the scalar —
+# or the double-entry books permanently record the money as having left the payout rail.
+_r3legs = (s.query(LedgerEntry).join(LedgerTx, LedgerEntry.tx_id == LedgerTx.id)
+           .filter(LedgerTx.reference_id == str(_pi.id),
+                   LedgerEntry.entry_type == "payout_reversal").all())
+_r3_seller_credit = sum(float(e.amount) for e in _r3legs
+    if e.account == dbmod.acct_seller(_u.id) and e.direction == dbmod.CREDIT)
+ok("M3: a failed payout posts a reversing leg crediting seller_earnings the GROSS back",
+   abs(_r3_seller_credit - 40.0) < 1e-6)
+# The request_payout CREDIT to EXTERNAL_PAYOUTS (net) and the reversal DEBIT (net) must net to
+# zero — the money never actually left the rail.
+_ext_net = sum((float(e.amount) if e.direction == dbmod.CREDIT else -float(e.amount))
+    for e in s.query(LedgerEntry).join(LedgerTx, LedgerEntry.tx_id == LedgerTx.id)
+      .filter(LedgerTx.reference_id == str(_pi.id),
+              LedgerEntry.account == dbmod.EXTERNAL_PAYOUTS).all())
+ok("M3: net EXTERNAL_PAYOUTS movement for a failed payout is zero (money never left)",
+   abs(_ext_net) < 1e-6)
+_m3_bal, _ = dbmod.ledger_is_balanced(s)
+ok("M3: ledger stays balanced after the failed-payout reversal", _m3_bal)
+# idempotent: re-marking an already-failed payout must NOT double-credit or double-reverse.
+_earn_before = float(dbmod.get_user_by_id(s, _u.id).earnings)
+dbmod.set_payout_status(s, _pi, "failed")
+_n_rev = (s.query(LedgerEntry).join(LedgerTx, LedgerEntry.tx_id == LedgerTx.id)
+          .filter(LedgerTx.reference_id == str(_pi.id),
+                  LedgerEntry.entry_type == "payout_reversal",
+                  LedgerEntry.account == dbmod.acct_seller(_u.id)).count())
+ok("M3: re-marking an already-failed payout is a no-op (no double credit, single reversal)",
+   abs(float(dbmod.get_user_by_id(s, _u.id).earnings) - _earn_before) < 1e-6 and _n_rev == 1)
 
 # guard: an amount at/under the fee is refused for instant (fee must be smaller than amount)
 ok("instant is refused when the fee would meet/exceed the amount (no zero/negative payout)",

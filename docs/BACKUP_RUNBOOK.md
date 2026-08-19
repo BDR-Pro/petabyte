@@ -46,17 +46,35 @@ Make it **private**, enable **versioning** and **default encryption**, add a **l
 
 ## Scheduling (cron / systemd)
 
-Run the CLI on the API host, where `DATABASE_URL` + `S3_*` are already in the environment:
+Run the backup on the API host, where `DATABASE_URL` + `S3_*` are already in the environment.
+Which command depends on how you deployed:
+
+**A. Repo checkout / production Docker image** (the image ships `pg_dump` and the full repo, so
+`scripts/backup_database.py` is present). Drive the CLI directly — it expects to sit next to
+`lumaris_api/`, so run it from the checkout root:
 
 ```cron
 # /etc/cron.d/petabyte-db-backup  — hourly
 0 * * * *  petabyte  . /etc/lumaris/lumaris.env && \
-    /opt/petabyte/venv/bin/python /opt/petabyte/scripts/backup_database.py --verify \
+    cd /path/to/petabyte && .venv/bin/python scripts/backup_database.py --verify \
     >> /var/log/petabyte-backup.log 2>&1
 ```
 
-`--verify` re-downloads the object and re-checks its SHA-256 after upload. The CLI exits non-zero on
-failure so cron/systemd records it. You can also trigger one on demand: `POST /admin/backups/run`.
+**B. `deploy.sh` droplet** — that path rsyncs only `lumaris_api/` into `/opt/lumaris`, so the
+repo-root `scripts/` CLI is **not** deployed there. Drive the admin endpoint from any scheduler
+instead:
+
+```cron
+0 * * * *  root  curl -fsS -X POST -H "Authorization: Bearer $PETABYTE_ADMIN_TOKEN" \
+    https://yourdomain.com/admin/backups/run \
+    >> /var/log/petabyte-backup.log 2>&1
+```
+
+`POST /admin/backups/run` is admin-gated and takes an optional `retention` query param; it returns
+the backup summary (or 503 with the reason, which also records a `status=failed` row so alerts fire).
+Integrity-verify a stored backup with the follow-up call `POST /admin/backups/{backup_id}/verify`.
+The CLI's `--verify` flag does the equivalent in one shot (download + re-check SHA-256) and exits
+non-zero on failure so cron/systemd records it.
 
 The production Docker image ships **`postgresql-client-16`** (`pg_dump` on `PATH`), so the endpoint
 and CLI work in-container out of the box. `pg_dump` refuses to dump a server **newer** than the
@@ -94,6 +112,41 @@ or `PG_DUMP_BIN` on the host).
 5. **Sanity-check** the restore (row counts, `scripts/audit_ledger.py` against the restored DB to
    confirm the money ledger still balances), then repoint `DATABASE_URL` and restart the API.
 
+## RPO / RTO + freshness gate
+
+- **RPO (Recovery Point Objective)** — how much data you can afford to lose = **your backup
+  interval**. With the hourly cron above, RPO ≈ 1h (you'd lose at most the last hour of writes).
+  `BACKUP_RPO_SECONDS` (default **7200s / 2h**, i.e. 2× the hourly cadence) is the *alerting*
+  threshold: monitoring fires when the newest successful backup is older than this.
+- **RTO (Recovery Time Objective)** — how long recovery takes = download + decompress + `psql`
+  replay + cutover. For a small/medium DB this is **minutes**; measure it in your restore drill
+  (below) and record the observed time so the number is real, not aspirational.
+- **Freshness gate** — `python scripts/backup_database.py --check-fresh` prints
+  `backup_freshness` and **exits non-zero when the newest backup exceeds the RPO**. Run it from
+  monitoring/cron (independently of the backup itself) so a silently-stalled backup pages you.
+  It's the same signal as the `petabyte_db_backup_last_age_seconds` Prometheus gauge.
+
+## Restore drill (tested recovery — automated)
+
+A backup you have never restored is not a backup. The restore is **programmatic and CI-gated**,
+not just prose:
+
+```bash
+# take a fresh backup, restore it into a THROWAWAY scratch DB, and verify the money ledger still
+# balances + row counts match the source. Exits non-zero if recovery is broken.
+python scripts/restore_drill.py
+# CI (Postgres): point at a dedicated scratch DB so nothing production-shaped is touched
+RESTORE_DRILL_TARGET_URL=postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/drill \
+    python scripts/restore_drill.py
+```
+
+The drill (`backup.run_restore_drill`) is **non-destructive** — it never touches the live DB; it
+restores into a temp SQLite file or a `<db>_restore_drill` Postgres DB and checks it with the same
+`ledger_is_balanced` invariant the money suite uses. It runs on every CI push (SQLite in the fast
+suite; **real Postgres** in the "postgres (the one that counts)" job), so a regression that breaks
+recovery fails the build. Run it **on a schedule against production backups too**, and record the
+observed RTO each time.
+
 ## Honest limitations
 
 - **Logical dumps, not PITR.** This gives you point-in-time-of-*backup* recovery, not
@@ -101,4 +154,6 @@ or `PG_DUMP_BIN` on the host).
   For tighter RPO, run this alongside managed Postgres PITR — the two are complementary.
 - **Not client-side encrypted.** Confidentiality relies on S3 SSE + bucket IAM. The dump is not
   additionally encrypted with the app key, so bucket access = data access. Lock the bucket down.
-- **Restore is a documented manual procedure**, not an automated one-click failover. Practise it.
+- **The restore drill proves the mechanism, not your capacity plan.** It verifies a backup restores
+  and the ledger balances; it does not load-test recovery at production scale. Measure RTO on a
+  production-sized dump before you rely on the number.

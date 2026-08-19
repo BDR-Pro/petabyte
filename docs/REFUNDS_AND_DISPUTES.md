@@ -33,7 +33,7 @@ sequenceDiagram
     P->>P: REFUND_PENDING; refund_split -> seller_reversal=225, platform_refund=25
     P->>S: Refund 250 on PaymentIntent [idem]
     S-->>P: refunded
-    P->>P: ledger CREDIT external:payments 250; DEBIT platform_revenue 25 + seller_payable 225
+    P->>P: ledger CREDIT external:payments:minor 250; DEBIT platform_revenue:minor 25 + seller_payable 225
     P->>S: Transfer reversal 225 on tr_... [idem]
     S-->>P: reversed
     P->>P: ledger DEBIT external:stripe_transfers 225; CREDIT seller_payable 225

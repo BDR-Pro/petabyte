@@ -12,16 +12,60 @@ routers cleanly requires lifting those dependencies into a `deps.py` FIRST (so a
 import them without importing `main`). This static-page slice needs none of that, so it is the
 safe, self-contained first step that establishes the pattern behind the green test suite.
 """
+import os
+
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, FileResponse
 
 from pages import (
-    TRUST_HTML, STATUS_HTML, METRICS_HTML, BUY_HTML, SELLER_EARNINGS_HTML, TEMPLATES_HTML,
-    DEMO_HTML, CONTACT_HTML, PRICING_HTML, SECURITY_HTML, PRIVACY_HTML, TERMS_HTML, AUP_HTML,
-    REFUNDS_HTML, GPU_DETAIL_HTML, GAMERS_HTML, ARTISTS_HTML, CLUSTER_HTML, CONSOLE_HTML,
+    TRUST_HTML, STATUS_HTML, METRICS_HTML, TRACTION_HTML, BUY_HTML, SELLER_EARNINGS_HTML,
+    TEMPLATES_HTML, DEMO_HTML, CONTACT_HTML, PRICING_HTML, SECURITY_HTML, PRIVACY_HTML,
+    TERMS_HTML, AUP_HTML, REFUNDS_HTML, GPU_DETAIL_HTML, GAMERS_HTML, ARTISTS_HTML,
+    CLUSTER_HTML, CONSOLE_HTML, FAQ_HTML, DESKTOP_SOON_HTML, MYSYSTEM_HTML, EDGE_HTML,
 )
 
 router = APIRouter(tags=["web"])
+
+
+@router.get("/mysystem", response_class=HTMLResponse)
+@router.get("/test-gpu", response_class=HTMLResponse)
+def mysystem_page():
+    """In-browser WebGPU self-benchmark (indicative) → funnels into /install."""
+    return HTMLResponse(MYSYSTEM_HTML)
+
+
+@router.get("/edge", response_class=HTMLResponse)
+def edge_page():
+    """Edge-Inference SDK demo: on-device WebGPU inference + metered Petabyte API fallback."""
+    return HTMLResponse(EDGE_HTML)
+
+
+@router.get("/faq", response_class=HTMLResponse)
+@router.get("/help", response_class=HTMLResponse)
+def faq_page():
+    """Plain-language answers for non-technical sellers and buyers (safety, payouts, trust)."""
+    return HTMLResponse(FAQ_HTML)
+
+
+@router.get("/download/windows")
+@router.get("/download")
+def download_windows():
+    """The 'Get the Windows app' target — never a dead link, never a fabricated download.
+
+    Order of truth: (1) a build an admin uploaded to THIS server (private-safe, no GitHub) wins —
+    same dir /admin/desktop/release writes to; (2) else a configured DESKTOP_APP_URL (a
+    domain-hosted .exe or a signed public release); (3) else an honest 'early access — start now
+    with one command' page. So the button works the moment a real build exists and tells the truth
+    until then."""
+    local = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "installers", "desktop", "PetabyteAgent.exe")
+    if os.path.exists(local):
+        return FileResponse(local, filename="PetabyteAgent.exe",
+                            media_type="application/vnd.microsoft.portable-executable")
+    url = os.getenv("DESKTOP_APP_URL", "").strip()
+    if url:
+        return RedirectResponse(url, status_code=302)
+    return HTMLResponse(DESKTOP_SOON_HTML)
 
 
 @router.get("/trust", response_class=HTMLResponse)
@@ -33,10 +77,12 @@ def trust_page():
 @router.get("/security.txt", response_class=PlainTextResponse)
 def security_txt():
     """RFC 9116 security contact — the file security researchers look for first."""
+    # Contact is a domain email, not a GitHub advisories URL: the source repo is (or may become)
+    # private, and a github.com/<repo>/security/advisories link 404s for external researchers
+    # without repo access — the opposite of what security.txt is for. mailto works regardless.
     return (
-        "# Petabyte vulnerability disclosure — see /security and the repo SECURITY.md\n"
+        "# Petabyte vulnerability disclosure — see /security\n"
         "Contact: mailto:security@petabyte.market\n"
-        "Contact: https://github.com/BDR-Pro/petabyte/security/advisories/new\n"
         "Policy: https://petabyte.market/security\n"
         "Expires: 2027-08-01T00:00:00Z\n"
         "Preferred-Languages: en\n"
@@ -53,6 +99,12 @@ def status_page():
 def metrics_page():
     """Investor / operations metrics dashboard (data from /metrics/overview)."""
     return HTMLResponse(METRICS_HTML)
+
+
+@router.get("/traction", response_class=HTMLResponse)
+def traction_page():
+    """Public investor traction — live, canonical, honest (data from /metrics/traction)."""
+    return HTMLResponse(TRACTION_HTML)
 
 
 @router.get("/buy/{public_id}", response_class=HTMLResponse)

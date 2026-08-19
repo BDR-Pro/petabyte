@@ -8,8 +8,13 @@ token/curl/JSON wrangling:
     capture_method=manual) -> confirm the PI with the Stripe SDK (test card + return_url) ->
     POST /payments/{tx}/confirm (server verifies Stripe) -> reserve -> dispatch ONCE ->
     seller agent claims + runs a bounded GPU workload -> /jobs/result -> auto meter+capture ->
-    poll GET -> verify capture / fee / seller-net / HELD payout obligation (14-day hold) ->
-    receipt + timeline -> redacted artifacts.
+    poll GET -> verify capture / fee / seller-net -> unified proof (payment + signed compute
+    receipt + payout) -> receipt + timeline -> redacted artifacts.
+
+    With --settle-payout (and E2E_ADMIN_USERNAME/E2E_ADMIN_PASSWORD) it also drives the REAL
+    provider payout leg — an admin transfer_to_seller = a Stripe TEST transfer to the seller's
+    connected account — so the run proves buyer -> GPU -> PAYOUT -> receipt end to end. Without
+    it, the seller net is HELD by design for the configured payout hold.
 
 SAFETY — this runner NEVER touches live money and has NO override:
   * STRIPE_SECRET_KEY must start with sk_test_ (an sk_live_ key aborts immediately);
@@ -370,10 +375,11 @@ def run(args) -> dict:
                              transaction=tx, task_id=task_id,
                              hint="seller agent may be offline or the workload timed out")
 
-        # ---- receipt + timeline + final view ----
+        # ---- receipt + timeline + unified proof + final view ----
         final = api.req("get", f"/payments/{tx}").json()
         receipt = _safe_json(api.req("get", f"/payments/{tx}/receipt"))
         timeline = _safe_json(api.req("get", f"/payments/{tx}/timeline"))
+        proof = _safe_json(api.req("get", f"/payments/{tx}/proof"))
         cap = final.get("captured_amount") or 0
         fee = final.get("platform_fee_amount") or 0
         net = final.get("seller_net_amount") or 0
@@ -382,18 +388,42 @@ def run(args) -> dict:
         ok_ident = (cap == fee + net)
         stage("accounting", "PASS" if ok_ident else "FAIL",
               platform_fee_minor=fee, seller_net_minor=net, identity_holds=ok_ident)
+        # the compute half of the proof: a signed result the server re-verified live
+        cproof = (proof.get("compute") or {}).get("proof") if isinstance(proof, dict) else None
+        stage("compute_proof", "PASS" if (cproof and cproof.get("server_reverified")) else "WARN",
+              server_reverified=(cproof or {}).get("server_reverified"),
+              content_hash=(cproof or {}).get("content_hash_sha256"))
         report.update({"captured_minor": cap, "platform_fee_minor": fee,
                        "seller_net_minor": net, "metering_seconds": final.get("metering_seconds"),
                        "transferred_minor": final.get("transferred_amount", 0),
                        "gpu_model": gpu_model, "timeline": scrub(timeline),
-                       "receipt": scrub(receipt)})
+                       "receipt": scrub(receipt), "proof": scrub(proof)})
 
-        # ---- payout obligation / 14-day hold (read-only /seller view or receipt) ----
-        report["seller_settlement"] = {
-            "transferred_now": final.get("transferred_amount", 0),
-            "status": "PENDING BY DESIGN (held for the configured payout hold)",
-        }
-        report["result"] = "PASS" if ok_ident and cap > 0 else "FAIL"
+        # ---- payout leg ----
+        # By default the seller payout is HELD for the configured hold (PENDING BY DESIGN). Pass
+        # --settle-payout WITH admin creds (E2E_ADMIN_USERNAME/PASSWORD) to drive the REAL
+        # provider payout leg (transfer_to_seller -> a Stripe TEST transfer to the connected
+        # account) so the demo proves buyer -> GPU -> payout -> receipt end to end.
+        admin_user = os.getenv("E2E_ADMIN_USERNAME")
+        admin_pass = os.getenv("E2E_ADMIN_PASSWORD")
+        if args.settle_payout and admin_user and admin_pass:
+            settled = _drive_payout(args.api, admin_user, admin_pass, tx)
+            report["seller_settlement"] = settled
+            stage("payout", "PASS" if settled.get("paid") else "FAIL",
+                  transfer_id=mask(settled.get("stripe_transfer_id")),
+                  transferred_minor=settled.get("transferred_minor"))
+            report["proof"] = scrub(_safe_json(api.req("get", f"/payments/{tx}/proof")))
+            payout_ok = bool(settled.get("paid"))
+        else:
+            report["seller_settlement"] = {
+                "transferred_now": final.get("transferred_amount", 0),
+                "status": ("PENDING BY DESIGN (held for the configured payout hold). Pass "
+                           "--settle-payout with E2E_ADMIN_USERNAME/PASSWORD to drive the "
+                           "provider payout leg in-session."),
+            }
+            payout_ok = True   # not requested -> not a failure
+
+        report["result"] = "PASS" if (ok_ident and cap > 0 and payout_ok) else "FAIL"
         return report
 
     except (E2EAbort, StageError) as e:
@@ -459,6 +489,37 @@ def _release_on_failure(api, report):
                 "reaper will reclaim the GPU unit."}
 
 
+def _drive_payout(base, admin_user, admin_pass, tx) -> dict:
+    """Drive the REAL provider payout leg as an admin: POST /admin/payments/{tx}/transfer
+    (transfer_to_seller -> a Stripe TEST transfer to the seller's connected account), then read
+    the unified proof to report the settled payout. Never prints the admin token."""
+    import httpx
+    b = base.rstrip("/")
+    try:
+        with httpx.Client(timeout=30) as h:
+            r = h.post(b + "/login", data={"username": admin_user, "password": admin_pass})
+            if r.status_code != 200:
+                return {"status": f"admin login failed (http {r.status_code}); payout not driven",
+                        "transferred_minor": 0, "paid": False}
+            ah = {"Authorization": f"Bearer {r.json()['access_token']}"}
+            tr = h.post(b + f"/admin/payments/{tx}/transfer", headers=ah)
+            if tr.status_code != 200:
+                return {"status": f"transfer refused (http {tr.status_code}) — is the seller "
+                                  f"payout-ready and the obligation claimable?",
+                        "transferred_minor": 0, "paid": False, "http": tr.status_code}
+            pf = h.get(b + f"/payments/{tx}/proof", headers=ah)
+            po = ((pf.json() or {}).get("payout") or {}) if pf.status_code == 200 else {}
+            return {"status": ("TRANSFERRED — real provider payout (Stripe TEST transfer)"
+                              if po.get("paid") else "transfer attempted; see proof.payout"),
+                    "transferred_minor": po.get("transferred_minor", 0),
+                    "stripe_transfer_id": po.get("stripe_transfer_id"),
+                    "obligation_state": po.get("obligation_state"),
+                    "paid": bool(po.get("paid"))}
+    except Exception as e:  # noqa: BLE001 — never leak; report the type only
+        return {"status": f"payout leg error: {type(e).__name__}", "transferred_minor": 0,
+                "paid": False}
+
+
 def _safe_json(resp):
     try:
         return resp.json()
@@ -519,8 +580,16 @@ def render_text(r: dict) -> str:
           f"  {'Invariants':<22}{(st.get('accounting') or {}).get('status', '—')}"]
     ss = r.get("seller_settlement", {})
     L += ["", "Seller settlement",
-          f"  {'Transferred now':<22}{money(ss.get('transferred_now'))}",
+          f"  {'Transferred':<22}{money(ss.get('transferred_minor', ss.get('transferred_now')))}",
+          f"  {'Stripe transfer':<22}{ss.get('stripe_transfer_id') or '—'}",
+          f"  {'Obligation':<22}{ss.get('obligation_state', '—')}",
           f"  {'Status':<22}{ss.get('status', '—')}"]
+    pr = r.get("proof") or {}
+    cp = ((pr.get("compute") or {}).get("proof") or {}) if isinstance(pr, dict) else {}
+    L += ["", "Unified proof",
+          f"  {'Compute re-verified':<22}{cp.get('server_reverified', '—')}",
+          f"  {'Content hash':<22}{(cp.get('content_hash_sha256') or '—')}",
+          f"  {'Payout state':<22}{((pr.get('payout') or {}).get('hold_status', '—'))}"]
     L += ["", "Security",
           f"  {'Stripe live mode':<22}{'USED' if r.get('stripe_livemode') else 'NOT USED'}",
           f"  {'Payment bypass':<22}NONE",
@@ -552,6 +621,9 @@ def main(argv=None) -> int:
     ap.add_argument("--gpu-test-seconds", type=int, default=int(os.getenv("E2E_GPU_SECONDS", "45")))
     ap.add_argument("--poll-timeout", type=int, default=int(os.getenv("E2E_POLL_TIMEOUT", "300")))
     ap.add_argument("--json-output", default=None)
+    ap.add_argument("--settle-payout", action="store_true",
+                    help="drive the REAL provider payout leg after capture (needs "
+                         "E2E_ADMIN_USERNAME/E2E_ADMIN_PASSWORD); default holds by design")
     ap.add_argument("--preflight-only", action="store_true")
     ap.add_argument("--keep-artifacts", action="store_true")
     ap.add_argument("--verbose", action="store_true")

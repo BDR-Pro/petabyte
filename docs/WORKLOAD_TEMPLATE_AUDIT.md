@@ -58,6 +58,14 @@ gap analysis in the E2E report).
 
 ## Container templates (`TEMPLATES`)
 
+> **Current registry (`templates_registry.py`):** the bookable catalog is **9**
+> templates exposed via `public_catalog()` — `ollama`, `vllm`, `comfyui`, `blender`,
+> `sd-webui`, `jupyter`, `minecraft`, `valheim`, `factorio`. The rows below for
+> **`tensorrt-llm`, `ffmpeg`, `pytorch`** are **not** in `TEMPLATES` (they survive only
+> as VRAM hints in `_MIN_VRAM`); `ffmpeg`/`pytorch` run as the `transcode` task type /
+> bring-your-own image rather than as catalog templates, and `tensorrt-llm` is not
+> currently offered. The full-audit rows are kept for their review notes.
+
 | Template | Image | GPU | Egress | Kind | Code-review status | GPU-verified? |
 |---|---|---|---|---|---|---|
 | `ollama` | `ollama/ollama:latest` | yes | limited | LLM serve | FUNCTIONAL (interactive serve; no result validation — not a batch/validated job) | **NO (blocked)** |

@@ -86,7 +86,7 @@ def _run_notebook(task):
         code = _json.loads(code).get("code", code) if code.strip().startswith("{") else code
     except Exception:
         pass
-    result = run_notebook_code(code)
+    result = run_notebook_code(code, max_runtime_s=task.get("max_runtime_s"))
     try:
         _submit_signed(tid, crypto.sha256_hex(result), result=_to_str(result))
         _set_ui(status="idle", task=None, ok=True)
@@ -240,7 +240,12 @@ def _isolation_flags(task):
     Kept in parity with the Linux agent (lumaris_agent/task_fetcher.py): drop ALL Linux
     capabilities (so a job can't reconfigure networking, load modules, or escalate),
     no-new-privileges, a pids cap, and memory/CPU caps when the server sends them.
-    GPU device access is unaffected (the NVIDIA runtime injects it via cgroups)."""
+    GPU device access is unaffected (the NVIDIA runtime injects it via cgroups).
+
+    Strict rootfs (opt-in via the server's AGENT_STRICT_ROOTFS / AGENT_CONTAINER_USER): read_only
+    -> --read-only + a writable /tmp tmpfs + HOME=/tmp (caches land on the tmpfs, not the immutable
+    rootfs); run_as -> --user (force non-root). Both default OFF because an arbitrary buyer image
+    may not tolerate them; the notebook sandbox already runs read-only because it owns its image."""
     import subprocess
     flags = ["--cap-drop", "ALL",
              "--security-opt", "no-new-privileges",
@@ -253,6 +258,13 @@ def _isolation_flags(task):
     cpus = task.get("cpus") or _default_cpu_cap()
     if cpus:
         flags += ["--cpus", str(cpus)]
+    if task.get("read_only"):
+        flags += ["--read-only",
+                  "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m",
+                  "-e", "HOME=/tmp"]
+    run_as = task.get("run_as")
+    if run_as:
+        flags += ["--user", str(run_as)]
     try:
         info = subprocess.check_output(["docker", "info", "--format", "{{.Runtimes}}"],
                                        text=True, timeout=5)
@@ -353,6 +365,7 @@ def _run_render(task):
     work = tempfile.mkdtemp(prefix=f"render-{tid}-")
     scene = _os.path.join(work, "scene.blend")
     out_dir = _os.path.join(work, "out"); _os.makedirs(out_dir, exist_ok=True)
+    _os.chmod(out_dir, 0o777)   # a forced non-root container (AGENT_CONTAINER_USER) must write frames here
     try:
         # 1) pull the scene via a pre-signed GET (no standing creds on the node)
         g = httpx.post(f"{API_URL}/jobs/input_url", headers=HEADERS, timeout=15,
@@ -367,7 +380,9 @@ def _run_render(task):
             cmd += ["--gpus", "all"]
         cmd += [image, "blender", "-b", "/scene.blend", "--disable-autoexec",
                 "-o", "/out/frame_", "-s", str(fs), "-e", str(fe), "-a"]
-        subprocess.check_call(cmd)
+        # Audit H1: hard-kill at the buyer's authorized runtime budget.
+        _rt = task.get("max_runtime_s")
+        subprocess.run(cmd, check=True, timeout=(int(_rt) if _rt else None))
         report_progress(tid, 85, "uploading frames")
         # 3) tar the frames and upload via a one-object pre-signed PUT
         bundle = _os.path.join(work, f"frames_{fs}_{fe}.tar")
@@ -403,6 +418,7 @@ def _run_transcode(task):
     if not shutil.which("docker"):
         _post("/jobs/result", _signed_result(tid, status="failed")); return
     work = tempfile.mkdtemp(prefix=f"tc-{tid}-")
+    _os.chmod(work, 0o777)   # a forced non-root container (AGENT_CONTAINER_USER) must write /work
     src = _os.path.join(work, "in"); dst = _os.path.join(work, f"out.{_safe_ext(task.get('container'))}")
     try:
         g = httpx.post(f"{API_URL}/jobs/input_url", headers=HEADERS, timeout=15,
@@ -428,7 +444,9 @@ def _run_transcode(task):
         elif task.get("bitrate"):
             ff += ["-b:v", task["bitrate"]]
         ff += [f"/work/{_os.path.basename(dst)}"]
-        subprocess.check_call(args + ff)
+        # Audit H1: hard-kill at the buyer's authorized runtime budget.
+        _rt = task.get("max_runtime_s")
+        subprocess.run(args + ff, check=True, timeout=(int(_rt) if _rt else None))
         report_progress(tid, 80, "uploading")
         grant = httpx.post(f"{API_URL}/jobs/backup_url", headers=HEADERS, timeout=15,
                            json={"task_id": tid, "filename": _os.path.basename(dst)}).json()
@@ -458,6 +476,7 @@ def _run_stitch(task):
     if not shutil.which("docker"):
         _post("/jobs/result", _signed_result(tid, status="failed")); return
     work = tempfile.mkdtemp(prefix=f"stitch-{tid}-")
+    _os.chmod(work, 0o777)   # a forced non-root container (AGENT_CONTAINER_USER) must write /work
     try:
         # pull each segment via a restore-style GET, concat with ffmpeg
         listfile = _os.path.join(work, "list.txt")
@@ -476,7 +495,9 @@ def _run_stitch(task):
             concat += ["-v", f"{work}:/work", image, "-y",
                        "-f", "concat", "-safe", "0", "-i", "/work/list.txt", "-c", "copy",
                        f"/work/{_os.path.basename(out)}"]
-            subprocess.check_call(concat)
+            # Audit H1: bound concat to the authorized runtime budget.
+            _rt = task.get("max_runtime_s")
+            subprocess.run(concat, check=True, timeout=(int(_rt) if _rt else None))
         else:   # render: tar the collected frames
             import tarfile
             with tarfile.open(out, "w") as tf:
@@ -622,7 +643,9 @@ def _run_distributed(task):
             env=task.get("env") or {}, isolation_flags=_isolation_flags(task),
             egress_flags=_egress_flags(task))
         report_progress(tid, 45, f"launching torchrun rank {rank}/{world}")
-        subprocess.check_call(argv)
+        # Audit H1 parity: bound the rank to the buyer's authorized runtime budget.
+        _rt = task.get("max_runtime_s")
+        subprocess.run(argv, check=True, timeout=(int(_rt) if _rt else None))
         report_progress(tid, 100, f"rank {rank}/{world} finished")
         _post("/jobs/result", _signed_result(
             tid, status="completed", result=f"distributed rank {rank}/{world} complete"))

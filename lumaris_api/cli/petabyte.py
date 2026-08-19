@@ -199,6 +199,8 @@ def cmd_launch(a, cfg):
         print(_green("✓ launched ") + _bold(a.template) +
               _dim(f"  · {d.get('gpu_model', '?')} @ ${d.get('price_per_hour', '?')}/hr · {a.hours}h"))
         print(f"  booking #{d.get('booking_id')}   escrow ${d.get('gross_amount')}")
+        if d.get("routing_explanation"):
+            print("  " + _dim(d["routing_explanation"]))
         url = d.get("url")
         addr = url.get("http") if isinstance(url, dict) else url
         if addr:

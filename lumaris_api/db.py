@@ -620,8 +620,19 @@ def acct_buyer(uid):      return f"buyer_available:{uid}"
 def acct_escrow(bid):     return f"escrow:{bid}"
 def acct_seller(uid):     return f"seller_earnings:{uid}"
 def acct_org(oid):        return f"org_available:{oid}"
-PLATFORM_REVENUE   = "platform_revenue"
-EXTERNAL_PAYMENTS  = "external:payments"    # the card processor
+# UNIT SCALES (audit STD-E). The platform runs two long-standing money conventions:
+#   * the WALLET/BOOKING path (this module: deposits, escrow, booking capture/settle, data-API,
+#     mining, storage, instant payouts) posts Decimal DOLLARS;
+#   * the STRIPE-CONNECT compute path (stripe_connect.py: capture/refund/processing-fee) posts
+#     integer MINOR UNITS (cents), the unit pricing.py + PayoutObligation.net_amount_minor use.
+# Each individual post() is internally consistent, but summing one account across BOTH scales is
+# meaningless ($10 wallet top-up posts 10; a $10 card capture posts 1000). So the two scales get
+# SEPARATE clearing/revenue accounts and account_balance() is never mixed across scales. The bare
+# names below are the DOLLAR accounts; the *_MINOR names are the Stripe-Connect (cents) accounts.
+PLATFORM_REVENUE   = "platform_revenue"     # DOLLARS: booking/data/mining/storage/payout-fee revenue
+EXTERNAL_PAYMENTS  = "external:payments"    # DOLLARS: wallet/booking card + org top-up clearing
+PLATFORM_REVENUE_MINOR  = "platform_revenue:minor"   # MINOR: Stripe-Connect compute commission
+EXTERNAL_PAYMENTS_MINOR = "external:payments:minor"  # MINOR: Stripe-Connect card clearing
 EXTERNAL_PAYOUTS   = "external:payouts"     # the bank / USDC rail
 EXTERNAL_MINING    = "external:mining"      # NiceHash
 EXTERNAL_STORAGE   = "external:storage"     # decentralized storage network (Storj/BTFS/Sia)
@@ -672,6 +683,30 @@ def account_balance(db: Session, account: str) -> Decimal:
     for e in rows:
         bal += D(e.amount) if e.direction == CREDIT else -D(e.amount)
     return q(bal)
+
+
+def seller_recoverable_debt_minor(db: Session, seller_id: int) -> int:
+    """Minor units a seller owes the platform from a post-payout refund clawback — i.e. the amount
+    by which their `seller_payable` ledger balance is MORE negative than their still-unpaid
+    obligations can explain. Zero when the books are square.
+
+    A refund/chargeback on a job whose seller was already paid via the batch path DEBITs
+    seller_payable (the platform fronted the buyer's refund) with no reversible transfer to claw
+    back — leaving a recoverable NEGATIVE balance (see stripe_connect.refund / audit killer #6).
+    Unpaid obligations (accrued/available/batched) are seller_payable CREDITs not yet disbursed, so:
+
+        recoverable_debt = Σ(unpaid obligation nets) − seller_payable_balance   (floored at 0)
+
+    Clawback auto-netting (payout_routing) uses this to recover the debt from the seller's next
+    payout instead of leaving it for manual operator recovery."""
+    from sqlalchemy import func
+    unpaid = (db.query(func.coalesce(func.sum(PayoutObligation.net_amount_minor), 0))
+              .filter(PayoutObligation.seller_id == seller_id,
+                      PayoutObligation.state.in_(["accrued", "available", "batched"]))
+              .scalar()) or 0
+    bal = account_balance(db, acct_seller_payable(seller_id))
+    debt = int(unpaid) - int(bal)
+    return debt if debt > 0 else 0
 
 
 def ledger_is_balanced(db: Session):
@@ -1448,6 +1483,13 @@ def charge_wallet(db: Session, user_id: int, amount, *, reference_type: str,
         (acct_buyer(user_id), DEBIT,  amt, user_id),
         (PLATFORM_REVENUE,    CREDIT, amt),
     ], reference_id=user_id, description=description or reference_type, entry_type=reference_type)
+    # Keep the Platform.revenue scalar in lockstep with the PLATFORM_REVENUE ledger account,
+    # exactly like the booking-settlement paths — otherwise every metered charge (data API,
+    # inference) would break the "platform revenue == ledger" reconciliation invariant.
+    plat = db.query(Platform).first()
+    if plat is None:
+        plat = Platform(revenue=Decimal(0)); db.add(plat); db.flush()
+    plat.revenue = q(D(plat.revenue) + amt)
     db.commit()
     return True
 
@@ -1512,6 +1554,43 @@ def data_api_revenue(db: Session) -> dict:
         "calls_month": sum(int(r.calls or 0) for r in month),
         "paying_accounts_month": sum(1 for r in month if (r.billed_calls or 0) > 0),
     }
+
+
+def meter_tokens(db: Session, user_id: int, *, prompt_tokens: int, completion_tokens: int,
+                 price_in_per_mtok, price_out_per_mtok) -> dict:
+    """Bill ONE inference request by token count against the wallet, reusing the monthly
+    ApiUsage row + charge_wallet, and tagging revenue ``entry_type='inference'`` in the ledger.
+
+    Charge = prompt_tokens/1e6 * price_in + completion_tokens/1e6 * price_out (USD). Pricing 0
+    keeps it free. The caller MUST pre-check the balance against an upper-bound estimate before
+    running the model (the work is already done by the time we get here), so a False result is
+    only the rare concurrent-spend race — surface it as billed:false, not a hard failure."""
+    period = _period()
+    row = (db.query(ApiUsage)
+           .filter(ApiUsage.user_id == user_id, ApiUsage.period == period).first())
+    if row is None:
+        row = ApiUsage(user_id=user_id, period=period, calls=0, billed_calls=0,
+                       amount_usd=Decimal(0))
+        db.add(row); db.flush()
+    p = max(0, int(prompt_tokens or 0)); c = max(0, int(completion_tokens or 0))
+    total = p + c
+    charge = q((D(p) * D(str(price_in_per_mtok)) + D(c) * D(str(price_out_per_mtok)))
+               / Decimal(1_000_000))
+    row.calls += 1
+    if charge <= 0:
+        row.updated_at = _utcnow(); db.commit()
+        return {"ok": True, "billed": False, "charged": 0.0, "tokens": total,
+                "prompt_tokens": p, "completion_tokens": c, "period": period}
+    if not charge_wallet(db, user_id, charge, reference_type="inference",
+                         description=f"inference {total} tokens"):
+        db.commit()
+        return {"ok": False, "reason": "insufficient_balance", "charge": float(charge),
+                "tokens": total, "prompt_tokens": p, "completion_tokens": c, "period": period}
+    row.billed_calls += 1
+    row.amount_usd = q(D(row.amount_usd) + charge)
+    row.updated_at = _utcnow(); db.commit()
+    return {"ok": True, "billed": True, "charged": float(charge), "tokens": total,
+            "prompt_tokens": p, "completion_tokens": c, "period": period}
 
 
 def usage_summary(db: Session, user_id: int, *, free_quota: int) -> dict:
@@ -1832,7 +1911,7 @@ class PayoutBatch(Base):
     destination_currency = Column(String, nullable=True)
     total_amount_minor = Column(Integer, nullable=False, default=0)
     provider_fee_minor = Column(Integer, nullable=False, default=0)
-    fx_rate = Column(Float, nullable=True)
+    fx_rate = Column(Numeric(20, 8), nullable=True)   # exact rate; never binary float (money rule)
     external_id = Column(String, index=True, nullable=True)
     # created|sent|paid|failed|aborted|reversed|needs_reconciliation.
     # TERMINAL (obligations released, never an idempotent replay): failed, aborted.
@@ -1917,7 +1996,8 @@ def mark_topup_paid_and_credit(db: Session, topup: "WalletTopup", *,
         topup.stripe_payment_intent_id = payment_intent_id
     user = db.query(User).filter(User.id == topup.user_id).first()
     if user:
-        deposit(db, user, topup.amount_minor / 100.0)   # minor -> major (2-dp currencies)
+        # minor -> major in Decimal (never binary float — the money rule the module enforces)
+        deposit(db, user, Decimal(int(topup.amount_minor)) / Decimal(100))
     db.add(topup); db.commit()
     return True
 
@@ -3204,8 +3284,7 @@ def maybe_reward_referral(db: Session, buyer: "User"):
             buyer.referral_rewarded = True; db.add(buyer); db.commit()
             return
         # monthly cap: how many rewards has this referrer already earned this month?
-        import datetime as _dt
-        month_start = _dt.datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        month_start = _utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         already = db.query(LedgerTx).filter(
             LedgerTx.reference_type == "referral_credit",
             LedgerTx.reference_id == str(referrer.id),
@@ -3423,6 +3502,36 @@ def credit_user_by_username(db: Session, username: str, amount: float) -> bool:
         return False
     deposit(db, user, amount)
     return True
+
+
+def credit_user_from_webhook(db: Session, event_id: str, username: str, amount) -> str:
+    """Claim the webhook event_id AND credit the user in ONE transaction (atomic claim-and-credit).
+
+    The old flow claimed the id and credited in SEPARATE commits, so a crash between them marked
+    the event processed without crediting — and the provider's retry was then silently deduped
+    (lost credit). Here the ProcessedWebhook claim, the balance update, and the ledger legs share a
+    single commit: either all land or none do. Returns 'ok' | 'duplicate' | 'unknown_user'."""
+    amount = q(amount)
+    if amount <= 0:
+        raise ValueError("amount must be positive")
+    db.add(ProcessedWebhook(event_id=event_id))
+    try:
+        db.flush()                       # claim the id (unique constraint dedups)
+    except IntegrityError:
+        db.rollback()
+        return "duplicate"
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        db.rollback()                    # release the claim so a corrected retry can still credit
+        return "unknown_user"
+    user.balance = q(D(user.balance) + amount)
+    db.add(user)
+    post(db, "deposit", legs=[
+        (EXTERNAL_PAYMENTS,   DEBIT,  amount),
+        (acct_buyer(user.id), CREDIT, amount, user.id),
+    ], reference_id=user.id, description="wallet deposit (webhook)", entry_type="deposit")
+    db.commit()
+    return "ok"
 
 
 
@@ -4115,6 +4224,7 @@ def request_payout(db: Session, user: "User", method: "SellerPayoutMethod",
 
 def set_payout_status(db: Session, payout: "Payout", status: str,
                       provider_ref: str = None, reason: str = None) -> None:
+    prev = payout.status
     payout.status = status
     payout.updated_at = _utcnow()
     if provider_ref:
@@ -4122,9 +4232,27 @@ def set_payout_status(db: Session, payout: "Payout", status: str,
     if reason:
         payout.reason = reason
     db.add(payout); db.commit()
-    if status == "failed":                       # return the money on failure — the GROSS
-        # (net that would have been sent + any instant fee), so the seller is fully made whole.
-        credit_earnings(db, payout.user_id, q(payout.amount_usd) + q(payout.fee_usd or 0))
+    # Return the money on failure, exactly ONCE (guard on prior status so a retried/duplicate
+    # 'failed' can't double-credit).
+    if status == "failed" and prev != "failed":
+        gross = q(payout.amount_usd) + q(payout.fee_usd or 0)   # net that would ship + instant fee
+        net = q(payout.amount_usd)
+        fee = q(payout.fee_usd or 0)
+        # 1) Restore the seller's spendable earnings scalar so they're made whole.
+        credit_earnings(db, payout.user_id, gross)
+        # 2) Post the REVERSING ledger legs (audit M3). request_payout recorded the money as having
+        #    LEFT the system (seller_earnings DEBIT gross, EXTERNAL_PAYOUTS CREDIT net, PLATFORM_REVENUE
+        #    CREDIT fee). A failed payout means nothing actually left the bank rail, so mirror those
+        #    legs back — otherwise the ledger permanently overstates external payouts and diverges
+        #    from both the seller_earnings scalar and reality. Balanced by construction (gross=net+fee).
+        legs = [(acct_seller(payout.user_id), CREDIT, gross, payout.user_id),
+                (EXTERNAL_PAYOUTS,            DEBIT,  net)]
+        if fee > 0:
+            legs.append((PLATFORM_REVENUE, DEBIT, fee))
+        post(db, "payout", legs=legs, reference_id=payout.id,
+             description=f"payout #{payout.id} failed — reversal ({payout.kind})",
+             entry_type="payout_reversal")
+        db.commit()
 
 
 def pending_payouts(db: Session):
@@ -4635,7 +4763,11 @@ def get_or_create_oauth_user(db: Session, email: str, provider: str = "google",
     return u
 
 
-init_db()
+# Build the schema on import (create_all + idempotent _ensure_* passes) — the runtime bootstrap.
+# Alembic sets PETABYTE_SKIP_INIT_DB=1 so it can own schema creation during a migration run
+# instead of it happening as an import side-effect. Default (unset) preserves prior behavior.
+if os.getenv("PETABYTE_SKIP_INIT_DB", "").strip().lower() not in ("1", "true", "yes", "on"):
+    init_db()
 
 
 # ---------------------------------------------------------------------------

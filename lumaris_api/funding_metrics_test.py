@@ -140,6 +140,23 @@ demo = fm.funding_snapshot(s, scope="demo", now=NOW)
 ok("DEMO scope sees ONLY the demo tx (9999), isolated from test/real",
    demo["money_minor"]["gmv_captured"] == 9999)
 
+# ---- public_traction: curated, real-only, and omits sensitive absolutes ----
+pt = fm.public_traction(s, now=NOW)
+ok("public_traction is REAL-scope only (no TEST/demo money shown as traction)",
+   pt["scope"] == "real" and pt["gmv_captured_minor"] == 0 and pt["paid_jobs"] == 0)
+ok("public_traction still surfaces real supply (a non-demo GPU is online)",
+   pt["active_gpus_online"] == 1 and pt["has_real_data"] is True)
+ok("public_traction take rate is undefined (—) when real GMV is 0, never faked 0%",
+   pt["take_rate_gross"] is None)
+_SENSITIVE = {"seller_liability_outstanding", "payouts_paid", "net_platform_revenue",
+              "platform_revenue_gross", "processing_fees_est", "arpu_minor",
+              "money_minor", "retention"}
+ok("public_traction OMITS sensitive absolutes (revenue/liability/payouts/ARPU/retention)",
+   not (_SENSITIVE & set(pt.keys())))
+ok("public_traction exposes only safe headline keys + honesty flags",
+   {"gmv_captured_minor", "paid_jobs", "active_gpus_online", "take_rate_gross",
+    "has_real_data", "contains_demo_data", "note"}.issubset(pt.keys()))
+
 s.close()
 for _f in ("funding_metrics_test.db", "funding_metrics_test.db-wal", "funding_metrics_test.db-shm"):
     try:

@@ -1,5 +1,10 @@
 # Funding-Readiness Report
 
+> ⚠️ **Superseded (2026-08-18).** This is a 2026-08-04 point-in-time snapshot kept for the
+> audit trail. For current state read [`../FUNDING_READINESS.md`](../FUNDING_READINESS.md)
+> (§0 "Current status" + §5 "Execution status") — most gaps flagged below have since been
+> closed in code.
+
 Branch: `claude/petabyte-funding-readiness-fun2q6` · Date: 2026-08-04
 Companion docs: [AUDIT](FUNDING_READINESS_AUDIT.md) · [PLAN](FUNDING_READINESS_PLAN.md) ·
 [INVESTOR_TECHNICAL_BRIEF](INVESTOR_TECHNICAL_BRIEF.md) · [PRODUCTION_GAPS](PRODUCTION_GAPS.md)

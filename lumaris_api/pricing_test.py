@@ -10,7 +10,7 @@ Run: python pricing_test.py
 import os
 
 from pricing import (PricingConfig, PricingError, estimate, settle,
-                     estimate_processing_fee_minor)
+                     estimate_processing_fee_minor, authorized_seconds)
 
 _fail = 0
 
@@ -104,6 +104,31 @@ os.environ["STRIPE_FEE_BPS"] = "290"; os.environ["STRIPE_FEE_FIXED_MINOR"] = "10
 ok("an oversized FIXED fee is CAPPED at the captured amount",
    estimate_processing_fee_minor(1000) == 1000)
 os.environ.pop("STRIPE_FEE_BPS", None); os.environ.pop("STRIPE_FEE_FIXED_MINOR", None)
+
+# ---- H1: authorized runtime budget ties allowed runtime + the settled charge to the money held ----
+# $500/hr = 50000 minor/hr; a huge max_duration so the AUTHORIZATION is the binding constraint.
+_rtcfg = PricingConfig(commission_bps=1000, max_duration_s=10**7, max_charge_minor=10**9)
+_rtsnap = _rtcfg.snapshot(price_per_hour_minor=50000)
+ok("authorized_seconds: a 25000-minor auth buys exactly 1800s at $500/hr",
+   authorized_seconds(_rtsnap, 25000) == 1800)
+# capped at the snapshot's max duration
+_capcfg = PricingConfig(commission_bps=1000, max_duration_s=600, max_charge_minor=10**9)
+_capsnap = _capcfg.snapshot(price_per_hour_minor=50000)
+ok("authorized_seconds is capped at the snapshot max_duration_s",
+   authorized_seconds(_capsnap, 25000) == 600)
+ok("authorized_seconds floors at 1s for a tiny authorization",
+   authorized_seconds(_rtsnap, 1) == 1)
+ok("authorized_seconds falls back to max_duration_s when the price is unknown (never a tighter cap)",
+   authorized_seconds({"price_per_hour_minor": 0, "max_duration_s": 777}, 999999) == 777)
+# settle CLAMPS the recorded usage to the authorized budget: a seller reporting a huge runtime
+# can never make the books show more compute than the buyer's authorization paid for (H1).
+_over = settle(_rtsnap, actual_seconds=10**6, authorization_amount=25000)
+ok("settle clamps recorded seconds to the authorized budget (1800s, not the reported 1e6) [H1]",
+   _over["actual_seconds"] == 1800)
+ok("settle never records/charges more compute than authorized (no runaway actual_compute) [H1]",
+   _over["actual_compute_amount"] == 25000 and _over["capture_amount"] == 25000)
+ok("settle identity still holds at the authorized clamp",
+   _over["capture_amount"] == _over["platform_fee_amount"] + _over["seller_net_amount"])
 
 print(f"\n=== pricing: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
 raise SystemExit(1 if _fail else 0)

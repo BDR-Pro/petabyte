@@ -25,7 +25,12 @@ import logging
 import os
 from datetime import datetime, timezone, timedelta
 
-from db import (post, DEBIT, CREDIT, EXTERNAL_PAYMENTS, PLATFORM_REVENUE,
+from db import (post, DEBIT, CREDIT,
+                # STD-E: the Stripe-Connect compute path posts integer MINOR UNITS, so it uses the
+                # *_MINOR clearing/revenue accounts — never the DOLLAR-scale wallet/booking accounts
+                # of the same name — so account_balance() is never summed across unit scales.
+                EXTERNAL_PAYMENTS_MINOR as EXTERNAL_PAYMENTS,
+                PLATFORM_REVENUE_MINOR as PLATFORM_REVENUE,
                 acct_seller_payable, acct_stripe_payouts, acct_stripe_fees,
                 ConnectedAccount, ComputeTransaction, ComputeTxEvent,
                 PaymentOperation, StripeWebhookEvent, Settlement,
@@ -291,6 +296,75 @@ def refresh_connected_account(db, ca: ConnectedAccount) -> ConnectedAccount:
     """Authoritative status pull from Stripe. Never infer completion from a return URL."""
     acct = get_gateway().retrieve_account(ca.stripe_account_id)
     return _sync_from_stripe(db, ca, acct)
+
+
+def ensure_test_payout_ready(db, user: User, *, country: str = "US",
+                             email: str = None) -> ConnectedAccount:
+    """TEST-MODE ONLY: make a seller's connected account payout-ready WITHOUT the manual
+    hosted-onboarding click-through, so the end-to-end demo is genuinely one command.
+
+    Fake gateway  -> flip the in-process account to enabled (complete_onboarding).
+    Real gateway  -> push Stripe's documented TEST verification values + a test external bank
+                     account so the transfers/payouts capabilities go active (test mode only).
+
+    Refuses to run against a LIVE Stripe key. assert_test_mode() alone is NOT sufficient — it
+    PERMITS live keys under the production go-live opt-in — but injecting TEST identity/bank
+    magic values against a real connected account would corrupt a live seller, so we additionally
+    require a genuinely non-live gateway: the in-process Fake gateway, OR no live secret key
+    configured (audit L2). This NEVER fabricates readiness in the DB — it drives the gateway and
+    then re-reads authoritative status via refresh_connected_account, so payout_ready() still
+    reflects what Stripe actually reports. Returns the account; the caller should check
+    ca.payout_ready()."""
+    from stripe_gateway import (get_gateway as _gg, FakeStripeGateway,
+                                assert_test_mode, LiveModeForbidden)
+    gw = _gg()
+    is_fake = isinstance(gw, FakeStripeGateway)
+    if not is_fake:
+        assert_test_mode()   # fail-closed on mixed/mislabeled keys
+        if os.getenv("STRIPE_SECRET_KEY", "").startswith(("sk_live_", "rk_live_")):
+            raise LiveModeForbidden(
+                "ensure_test_payout_ready() refuses to run against a LIVE Stripe key: it injects "
+                "TEST verification + bank magic values and must never touch a real connected "
+                "account. This is a test-mode/demo-only helper.")
+    acct = get_or_create_connected_account(db, user, country=country,
+                                           email=email or getattr(user, "email", None)
+                                           or f"{user.username}@example.com")
+    if is_fake:
+        gw.complete_onboarding(acct.stripe_account_id, ok=True)
+    else:
+        _stripe_test_force_payout_ready(acct.stripe_account_id, (acct.country or country))
+    return refresh_connected_account(db, acct)
+
+
+def _stripe_test_force_payout_ready(account_id: str, country: str) -> None:
+    """Drive a REAL Stripe *test* connected account to payout-ready via the API, using Stripe's
+    published test verification values so no human has to click through hosted onboarding.
+
+    Test-mode only (the caller asserts it). Best-effort: if Stripe still lists requirements
+    afterwards the caller sees it via refresh_connected_account (payout_ready() stays honest).
+    See https://docs.stripe.com/connect/testing — magic values auto-verify in test mode."""
+    import time as _t
+    import stripe
+    stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
+    # Test external bank account (US magic numbers; Stripe documents these for test payouts).
+    _bank = {"US": {"country": "US", "currency": "usd", "routing_number": "110000000",
+                    "account_number": "000123456789"}}.get(
+        (country or "US").upper(),
+        {"country": (country or "US").upper(), "currency": "usd",
+         "account_number": "000123456789"})
+    stripe.Account.modify(
+        account_id,
+        business_type="individual",
+        business_profile={"url": "https://petabyte.market", "mcc": "5734"},
+        tos_acceptance={"date": int(_t.time()), "ip": "127.0.0.1"},
+        individual={
+            "first_name": "Test", "last_name": "Seller",
+            "email": "test-seller@example.com", "phone": "0000000000",
+            "dob": {"day": 1, "month": 1, "year": 1990},
+            "address": {"line1": "address_full_match", "city": "Beverly Hills",
+                        "state": "CA", "postal_code": "90210", "country": "US"},
+            "ssn_last_4": "0000", "id_number": "000000000"},
+        external_account=_bank)
 
 
 def _sync_from_stripe(db, ca: ConnectedAccount, acct: dict) -> ConnectedAccount:
@@ -779,6 +853,40 @@ def reconcile_captured_without_obligations(db, *, limit: int = 500) -> int:
 
 
 # ----------------------------------------------------------------- transfer
+def _assert_payout_allowed(db, seller_id: int) -> None:
+    """Payout-time compliance gate — enforced on EVERY money-out path, not just the batch.
+
+    The direct (admin) transfer historically skipped these, so a sanctioned or fraud-held
+    seller could be paid via POST /admin/payments/{id}/transfer. Fail closed on:
+      * a fraud / manual-review payout hold (place_payout_hold),
+      * a sanctioned payout country,
+      * (when a sanctions screening provider is configured) a missing/expired APPROVED
+        sanctions decision — mirroring the batch path's compliance_ok.
+    Raises TransactionError to refuse the transfer."""
+    import db as _dbm
+    import payout_capabilities as _cap
+    if _dbm.payout_hold_active(db, seller_id):
+        raise TransactionError("seller is under a payout hold (fraud/manual review); "
+                               "transfer refused (fail closed)")
+    acct = (db.query(_dbm.ConnectedAccount)
+            .filter(_dbm.ConnectedAccount.user_id == seller_id).first())
+    country = getattr(acct, "country", None) if acct else None
+    if not country:
+        raise TransactionError("seller has no recorded payout country; transfer refused "
+                               "(fail closed)")
+    if _cap.is_sanctioned(country):
+        raise TransactionError(f"seller country {country} is sanctioned/prohibited; "
+                               "no payout permitted")
+    # Only require an APPROVED sanctions decision when the platform actually runs screening
+    # (a provider is configured) — mirrors the low-level screen() fail-closed-when-configured
+    # behavior so test/dev without a provider still work, while production has full parity.
+    if os.getenv("SANCTIONS_SCREEN_PROVIDER", "").strip():
+        from payout_routing import compliance_ok
+        ok, why = compliance_ok(db, seller_id)
+        if not ok:
+            raise TransactionError(f"compliance not satisfied: {why}; transfer refused")
+
+
 def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
     """Transfer the seller's net to their connected account. At most once, even under
     retries/crashes/duplicate webhooks/concurrent workers (guarded by the unique
@@ -796,6 +904,9 @@ def transfer_to_seller(db, tx: ComputeTransaction) -> ComputeTransaction:
         return transition(db, tx, "COMPLETED", reason="no seller net to transfer")
     if net > tx.captured_amount - tx.transferred_amount:
         raise TransactionError("transfer would exceed captured/available amount")
+    # Compliance parity with the batch path: never pay a sanctioned or fraud-held seller,
+    # even via the direct admin transfer. Fail closed BEFORE claiming/moving money.
+    _assert_payout_allowed(db, tx.seller_id)
 
     # Repair-on-read: a tx captured before its obligation was created has none. Create it
     # now (idempotent) so the earning is recorded and can be marked paid below.
@@ -1142,9 +1253,6 @@ def refund(db, tx: ComputeTransaction, *, amount: int = None, actor: str = "admi
     transition(db, tx, "REFUND_PENDING", reason=reason, allow_same=True) \
         if tx.status != "REFUND_PENDING" else None
 
-    split = refund_split({"capture_amount": tx.captured_amount,
-                          "seller_net_amount": tx.seller_net_amount}, amount)
-
     rkey = idem_key("refund", tx, tx.settlement_version) + f":{amount}"
     op, proceed = _begin_op(db, tx, "refund", rkey)
     # A duplicate/concurrent identical refund (same settlement version + amount) does
@@ -1162,6 +1270,27 @@ def refund(db, tx: ComputeTransaction, *, amount: int = None, actor: str = "admi
         _finish_op(db, op, state="failed", error=str(e))
         raise TransactionError(f"refund failed: {e}")
     tx.refunded_amount += amount
+    return _reconcile_refund_ledger(db, tx, amount, reason=reason)
+
+
+def _reconcile_refund_ledger(db, tx: ComputeTransaction, amount: int, *,
+                             reason: str = "refund") -> ComputeTransaction:
+    """Post the double-entry ledger + reconcile the seller side for a refund of `amount`
+    minor units that has ALREADY happened at the gateway (the caller has already bumped
+    tx.refunded_amount by `amount`).
+
+    Shared by the admin/API refund() path AND the charge.refunded webhook. An out-of-band
+    refund initiated in the Stripe Dashboard (or Stripe's own auto-refund) fires
+    charge.refunded but never runs refund(); previously the webhook only bumped a counter,
+    so the ledger silently unbalanced and the seller still got paid their full share on the
+    batch run — the platform ate the buyer's refund (audit M2). Routing both origins through
+    this one function keeps the books balanced and claws the seller's share back no matter
+    where the refund started. Idempotency is the caller's job (refund() via _begin_op; the
+    webhook via amount_refunded deltas + StripeWebhookEvent at-most-once)."""
+    if amount <= 0:
+        return tx
+    split = refund_split({"capture_amount": tx.captured_amount,
+                          "seller_net_amount": tx.seller_net_amount}, amount)
 
     # Ledger: return money to the card, drawn proportionally from platform + seller payable.
     legs = [(EXTERNAL_PAYMENTS, CREDIT, amount, tx.buyer_id)]
@@ -1220,6 +1349,21 @@ def refund(db, tx: ComputeTransaction, *, amount: int = None, actor: str = "admi
                        .values(state="reversed"))
             db.commit()
             seller_share_settled = (claim.rowcount == 1)
+        elif split["seller_reversal_amount"] > 0:
+            # PARTIAL refund of a not-yet-paid obligation (audit H3): proportionally REDUCE the
+            # obligation's net so the biweekly batch pays the POST-refund amount, not the full
+            # pre-refund net. Guarded + atomic: only an unpaid (accrued/available) obligation with
+            # enough net is decremented, so it can never go negative and a concurrent batch that
+            # already claimed it (batched/transferring/paid) falls through to the review path below.
+            dec = db.execute(_dbm.update(_dbm.PayoutObligation)
+                       .where(_dbm.PayoutObligation.compute_tx_id == tx.id,
+                              _dbm.PayoutObligation.state.in_(["accrued", "available"]),
+                              _dbm.PayoutObligation.net_amount_minor
+                              >= split["seller_reversal_amount"])
+                       .values(net_amount_minor=_dbm.PayoutObligation.net_amount_minor
+                               - split["seller_reversal_amount"]))
+            db.commit()
+            seller_share_settled = (dec.rowcount == 1)
         if not seller_share_settled:
             # Seller ALREADY paid via the batch path (paid/batched/transferring), a partial
             # (not-yet-cumulatively-full) refund of an unpaid obligation, or no reversible
@@ -1339,12 +1483,39 @@ def _handle_event(db, event: dict):
 
     if etype == "charge.refunded":
         tx = _tx_by_pi(db, obj.get("payment_intent"))
-        if tx:
-            # Stripe confirms the refund we initiated; reconcile the amount.
-            refunded = int(obj.get("amount_refunded", tx.refunded_amount))
-            if refunded > tx.refunded_amount:
-                tx.refunded_amount = min(refunded, tx.captured_amount)
-                db.add(tx); db.commit()
+        if tx and tx.captured_amount:
+            # Stripe reports the CUMULATIVE amount refunded on the charge. A refund WE
+            # initiated already bumped tx.refunded_amount AND posted the ledger via refund(),
+            # so there's no delta here and this no-ops. But an OUT-OF-BAND refund (issued in the
+            # Stripe Dashboard, or Stripe's own auto-refund) fires charge.refunded with NO prior
+            # refund() call: previously we only nudged a counter, leaving the double-entry ledger
+            # unbalanced and the seller still due their full share on the batch run — the platform
+            # silently ate the buyer's refund (audit M2). Settle the delta through the SAME
+            # reconciler the admin path uses so the books balance and the seller's share is clawed
+            # back. Idempotent: StripeWebhookEvent is at-most-once and the delta collapses to 0 on
+            # any replay.
+            reported = int(obj.get("amount_refunded", tx.refunded_amount))
+            delta = min(reported, tx.captured_amount) - tx.refunded_amount
+            if delta > 0:
+                # refund() drives its own FSM (-> REFUND_PENDING) before reconciling; the out-of-band
+                # path must do the same so a full refund can finalize to REFUNDED. Only post-capture
+                # states may enter REFUND_PENDING — from anything else, record the amount + flag for
+                # review rather than crashing the webhook into an infinite Stripe retry.
+                _refundable = {"PAYMENT_CAPTURED", "SELLER_TRANSFERRED", "COMPLETED",
+                               "DISPUTED", "REFUND_PENDING"}
+                if tx.status not in _refundable:
+                    tx.refunded_amount = min(reported, tx.captured_amount)
+                    tx.reconciliation_status = "needs_review"
+                    db.add(tx); db.commit()
+                    logger.warning("out-of-band refund on tx %s in non-refundable state %s; "
+                                   "recorded + flagged for review", tx.public_id, tx.status)
+                    return
+                if tx.status != "REFUND_PENDING":
+                    transition(db, tx, "REFUND_PENDING", actor="stripe",
+                               reason="out-of-band refund (charge.refunded)")
+                tx.refunded_amount += delta
+                _reconcile_refund_ledger(db, tx, delta,
+                                         reason="out-of-band refund (charge.refunded)")
         return
 
     if etype in ("charge.dispute.created", "charge.dispute.updated", "charge.dispute.closed"):

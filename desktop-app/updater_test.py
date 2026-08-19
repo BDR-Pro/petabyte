@@ -80,6 +80,52 @@ m4 = signed_manifest(version="1.2.3"); m4["version"] = "9.9.9"   # tamper a sign
 ok("tampering a signed field (version) invalidates the signature -> REFUSED",
    updater.verify_update(EXE, m4, PUB)[0] is False)
 
+# ---- private-repo-safe update source: PETABYTE_UPDATE_URL bypasses the GitHub API ----
+# A private source repo makes the default api.github.com release lookup 404 for anonymous agents.
+# With PETABYTE_UPDATE_URL set, _latest() must read a domain-hosted release JSON and NOT touch
+# GitHub — so going private never silently kills desktop auto-update. (Signature verification is
+# unchanged and already covered above, so the transport swap can't weaken integrity.)
+import urllib.request as _urlreq
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._b = json.dumps(payload).encode()
+
+    def read(self, *a):
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+_captured = {}
+
+
+def _fake_urlopen(req, timeout=None):
+    _captured["url"] = getattr(req, "full_url", req)
+    return _FakeResp({"tag": "v9.9.9",
+                      "exe_url": "https://petabyte.market/dl/PetabyteAgent.exe",
+                      "manifest_url": "https://petabyte.market/dl/PetabyteAgent.exe.manifest.json"})
+
+
+_orig_urlopen = _urlreq.urlopen
+_urlreq.urlopen = _fake_urlopen
+try:
+    os.environ["PETABYTE_UPDATE_URL"] = "https://petabyte.market/desktop/latest.json"
+    _tag, _exe, _man = updater._latest()
+    ok("PETABYTE_UPDATE_URL: _latest reads the domain-hosted release JSON (private-repo safe)",
+       _tag == "v9.9.9" and _exe.endswith("PetabyteAgent.exe") and _man.endswith(".manifest.json"))
+    ok("PETABYTE_UPDATE_URL: the GitHub API is NOT contacted (domain source wins)",
+       _captured.get("url") == "https://petabyte.market/desktop/latest.json")
+finally:
+    _urlreq.urlopen = _orig_urlopen
+    os.environ.pop("PETABYTE_UPDATE_URL", None)
+
+
 os.remove(EXE)
 print(f"\n=== updater: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
 raise SystemExit(1 if _fail else 0)

@@ -15,7 +15,10 @@ write, a leaked CI/PAT token, a rogue maintainer). So an update is applied ONLY 
 Any missing/invalid piece -> the update is REFUSED (fail closed). No pin -> no auto-update.
 
 No-ops unless running as a frozen Windows exe. Configure the source repo with
-PETABYTE_UPDATE_REPO (default: BDR-Pro/petabyte).
+PETABYTE_UPDATE_REPO (default: BDR-Pro/petabyte), or point PETABYTE_UPDATE_URL at a
+domain-hosted latest-release JSON so a PRIVATE source repo never breaks auto-update
+(see _latest() and docs/GOING-PRIVATE.md). Signed-manifest verification is unchanged
+either way, so neither source can inject an unsigned binary.
 """
 import base64
 import hashlib
@@ -117,7 +120,25 @@ def _ver(s: str):
 
 
 def _latest():
-    """Return (tag, exe_url, manifest_url) for the latest release."""
+    """Return (tag, exe_url, manifest_url) for the latest release.
+
+    Private-repo-safe source (PETABYTE_UPDATE_URL): GitHub Releases inherit repo visibility, so a
+    PRIVATE source repo makes the default api.github.com lookup 404 for anonymous agents and
+    silently stops all auto-updates. When PETABYTE_UPDATE_URL is set, the agent instead reads a
+    domain-hosted JSON `{ "tag": "...", "exe_url": "...", "manifest_url": "..." }` (serve it from
+    your own site, like the Linux agent bundle) — GitHub is never contacted. This is SAFE because
+    integrity comes from the pinned Ed25519 signature verified in verify_update(), not from the
+    transport or the host's access control; the download is still refused unless it matches the
+    signed manifest. (The other private-safe option needs no code: publish the signed exe+manifest
+    to a separate PUBLIC releases repo and point PETABYTE_UPDATE_REPO at it.)"""
+    override = os.getenv("PETABYTE_UPDATE_URL", "").strip()
+    if override:
+        req = urllib.request.Request(
+            override, headers={"Accept": "application/json", "User-Agent": "petabyte-agent"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.load(r)
+        tag = str(data.get("tag") or data.get("tag_name") or data.get("version") or "")
+        return tag, data.get("exe_url"), data.get("manifest_url")
     req = urllib.request.Request(
         LATEST_URL,
         headers={"Accept": "application/vnd.github+json", "User-Agent": "petabyte-agent"},

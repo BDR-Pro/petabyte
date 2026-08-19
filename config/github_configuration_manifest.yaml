@@ -51,6 +51,18 @@ variables:
     scope:
     - platform
     description: ''
+  AGENT_CONTAINER_USER:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  AGENT_STRICT_ROOTFS:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: ''
   AGENT_TELEMETRY_ENABLED:
     required: false
     default: 'true'
@@ -131,6 +143,12 @@ variables:
   BACKUP_RETENTION:
     required: false
     default: '30'
+    scope:
+    - platform
+    description: ''
+  BACKUP_RPO_SECONDS:
+    required: false
+    default: '7200'
     scope:
     - platform
     description: ''
@@ -223,6 +241,12 @@ variables:
     - deployment
     description: Rollout gate. When 'true' the deploy generates the server env from GitHub config and
       pushes it; until then deploys stay code-only. Flip to true after entering all Secrets.
+  DESKTOP_APP_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   DISK_DATA_DIR:
     required: false
     default: /var/lib/petabyte/disk
@@ -350,6 +374,24 @@ variables:
   EARNINGS_HOLD_HOURS:
     required: false
     default: '24'
+    scope:
+    - platform
+    description: ''
+  EDGE_INFERENCE_ENABLED:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: ''
+  EDGE_INFER_MODEL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
+  EDGE_INFER_UPSTREAM_URL:
+    required: false
+    default: null
     scope:
     - platform
     description: ''
@@ -558,6 +600,18 @@ variables:
     - gpu
     description: Enable idle NiceHash mining when no paid job is running.
     format: bool
+  INFERENCE_PRICE_PER_MTOK_IN:
+    required: false
+    default: '0'
+    scope:
+    - platform
+    description: ''
+  INFERENCE_PRICE_PER_MTOK_OUT:
+    required: false
+    default: '0'
+    scope:
+    - platform
+    description: ''
   INSTANT_PAYOUT_FEE_MIN:
     required: false
     default: '0.50'
@@ -931,6 +985,12 @@ variables:
     - sandbox
     - test
     - live
+  PAYOUT_AUTONET_CLAWBACK:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: ''
   PAYOUT_CAPABILITIES_PATH:
     required: false
     default: null
@@ -1033,6 +1093,12 @@ variables:
     description: Base64 Ed25519 PUBLIC release key (not a secret). The release workflow pins it into the
       exe at build time; the API reads it to pin the key into the served install.sh for Linux/WSL signed
       auto-update. Pairs with RELEASE_SIGNING_KEY.
+  PETABYTE_SKIP_INIT_DB:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   PETABYTE_SPEC_ID:
     required: true
     default: null
@@ -1372,6 +1438,12 @@ variables:
     - platform
     description: ''
     format: float
+  SETTLEMENT_REQUIRE_VERIFICATION:
+    required: false
+    default: 'true'
+    scope:
+    - platform
+    description: ''
   STORAGE_STUB:
     required: false
     default: 'false'
@@ -1575,6 +1647,12 @@ variables:
     - platform
     description: ''
 secrets:
+  ACCESS_TOKEN_EXPIRE_MINUTES:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   AWS_ACCESS_KEY_ID:
     required: false
     default: null
@@ -1673,6 +1751,12 @@ secrets:
     scope:
     - ci
     description: browser-e2e seller password (TEST account).
+  EDGE_INFER_UPSTREAM_TOKEN:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   GATEWAY_TOKEN:
     required: false
     default: null
@@ -1817,6 +1901,14 @@ secrets:
     scope:
     - observability
     description: Prometheus remote-write basic-auth user.
+  PYPI_API_TOKEN:
+    required: false
+    default: null
+    scope:
+    - deployment
+    description: PyPI API token that release-cli.yml uses to publish the `petabyte` CLI on a `cli-v*`
+      tag. Unset -> the workflow builds + verifies the wheel but does NOT publish (no hard fail). See
+      release-cli.yml for the one-time setup.
   REDIS_PASSWORD:
     required: false
     default: null
@@ -1837,6 +1929,12 @@ secrets:
     description: Ed25519 PEM PRIVATE key that signs desktop-agent releases (release-desktop.yml -> scripts/sign_release.py).
       Offline key; generate via the release-keygen workflow. Unset -> the exe publishes UNSIGNED and auto-update
       is fail-closed.
+  RESTORE_DRILL_TARGET_URL:
+    required: false
+    default: null
+    scope:
+    - platform
+    description: ''
   SECRET_KEY:
     required: true
     default: null

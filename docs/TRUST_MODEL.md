@@ -132,9 +132,12 @@ per-object handles + metadata minimization.
   measured** — never "measured".
 
 **Honest gaps (closeable in software — roadmap, not yet enforced)**
-- The strongest validator (`matmul_validation.py`) is **not yet wired into the live result
-  path**. With the signed `content_hash` stored and `reverify.py` re-executing real jobs, wiring
-  it into the reverify comparison is the next step.
+- The strongest validator (`matmul_validation.py`) **is** wired into live settlement:
+  `settlement_verification.decide(...)` runs on the auto-settle-on-result path
+  (`AUTO_SETTLE_ON_RESULT`, on by default) and uses it, so `pytorch-matmul-v1` pays only
+  on a VALID verdict (fail-closed). What remains is wiring it into the **reverify
+  comparison** — with the signed `content_hash` stored and `reverify.py` re-executing
+  real jobs, that comparison is the next step.
 - The benchmark now carries a fresh **server-seeded proof-of-work** (a fabricated/replayed number
   can't answer the seed) + server-timing, so it proves *real, current computation on the node*.
   What it does **not** yet prove is that the throughput number came from *that GPU*: the

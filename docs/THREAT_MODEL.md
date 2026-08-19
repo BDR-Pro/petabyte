@@ -29,9 +29,15 @@ only trusted components. **Code execution on seller machines is treated as hosti
   strict slug server-side before it reaches a root `tar` on the node (fixed; tested).
 - **Egress abuse** (the seller's IP): templates default to closed network; only
   serving templates get a single declared port; batch jobs get no network.
+- **Isolation parity**: the shared `_isolation_flags` (cap-drop ALL, no-new-privileges,
+  PID/mem/CPU caps, gVisor when installed) applies to **every** buyer container
+  (template/render/transcode/stitch/distributed), so cap-drop parity with the notebook
+  path is done. Read-only rootfs + forced non-root UID are opt-in
+  (`AGENT_STRICT_ROOTFS`/`AGENT_CONTAINER_USER`, off by default); the notebook path
+  hard-codes `--read-only`.
 - **Unresolved**: container-escape resistance must be verified on a real Docker host
-  (`docs/RLtest.md`); template/render paths need cap-drop/read-only parity with the
-  notebook path; micro-VM isolation is roadmap. See PRODUCTION_GAPS.
+  (`docs/RLtest.md`); making strict read-only the default; micro-VM isolation is
+  roadmap. See PRODUCTION_GAPS.
 
 ### A2. Malicious seller faking hardware or results
 - **Attestation**: results must be Ed25519-signed by the key that attested the node;
@@ -50,33 +56,42 @@ only trusted components. **Code execution on seller machines is treated as hosti
   concurrency tests prove no oversell and exact money conservation under parallel
   writers (`adversarial_test.py`).
 - **Payments in**: buyer funds enter only via the HMAC-verified webhook, idempotent on
-  `event_id`; live-mode `/deposit` is disabled.
+  `event_id` (a single claim-and-credit transaction); with `X-Timestamp` the signature
+  is replay-bounded to ±300s. Live-mode `/deposit` is disabled.
 - **Payouts out**: sanctions/AML `screen()` **fails closed** in live mode; new payout
-  destinations have a 24h cooling-off; state machine reverses on failure.
+  destinations have a 24h cooling-off; state machine reverses on failure. The wallet
+  payout worker runs on a shipped systemd timer (`lumaris-payout.timer`, every 5 min).
 - **Unresolved**: real KYC/AML/sanctions provider integration; live payment provider
-  review; payout worker scheduler in deploy. See PRODUCTION_GAPS.
+  review; the Connect biweekly obligation batch is still manual-cron. See PRODUCTION_GAPS.
 
 ### A4. Attacker against the control plane
-- **AuthN/Z**: JWT (UTC expiry, fail-fast on missing `SECRET_KEY`); encrypted,
-  revocable, **scoped** node API keys. Ownership enforced per object (nodes claim only
-  their own jobs; buyers act only on their own bookings/tasks) with negative tests.
+- **AuthN/Z**: JWT (UTC expiry, fail-fast on missing `SECRET_KEY`, production entropy
+  gate) with `iat`/`jti` and a **revocation denylist** (real logout); signed
+  double-submit **CSRF** enforced on cookie-auth unsafe methods; optional **TOTP 2FA**
+  at login. Encrypted, revocable, **scoped** node API keys. Ownership enforced per
+  object (nodes claim only their own jobs; buyers act only on their own bookings/tasks)
+  with negative tests.
 - **Rate limiting**: nginx zones on `/login`, `/register_user`, key/deposit routes;
-  app-level failure-budget limiter on sensitive routes.
+  an app-level per-(IP, username) failure-budget limiter also throttles `/login`
+  (`LOGIN_MAX_FAILS`/`LOGIN_WINDOW_S`, Redis-backed with in-proc fallback → 429).
 - **Request size limits** (nginx `client_max_body_size`), secure headers + CSP,
   ORM-only DB access (no string SQL), list-form subprocess (no shell).
 - **Audit log**: append-only `AuditEvent` for security-sensitive actions;
   correlation/request IDs; a kill switch that pauses new bookings without disrupting
   running rentals.
-- **Unresolved**: `/login` is not in the app-level limiter (nginx-only); CSRF is N/A
-  for the bearer-token flows but must be added if cookie flows are introduced;
-  SSRF review of any user-supplied URLs before enabling live upload/fetch.
+- **Unresolved**: SSRF review of any user-supplied URLs before enabling live
+  upload/fetch (a source allowlist + fetch-helper hardening already landed for the
+  known sinks). App-level `/login` throttling and cookie-flow CSRF are now
+  implemented (see above), not open items.
 
 ### A5. Supply-chain / update channel
-- **Highest-consequence known risk**: the agent auto-update channel is not
-  cryptographically signed. It is now **opt-in only**, the systemd unit is hardened,
-  and `update.sh` has a pinned-key signature-verification hook ready for a signing
-  pipeline. Release signing is required before fleet-wide auto-update — see
-  PRODUCTION_GAPS (must-fix before executing untrusted workloads at scale).
+- The agent auto-update channel **is Ed25519-signed and fail-closed**: `update.sh`
+  verifies each bundle against a pinned public key and refuses anything unsigned (no
+  unsigned fallback), and the desktop `updater.py` verifies a signed manifest +
+  SHA-256 with anti-replay. The producer side is `scripts/sign_release.py` +
+  `release-desktop.yml`/`release-keygen.yml`. Auto-update stays **opt-in** as a
+  conservative default (`PETABYTE_AUTO_UPDATE=true`); the systemd unit is hardened.
+  See `docs/RELEASE_SIGNING.md`.
 - Historically committed secrets: `SECURITY.md` documents the leaked `.env` and the
   rotation procedure; template/`.env.example` carry only placeholders and git history
   contains no real key literals.

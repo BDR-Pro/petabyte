@@ -72,8 +72,9 @@ ok(f"ledger balances after seeding (broken={broken})", balanced)
 m_demo = client.get("/metrics/overview?scope=demo").json()
 m_real = client.get("/metrics/overview?scope=real").json()
 ok("metrics flag demo data present", m_demo["contains_demo_data"] is True)
-ok("real-scope excludes all seeded data",
-   m_real["supply"]["registered"] == 0 and float(m_real["economics"]["gmv"]) == 0.0)
+ok("real-scope excludes all seeded data (money volumes redacted for anon caller; audit L1)",
+   m_real["supply"]["registered"] == 0 and m_real["economics"]["gmv"] is None
+   and m_real["economics"].get("restricted") is True)
 ok("effective take rate matches the configured platform fee",
    abs(m_demo["economics"]["effective_take_rate_pct"] - float(dbmod.PLATFORM_TAKE_RATE) * 100) < 0.11)
 gmv = float(m_demo["economics"]["gmv"])

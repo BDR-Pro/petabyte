@@ -192,6 +192,35 @@ def verify_webhook_signature(secret: str, raw_body: bytes, signature: str) -> bo
         return False
 
 
+def verify_payment_webhook(secret: str, raw_body: bytes, signature: str,
+                           timestamp: str | None = None, tolerance_s: int = 300) -> bool:
+    """Money-webhook signature check with an OPTIONAL replay-bounded scheme (Stripe-style).
+
+    When an `X-Timestamp` is supplied the signed material is `"<ts>.<body>"` and a timestamp
+    outside ±tolerance_s is rejected — so a captured request can't be replayed after the window.
+    Without a timestamp it falls back to the legacy body-only HMAC (still constant-time), for
+    backward compatibility with existing senders; replay is then bounded by the caller's
+    idempotency (event_id). Prefer sending X-Timestamp.
+    """
+    if not secret or not signature:
+        return False
+    if timestamp is not None:
+        try:
+            ts = int(timestamp)
+        except (TypeError, ValueError):
+            return False
+        if abs(int(time.time()) - ts) > max(0, tolerance_s):
+            return False
+        signed = f"{ts}.".encode() + raw_body
+        expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    else:
+        expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    try:
+        return hmac.compare_digest(expected, signature)
+    except Exception:
+        return False
+
+
 # ------------------ TEE / confidential-computing attestation ------------------
 #
 # Pluggable verifier. The STUB below verifies an Ed25519-signed report against a

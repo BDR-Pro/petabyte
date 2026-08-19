@@ -1,5 +1,10 @@
 # Funding-Readiness Execution Plan
 
+> ⚠️ **Superseded (2026-08-18).** This is a 2026-08-04 point-in-time snapshot kept for the
+> audit trail. For current state read [`../FUNDING_READINESS.md`](../FUNDING_READINESS.md)
+> (§0 "Current status" + §5 "Execution status") — most planned items below have since been
+> executed.
+
 Date: 2026-08-04 · Branch: `claude/petabyte-funding-readiness-fun2q6`
 Companion document: [`FUNDING_READINESS_AUDIT.md`](FUNDING_READINESS_AUDIT.md) (findings + evidence).
 

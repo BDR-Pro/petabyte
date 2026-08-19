@@ -93,6 +93,10 @@ else — the marketplace, money, routing — is runtime-agnostic.
    `runsc` unavailable, and record which runtime a node uses (surface it as a
    trust signal in the marketplace).
 2. Apply the **hardening flags** above to every template launch in the agent.
+   ✅ **Done** — `task_fetcher._isolation_flags` is applied by
+   `_run_template`/`_run_render`/`_run_transcode`/`_run_stitch`/`_run_distributed`
+   (read-only rootfs + forced UID remain opt-in via `AGENT_STRICT_ROOTFS`/
+   `AGENT_CONTAINER_USER`).
 3. Keep the product to **managed templates** (no raw SSH) until Phase 2.
 4. Document the boundary honestly to buyers: "managed workloads, isolated with
    gVisor; confidential-compute attestation is Ed25519 software attestation today

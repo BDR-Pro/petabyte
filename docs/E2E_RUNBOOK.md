@@ -103,6 +103,12 @@ environments; on the Droplet, `pip install playwright && playwright install
 chromium`). Record a trace of: login → GPU selection → template → quote → Stripe
 test checkout → job progress → validation → result → receipt.
 
+> **One-command alternative.** The whole buyer → GPU → **payout** → proof loop (including the
+> transfer leg below) now runs from a single command with real Stripe TEST objects — see
+> [`docs/demo/REAL_TEST_OBJECT_LOOP.md`](demo/REAL_TEST_OBJECT_LOOP.md)
+> (`e2e_marketplace_test.py --settle-payout`, headless `ensure_test_payout_ready`, and the
+> unified `GET /payments/{tx}/proof`). The manual steps below remain valid for step-by-step runs.
+
 ## Phase 3 — Settlement (capture + seller transfer)
 
 Capture and transfer are admin/orchestrator-gated in this build. As an admin

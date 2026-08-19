@@ -60,6 +60,26 @@ ok("isolation caps memory + disables swap escape when sized",
 ok("isolation caps cpus when sized", "--cpus" in sized and "2" in sized)
 ok("isolation honours a per-task pids limit", "512" in sized)
 
+# STD-C: strict rootfs is OPT-IN (operator flips AGENT_STRICT_ROOTFS / AGENT_CONTAINER_USER). The
+# DEFAULT profile must be byte-for-byte the pre-existing hardening — no --read-only, no --user — so
+# an arbitrary buyer image (s6-overlay server, cache-writing model server) is never silently broken.
+ok("strict rootfs is OFF by default (no --read-only unless the server opts in)",
+   "--read-only" not in base)
+ok("non-root is OFF by default (no --user unless the server opts in)", "--user" not in base)
+
+ro = tf._isolation_flags({"read_only": True})
+ok("read_only -> immutable rootfs (--read-only)", "--read-only" in ro)
+ok("read_only -> a writable /tmp tmpfs so caches/scratch still work",
+   "--tmpfs" in ro and any(str(x).startswith("/tmp:") for x in ro))
+ok("read_only -> HOME=/tmp routes user/CUDA/pip caches onto the writable tmpfs (not the RO rootfs)",
+   "-e" in ro and "HOME=/tmp" in ro)
+
+nr = tf._isolation_flags({"run_as": "65534:65534"})
+ok("run_as -> container forced non-root (--user)", "--user" in nr and "65534:65534" in nr)
+# The strict flags still compose with the always-on baseline.
+ok("strict profile keeps the always-on baseline (cap-drop ALL + no-new-privileges)",
+   "--cap-drop" in ro and "ALL" in ro and "no-new-privileges" in ro)
+
 
 # ---------------------------------------------------------------- _egress_flags
 ok("egress default is CLOSED (no network)",
@@ -85,6 +105,11 @@ ok("render disables Blender embedded-script auto-exec",
    "--disable-autoexec" in src("_run_render"))
 ok("template still publishes to loopback only (not 0.0.0.0)",
    '127.0.0.1:{port}' in src("_run_template") or "127.0.0.1" in src("_run_template"))
+# STD-C: the media runners chmod their bind-mounted output dir world-writable so a forced non-root
+# container (AGENT_CONTAINER_USER) can still write results (mirrors notebook.py's workdir chmod).
+for runner in ("_run_render", "_run_transcode", "_run_stitch"):
+    ok(f"{runner} makes its bind-mounted output dir writable for a non-root container",
+       "0o777" in src(runner))
 
 
 # ---------------------------------------------------------------- desktop agent parity
