@@ -14,6 +14,14 @@ on:
   workflow_dispatch:      # manual trigger — required for the opt-in real Mailgun send job
   workflow_call:          # callable as a required gate by other workflows (deploy-server.yml)
                           # so a push to main can NEVER reach production without this suite green
+    secrets:              # the ONLY secrets a caller may hand this suite (Stripe TEST keys for
+                          # the self-skipping integration job) — callers must never `inherit`.
+      STRIPE_SECRET_KEY:
+        required: false
+      STRIPE_PUBLISHABLE_KEY:
+        required: false
+      STRIPE_WEBHOOK_SECRET:
+        required: false
 
 # Least privilege: the whole suite only needs to read the repo. No job pushes, comments,
 # or mutates GitHub state — checkouts below also drop the persisted token.
@@ -230,7 +238,7 @@ jobs:
                  psql "postgresql://postgres:postgres@127.0.0.1:5432/postgres" -v ON_ERROR_STOP=1 \
                    -c 'DROP DATABASE IF EXISTS alembic_ci' -c 'CREATE DATABASE alembic_ci'; }
           alembic upgrade head
-          alembic current | grep -q '0001_baseline' && echo "schema at head"
+          alembic current | grep -q '0002_type_hygiene' && echo "schema at head"
           alembic downgrade base
           alembic upgrade head
 

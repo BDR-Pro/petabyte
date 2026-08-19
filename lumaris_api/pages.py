@@ -944,7 +944,7 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 </div></div>
 
 <!-- NEWSLETTER (Mailgun mailing list via /newsletter/subscribe) -->
-<div class="wrap" style="padding:10px 24px 40px">
+<div class="wrap" id="newsletter" style="padding:10px 24px 40px">
   <div class="card" style="max-width:560px;margin:0 auto;text-align:center">
     <div class="lbl" data-ar="النشرة البريدية">Newsletter</div>
     <h2 style="font-size:19px;margin:6px 0 6px" data-ar="تابع تطوّر Petabyte">Follow how Petabyte is built</h2>

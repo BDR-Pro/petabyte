@@ -204,7 +204,7 @@ ok("the cluster spec hands back ready-to-run launch commands for the standard sc
    and "10.8.0.1" in cl["launch"]["torchrun"])
 # unauthenticated = no Bearer AND no session cookie; the shared client `c` holds a session
 # cookie (a cookie is a valid session now), so a fresh client models the true "no auth" case.
-ok("hostfile/cluster are owner-only (an outsider agent JWT can't read them)",
+ok("hostfile/cluster reject an unauthenticated caller (no Bearer, no session cookie)",
    TestClient(main.app).get(f"/jobs/{job_id}/hostfile").status_code in (401, 422))
 
 # ---- completion: the job is done when EVERY rank finishes (no stitch step) ----

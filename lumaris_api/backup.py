@@ -324,12 +324,17 @@ def run_restore_drill(db, *, keep: bool = False, target_url: str = None) -> dict
 
     Non-destructive: never touches the live database — it only restores into a throwaway scratch
     DB (temp SQLite file, or a `<db>_restore_drill` Postgres DB / RESTORE_DRILL_TARGET_URL)."""
-    summary = create_backup(db)                          # full chain: prove the STORED object restores
-    sql_text, row = _fetch_backup_sql(db, summary["backup_id"])
-    engine_name = row.engine
+    # Read the comparison values BEFORE the dump: a commit landing between the dump and a
+    # LATER count read would make a perfectly good restore look broken (row-count mismatch).
+    # The reverse window (a commit between this read and the dump) still exists — the drill
+    # runs from CI/maintenance where the DB is quiesced — but this ordering never flags a
+    # GOOD backup taken after new rows arrived.
     src_counts = {"users": db.query(dbmod.User).count(),
                   "ledger_entries": db.query(dbmod.LedgerEntry).count()}
     src_balanced, _ = dbmod.ledger_is_balanced(db)
+    summary = create_backup(db)                          # full chain: prove the STORED object restores
+    sql_text, row = _fetch_backup_sql(db, summary["backup_id"])
+    engine_name = row.engine
 
     cleanup_path = None
     if engine_name == "sqlite":

@@ -349,6 +349,28 @@ def _run_benchmark(task):
     _set_ui(status="idle", task=None, ok=True)
 
 
+def _run_docker(argv, timeout=None):
+    """Run a `docker run --rm ...` command with a unique --name, and if the CLIENT times out,
+    force-remove the daemon-owned container. Killing the local docker client does NOT stop the
+    container (--rm only fires when the container itself exits), so without this a timed-out
+    job would keep burning the seller's GPU/CPU until it finished on its own."""
+    import subprocess as _sp
+    import uuid as _uuid
+    name = None
+    if list(argv[:3]) == ["docker", "run", "--rm"]:
+        name = "pb-task-" + _uuid.uuid4().hex[:12]
+        argv = list(argv[:3]) + ["--name", name] + list(argv[3:])
+    try:
+        return _sp.run(argv, check=True, timeout=timeout)
+    except _sp.TimeoutExpired:
+        if name:
+            try:
+                _sp.run(["docker", "rm", "-f", name], capture_output=True, timeout=30)
+            except Exception:
+                pass
+        raise
+
+
 def _run_render(task):
     """Render an assigned frame range by launching Blender AS A CONTAINER.
     The seller never installs Blender — the image is pulled on demand and cached;
@@ -383,7 +405,7 @@ def _run_render(task):
                 "-o", "/out/frame_", "-s", str(fs), "-e", str(fe), "-a"]
         # Audit H1: hard-kill at the buyer's authorized runtime budget.
         _rt = task.get("max_runtime_s")
-        subprocess.run(cmd, check=True, timeout=(int(_rt) if _rt else None))
+        _run_docker(cmd, timeout=(int(_rt) if _rt else None))
         report_progress(tid, 85, "uploading frames")
         # 3) tar the frames and upload via a one-object pre-signed PUT
         bundle = _os.path.join(work, f"frames_{fs}_{fe}.tar")
@@ -451,7 +473,7 @@ def _run_transcode(task):
         ff += [f"/work/{_os.path.basename(dst)}"]
         # Audit H1: hard-kill at the buyer's authorized runtime budget.
         _rt = task.get("max_runtime_s")
-        subprocess.run(args + ff, check=True, timeout=(int(_rt) if _rt else None))
+        _run_docker(args + ff, timeout=(int(_rt) if _rt else None))
         report_progress(tid, 80, "uploading")
         grant = httpx.post(f"{API_URL}/jobs/backup_url", headers=HEADERS, timeout=15,
                            json={"task_id": tid, "filename": _os.path.basename(dst)}).json()
@@ -506,7 +528,7 @@ def _run_stitch(task):
                        f"/work/{_os.path.basename(out)}"]
             # Audit H1: bound concat to the authorized runtime budget.
             _rt = task.get("max_runtime_s")
-            subprocess.run(concat, check=True, timeout=(int(_rt) if _rt else None))
+            _run_docker(concat, timeout=(int(_rt) if _rt else None))
         else:   # render: tar the collected frames
             import tarfile
             with tarfile.open(out, "w") as tf:
@@ -654,7 +676,7 @@ def _run_distributed(task):
         report_progress(tid, 45, f"launching torchrun rank {rank}/{world}")
         # Audit H1 parity: bound the rank to the buyer's authorized runtime budget.
         _rt = task.get("max_runtime_s")
-        subprocess.run(argv, check=True, timeout=(int(_rt) if _rt else None))
+        _run_docker(argv, timeout=(int(_rt) if _rt else None))
         report_progress(tid, 100, f"rank {rank}/{world} finished")
         _post("/jobs/result", _signed_result(
             tid, status="completed", result=f"distributed rank {rank}/{world} complete"))

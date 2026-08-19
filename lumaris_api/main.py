@@ -298,6 +298,13 @@ def _maintenance_cycle() -> None:
         settle_dead_specs(db)            # refund in-flight bookings on dead nodes
         meter_and_expire(db)             # auto-stop VMs whose prepaid window ended
         try:
+            # keep the jti denylist bounded: rows for tokens past their own expiry are dead
+            # weight on every authenticated request's revocation lookup.
+            from db import prune_expired_revocations
+            prune_expired_revocations(db)
+        except Exception:  # noqa: BLE001 — never let cleanup break the maintenance cycle
+            logger.debug("revocation prune failed (non-fatal)", exc_info=True)
+        try:
             # release GPU units held by abandoned/failed compute-tx reservations (the buyer
             # cancel path can't release a dispatched tx, so a post-dispatch failure would
             # otherwise leak its unit forever).
@@ -380,6 +387,11 @@ def _assert_production_is_safe() -> None:
             os.getenv("STRIPE_GATEWAY", "").strip().lower() != "real",
         "SECRET_KEY is a default/dev/placeholder value (or < 32 chars)":
             _weak_secret_key(os.getenv("SECRET_KEY", "")),
+        # Without a release trust root, /admin/desktop/release accepts any self-consistent
+        # exe+manifest pair and /download/windows hands it to NEW installs that have no pinned
+        # updater key to verify against — a compromised admin session could ship arbitrary code.
+        "PETABYTE_RELEASE_PUBKEY is not set (desktop builds would be served unverified)":
+            not os.getenv("PETABYTE_RELEASE_PUBKEY", "").strip(),
     }
     enabled = [k for k, v in unsafe.items() if v]
     if enabled:
@@ -1357,6 +1369,17 @@ def _require_seller(db: Session, user: dict):
     return owner
 
 
+def _verified_unrevoked_claims(db: Session, raw: str):
+    """verify_token + the jti denylist in one step, so no auth path can forget the
+    revocation check: a signed-out (revoked) session JWT must die everywhere, not just in
+    get_current_user. Returns the claims, or None when the jti has been revoked. Raises
+    like verify_token for invalid/expired tokens."""
+    claims = verify_token(raw)
+    if claims.get("jti") and is_jti_revoked(db, claims.get("jti")):
+        return None
+    return claims
+
+
 def seller_actor(request: Request, db: Session = Depends(get_db)):
     """Resolve the acting seller from EITHER a JWT (Authorization: Bearer) or an
     X-API-KEY. Lets a node bootstrap itself (register spec + attest) with just its
@@ -1369,7 +1392,8 @@ def seller_actor(request: Request, db: Session = Depends(get_db)):
     # This stops a stray cookie from hijacking an explicitly API-key-authenticated node call.
     if auth.startswith("Bearer "):
         try:
-            owner = get_user_by_username(db, _username(verify_token(auth[7:])))
+            _claims = _verified_unrevoked_claims(db, auth[7:])
+            owner = get_user_by_username(db, _username(_claims)) if _claims else None
         except Exception:
             owner = None
     elif key:
@@ -1381,7 +1405,8 @@ def seller_actor(request: Request, db: Session = Depends(get_db)):
             owner = None
     elif request.cookies.get(SESSION_COOKIE):
         try:
-            owner = get_user_by_username(db, _username(verify_token(request.cookies.get(SESSION_COOKIE))))
+            _claims = _verified_unrevoked_claims(db, request.cookies.get(SESSION_COOKIE))
+            owner = get_user_by_username(db, _username(_claims)) if _claims else None
         except Exception:
             owner = None
         # A browser (ambient cookie) mutating via seller_actor must pass CSRF, same as any other
@@ -1806,15 +1831,13 @@ def _edge_chat_upstream(base_url: str, api_key: Optional[str], payload: dict, ti
 
 @app.post("/edge/infer", tags=["edge"])
 def edge_infer(data: EdgeInferModel, request: Request):
-    """Paid fallback for the Edge-Inference SDK (`/static/petabyte-edge.js`): the SDK runs a
-    model on the visitor's own WebGPU for free and calls this only when the visitor has no
-    capable GPU (or on-device inference is disabled). Public + per-IP rate-limited.
-
-    When an operator sets `EDGE_INFER_UPSTREAM_URL` (the OpenAI-compatible endpoint of a
-    Petabyte-launched `ollama`/`vllm` node — see docs/EDGE_INFERENCE.md), this proxies the
-    prompt there and returns a REAL completion. Until then it returns a clearly-labelled
-    `prototype` placeholder — it never passes a canned string off as a real model output.
-    (Per-token billing of the site's developer account is the remaining money-path step.)"""
+    """Keyless prototype endpoint for the Edge-Inference SDK (`/static/petabyte-edge.js`).
+    Public + per-IP rate-limited, and it NEVER runs a real model: real completions cost GPU
+    time on the operator's `EDGE_INFER_UPSTREAM_URL` pool, so they are only reachable through
+    the authenticated, per-token-metered `POST /v1/chat/completions` (the SDK uses it
+    automatically when configured with an inference-scoped `apiKey`). An unauthenticated proxy
+    here would be a free-compute hole — this endpoint only ever returns a clearly-labelled
+    `prototype` placeholder, plus an `upgrade` pointer when a real upstream exists."""
     ip = _client_ip(request) or "?"
     key = f"edge:{ip}"
     retry = _rl_blocked(key, 60, 3600)          # 60 fallback calls / hour / IP
@@ -1828,30 +1851,19 @@ def edge_infer(data: EdgeInferModel, request: Request):
         raise HTTPException(status_code=413, detail="prompt too long (8000 char cap)")
     default_model = os.getenv("EDGE_INFER_MODEL", "").strip()
     model = (data.model or "").strip()[:120] or default_model or "default"
-    max_tokens = max(1, min(int(data.max_tokens or 256), 2048))
 
-    upstream = os.getenv("EDGE_INFER_UPSTREAM_URL", "").strip()
-    if upstream:
-        if not upstream.startswith(("http://", "https://")):
-            raise HTTPException(status_code=500,
-                                detail="EDGE_INFER_UPSTREAM_URL must start with http:// or https://")
-        payload = {"model": model,
-                   "messages": [{"role": "user", "content": prompt}],
-                   "max_tokens": max_tokens, "stream": False}
-        try:
-            j = _edge_chat_upstream(upstream, os.getenv("EDGE_INFER_UPSTREAM_TOKEN", "").strip() or None,
-                                    payload)
-        except Exception as e:  # noqa: BLE001
-            # Never leak the upstream URL/key in the client-facing error.
-            logger.warning("edge upstream inference failed: %s", e.__class__.__name__)
-            raise HTTPException(status_code=502, detail="edge upstream inference failed")
-        text = ""
-        try:
-            text = j["choices"][0]["message"]["content"] or ""
-        except (KeyError, IndexError, TypeError):
-            text = j.get("text", "") if isinstance(j, dict) else ""
-        return {"source": "petabyte", "model": (isinstance(j, dict) and j.get("model")) or model,
-                "text": text, "prototype": False, "usage": (isinstance(j, dict) and j.get("usage")) or None}
+    if os.getenv("EDGE_INFER_UPSTREAM_URL", "").strip():
+        # A real pool exists — but never for free: point the caller at the billed API.
+        return {
+            "source": "petabyte-fallback", "model": model, "prototype": True,
+            "upgrade": {"endpoint": "/v1/chat/completions",
+                        "auth": "X-API-KEY with the 'inference' scope",
+                        "docs": "/developers"},
+            "text": ("[Petabyte fallback · prototype] A GPU inference pool is configured, but "
+                     "real completions are metered: call POST /v1/chat/completions with an "
+                     "inference-scoped API key (PetabyteEdge.configure({apiKey: ...}) does this "
+                     "automatically). This keyless endpoint only returns this placeholder."),
+        }
 
     return {
         "source": "petabyte-fallback",
@@ -2930,9 +2942,13 @@ def logout(request: Request, db: Session = Depends(get_db)):
         raw = ah[7:].strip() if ah.lower().startswith("bearer ") else None
     if raw:
         try:
-            jti = verify_token(raw).get("jti")
+            claims = verify_token(raw)
+            jti = claims.get("jti")
             if jti:
-                revoke_jti(db, jti)
+                _exp = claims.get("exp")
+                revoke_jti(db, jti,
+                           expires_at=(datetime.fromtimestamp(_exp, tz=timezone.utc)
+                                       if _exp else None))
         except Exception:      # already-invalid/expired token — nothing to revoke
             pass
     resp = JSONResponse({"ok": True})
@@ -3536,6 +3552,9 @@ def _job_runtime_budget_s(task, db=None):
             tx = db.query(ComputeTransaction).filter(
                 ComputeTransaction.task_id == task.id).first()
         except Exception:
+            # A silent None here disables the H1 runtime kill entirely — say so.
+            logger.warning("task %s: runtime-budget tx lookup failed; no deadline applied",
+                           getattr(task, "id", "?"), exc_info=True)
             tx = None
     if not tx or not getattr(tx, "authorization_amount", 0) or not tx.pricing_snapshot:
         return None
@@ -3543,6 +3562,8 @@ def _job_runtime_budget_s(task, db=None):
         import pricing as _pr
         return _pr.authorized_seconds(json.loads(tx.pricing_snapshot), tx.authorization_amount)
     except Exception:
+        logger.warning("tx %s: authorized_seconds failed; no runtime deadline applied",
+                       getattr(tx, "public_id", "?"), exc_info=True)
         return None
 
 
@@ -4480,8 +4501,8 @@ def _viewer_is_admin(request: Request, db: Session) -> bool:
     if not raw:
         return False
     try:
-        claims = verify_token(raw)
-        return _is_admin(get_user_by_username(db, claims.get("sub")))
+        claims = _verified_unrevoked_claims(db, raw)
+        return bool(claims) and _is_admin(get_user_by_username(db, claims.get("sub")))
     except Exception:
         return False
 
@@ -4568,14 +4589,22 @@ async def admin_desktop_release(exe: UploadFile = File(...), manifest: UploadFil
         ok_v, reason = _verify_release_manifest(man, h.hexdigest())
         if not ok_v:
             raise HTTPException(status_code=400, detail=reason)
-        os.replace(tmp, os.path.join(d, _DESKTOP_EXE))    # commit only the verified build
-        with open(os.path.join(d, _DESKTOP_MANIFEST), "wb") as f:
-            f.write(raw_manifest)
+        # Publish METADATA first, the exe LAST — each via atomic os.replace. If the process
+        # dies mid-publish, an updater that reads manifest/latest.json first can at worst see
+        # new metadata with the old exe (hash mismatch -> it retries later); the reverse order
+        # would serve a NEW exe described by the OLD manifest and stall the fleet on rejects.
         latest = {"tag": str(man["version"]), "version": str(man["version"]),
                   "exe_url": "/download/windows", "manifest_url": "/download/" + _DESKTOP_MANIFEST,
                   "sha256": str(man["sha256"])}
-        with open(os.path.join(d, "latest.json"), "w") as f:
+        man_tmp = os.path.join(d, _DESKTOP_MANIFEST + ".incoming")
+        with open(man_tmp, "wb") as f:
+            f.write(raw_manifest)
+        latest_tmp = os.path.join(d, "latest.json.incoming")
+        with open(latest_tmp, "w") as f:
             json.dump(latest, f)
+        os.replace(man_tmp, os.path.join(d, _DESKTOP_MANIFEST))
+        os.replace(latest_tmp, os.path.join(d, "latest.json"))
+        os.replace(tmp, os.path.join(d, _DESKTOP_EXE))    # commit only the verified build
     finally:
         try:
             if os.path.exists(tmp):
@@ -8098,9 +8127,16 @@ def inference_chat_completions(data: ChatCompletionRequest, request: Request,
         raise HTTPException(status_code=429, detail="rate limit: too many inference requests")
     _rl_record_failure(f"infer:{ip}", 3600)
 
-    sandbox = getattr(user, "is_sandbox", False)
-    if not sandbox:
-        require_scope(user, "inference")
+    # The PUBLISHED sandbox key is read-only by contract and never billed — and inference
+    # costs real GPU time on the operator's upstream pool, so it can never be free-tier:
+    # letting the sandbox in here would be an unauthenticated, unbilled path to paid compute.
+    if getattr(user, "is_sandbox", False):
+        raise HTTPException(status_code=403, detail={
+            "code": "SANDBOX_KEY_NOT_ALLOWED",
+            "message": "The sandbox key cannot run inference. Mint an API key with the "
+                       "'inference' scope from your account page."})
+    sandbox = False
+    require_scope(user, "inference")
 
     # Build OpenAI messages (accept either `messages` or a bare `prompt`).
     if data.messages:
@@ -8804,8 +8840,10 @@ async def task_logs_ws(websocket: WebSocket, task_id: int, token: str = ""):
     db = SessionLocal()
     try:
         try:
-            claims = verify_token(token or websocket.cookies.get(SESSION_COOKIE, ""))
+            claims = _verified_unrevoked_claims(db, token or websocket.cookies.get(SESSION_COOKIE, ""))
         except ValueError:
+            await websocket.close(code=4401); return
+        if not claims:                       # revoked (signed-out) token: same as invalid
             await websocket.close(code=4401); return
         from db import Task
         buyer = get_user_by_username(db, claims.get("sub"))

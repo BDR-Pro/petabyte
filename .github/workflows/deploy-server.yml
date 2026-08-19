@@ -54,7 +54,13 @@ jobs:
   tests:
     name: test gate
     uses: ./.github/workflows/tests.yml
-    secrets: inherit
+    # Pass ONLY what the test suite declares it can use (the Stripe TEST-mode keys for the
+    # self-skipping integration job) — never `secrets: inherit`, which would hand the reusable
+    # workflow every deployment secret (SSH key included).
+    secrets:
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+      STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
 
   configuration-preflight:
     runs-on: ubuntu-latest

@@ -47,7 +47,11 @@ def _load_expected(task):
     try:
         ch = (json.loads(task.template_params or "{}") or {}).get("matmul_challenge")
         return mv.ExpectedJob(**ch) if ch else None
-    except Exception:
+    except Exception:  # noqa: BLE001 — a bad challenge must DEFER, never raise
+        # But log it: a malformed challenge (wiring bug / schema drift) must be separable
+        # from the ordinary "no challenge issued" state in the DEFER reason.
+        logger.warning("settlement: unreadable matmul challenge for task %s",
+                       getattr(task, "id", "?"), exc_info=True)
         return None
 
 
@@ -55,7 +59,9 @@ def _manifest_from_proof(task):
     """The agent-reported matmul manifest, carried inside the signed result proof."""
     try:
         return (json.loads(getattr(task, "result_proof", None) or "{}") or {}).get("manifest")
-    except Exception:
+    except Exception:  # noqa: BLE001 — a bad proof must DEFER, never raise
+        logger.warning("settlement: unreadable result proof for task %s",
+                       getattr(task, "id", "?"), exc_info=True)
         return None
 
 

@@ -62,7 +62,9 @@ def main():
                   "not_implemented", "not_supported", "blocked_sanctioned", "unknown"}
         bad = [c for c in m["countries"] if c["status"] not in _valid
                or c["status"] == "unknown"
-               or (c["active_today"] and c["status"] != "active")]
+               # both directions: active_today must be true EXACTLY when status is "active" —
+               # an "active" row with active_today=False is just as contradictory.
+               or c["active_today"] != (c["status"] == "active")]
         if args.json:
             print(json.dumps(m, indent=2))
         else:

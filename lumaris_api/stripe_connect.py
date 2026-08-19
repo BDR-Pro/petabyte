@@ -346,12 +346,16 @@ def _stripe_test_force_payout_ready(account_id: str, country: str) -> None:
     import time as _t
     import stripe
     stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
-    # Test external bank account (US magic numbers; Stripe documents these for test payouts).
-    _bank = {"US": {"country": "US", "currency": "usd", "routing_number": "110000000",
-                    "account_number": "000123456789"}}.get(
-        (country or "US").upper(),
-        {"country": (country or "US").upper(), "currency": "usd",
-         "account_number": "000123456789"})
+    # Stripe's PUBLISHED test bank values are US-specific (routing 110000000). A non-US account
+    # needs its own documented fixture (IBAN / country routing fields) — a half-built fallback
+    # would just fail deep inside Stripe with a confusing error, so refuse it up front.
+    cc = (country or "US").upper()
+    if cc != "US":
+        raise ValueError(
+            f"_stripe_test_force_payout_ready has test-bank fixtures for US only (got {cc}); "
+            "add Stripe's documented per-country test values before using it elsewhere")
+    _bank = {"country": "US", "currency": "usd", "routing_number": "110000000",
+             "account_number": "000123456789"}
     stripe.Account.modify(
         account_id,
         business_type="individual",

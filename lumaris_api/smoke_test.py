@@ -329,9 +329,9 @@ _eij=_ei.json() if _ei.status_code==200 else {}
 ok("POST /edge/infer returns a labelled prototype fallback (never fakes a real completion)",
    _ei.status_code==200 and _eij.get("source")=="petabyte-fallback" and _eij.get("prototype") is True)
 ok("POST /edge/infer rejects an empty prompt", c.post("/edge/infer", json={"prompt":"  "}).status_code==400)
-# When an operator configures an OpenAI-compatible upstream (a launched ollama/vLLM node),
-# /edge/infer proxies the prompt and returns a REAL completion (source 'petabyte', prototype
-# False) — the upstream call is isolated in main._edge_chat_upstream so we mock it here.
+# Even with an upstream pool configured, the KEYLESS /edge/infer must NEVER proxy to it —
+# that would be an unauthenticated free-compute hole. It stays a labelled prototype that
+# points at the metered /v1/chat/completions (audit: unbilled-inference finding).
 import os as _os
 _prev_up, _prev_model = _os.environ.get("EDGE_INFER_UPSTREAM_URL"), _os.environ.get("EDGE_INFER_MODEL")
 _os.environ["EDGE_INFER_UPSTREAM_URL"]="http://ollama.local:11434"
@@ -349,11 +349,10 @@ finally:
     main._edge_chat_upstream=_orig_up
     for _k,_v in (("EDGE_INFER_UPSTREAM_URL",_prev_up),("EDGE_INFER_MODEL",_prev_model)):
         _os.environ.pop(_k,None) if _v is None else _os.environ.__setitem__(_k,_v)
-ok("POST /edge/infer proxies a configured upstream and returns a REAL completion (not a stub)",
-   _er.status_code==200 and _erj.get("source")=="petabyte" and _erj.get("prototype") is False
-   and "verified GPUs" in _erj.get("text","") and _erj.get("model")=="llama3.2"
-   and _cap.get("base")=="http://ollama.local:11434"
-   and _cap["payload"]["messages"][0]["content"]=="what is petabyte?")
+ok("keyless /edge/infer NEVER proxies a configured upstream (no unbilled compute)",
+   _er.status_code==200 and _erj.get("prototype") is True
+   and _erj.get("source")=="petabyte-fallback" and not _cap
+   and _erj.get("upgrade",{}).get("endpoint")=="/v1/chat/completions")
 # On-device inference (and its CSP widening) is OFF by default -> the CSP the browser gets must
 # stay locked down: no wasm-eval, no external model host in connect-src.
 _csp=c.get("/edge").headers.get("Content-Security-Policy","")
@@ -409,6 +408,10 @@ try:
                params={"scopes":"inference"}).json()["api_key"]
     ok("/v1/chat/completions returns 402 when the wallet can't cover the token estimate",
        c.post("/v1/chat/completions", headers={"X-API-KEY":_bk}, json={"prompt":"x"}).status_code==402)
+    # the PUBLISHED sandbox key must never reach paid GPU inference (read-only by contract)
+    ok("/v1/chat/completions rejects the published sandbox key (403, never free compute)",
+       c.post("/v1/chat/completions", headers={"X-API-KEY": main.DATA_API_SANDBOX_KEY},
+              json={"prompt":"hi"}).status_code==403)
 finally:
     main._edge_chat_upstream=_orig_chat
     _os2.environ.pop("EDGE_INFER_UPSTREAM_URL",None) if _pu is None else _os2.environ.__setitem__("EDGE_INFER_UPSTREAM_URL",_pu)

@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import func
@@ -165,25 +166,35 @@ def _autonet_clawback_enabled() -> bool:
     return os.getenv("PAYOUT_AUTONET_CLAWBACK", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
-def _apply_clawback_recovery(db, seller_id: int, recovered_minor: int) -> int:
-    """After a netted batch SETTLES, mark the seller's batch-path refund clawbacks recovered: the
-    recoverable seller_payable debt has now been recouped by paying the seller less. Flips those
-    txs from `needs_review` to `reconciled` (the batch-clawback signature is a needs_review tx with
-    a refund but no reversible transfer — see stripe_connect.refund) and logs the recovery. The
-    ledger was already balanced by the reduced payout DEBIT; this clears the operator flag."""
-    txs = (db.query(dbmod.ComputeTransaction)
-           .filter(dbmod.ComputeTransaction.seller_id == seller_id,
-                   dbmod.ComputeTransaction.reconciliation_status == "needs_review",
-                   dbmod.ComputeTransaction.refunded_amount > 0,
-                   dbmod.ComputeTransaction.stripe_transfer_id.is_(None))
-           .all())
-    for t in txs:
-        t.reconciliation_status = "reconciled"
-        db.add(t)
+def _clawback_tx_ids(db, seller_id: int) -> list:
+    """The EXACT clawback txs whose debt a netting round is recovering, captured at the same
+    moment the debt is measured (the batch-clawback signature is a needs_review tx with a refund
+    but no reversible transfer — see stripe_connect.refund). Binding the recovery to these ids
+    means a refund landing AFTER the measurement, or a tx flagged needs_review for an unrelated
+    reason, is never cleared by a payout that did not actually net it out."""
+    return [t.id for t in (db.query(dbmod.ComputeTransaction.id)
+                           .filter(dbmod.ComputeTransaction.seller_id == seller_id,
+                                   dbmod.ComputeTransaction.reconciliation_status == "needs_review",
+                                   dbmod.ComputeTransaction.refunded_amount > 0,
+                                   dbmod.ComputeTransaction.stripe_transfer_id.is_(None))
+                           .all())]
+
+
+def _apply_clawback_recovery(db, seller_id: int, recovered_minor: int, tx_ids: list) -> int:
+    """After a netted batch SETTLES, mark exactly the clawback txs measured for THIS round
+    (`tx_ids`) recovered: the recoverable seller_payable debt has been recouped by paying the
+    seller less. The conditional UPDATE (still needs_review) keeps it idempotent. The ledger was
+    already balanced by the reduced payout DEBIT; this clears the operator flag."""
+    if not tx_ids:
+        return 0
+    n = db.execute(dbmod.update(dbmod.ComputeTransaction)
+                   .where(dbmod.ComputeTransaction.id.in_(tx_ids),
+                          dbmod.ComputeTransaction.reconciliation_status == "needs_review")
+                   .values(reconciliation_status="reconciled")).rowcount
     db.commit()
     logger.info("clawback auto-netting: recovered %s minor from seller %s's payout; cleared %d "
-                "needs_review clawback tx(s)", recovered_minor, seller_id, len(txs))
-    return len(txs)
+                "needs_review clawback tx(s)", recovered_minor, seller_id, n)
+    return n
 
 
 def create_and_send_batch(db, seller, *, currency: str = "usd",
@@ -278,16 +289,33 @@ def create_and_send_batch(db, seller, *, currency: str = "usd",
     # seller_payable settles to zero (the reduced DEBIT posted at settlement clears the debt);
     # otherwise we leave it to accrue against a larger future payout. Default OFF = prior behavior.
     recovered = 0
+    recovered_tx_ids = []
     if execute and _autonet_clawback_enabled():
-        debt = dbmod.seller_recoverable_debt_minor(db, seller.id)
+        # seller_payable is a single (mode-less) ledger account while obligations are
+        # per-mode, so netting is only well-defined when every unpaid obligation is in
+        # ONE mode — with TEST and LIVE both outstanding, the debt figure would mix them.
+        _modes = {m for (m,) in db.query(PayoutObligation.mode)
+                  .filter(PayoutObligation.seller_id == seller.id,
+                          PayoutObligation.state.in_(["accrued", "available", "batched"]))
+                  .distinct()}
+        debt = dbmod.seller_recoverable_debt_minor(db, seller.id) if len(_modes) <= 1 else 0
+        if len(_modes) > 1:
+            logger.warning("clawback auto-netting skipped for seller %s: unpaid obligations in "
+                           "multiple modes (%s) — netting needs a mode-scoped payable balance",
+                           seller.id, sorted(_modes))
+        recovered_tx_ids = _clawback_tx_ids(db, seller.id) if debt > 0 else []
         net_send = claimed_total - debt
         if debt > 0 and net_send >= max(min_threshold_minor, 1):
             recovered = debt
             claimed_total = net_send
             batch.total_amount_minor = claimed_total
+            # The [clawback_txs:...] marker persists WHICH txs this round nets, so an
+            # asynchronously-settled batch (state 'sent') can still clear exactly them at
+            # confirm time — and an aborted/failed batch never clears anything.
             batch.routing_explanation = (
                 (batch.routing_explanation or "") +
-                f" | auto-netted {recovered} minor of recoverable clawback debt")[:500]
+                f" | auto-netted {recovered} minor of recoverable clawback debt"
+                f" [clawback_txs:{','.join(str(i) for i in recovered_tx_ids)}]")[:500]
             db.add(batch); db.commit()
 
     # REVALIDATE eligibility against claimed_total BEFORE sending. If a concurrent claim
@@ -316,9 +344,10 @@ def create_and_send_batch(db, seller, *, currency: str = "usd",
 
     result = execute_batch(db, batch)
     # Only mark the clawback recovered once the batch has actually SETTLED (ledger DEBIT posted) —
-    # if it aborted/failed and released its obligations, the debt was never recovered.
+    # if it aborted/failed and released its obligations, the debt was never recovered. A 'sent'
+    # (async) batch keeps its [clawback_txs:...] marker and clears them in confirm_batch instead.
     if recovered and result is not None and result.state == "paid":
-        _apply_clawback_recovery(db, seller.id, recovered)
+        _apply_clawback_recovery(db, seller.id, recovered, recovered_tx_ids)
     return result
 
 
@@ -433,6 +462,12 @@ def confirm_batch(db, batch: PayoutBatch) -> PayoutBatch:
     # commit both together (atomic split-brain fix; was a separate best-effort commit).
     _add_batch_payout_ledger(db, batch)
     _commit_payout_atomic(db, batch, "paid", "paid")
+    # An auto-netted batch that settled ASYNCHRONOUSLY clears exactly the clawback txs it
+    # netted (persisted in the [clawback_txs:...] marker at netting time) — never a re-query.
+    m = re.search(r"\[clawback_txs:([0-9,]*)\]", batch.routing_explanation or "")
+    if m:
+        ids = [int(x) for x in m.group(1).split(",") if x]
+        _apply_clawback_recovery(db, batch.seller_id, 0, ids)
     return batch
 
 

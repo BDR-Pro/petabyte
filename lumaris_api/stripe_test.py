@@ -436,9 +436,14 @@ _spr = dbmod.SessionLocal()
 _txpr = sc.get_tx_by_public_id(_spr, tid_pr)
 _oblpr = _spr.query(dbmod.PayoutObligation).filter(
     dbmod.PayoutObligation.compute_tx_id == _txpr.id).first()
+# Pin the EXACT post-refund net (pricing.refund_split's proportional clawback), so a
+# wrong-but-smaller reduction (e.g. straight to 0) can't pass a mere range check.
+_expected_net = _txpr.seller_net_amount - (_txpr.seller_net_amount * _txpr.refunded_amount
+                                           // _txpr.captured_amount)
 ok("partial refund REDUCES the unpaid obligation net (batch won't overpay) [H3]",
    _oblpr is not None and _oblpr.state in ("accrued", "available")
-   and 0 <= _oblpr.net_amount_minor < _txpr.seller_net_amount)
+   and _oblpr.net_amount_minor == _expected_net
+   and _expected_net < _txpr.seller_net_amount)
 _spr.close()
 
 # TWO partial refunds that CUMULATIVELY equal the capture must REVERSE the unpaid obligation

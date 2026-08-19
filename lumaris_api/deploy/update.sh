@@ -64,7 +64,9 @@ for _u in lumaris-api.service lumaris-payout.service lumaris-payout.timer; do
 done
 [ "$_units_changed" = 1 ] && systemctl daemon-reload
 # Ensure the payout timer is armed (idempotent — no-op if already enabled/running).
-systemctl enable --now lumaris-payout.timer >/dev/null 2>&1 || true
+# No `|| true`: a deploy that leaves the payout worker disabled must FAIL loudly (set -e),
+# not exit green while queued withdrawals silently never run.
+systemctl enable --now lumaris-payout.timer >/dev/null 2>&1
 
 # NOTE: nginx conf is intentionally NOT auto-copied — certbot rewrites that file when
 # you enable HTTPS, so overwriting it would wipe the SSL block. If you change

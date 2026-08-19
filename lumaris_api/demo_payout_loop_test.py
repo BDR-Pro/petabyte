@@ -130,14 +130,16 @@ d1 = c.post(f"/payments/{tx}/dispatch", headers=bh,
 ok("dispatch -> RUNNING", d1.json().get("status") == "RUNNING")
 
 # ---- seller signs a real result; settlement (meter+capture) is automatic ----
-claimed = c.get("/jobs/next", headers={"X-API-KEY": api_key}).json()["task_id"]
+_next = c.get("/jobs/next", headers={"X-API-KEY": api_key}).json() or {}
+claimed = _next.get("task_id")
+ok("the seller agent is handed the dispatched task", bool(claimed))
 res = c.post("/jobs/result", headers={"X-API-KEY": api_key},
              json={"task_id": claimed, "status": "completed", "result": "ok",
                    **signed_proof(f"sha256:demo-{claimed}")})
 ok("seller result accepted (signature verified)", res.status_code == 200)
 
 final_status = None
-for _ in range(20):
+for _ in range(200):                      # up to ~10s; capture is normally synchronous
     final_status = c.get(f"/payments/{tx}", headers=bh).json().get("status")
     if final_status in ("PAYMENT_CAPTURED", "SELLER_TRANSFERRED", "COMPLETED",
                         "CAPTURE_FAILED", "JOB_FAILED"):
@@ -193,4 +195,6 @@ print(f"\n=== demo_payout_loop: {'0 failures' if _fail == 0 else str(_fail) + ' 
 for f in ("demo_payout_loop_test.db", "demo_payout_loop_test.db-wal", "demo_payout_loop_test.db-shm"):
     if os.path.exists(f):
         os.remove(f)
+import shutil  # noqa: E402
+shutil.rmtree(_keydir, ignore_errors=True)   # the throwaway agent-key dir must not accumulate
 raise SystemExit(1 if _fail else 0)

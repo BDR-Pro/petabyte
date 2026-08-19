@@ -25,6 +25,7 @@
 
   var DEFAULTS = {
     apiBase: '',                                   // same-origin by default
+    apiKey: '',                                    // inference-scoped key: enables the METERED fallback
     model: 'onnx-community/Qwen2.5-0.5B-Instruct', // small instruct model for the demo
     allowOnDevice: true,
     maxTokens: 128,
@@ -79,6 +80,25 @@
 
   async function _fallback(prompt, opts) {
     var base = (opts.apiBase != null ? opts.apiBase : cfg.apiBase) || '';
+    var key = (opts.apiKey != null ? opts.apiKey : cfg.apiKey) || '';
+    if (key) {
+      // Real, metered inference: the authenticated pay-per-token API. /edge/infer never
+      // proxies the GPU pool (it would be an unauthenticated free-compute hole).
+      var rr = await fetch(base + '/v1/chat/completions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-KEY': key },
+        body: JSON.stringify({ prompt: prompt, model: opts.model || cfg.model,
+                               max_tokens: opts.maxTokens || cfg.maxTokens })
+      });
+      if (!rr.ok) {
+        var ee = ''; try { ee = await rr.text(); } catch (_) {}
+        throw new Error('petabyte inference HTTP ' + rr.status + ' ' + ee);
+      }
+      var bb = await rr.json();
+      var txt = '';
+      try { txt = bb.choices[0].message.content || ''; } catch (_) { txt = bb.text || ''; }
+      return { source: 'petabyte', model: bb.model || opts.model || cfg.model, text: txt, meta: bb };
+    }
+    // Keyless: the public prototype placeholder (clearly labelled, never a real model).
     var r = await fetch(base + '/edge/infer', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt: prompt, model: opts.model || cfg.model, max_tokens: opts.maxTokens || cfg.maxTokens })

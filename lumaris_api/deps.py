@@ -46,7 +46,12 @@ def enforce_csrf(request: Request) -> None:
     tok = request.cookies.get(CSRF_COOKIE, "")
     # Double-submit: cookie must equal header; AND the token must carry a valid server HMAC
     # (signed double-submit) so an attacker who can only write the cookie can't forge a pair.
-    if not (sent and tok and _secrets.compare_digest(sent, tok) and csrf_token_valid(tok)):
+    # Compare BYTES: compare_digest raises TypeError on non-ASCII str (headers are
+    # latin-1-decoded, so a client can send 0x80-0xFF bytes) — that must be a 403, not a 500.
+    if not (sent and tok
+            and _secrets.compare_digest(sent.encode("utf-8", "surrogateescape"),
+                                        tok.encode("utf-8", "surrogateescape"))
+            and csrf_token_valid(tok)):
         raise HTTPException(status_code=403, detail="CSRF token missing or invalid")
 
 

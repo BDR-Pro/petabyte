@@ -294,21 +294,25 @@ ok("recoverable debt is computed from the ledger (unpaid nets - payable balance)
 cs.close()
 _os_cb.environ["PAYOUT_AUTONET_CLAWBACK"] = "true"
 cs = dbmod.SessionLocal()
-b_on = routing.create_and_send_batch(cs, dbmod.get_user_by_id(cs, sid_cb),
-                                     currency="usd", min_threshold_minor=100)
-ok("auto-netting reduces the payout by the recoverable debt (1000 - 300 = 700)",
-   b_on is not None and b_on.state == "paid" and b_on.total_amount_minor == 700)
-ok("after netting, the seller owes nothing (recoverable debt cleared)",
-   dbmod.seller_recoverable_debt_minor(cs, sid_cb) == 0)
-ok("after netting, the seller_payable ledger balance is square (0)",
-   int(dbmod.account_balance(cs, dbmod.acct_seller_payable(sid_cb))) == 0)
-_cbtx_row = cs.query(dbmod.ComputeTransaction).filter(dbmod.ComputeTransaction.id == cbtx).first()
-ok("the batch-path clawback tx is flipped needs_review -> reconciled",
-   _cbtx_row.reconciliation_status == "reconciled")
-_onbal, _ = dbmod.ledger_is_balanced(cs)
-ok("ledger balances after clawback auto-netting", _onbal)
-cs.close()
-_os_cb.environ.pop("PAYOUT_AUTONET_CLAWBACK", None)
+try:
+    b_on = routing.create_and_send_batch(cs, dbmod.get_user_by_id(cs, sid_cb),
+                                         currency="usd", min_threshold_minor=100)
+    ok("auto-netting reduces the payout by the recoverable debt (1000 - 300 = 700)",
+       b_on is not None and b_on.state == "paid" and b_on.total_amount_minor == 700)
+    ok("after netting, the seller owes nothing (recoverable debt cleared)",
+       dbmod.seller_recoverable_debt_minor(cs, sid_cb) == 0)
+    ok("after netting, the seller_payable ledger balance is square (0)",
+       int(dbmod.account_balance(cs, dbmod.acct_seller_payable(sid_cb))) == 0)
+    _cbtx_row = cs.query(dbmod.ComputeTransaction).filter(dbmod.ComputeTransaction.id == cbtx).first()
+    ok("the batch-path clawback tx is flipped needs_review -> reconciled",
+       _cbtx_row.reconciliation_status == "reconciled")
+    _onbal, _ = dbmod.ledger_is_balanced(cs)
+    ok("ledger balances after clawback auto-netting", _onbal)
+finally:
+    # ALWAYS drop the flag — an exception above must not leave auto-netting enabled for the
+    # flag-OFF assertions below (they would then fail for the wrong reason).
+    cs.close()
+    _os_cb.environ.pop("PAYOUT_AUTONET_CLAWBACK", None)
 
 # --- flag OFF (default): no netting — full payout, debt persists, tx stays needs_review ---
 sid_off = mk_seller("payout_autonet_off", "US"); approve_sanctions(sid_off)

@@ -1383,6 +1383,11 @@ class RevokedApiKey(Base):
     __tablename__ = "revoked_api_keys"
     jti = Column(String, primary_key=True, index=True)
     revoked_at = Column(DateTime, default=_utcnow)
+    # The revoked token's own expiry, when the revoker knows it (session-JWT logout does).
+    # Once past, the token is dead with or without this row, so maintenance can prune it —
+    # otherwise the denylist (checked on EVERY authenticated request) grows forever.
+    # NULL = unknown lifetime (e.g. an API key revoked by jti alone): kept indefinitely.
+    expires_at = Column(DateTime, nullable=True)
 
 
 class NodeInstallToken(Base):
@@ -1486,10 +1491,13 @@ def charge_wallet(db: Session, user_id: int, amount, *, reference_type: str,
     # Keep the Platform.revenue scalar in lockstep with the PLATFORM_REVENUE ledger account,
     # exactly like the booking-settlement paths — otherwise every metered charge (data API,
     # inference) would break the "platform revenue == ledger" reconciliation invariant.
-    plat = db.query(Platform).first()
-    if plat is None:
-        plat = Platform(revenue=Decimal(0)); db.add(plat); db.flush()
-    plat.revenue = q(D(plat.revenue) + amt)
+    # Atomic increment: two concurrent metered charges must both land (no stale RMW).
+    if not db.execute(update(Platform).values(revenue=Platform.revenue + amt)).rowcount:
+        plat = db.query(Platform).first()          # first-ever charge: bootstrap the singleton
+        if plat is None:
+            db.add(Platform(revenue=amt))
+        else:
+            plat.revenue = q(D(plat.revenue) + amt)
     db.commit()
     return True
 
@@ -1571,7 +1579,13 @@ def meter_tokens(db: Session, user_id: int, *, prompt_tokens: int, completion_to
     if row is None:
         row = ApiUsage(user_id=user_id, period=period, calls=0, billed_calls=0,
                        amount_usd=Decimal(0))
-        db.add(row); db.flush()
+        db.add(row)
+        try:
+            db.flush()
+        except IntegrityError:      # concurrent first call of the month (uq_api_usage_user_period)
+            db.rollback()
+            row = (db.query(ApiUsage)
+                   .filter(ApiUsage.user_id == user_id, ApiUsage.period == period).one())
     p = max(0, int(prompt_tokens or 0)); c = max(0, int(completion_tokens or 0))
     total = p + c
     charge = q((D(p) * D(str(price_in_per_mtok)) + D(c) * D(str(price_out_per_mtok)))
@@ -2202,6 +2216,7 @@ def _ensure_columns():
         "compute_transactions": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
         "payout_obligations": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
         "payout_batches": [("mode", "VARCHAR NOT NULL DEFAULT 'TEST'")],
+        "revoked_api_keys": [("expires_at", "TIMESTAMP")],
         "connected_accounts": [("gateway_mode", "VARCHAR")],
         "tasks": [("result_content_hash", "VARCHAR"),
                   ("result_signature", "VARCHAR"), ("result_proof", "TEXT")],
@@ -2969,13 +2984,24 @@ def get_booking_by_id(db: Session, booking_id: int) -> Booking | None:
 
 # ------------------ API key revocation ------------------
 
-def revoke_jti(db: Session, jti: str) -> None:
+def revoke_jti(db: Session, jti: str, expires_at: datetime = None) -> None:
     if not db.query(RevokedApiKey).filter(RevokedApiKey.jti == jti).first():
-        db.add(RevokedApiKey(jti=jti)); db.commit()
+        db.add(RevokedApiKey(jti=jti, expires_at=expires_at)); db.commit()
 
 
 def is_jti_revoked(db: Session, jti: str) -> bool:
     return db.query(RevokedApiKey).filter(RevokedApiKey.jti == jti).first() is not None
+
+
+def prune_expired_revocations(db: Session) -> int:
+    """Drop denylist rows whose token is past its own recorded expiry — the token can no
+    longer authenticate anyway, so the row only slows the per-request revocation lookup.
+    Rows with no known expiry are kept forever (fail-safe)."""
+    n = (db.query(RevokedApiKey)
+         .filter(RevokedApiKey.expires_at.isnot(None), RevokedApiKey.expires_at < _utcnow())
+         .delete(synchronize_session=False))
+    db.commit()
+    return int(n or 0)
 
 
 # ------------------ WireGuard peer (race-safe allocation) ------------------
@@ -3524,8 +3550,10 @@ def credit_user_from_webhook(db: Session, event_id: str, username: str, amount) 
     if not user:
         db.rollback()                    # release the claim so a corrected retry can still credit
         return "unknown_user"
-    user.balance = q(D(user.balance) + amount)
-    db.add(user)
+    # Atomic server-side increment (try_debit's pattern): a concurrent spend between our read
+    # of `user` and this commit must not be overwritten by a stale Python-side sum.
+    db.execute(update(User).where(User.id == user.id)
+               .values(balance=User.balance + amount))
     post(db, "deposit", legs=[
         (EXTERNAL_PAYMENTS,   DEBIT,  amount),
         (acct_buyer(user.id), CREDIT, amount, user.id),
@@ -4224,17 +4252,28 @@ def request_payout(db: Session, user: "User", method: "SellerPayoutMethod",
 
 def set_payout_status(db: Session, payout: "Payout", status: str,
                       provider_ref: str = None, reason: str = None) -> None:
-    prev = payout.status
-    payout.status = status
-    payout.updated_at = _utcnow()
+    vals = {"status": status, "updated_at": _utcnow()}
     if provider_ref:
-        payout.provider_ref = provider_ref
+        vals["provider_ref"] = provider_ref
     if reason:
-        payout.reason = reason
-    db.add(payout); db.commit()
-    # Return the money on failure, exactly ONCE (guard on prior status so a retried/duplicate
-    # 'failed' can't double-credit).
-    if status == "failed" and prev != "failed":
+        vals["reason"] = reason
+    # CLAIM the failed transition with a conditional UPDATE so exactly ONE caller wins even
+    # under concurrency — an in-Python `prev != "failed"` guard reads a stale status, and two
+    # racing 'failed' writers would then both run the reversal (double-credit).
+    claimed_failed = False
+    if status == "failed":
+        claimed_failed = bool(db.execute(
+            update(Payout).where(Payout.id == payout.id, Payout.status != "failed")
+            .values(**vals)).rowcount)
+        if not claimed_failed:                       # already failed: refresh refs only
+            db.execute(update(Payout).where(Payout.id == payout.id)
+                       .values(**{k: v for k, v in vals.items() if k != "status"}))
+    else:
+        db.execute(update(Payout).where(Payout.id == payout.id).values(**vals))
+    db.commit()
+    db.refresh(payout)
+    # Return the money on failure, exactly ONCE (the atomic claim above guarantees it).
+    if claimed_failed:
         gross = q(payout.amount_usd) + q(payout.fee_usd or 0)   # net that would ship + instant fee
         net = q(payout.amount_usd)
         fee = q(payout.fee_usd or 0)

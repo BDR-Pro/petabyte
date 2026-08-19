@@ -406,7 +406,17 @@ def run(args) -> dict:
         # account) so the demo proves buyer -> GPU -> payout -> receipt end to end.
         admin_user = os.getenv("E2E_ADMIN_USERNAME")
         admin_pass = os.getenv("E2E_ADMIN_PASSWORD")
-        if args.settle_payout and admin_user and admin_pass:
+        if args.settle_payout and not (admin_user and admin_pass):
+            # The operator EXPLICITLY asked for the payout leg — running without it must be a
+            # visible failure, never a green "pending by design" report.
+            report["seller_settlement"] = {
+                "transferred_now": final.get("transferred_amount", 0),
+                "status": ("--settle-payout was requested but E2E_ADMIN_USERNAME/"
+                           "E2E_ADMIN_PASSWORD are not set; the payout leg did not run."),
+            }
+            stage("payout", "FAIL", reason="missing admin credentials")
+            payout_ok = False
+        elif args.settle_payout:
             settled = _drive_payout(args.api, admin_user, admin_pass, tx)
             report["seller_settlement"] = settled
             stage("payout", "PASS" if settled.get("paid") else "FAIL",

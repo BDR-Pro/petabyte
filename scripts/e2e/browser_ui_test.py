@@ -192,13 +192,13 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         page.wait_for_selector("#tgrid .pick", timeout=20000)
         ok("launch: workload cards render from the curated catalog (/templates)",
            page.locator("#tgrid .pick").count() >= 5)
-        page.click('#tgrid .pick[data-v="pytorch"]')
+        page.click('#tgrid .pick[data-v="jupyter"]')
         page.wait_for_selector("#costbody .sumrow", timeout=20000)
         cost = page.text_content("#costbody") or ""
         ok("launch: server-priced cost panel appears after choosing a template",
            "$" in cost and "Estimated total" in cost)
         ok("launch: the chosen template is visually selected (aria-checked)",
-           page.get_attribute('#tgrid .pick[data-v="pytorch"]', "aria-checked") == "true")
+           page.get_attribute('#tgrid .pick[data-v="jupyter"]', "aria-checked") == "true")
         ok("launch: a Review & Launch action is offered to the signed-in buyer",
            page.locator("#reviewbtn").is_visible())
         # change the template — selection must move
@@ -206,7 +206,7 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         page.wait_for_timeout(300)
         ok("launch: changing the template updates the selection",
            page.get_attribute('#tgrid .pick[data-v="ollama"]', "aria-checked") == "true"
-           and page.get_attribute('#tgrid .pick[data-v="pytorch"]', "aria-checked") == "false")
+           and page.get_attribute('#tgrid .pick[data-v="jupyter"]', "aria-checked") == "false")
         # save a reusable launch template (localStorage, no secrets) + survive reload
         page.click("#savetplbtn")
         page.wait_for_timeout(400)
@@ -240,7 +240,7 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         apage.goto(B + "/launch", wait_until="domcontentloaded")
         apage.wait_for_selector("#tgrid .pick", timeout=20000)
         ok("launch [anon]: guests see a sign-in prompt", apage.locator("#lc_signedout").is_visible())
-        apage.click('#tgrid .pick[data-v="pytorch"]')
+        apage.click('#tgrid .pick[data-v="jupyter"]')
         apage.wait_for_timeout(800)
         ok("launch [anon]: the launch action is hidden until sign-in",
            not apage.locator("#reviewbtn").is_visible())

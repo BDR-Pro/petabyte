@@ -148,6 +148,46 @@ _pg = c.get("/admin/desktop")
 ok("the admin publish page renders a browser upload form",
    _pg.status_code == 200 and "/admin/desktop/release" in _pg.text and "Publish" in _pg.text)
 
+# ---- CSRF: the browser form authenticates via the session COOKIE, so an unsafe write needs
+# the signed double-submit token — a cookie alone must never publish a build ----
+_cc = TestClient(main.app)
+_cc.post("/login", data={"username": "deskadmin", "password": "hunter2-correct-horse"})
+_files3 = {"exe": ("PetabyteAgent.exe", EXE, "application/octet-stream"),
+           "manifest": ("PetabyteAgent.exe.manifest.json",
+                        json.dumps(_signed_manifest(EXE, version="1.6.0")).encode(),
+                        "application/json")}
+ok("cookie-auth publish WITHOUT X-CSRF-Token -> 403 (CSRF-blocked)",
+   _cc.post("/admin/desktop/release", files=_files3).status_code == 403)
+ok("cookie-auth publish WITH the matching signed X-CSRF-Token is not CSRF-blocked",
+   _cc.post("/admin/desktop/release", files=_files3,
+            headers={"X-CSRF-Token": _cc.cookies.get("pb_csrf")}).status_code == 200)
+
+# ---- deployment risk: a REAL deployment must refuse to start with no release trust root —
+# without PETABYTE_RELEASE_PUBKEY, any self-consistent exe+manifest pair would be accepted
+# and served to NEW installs that have no pinned updater key to verify against ----
+_saved_env = {k: os.environ.get(k) for k in
+              ("ENVIRONMENT", "PETABYTE_RELEASE_PUBKEY", "STRIPE_GATEWAY", "SECRET_KEY",
+               "GOOGLE_OAUTH_STUB", "PAYOUT_STUB", "S3_STUB")}
+_saved_mode = main.PAYMENTS_MODE
+try:
+    os.environ["ENVIRONMENT"] = "production"
+    os.environ["STRIPE_GATEWAY"] = "real"
+    os.environ["SECRET_KEY"] = "a-strong-production-secret-key-0123456789abcdef"
+    for _k in ("GOOGLE_OAUTH_STUB", "PAYOUT_STUB", "S3_STUB", "PETABYTE_RELEASE_PUBKEY"):
+        os.environ.pop(_k, None)
+    main.PAYMENTS_MODE = "live"
+    _raised = ""
+    try:
+        main._assert_production_is_safe()
+    except RuntimeError as e:
+        _raised = str(e)
+    ok("production startup REFUSES to run without PETABYTE_RELEASE_PUBKEY (unverified builds)",
+       "PETABYTE_RELEASE_PUBKEY" in _raised)
+finally:
+    main.PAYMENTS_MODE = _saved_mode
+    for _k, _v in _saved_env.items():
+        os.environ.pop(_k, None) if _v is None else os.environ.__setitem__(_k, _v)
+
 shutil.rmtree(main._desktop_release_dir(), ignore_errors=True)   # leave no artifacts behind
 print(f"\n=== desktop_release: {'0 failures' if _fail == 0 else str(_fail) + ' FAILED'} ===")
 raise SystemExit(1 if _fail else 0)
