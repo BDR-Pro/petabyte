@@ -363,6 +363,12 @@ html[dir="rtl"] .arrow-fwd::after{content:"←"}
    A host checks "is my node earning?" from their phone, in bed. A 7-column table
    scrolled sideways is useless there. Below 720px every .tbl collapses into stacked
    cards, each row labelled by its header via data-l. */
+@media(max-width:480px){
+  /* Phone ergonomics contract (enforced by browser_ui_test): text inputs at ≥16px so iOS
+     never zooms on focus, and every tappable control at the ~44px HIG tap-target minimum. */
+  input:not([type=checkbox]):not([type=radio]),select,textarea{font-size:16px}
+  button,.btn{min-height:44px}
+}
 @media(max-width:720px){
   .wrap{padding:0 16px}
   h1{font-size:clamp(28px,8vw,40px)!important}

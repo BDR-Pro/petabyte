@@ -392,8 +392,9 @@ def run(pw, buyer_t, seller_t, pub, role_t):
            "; ".join(x for k, x in errs if _serious(x))[:120])
         page.close()
 
-        # inputs on the auth + onboarding forms must also be zoom-proof, and long code wraps
-        for path, sel in [("/login", "#u"), ("/install", "#calc_price")]:
+        # inputs on the auth + calculator forms must also be zoom-proof, and long code wraps
+        # (the /install inline calculator moved to /roi — its #kwh input is the analog)
+        for path, sel in [("/login", "#u"), ("/roi", "#kwh")]:
             page = browser.new_page(viewport={"width": 390, "height": 844}, is_mobile=True)
             page.goto(B + path, wait_until="domcontentloaded")
             page.wait_for_selector(sel, timeout=15000)
