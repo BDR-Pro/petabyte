@@ -377,6 +377,12 @@ variables:
     scope:
     - platform
     description: ''
+  EDGE_INFERENCE_ENABLED:
+    required: false
+    default: 'false'
+    scope:
+    - platform
+    description: ''
   EMAIL_FROM:
     required: false
     default: no-reply@petabyte.market

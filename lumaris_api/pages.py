@@ -923,6 +923,7 @@ INSTALL_HTML = _page("Petabyte — become a seller",
   <div class="eyebrow"><span class="dot"></span> <span data-ar="تسجيل جهاز">node onboarding</span></div>
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px" data-ar="أدرِج كرت رسوماتك بأمرٍ واحد">List your GPU in <span class="grad-teal">one command</span></h1>
   <p class="mut" style="max-width:56ch" data-ar="أي جهاز NVIDIA يمكن أن يصبح عقدة. يتحقق المُثبِّت من عتادك، ويعزل المهام داخل Docker، ويجعلك متصلاً خلال ٣٠ ثانية تقريباً. دون حصرية.">Any NVIDIA machine can become a node. The installer verifies your hardware, sandboxes jobs in Docker, and brings you online in ~30 seconds. No exclusivity.</p>
+  <p class="mut" style="font-size:13px;margin-top:6px" data-ar="لست متأكداً أن كرت رسوماتك مؤهل؟ اختبره في متصفحك خلال ثوانٍ — دون تثبيت.">Not sure your GPU qualifies? <a class="teal" href="/mysystem">Test it in your browser in seconds →</a> (no install)</p>
 </div>
 <!-- choose how to start: the friendly Windows app first, the one-command path second -->
 <div class="wrap" style="padding:6px 22px 0">
@@ -1064,6 +1065,241 @@ async function walletStart(a1, btn){
 }
 (function(){var si=document.getElementById('iksignin'),gn=document.getElementById('ikgen');
   if(authed()){if(gn)gn.style.display='';}else{if(si)si.style.display='';}})();
+</script>""")
+
+
+# In-browser WebGPU self-benchmark — a zero-install "will my machine work / how fast is it" check
+# that funnels prospective sellers into /install. Deliberately CSP-clean: pure WGSL, NO external
+# fetch, NO wasm, NO model download — so it needs no CSP relaxation. It is INDICATIVE ONLY and is
+# kept strictly separate from the attested `benchmark` task type (agent-side, Ed25519-signed, sets
+# trust/pricing). The page says so loudly: a browser cannot identify the real GPU and is throttled.
+MYSYSTEM_HTML = _page("Petabyte — test your GPU in your browser",
+    desc="Run a free WebGPU benchmark in your browser — no install. See a rough GPU score in seconds, then bring your GPU online to earn with the verified agent benchmark.",
+    path="/mysystem", body="""
+<div class="wrap" style="padding:52px 22px 8px;max-width:820px">
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="اختبر جهازك">test your GPU</span></div>
+  <h1 style="font-size:clamp(28px,5vw,40px);margin:14px 0 8px" data-ar="اختبر كرت رسوماتك في متصفحك">Test your GPU <span class="grad-teal">in your browser</span></h1>
+  <p class="mut" style="max-width:62ch" data-ar="فحص سريع بلا تثبيت: يشغّل WebGPU مباشرةً في متصفحك ويعطيك تقديراً لأداء كرت رسوماتك خلال ثوانٍ. رقم استرشادي فقط — المتصفح لا يستطيع تحديد نوع كرتك بدقة ويحدّ من الأداء. للأرقام الموثّقة التي تحدّد أرباحك، ثبّت الوكيل.">A no-install check: it runs a small WebGPU compute test right here and estimates your GPU's throughput in seconds. This is an <b>indicative</b> number only — the browser can't identify your exact GPU and throttles performance. For the <b class="teal">verified</b> benchmark that sets your earnings, install the agent.</p>
+</div>
+
+<div class="wrap" style="padding:8px 22px 0;max-width:820px">
+  <div class="card">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-teal" id="runbtn" data-ar="شغّل الفحص">Run the benchmark</button>
+      <span id="status" class="mut mono" style="font-size:13px"></span>
+    </div>
+    <div id="results" style="display:none;margin-top:16px">
+      <div class="cols c2" style="gap:12px">
+        <div class="card" style="margin:0"><div class="lbl">Est. FP32 throughput</div><div id="r_gflops" style="font-size:26px;font-weight:700" class="grad-teal">—</div><div class="mut" style="font-size:12px">GFLOP/s (dense matmul, indicative)</div></div>
+        <div class="card" style="margin:0"><div class="lbl">Rough class</div><div id="r_class" style="font-size:22px;font-weight:700">—</div><div class="mut" style="font-size:12px" id="r_class_note">based on the browser result</div></div>
+      </div>
+      <div class="card" style="margin-top:12px"><div class="lbl">What the browser can see</div>
+        <table style="width:100%;border-collapse:collapse;font-size:13.5px" id="r_table"></table>
+        <p class="mut" style="font-size:11.5px;margin-top:10px">WebGPU deliberately hides your exact GPU for privacy, caps memory well below a datacenter card, and doesn't expose tensor cores — so a real H100 and a laptop can't be told apart from here, and true peak FP16/tensor throughput isn't measurable in a browser. That's why this is a screening tool, not a certificate.</p>
+      </div>
+    </div>
+    <div id="nowebgpu" style="display:none;margin-top:14px">
+      <div class="card" style="margin:0;border-color:rgba(240,180,41,.35)"><div class="lbl am">WebGPU not available</div>
+        <p class="mut" style="margin:2px 0 0">Your browser didn't expose WebGPU. Try the latest Chrome, Edge, or Firefox on a machine with a GPU. Either way, the <b class="teal">agent</b> runs a native CUDA benchmark that doesn't depend on your browser — that's the one that counts.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap" style="padding:14px 22px 30px;max-width:820px">
+  <div class="card" style="border-color:rgba(79,214,201,.35);background:linear-gradient(180deg,rgba(79,214,201,.06),transparent)">
+    <div class="lbl" data-ar="الخطوة التالية">Next step · earn from this GPU</div>
+    <p class="mut" style="margin:2px 0 12px" data-ar="ثبّت الوكيل لتشغيل مقياس الأداء الموثّق (موقّع على جهازك) الذي يحدّد سعرك، ثم استقبل مهام مدفوعة.">Install the agent to run the <b>verified, signed</b> benchmark on your machine — that's what sets your hourly price and lets you accept paid jobs.</p>
+    <a class="btn btn-teal arrow-fwd" href="/install" data-ar="أدرِج كرت رسوماتك">Bring this GPU online →</a>
+  </div>
+</div>
+
+<script>
+(function(){
+  var runbtn=document.getElementById('runbtn'), statusEl=document.getElementById('status');
+  var results=document.getElementById('results'), nowebgpu=document.getElementById('nowebgpu');
+  function set(s){ statusEl.textContent=s; }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+  function fmtBytes(b){ if(!b) return '—'; var g=b/1073741824; if(g>=1) return g.toFixed(2)+' GB'; return (b/1048576).toFixed(0)+' MB'; }
+  function classify(g){
+    if(g>=8000) return ['Datacenter-class','looks like a strong discrete/datacenter GPU (indicative)'];
+    if(g>=2500) return ['High-end desktop','a capable desktop GPU — great for paid inference/render'];
+    if(g>=700)  return ['Mainstream GPU','a usable GPU; smaller models and batch jobs'];
+    if(g>=120)  return ['Entry / laptop','light workloads; the agent may still qualify it'];
+    return ['Integrated / weak','likely integrated graphics — limited for paid compute'];
+  }
+  if(!('gpu' in navigator) || !navigator.gpu){ runbtn.disabled=true; nowebgpu.style.display=''; set('WebGPU unavailable in this browser.'); return; }
+
+  var N=512, WG=16;
+  var SHADER =
+    '@group(0) @binding(0) var<storage, read> A : array<f32>;\\n'+
+    '@group(0) @binding(1) var<storage, read> B : array<f32>;\\n'+
+    '@group(0) @binding(2) var<storage, read_write> C : array<f32>;\\n'+
+    '@compute @workgroup_size('+WG+','+WG+')\\n'+
+    'fn main(@builtin(global_invocation_id) gid : vec3<u32>) {\\n'+
+    '  let row = gid.x; let col = gid.y;\\n'+
+    '  if (row >= '+N+'u || col >= '+N+'u) { return; }\\n'+
+    '  var acc : f32 = 0.0;\\n'+
+    '  for (var k : u32 = 0u; k < '+N+'u; k = k + 1u) { acc = acc + A[row*'+N+'u + k] * B[k*'+N+'u + col]; }\\n'+
+    '  C[row*'+N+'u + col] = acc;\\n'+
+    '}';
+
+  async function bench(){
+    runbtn.disabled=true; results.style.display='none'; set('requesting GPU adapter…');
+    var adapter = await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
+    if(!adapter){ nowebgpu.style.display=''; set('no WebGPU adapter.'); runbtn.disabled=false; return; }
+    var hasF16 = adapter.features && adapter.features.has && adapter.features.has('shader-f16');
+    var device = await adapter.requestDevice();
+    device.addEventListener && device.addEventListener('uncapturederror', function(e){ set('GPU error: '+e.error.message); });
+    var info={}; try{ info = adapter.info || (adapter.requestAdapterInfo ? await adapter.requestAdapterInfo() : {}); }catch(e){}
+
+    set('allocating buffers…');
+    var bytes=N*N*4;
+    function buf(usage){ return device.createBuffer({size:bytes, usage:usage}); }
+    var A=buf(GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);
+    var B=buf(GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);
+    var C=buf(GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC);
+    var fill=new Float32Array(N*N); for(var i=0;i<fill.length;i++) fill[i]=(i%97)*0.01+0.5;
+    device.queue.writeBuffer(A,0,fill); device.queue.writeBuffer(B,0,fill);
+    var mod=device.createShaderModule({code:SHADER});
+    var pipe=device.createComputePipeline({layout:'auto', compute:{module:mod, entryPoint:'main'}});
+    var bind=device.createBindGroup({layout:pipe.getBindGroupLayout(0), entries:[
+      {binding:0,resource:{buffer:A}},{binding:1,resource:{buffer:B}},{binding:2,resource:{buffer:C}}]});
+    var groups=Math.ceil(N/WG);
+
+    async function runIters(iters){
+      var enc=device.createCommandEncoder(); var pass=enc.beginComputePass();
+      pass.setPipeline(pipe); pass.setBindGroup(0,bind);
+      for(var i=0;i<iters;i++){ pass.dispatchWorkgroups(groups,groups); }
+      pass.end(); device.queue.submit([enc.finish()]); await device.queue.onSubmittedWorkDone();
+    }
+    set('warming up…'); await runIters(4);
+    // grow iteration count until a run takes >=150ms, for a stable estimate
+    var iters=8, elapsed=0, t0;
+    for(var tries=0; tries<8; tries++){
+      t0=performance.now(); await runIters(iters); elapsed=performance.now()-t0;
+      if(elapsed>=150) break; iters=Math.min(iters*2, 1024);
+      set('measuring… ('+iters+' passes)');
+    }
+    var best=elapsed;
+    // second timed run, keep the faster (less noise / scheduler warmup)
+    t0=performance.now(); await runIters(iters); var e2=performance.now()-t0; if(e2<best) best=e2;
+    var flops=2*N*N*N*iters, gflops=flops/1e9/(best/1000);
+
+    // touch the output so the write can't be optimized away
+    try{ var rb=device.createBuffer({size:16, usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
+      var e3=device.createCommandEncoder(); e3.copyBufferToBuffer(C,0,rb,0,16); device.queue.submit([e3.finish()]);
+      await rb.mapAsync(GPUMapMode.READ); rb.unmap(); }catch(e){}
+
+    var g=Math.round(gflops), cls=classify(g);
+    document.getElementById('r_gflops').textContent=g.toLocaleString();
+    document.getElementById('r_class').textContent=cls[0];
+    document.getElementById('r_class_note').textContent=cls[1];
+    var rows=[
+      ['Vendor', esc(info.vendor)||'(hidden by browser)'],
+      ['Architecture', esc(info.architecture)||'(hidden)'],
+      ['Description', esc(info.description)||'(hidden)'],
+      ['FP16 (shader-f16)', hasF16?'supported':'not exposed'],
+      ['Max buffer size', fmtBytes(device.limits.maxBufferSize)],
+      ['Max storage binding', fmtBytes(device.limits.maxStorageBufferBindingSize)],
+      ['Test', N+'×'+N+' matmul · '+iters+' passes · best '+best.toFixed(0)+' ms']
+    ];
+    document.getElementById('r_table').innerHTML=rows.map(function(r){
+      return '<tr><td style="padding:5px 8px;color:var(--muted);white-space:nowrap">'+r[0]+'</td><td style="padding:5px 8px;font-family:ui-monospace,monospace">'+r[1]+'</td></tr>';
+    }).join('');
+    results.style.display=''; set('done · indicative only'); runbtn.disabled=false;
+    try{ device.destroy&&device.destroy(); }catch(e){}
+  }
+  runbtn.addEventListener('click', function(){ bench().catch(function(err){ set('benchmark failed: '+(err&&err.message||err)); runbtn.disabled=false; }); });
+})();
+</script>""")
+
+
+# Edge-Inference SDK demo (#3-reframed): run an AI feature on the VISITOR'S own WebGPU (free to
+# the site) with a metered Petabyte-API fallback — the consent-based inverse of "mine visitors
+# for ads". The SDK is /static/petabyte-edge.js; the paid fallback is POST /edge/infer. On-device
+# model loading is opt-in (EDGE_INFERENCE_ENABLED widens the CSP); by default the demo uses the
+# fallback path, which always works. Nothing here fakes a real completion.
+EDGE_HTML = _page("Petabyte — Edge Inference SDK",
+    desc="Add an AI feature that runs on your visitors' own GPUs (free), with a metered Petabyte GPU fallback. The ad-free way to monetize and power web apps.",
+    path="/edge", body="""
+<div class="wrap" style="padding:52px 22px 8px;max-width:860px">
+  <div class="eyebrow"><span class="dot"></span> <span>developer preview · edge inference</span></div>
+  <h1 style="font-size:clamp(28px,5vw,40px);margin:14px 0 8px">AI on your visitors' GPUs — <span class="grad-teal">not ads</span></h1>
+  <p class="mut" style="max-width:64ch">Drop in one script and your site gets an AI feature that runs <b>on the visitor's own GPU</b> via WebGPU — free to you. When a visitor has no capable GPU, it falls back to a <b class="teal">metered Petabyte GPU</b> through the API. The user asked for the feature and their device serves it — the honest inverse of mining visitors for ad revenue.</p>
+</div>
+
+<div class="wrap" style="padding:8px 22px 0;max-width:860px">
+  <div class="card">
+    <div class="lbl">Live demo</div>
+    <div id="edgecap" class="mono mut" style="font-size:12.5px;margin:2px 0 10px">detecting capabilities…</div>
+    <textarea id="edgeprompt" rows="3" style="width:100%;font-family:inherit;resize:vertical" placeholder="Ask something…">Explain what a GPU marketplace is, in one sentence.</textarea>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:10px">
+      <button class="btn btn-teal" id="edgerun">Run</button>
+      <label class="mut" style="font-size:13px;display:flex;gap:6px;align-items:center">
+        <input type="checkbox" id="edgeondevice"/> try on-device (WebGPU)</label>
+      <span id="edgestatus" class="mono mut" style="font-size:12.5px"></span>
+    </div>
+    <div id="edgeout" style="display:none;margin-top:14px">
+      <div style="margin-bottom:8px"><span id="edgesrc" class="lbl" style="display:inline-block;padding:3px 9px;border-radius:999px"></span></div>
+      <div id="edgetext" class="card" style="margin:0;white-space:pre-wrap"></div>
+    </div>
+    <p class="mut" style="font-size:11.5px;margin-top:12px">On-device model loading is <b>off by default</b> (it needs the operator to set <span class="mono">EDGE_INFERENCE_ENABLED=true</span>, which widens the page CSP to fetch model weights). Until then — and on any device without WebGPU — this demo uses the Petabyte API fallback, which is itself a <b>prototype</b> responder here (production routes to a rented GPU). Nothing on this page fakes a real model output.</p>
+  </div>
+</div>
+
+<div class="wrap" style="padding:14px 22px 0;max-width:860px">
+  <div class="cols c2" style="gap:14px">
+    <div class="card" style="margin:0"><div class="lbl teal">On-device (visitor's GPU)</div>
+      <p class="mut" style="font-size:13px;margin:4px 0 0">Runs the model in the browser with WebGPU. <b>$0</b> inference cost to your site. Private — the prompt never leaves the device.</p></div>
+    <div class="card" style="margin:0"><div class="lbl am">Fallback (Petabyte GPU)</div>
+      <p class="mut" style="font-size:13px;margin:4px 0 0">No GPU on the visitor's device? The same call is served by a metered Petabyte GPU via the API — <b>you only pay when the client can't.</b></p></div>
+  </div>
+</div>
+
+<div class="wrap" style="padding:14px 22px 30px;max-width:860px">
+  <div class="card"><div class="lbl">Integrate in three lines</div>
+    <pre style="white-space:pre-wrap">&lt;script src="https://petabyte.market/static/petabyte-edge.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+  PetabyteEdge.configure({ apiBase: 'https://petabyte.market', model: 'onnx-community/Qwen2.5-0.5B-Instruct' });
+  const r = await PetabyteEdge.infer('Summarize: ' + text);   // r.source = 'on-device' | 'petabyte'
+&lt;/script&gt;</pre>
+    <p class="mut" style="font-size:12.5px;margin-top:9px">Full contract and the production fallback wiring: <a class="teal" href="https://github.com/BDR-Pro/petabyte/blob/main/docs/EDGE_INFERENCE.md">docs/EDGE_INFERENCE.md</a>. Developer keys: <a class="teal" href="/keys">/keys</a>.</p>
+  </div>
+</div>
+
+<script src="/static/petabyte-edge.js"></script>
+<script>
+(function(){
+  var cap=document.getElementById('edgecap'), runb=document.getElementById('edgerun');
+  var out=document.getElementById('edgeout'), txt=document.getElementById('edgetext');
+  var srcb=document.getElementById('edgesrc'), st=document.getElementById('edgestatus');
+  var od=document.getElementById('edgeondevice');
+  if(!global_ok()){ cap.textContent='PetabyteEdge SDK failed to load.'; return; }
+  function global_ok(){ return typeof PetabyteEdge!=='undefined'; }
+  PetabyteEdge.configure({ apiBase:'' });
+  PetabyteEdge.capabilities().then(function(c){
+    if(c.webgpu){ cap.textContent='WebGPU: available'+(c.f16?' · FP16 supported':'')+'  — you can try on-device.'; od.checked=false; }
+    else { cap.textContent='WebGPU: not available — requests will use the Petabyte fallback.'; od.checked=false; od.disabled=true; }
+  });
+  runb.addEventListener('click', function(){
+    var p=document.getElementById('edgeprompt').value.trim(); if(!p){ st.textContent='enter a prompt'; return; }
+    runb.disabled=true; out.style.display='none'; st.textContent = od.checked ? 'loading on-device model…' : 'calling Petabyte fallback…';
+    var t0=performance.now();
+    PetabyteEdge.infer(p, { allowOnDevice: od.checked,
+      onProgress:function(x){ if(x&&x.status) st.textContent='on-device: '+x.status+(x.progress?(' '+Math.round(x.progress)+'%'):''); },
+      onFallback:function(e){ st.textContent='on-device unavailable ('+(e&&e.message||e)+') → fallback'; }
+    }).then(function(r){
+      var ms=Math.round(performance.now()-t0);
+      var onDev = r.source==='on-device';
+      srcb.textContent = onDev ? 'served on-device · $0 to the site' : 'served by Petabyte fallback (metered)';
+      srcb.style.background = onDev ? 'rgba(79,214,201,.18)' : 'rgba(240,180,41,.18)';
+      srcb.style.color = onDev ? 'var(--teal)' : 'var(--amber)';
+      txt.textContent = r.text || '(empty)';
+      out.style.display=''; st.textContent='done · '+ms+' ms'; runb.disabled=false;
+    }).catch(function(e){ st.textContent='error: '+(e&&e.message||e); runb.disabled=false; });
+  });
+})();
 </script>""")
 
 

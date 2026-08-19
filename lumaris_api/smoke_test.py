@@ -304,6 +304,36 @@ ok("the Windows-app button degrades honestly (early-access page, not a dead link
 _ins=c.get("/install")
 ok("the seller page leads with a friendly app option + links the FAQ",
    _ins.status_code==200 and "Get the Windows app" in _ins.text and "/faq" in _ins.text)
+ok("the /install page funnels to the in-browser GPU self-test (/mysystem)", "/mysystem" in _ins.text)
+
+# WebGPU #1: in-browser self-benchmark. Public, CSP-clean, and clearly SEPARATE from the attested
+# benchmark — it must never claim to set trust/pricing.
+_ms=c.get("/mysystem")
+ok("/mysystem renders a WebGPU self-benchmark and funnels to /install",
+   _ms.status_code==200 and "webgpu" in _ms.text.lower() and "/install" in _ms.text)
+ok("/mysystem is honest: labelled indicative, not the verified/attested benchmark",
+   "indicative" in _ms.text.lower() and "verified" in _ms.text.lower()
+   and "benchmark_verified" not in _ms.text)
+
+# WebGPU #3: Edge-Inference SDK + demo + metered fallback endpoint.
+_edge=c.get("/edge")
+ok("/edge demo loads the Edge-Inference SDK and explains on-device + fallback",
+   _edge.status_code==200 and "/static/petabyte-edge.js" in _edge.text
+   and "fallback" in _edge.text.lower() and "on-device" in _edge.text.lower())
+_sdk=c.get("/static/petabyte-edge.js")
+ok("the Edge SDK is served with a JS content-type",
+   _sdk.status_code==200 and "javascript" in _sdk.headers.get("content-type","")
+   and "PetabyteEdge" in _sdk.text)
+_ei=c.post("/edge/infer", json={"prompt":"hello"})
+_eij=_ei.json() if _ei.status_code==200 else {}
+ok("POST /edge/infer returns a labelled prototype fallback (never fakes a real completion)",
+   _ei.status_code==200 and _eij.get("source")=="petabyte-fallback" and _eij.get("prototype") is True)
+ok("POST /edge/infer rejects an empty prompt", c.post("/edge/infer", json={"prompt":"  "}).status_code==400)
+# On-device inference (and its CSP widening) is OFF by default -> the CSP the browser gets must
+# stay locked down: no wasm-eval, no external model host in connect-src.
+_csp=c.get("/edge").headers.get("Content-Security-Policy","")
+ok("edge on-device is opt-in: default CSP stays locked (no wasm-unsafe-eval / no external connect-src)",
+   "wasm-unsafe-eval" not in _csp and "huggingface.co" not in _csp and "connect-src 'self';" in _csp)
 
 # REFUND ON REAP: new booking, node dies, settle refunds buyer
 c.post("/heartbeat", headers={"X-API-KEY":s3key}, json={"spec_id":sid3})

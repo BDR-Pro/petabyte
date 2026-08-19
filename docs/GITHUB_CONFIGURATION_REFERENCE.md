@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (224)
+## Variables (non-sensitive) (225)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -70,6 +70,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `E2E_SELLER_B_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e second seller (isolation, TEST). |
 | `E2E_SELLER_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e seller login (TEST account). |
 | `EARNINGS_HOLD_HOURS` | no | platform | `24` | `24` | api/db.py | — | — |
+| `EDGE_INFERENCE_ENABLED` | no | platform | `false` | `false` | api/main.py | — | — |
 | `EMAIL_FROM` | no | platform | `no-reply@petabyte.market` | `no-reply@petabyte.market` | api/notify_providers.py | — | — |
 | `EMAIL_PROVIDER` | no | platform | `mailgun` | `mailgun` | api/notify_providers.py | one of: mailgun / ses / sendgrid / postmark | Notification email provider. |
 | `EMAIL_TOKEN_TTL_MIN` | no | platform | `15` | `15` | api/db.py | format: int | — |

@@ -21,10 +21,23 @@ from pages import (
     TRUST_HTML, STATUS_HTML, METRICS_HTML, TRACTION_HTML, BUY_HTML, SELLER_EARNINGS_HTML,
     TEMPLATES_HTML, DEMO_HTML, CONTACT_HTML, PRICING_HTML, SECURITY_HTML, PRIVACY_HTML,
     TERMS_HTML, AUP_HTML, REFUNDS_HTML, GPU_DETAIL_HTML, GAMERS_HTML, ARTISTS_HTML,
-    CLUSTER_HTML, CONSOLE_HTML, FAQ_HTML, DESKTOP_SOON_HTML,
+    CLUSTER_HTML, CONSOLE_HTML, FAQ_HTML, DESKTOP_SOON_HTML, MYSYSTEM_HTML, EDGE_HTML,
 )
 
 router = APIRouter(tags=["web"])
+
+
+@router.get("/mysystem", response_class=HTMLResponse)
+@router.get("/test-gpu", response_class=HTMLResponse)
+def mysystem_page():
+    """In-browser WebGPU self-benchmark (indicative) → funnels into /install."""
+    return HTMLResponse(MYSYSTEM_HTML)
+
+
+@router.get("/edge", response_class=HTMLResponse)
+def edge_page():
+    """Edge-Inference SDK demo: on-device WebGPU inference + metered Petabyte API fallback."""
+    return HTMLResponse(EDGE_HTML)
 
 
 @router.get("/faq", response_class=HTMLResponse)
