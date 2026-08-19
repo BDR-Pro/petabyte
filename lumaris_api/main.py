@@ -1,8 +1,10 @@
 from fastapi import (
     FastAPI, Depends, HTTPException, Query, Header, Security, Request, WebSocket,
-    WebSocketDisconnect, Body, Form,
+    WebSocketDisconnect, Body, Form, UploadFile, File,
 )
-from fastapi.responses import PlainTextResponse, JSONResponse, Response, HTMLResponse, RedirectResponse
+from fastapi.responses import (
+    PlainTextResponse, JSONResponse, Response, HTMLResponse, RedirectResponse, FileResponse,
+)
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, case, or_, and_, distinct, cast, Float
@@ -139,14 +141,16 @@ from db import (
     rank_for_agent, register_peer, cluster_peers, cluster_ready,
 )
 import db as dbmod
-from auth import create_access_token, verify_token
+from auth import (create_access_token, verify_token, make_csrf_token,
+                  SESSION_COOKIE, CSRF_COOKIE, SESSION_MAX_AGE)
 # Shared FastAPI dependencies (auth + DB session) live in deps.py so domain routers can use
 # them without importing main. Every Depends(...) below resolves to these same callables.
-from deps import oauth2_scheme, get_current_user, _username, api_key_user  # noqa: F401
+from deps import (oauth2_scheme, get_current_user, _username, api_key_user,  # noqa: F401
+                  enforce_csrf)
 from pages import (LANDING_HTML, INVESTORS_HTML, DEVELOPERS_HTML, INSTALL_HTML,
                    KEYS_HTML, MARKETPLACE_HTML, ADMIN_HTML, LOGIN_HTML, ACCOUNT_HTML,
                    NOTFOUND_HTML, RESET_HTML, FUNDING_VIEW_HTML, ROI_HTML, LAUNCH_HTML,
-                   render_wiki)
+                   DESKTOP_ADMIN_HTML, render_wiki)
 from web_routes import router as web_router     # static public pages (extracted router)
 from trust_routes import router as trust_router  # trust/transparency API (extracted router)
 from models_routes import router as models_router  # model hub: discover/pull/manage (extracted router)
@@ -294,6 +298,13 @@ def _maintenance_cycle() -> None:
         settle_dead_specs(db)            # refund in-flight bookings on dead nodes
         meter_and_expire(db)             # auto-stop VMs whose prepaid window ended
         try:
+            # keep the jti denylist bounded: rows for tokens past their own expiry are dead
+            # weight on every authenticated request's revocation lookup.
+            from db import prune_expired_revocations
+            prune_expired_revocations(db)
+        except Exception:  # noqa: BLE001 — never let cleanup break the maintenance cycle
+            logger.debug("revocation prune failed (non-fatal)", exc_info=True)
+        try:
             # release GPU units held by abandoned/failed compute-tx reservations (the buyer
             # cancel path can't release a dispatched tx, so a post-dispatch failure would
             # otherwise leak its unit forever).
@@ -376,6 +387,11 @@ def _assert_production_is_safe() -> None:
             os.getenv("STRIPE_GATEWAY", "").strip().lower() != "real",
         "SECRET_KEY is a default/dev/placeholder value (or < 32 chars)":
             _weak_secret_key(os.getenv("SECRET_KEY", "")),
+        # Without a release trust root, /admin/desktop/release accepts any self-consistent
+        # exe+manifest pair and /download/windows hands it to NEW installs that have no pinned
+        # updater key to verify against — a compromised admin session could ship arbitrary code.
+        "PETABYTE_RELEASE_PUBKEY is not set (desktop builds would be served unverified)":
+            not os.getenv("PETABYTE_RELEASE_PUBKEY", "").strip(),
     }
     enabled = [k for k, v in unsafe.items() if v]
     if enabled:
@@ -579,6 +595,9 @@ async def _request_context(request: Request, call_next):
     rid = sanitize_incoming_request_id(request.headers.get("X-Request-ID")) or new_request_id()
     request.state.request_id = rid
     method = request.method
+    # CSRF for ambient cookie sessions is enforced inside the AUTH dependency (deps.enforce_csrf,
+    # invoked by get_current_user / seller_actor when auth came from the cookie) — so it applies
+    # exactly to session-protected endpoints and never to public/webhook routes.
     start = time.time()
     obsmod.inc_metric("petabyte_http_in_flight_requests", environment=obsmod.ENVIRONMENT)
     # A SERVER span parented on the incoming W3C trace context (browser/edge), so a single
@@ -635,24 +654,37 @@ async def _request_context(request: Request, call_next):
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     # CSP: our pages use inline <script>/<style>, so 'unsafe-inline' is required for
     # now. TODO(security): move page JS/CSS to static files with a nonce and drop it.
+    # Edge-Inference on-device path (opt-in, default OFF): running a model in the visitor's
+    # browser needs WASM compilation (`wasm-unsafe-eval`), blob: workers, and fetching model
+    # weights from the model host — all of which are DENIED by the locked-down default policy.
+    # We widen the policy ONLY when EDGE_INFERENCE_ENABLED=true, so production stays tight and
+    # the /edge demo simply uses the API fallback until an operator turns it on.
+    _edge_on = os.getenv("EDGE_INFERENCE_ENABLED", "false").lower() == "true"
+    _script_extra = " 'wasm-unsafe-eval' blob:" if _edge_on else ""
+    _connect_extra = (" https://huggingface.co https://cdn-lfs.huggingface.co "
+                      "https://cdn-lfs-us-1.huggingface.co https://cdn.jsdelivr.net") if _edge_on else ""
+    _worker_line = "worker-src 'self' blob:; " if _edge_on else ""
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net" + _script_extra + "; "
+        + _worker_line +
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
         "font-src 'self' https://fonts.gstatic.com; "
         # img-src is 'self' data: only (no blanket https:): all images are local (/static) or inline
         # SVG/data URIs, so this removes the `new Image().src='https://evil/?t='+token` beacon channel
         # that an injected script could otherwise use to exfiltrate data past connect-src 'self'.
         "img-src 'self' data:; "
-        "connect-src 'self'; "
+        "connect-src 'self'" + _connect_extra + "; "
         # Allow the landing-page YouTube embed to load. Without an explicit frame-src, CSP
         # falls back to default-src 'self' and the browser blocks the iframe ("content
         # blocked"). This lists only YouTube's embed hosts, nothing else.
         "frame-src https://www.youtube.com https://www.youtube-nocookie.com; "
         "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
     )
-    # Never let a browser or proxy cache an authenticated response.
-    if request.headers.get("Authorization") or request.headers.get("X-API-KEY"):
+    # Never let a browser or proxy cache an authenticated response (Bearer, API-key, OR the
+    # browser session cookie).
+    if (request.headers.get("Authorization") or request.headers.get("X-API-KEY")
+            or request.cookies.get(SESSION_COOKIE)):
         response.headers["Cache-Control"] = "private, no-store"
     return response
 
@@ -669,6 +701,12 @@ _RL_RULES = {           # path -> (max_hits, window_seconds)
     "/route": (60, 60),            # unauth, DB-backed — cap total volume per IP
     "/newsletter/subscribe": (10, 3600),  # public signup — anti-abuse / no email bombing
     "/create_api_key": (30, 3600),  # authed — bound key-minting so a hijacked session can't flood
+    # money-in probing: each failed authorize is a Stripe API call + a rejected reservation
+    # attempt (bad spec / insufficient funds / non-payout-ready seller / validation). Cap the
+    # FAILURE rate so a hijacked session or scripted probe can't hammer it; legitimate,
+    # SUCCESSFUL job launches never consume budget (not in _RL_COUNT_ALL), so a real buyer
+    # running a sweep of valid jobs is never throttled.
+    "/payments/authorize": (30, 3600),
 }
 # Paths where EVERY request (not just failures) consumes budget. Credential endpoints
 # count only failures (brute-force guard); an unauthenticated DB-backed endpoint like
@@ -1331,26 +1369,50 @@ def _require_seller(db: Session, user: dict):
     return owner
 
 
+def _verified_unrevoked_claims(db: Session, raw: str):
+    """verify_token + the jti denylist in one step, so no auth path can forget the
+    revocation check: a signed-out (revoked) session JWT must die everywhere, not just in
+    get_current_user. Returns the claims, or None when the jti has been revoked. Raises
+    like verify_token for invalid/expired tokens."""
+    claims = verify_token(raw)
+    if claims.get("jti") and is_jti_revoked(db, claims.get("jti")):
+        return None
+    return claims
+
+
 def seller_actor(request: Request, db: Session = Depends(get_db)):
     """Resolve the acting seller from EITHER a JWT (Authorization: Bearer) or an
     X-API-KEY. Lets a node bootstrap itself (register spec + attest) with just its
     API key — no username/password on the machine."""
     owner = None
     auth = request.headers.get("Authorization", "")
+    key = request.headers.get("X-API-KEY")
+    # EXPLICIT credentials win over the ambient browser cookie, in this precedence: a Bearer
+    # header (CLI), then an X-API-KEY (node), then finally the HttpOnly session cookie (browser).
+    # This stops a stray cookie from hijacking an explicitly API-key-authenticated node call.
     if auth.startswith("Bearer "):
         try:
-            owner = get_user_by_username(db, _username(verify_token(auth[7:])))
+            _claims = _verified_unrevoked_claims(db, auth[7:])
+            owner = get_user_by_username(db, _username(_claims)) if _claims else None
         except Exception:
             owner = None
-    if owner is None:
-        key = request.headers.get("X-API-KEY")
-        if key:
-            try:
-                data = decode_api_key(key)
-                if not is_jti_revoked(db, data["jti"]):
-                    owner = get_user_by_username(db, data["u"])
-            except Exception:
-                owner = None
+    elif key:
+        try:
+            data = decode_api_key(key)
+            if not is_jti_revoked(db, data["jti"]):
+                owner = get_user_by_username(db, data["u"])
+        except Exception:
+            owner = None
+    elif request.cookies.get(SESSION_COOKIE):
+        try:
+            _claims = _verified_unrevoked_claims(db, request.cookies.get(SESSION_COOKIE))
+            owner = get_user_by_username(db, _username(_claims)) if _claims else None
+        except Exception:
+            owner = None
+        # A browser (ambient cookie) mutating via seller_actor must pass CSRF, same as any other
+        # cookie-authenticated write. Bearer / API-key callers carry no ambient authority.
+        if owner is not None:
+            enforce_csrf(request)
     if owner is None:
         raise HTTPException(status_code=401, detail="Sign in or provide a valid X-API-KEY")
     if owner.role != "seller":
@@ -1719,6 +1781,9 @@ _STATIC_ALLOW = {
     # mailbox providers can show the Petabyte mark as the sender avatar. See
     # docs/EMAIL_BIMI_SETUP.md.
     "petabyte-bimi.svg": "image/svg+xml",
+    # Edge-Inference SDK (prototype): runs an AI feature on the visitor's own WebGPU with a
+    # metered Petabyte-API fallback. See docs/EDGE_INFERENCE.md.
+    "petabyte-edge.js": "text/javascript; charset=utf-8",
 }
 
 @app.get("/static/{fname}")
@@ -1742,6 +1807,78 @@ def favicon():
                             headers={"Cache-Control": "public, max-age=86400"})
     except OSError:
         raise HTTPException(status_code=404, detail="not found")
+
+class EdgeInferModel(BaseModel):
+    prompt: str
+    model: Optional[str] = None
+    max_tokens: Optional[int] = None
+
+
+def _edge_chat_upstream(base_url: str, api_key: Optional[str], payload: dict, timeout: float = 30.0):
+    """POST an OpenAI-compatible chat-completion to `base_url` (a Petabyte-launched `ollama`/
+    `vllm` node, or any OpenAI-compatible server) and return the parsed JSON. Isolated so tests
+    can monkeypatch it. `base_url` is OPERATOR config (never client-supplied), so this is not an
+    SSRF sink — the caller validates the scheme."""
+    import httpx
+    url = base_url.rstrip("/") + "/v1/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
+    r = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
+
+
+@app.post("/edge/infer", tags=["edge"])
+def edge_infer(data: EdgeInferModel, request: Request):
+    """Keyless prototype endpoint for the Edge-Inference SDK (`/static/petabyte-edge.js`).
+    Public + per-IP rate-limited, and it NEVER runs a real model: real completions cost GPU
+    time on the operator's `EDGE_INFER_UPSTREAM_URL` pool, so they are only reachable through
+    the authenticated, per-token-metered `POST /v1/chat/completions` (the SDK uses it
+    automatically when configured with an inference-scoped `apiKey`). An unauthenticated proxy
+    here would be a free-compute hole — this endpoint only ever returns a clearly-labelled
+    `prototype` placeholder, plus an `upgrade` pointer when a real upstream exists."""
+    ip = _client_ip(request) or "?"
+    key = f"edge:{ip}"
+    retry = _rl_blocked(key, 60, 3600)          # 60 fallback calls / hour / IP
+    if retry:
+        raise HTTPException(status_code=429, detail=f"rate limit: retry in ~{retry}s")
+    _rl_record_failure(key, 3600)               # count every call, not just failures
+    prompt = (data.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt required")
+    if len(prompt) > 8000:
+        raise HTTPException(status_code=413, detail="prompt too long (8000 char cap)")
+    default_model = os.getenv("EDGE_INFER_MODEL", "").strip()
+    model = (data.model or "").strip()[:120] or default_model or "default"
+
+    if os.getenv("EDGE_INFER_UPSTREAM_URL", "").strip():
+        # A real pool exists — but never for free: point the caller at the billed API.
+        return {
+            "source": "petabyte-fallback", "model": model, "prototype": True,
+            "upgrade": {"endpoint": "/v1/chat/completions",
+                        "auth": "X-API-KEY with the 'inference' scope",
+                        "docs": "/developers"},
+            "text": ("[Petabyte fallback · prototype] A GPU inference pool is configured, but "
+                     "real completions are metered: call POST /v1/chat/completions with an "
+                     "inference-scoped API key (PetabyteEdge.configure({apiKey: ...}) does this "
+                     "automatically). This keyless endpoint only returns this placeholder."),
+        }
+
+    return {
+        "source": "petabyte-fallback",
+        "model": model,
+        "prototype": True,
+        "text": (f"[Petabyte fallback · prototype] No WebGPU on this device (or on-device "
+                 f"inference is off), and no upstream GPU is configured, so this is a "
+                 f"placeholder. Received {len(prompt)} characters for '{model}'. Set "
+                 f"EDGE_INFER_UPSTREAM_URL to a launched ollama/vLLM node to return real "
+                 f"completions."),
+        "production": ("set EDGE_INFER_UPSTREAM_URL to a Petabyte-launched ollama/vLLM node's "
+                       "OpenAI-compatible endpoint; per-token billing of the developer account "
+                       "is the remaining step"),
+    }
+
 
 @app.get("/marketplace/specs/{public_id}", tags=["marketplace"])
 def public_spec_detail(public_id: str, db: Session = Depends(get_db)):
@@ -2736,7 +2873,7 @@ def google_login(db: Session = Depends(get_db)):
 
 
 @app.get("/auth/google/callback")
-def google_callback(code: str = Query(...), email: Optional[str] = Query(None),
+def google_callback(request: Request, code: str = Query(...), email: Optional[str] = Query(None),
                     db: Session = Depends(get_db)):
     """Exchange the code for the user's email, create-or-login, issue our JWT."""
     # TODO(stub): Google OAuth stub login — NEVER enable in production (stub.md #5)
@@ -2762,7 +2899,62 @@ def google_callback(code: str = Query(...), email: Optional[str] = Query(None),
         email_verified = bool(info.get("email_verified"))
     u = get_or_create_oauth_user(db, user_email, "google", email_verified=email_verified)
     token = create_access_token({"sub": u.username, "role": u.role})
-    return RedirectResponse(url="/console#t=" + token)
+    # Set the session as an HttpOnly cookie (never a URL fragment — a #t=JWT in the address
+    # bar leaks into history, referrers and JS). Clean redirect, no token in the URL.
+    resp = RedirectResponse(url="/console", status_code=303)
+    _set_session_cookies(resp, request, token)
+    return resp
+
+def _set_session_cookies(resp: Response, request: Request, token: str) -> str:
+    """Set the HttpOnly JWT session cookie + the readable double-submit CSRF token (which the
+    browser also treats as its 'signed in' hint). Returns the CSRF token.
+
+    `Secure` keeps the cookies off plaintext. Behind a TLS-terminating proxy the observed
+    request scheme is often plain http, so relying on it alone would ship the session cookie
+    without Secure in production — force Secure whenever ENVIRONMENT=production or the proxy
+    reports X-Forwarded-Proto: https (audit L3). Local http dev (ENVIRONMENT!=production) is
+    unaffected, so cookies still work over http://localhost."""
+    xf_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    secure = (request.url.scheme == "https" or xf_proto == "https"
+              or os.getenv("ENVIRONMENT", "").lower() == "production")
+    csrf = make_csrf_token()   # signed double-submit (HMAC-bound to the server secret)
+    resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_MAX_AGE, httponly=True,
+                    secure=secure, samesite="lax", path="/")
+    resp.set_cookie(CSRF_COOKIE, csrf, max_age=SESSION_MAX_AGE, httponly=False,
+                    secure=secure, samesite="lax", path="/")
+    return csrf
+
+
+def _clear_session_cookies(resp: Response) -> None:
+    resp.delete_cookie(SESSION_COOKIE, path="/")
+    resp.delete_cookie(CSRF_COOKIE, path="/")
+
+
+@app.post("/logout", tags=["account"])
+def logout(request: Request, db: Session = Depends(get_db)):
+    """Sign out: REVOKE the token (jti denylist) so it's dead even before it expires, then clear
+    the browser session cookies. The JWT cookie is HttpOnly, so JS can't delete it — logout must
+    go through the server. Bearer/API clients pass their token in the header; it's revoked too."""
+    from db import revoke_jti
+    raw = request.cookies.get(SESSION_COOKIE)
+    if not raw:
+        ah = request.headers.get("authorization") or ""
+        raw = ah[7:].strip() if ah.lower().startswith("bearer ") else None
+    if raw:
+        try:
+            claims = verify_token(raw)
+            jti = claims.get("jti")
+            if jti:
+                _exp = claims.get("exp")
+                revoke_jti(db, jti,
+                           expires_at=(datetime.fromtimestamp(_exp, tz=timezone.utc)
+                                       if _exp else None))
+        except Exception:      # already-invalid/expired token — nothing to revoke
+            pass
+    resp = JSONResponse({"ok": True})
+    _clear_session_cookies(resp)
+    return resp
+
 
 @app.post("/login", tags=["account"])
 def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(),
@@ -2822,7 +3014,12 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(),
                       environment=obsmod.ENVIRONMENT)
     audit(db, "auth.login", actor=user, ip=ip)
     token = create_access_token({"sub": user.username, "role": user.role})
-    return {"access_token": token, "token_type": "bearer"}
+    # Return the token in the body (CLI / API clients keep using Authorization: Bearer) AND set
+    # it as an HttpOnly cookie for browsers (so XSS can't read the session). Both are honored by
+    # get_current_user; browsers additionally send the CSRF token on unsafe requests.
+    resp = JSONResponse({"access_token": token, "token_type": "bearer"})
+    _set_session_cookies(resp, request, token)
+    return resp
 
 
 @app.post("/change_role")
@@ -3314,9 +3511,11 @@ def jobs_next(agent=Depends(api_key_user), db: Session = Depends(get_db)):
     # PRODUCER span across the queue/network boundary: inject the current W3C trace context
     # into the job envelope so the seller agent's execution joins THIS trace end-to-end.
     with obs.span("job.dispatch", kind="producer", task_type=str(task.task_type)):
-        payload = _build_job_payload(task)
+        payload = _build_job_payload(task, db)
         payload["trace_context"] = obs.inject({})
-        tx_pub = getattr(getattr(task, "compute_tx", None), "public_id", None)
+        from db import ComputeTransaction as _ComputeTx
+        _txp = db.query(_ComputeTx).filter(_ComputeTx.task_id == task.id).first()
+        tx_pub = getattr(_txp, "public_id", None)
         # A successful claim is the seller ACCEPTING the job (pull model).
         obsmod.inc_metric("petabyte_seller_job_decisions_total", decision="accepted",
                           environment=obsmod.ENVIRONMENT)
@@ -3339,15 +3538,64 @@ def _record_benchmark_sample(db, spec, *, source, metrics=None, verdict=None,
         logger.debug("benchmark sample record failed (non-fatal)", exc_info=True)
 
 
-def _build_job_payload(task) -> dict:
+def _job_runtime_budget_s(task, db=None):
+    """The runtime budget (seconds) the buyer's authorization pays for — the agent kills the
+    container at this deadline so a job can't consume more of the seller's GPU than was
+    authorized (audit H1). None for jobs with no paid ComputeTransaction (test/benchmark).
+
+    The ORM has no Task->ComputeTransaction relationship, so we look the tx up by task_id from
+    the provided session (falling back to a pre-attached task.compute_tx if a caller set one)."""
+    tx = getattr(task, "compute_tx", None)
+    if tx is None and db is not None:
+        try:
+            from db import ComputeTransaction
+            tx = db.query(ComputeTransaction).filter(
+                ComputeTransaction.task_id == task.id).first()
+        except Exception:
+            # A silent None here disables the H1 runtime kill entirely — say so.
+            logger.warning("task %s: runtime-budget tx lookup failed; no deadline applied",
+                           getattr(task, "id", "?"), exc_info=True)
+            tx = None
+    if not tx or not getattr(tx, "authorization_amount", 0) or not tx.pricing_snapshot:
+        return None
+    try:
+        import pricing as _pr
+        return _pr.authorized_seconds(json.loads(tx.pricing_snapshot), tx.authorization_amount)
+    except Exception:
+        logger.warning("tx %s: authorized_seconds failed; no runtime deadline applied",
+                       getattr(tx, "public_id", "?"), exc_info=True)
+        return None
+
+
+def _strict_isolation_kw() -> dict:
+    """Operator-gated CIS-restricted container profile for buyer jobs (audit STD-C).
+
+    OFF by default. A buyer job runs an ARBITRARY image — an s6-overlay server, a model server
+    that writes caches to its rootfs — so forcing a read-only rootfs or a non-root UID universally
+    would break real workloads. Instead the operator flips these on once they've validated their
+    image mix, and the agent's _isolation_flags then adds --read-only (+ a writable /tmp tmpfs,
+    HOME=/tmp) and/or --user. Notebook jobs already run read-only (notebook.py owns that image)."""
+    kw = {}
+    if os.getenv("AGENT_STRICT_ROOTFS", "").strip().lower() in ("1", "true", "yes", "on"):
+        kw["read_only"] = True
+    run_as = os.getenv("AGENT_CONTAINER_USER", "").strip()
+    if run_as:
+        kw["run_as"] = run_as
+    return kw
+
+
+def _build_job_payload(task, db=None) -> dict:
     """Build the job envelope returned to the agent. Never includes platform secrets or
     full buyer workload inputs beyond what the job type needs to run."""
+    _iso = _strict_isolation_kw()   # STD-C: operator-gated read-only/non-root (default: {})
     _backup = {"backup_enabled": bool(task.backup_enabled),
                "backup_interval_s": task.backup_interval_s,
                "volume": task.volume,
                "restore_from": task.latest_checkpoint_ref}   # restore if a backup exists
+    _rt = _job_runtime_budget_s(task, db)
+    _rt_kw = {"max_runtime_s": _rt} if _rt else {}    # authorized runtime budget (H1); agent enforces
     if task.task_type == "notebook":
-        return {"task_id": task.id, "task_type": "notebook", "code": task.code}
+        return {"task_id": task.id, "task_type": "notebook", "code": task.code, **_rt_kw}
     if task.task_type == "test":
         params = json.loads(task.code or "{}")
         return {"task_id": task.id, "task_type": "test",
@@ -3359,15 +3607,15 @@ def _build_job_payload(task) -> dict:
     if task.task_type == "render":
         rp = json.loads(task.template_params or "{}")
         return {"task_id": task.id, "task_type": "render", "image": RENDER_IMAGE,
-                "gpu": True, **rp, **_backup}
+                "gpu": True, **rp, **_backup, **_rt_kw, **_iso}
     if task.task_type == "transcode":
         rp = json.loads(task.template_params or "{}")
         return {"task_id": task.id, "task_type": "transcode", "image": FFMPEG_IMAGE,
-                "gpu": bool(rp.get("use_gpu", True)), **rp, **_backup}
+                "gpu": bool(rp.get("use_gpu", True)), **rp, **_backup, **_rt_kw, **_iso}
     if task.task_type == "stitch":
         rp = json.loads(task.template_params or "{}")
         return {"task_id": task.id, "task_type": "stitch", "image": FFMPEG_IMAGE,
-                **rp, **_backup}
+                **rp, **_backup, **_rt_kw, **_iso}
     if task.task_type == "distributed":
         # One rank of a multi-node cluster. The agent runs `image`/`command` under torchrun with
         # the rank/world_size below, forming an NCCL/gloo cluster with the other ranks OVER THE
@@ -3388,7 +3636,7 @@ def _build_job_payload(task) -> dict:
                                 "selftest": bool(rp.get("selftest")),
                                 "register_url": "/jobs/rendezvous",
                                 "rendezvous_url": f"/jobs/rendezvous/{jid}"},
-                **_backup}
+                **_backup, **_rt_kw, **_iso}
     if task.task_type == "template":
         tpl = TEMPLATES.get(task.template, {})
         params = json.loads(task.template_params or "{}")
@@ -3403,20 +3651,30 @@ def _build_job_payload(task) -> dict:
                 # The agent enforces this. Default CLOSED: if a template forgets to
                 # declare a policy, the workload gets no network rather than the host's.
                 "egress": tpl.get("egress", "none"),
-                "params": params, **_backup}
+                "params": params, **_backup, **_iso}
     return {"task_id": task.id, "task_type": "vm", "vm_type": task.vm_type,
             "cpu": task.cpu, "ram": task.ram, "cuda": task.cuda}
 
 
 def _observed_seconds(task) -> int:
-    """Platform-observed wall-clock for a task (dispatch -> result), server-side and
-    not a seller/browser value. Capped later by the pricing snapshot's max duration."""
-    ca = getattr(task, "created_at", None)
-    if ca is None:
+    """Platform-observed billable wall-clock for a task, measured DISPATCH -> RESULT on the
+    server's own clock — never a seller- or browser-supplied duration (audit M1).
+
+    Billing must reflect only the time the node actually held the job, not the queue wait
+    before it was assigned: the window is assigned_at -> completed_at. We fall back
+    conservatively (assigned_at -> now if the result timestamp is missing; created_at only if
+    the task was never assigned) and floor at 1s. record_metering caps this at the snapshot's
+    max_duration_s and settle() further clamps the charge to the buyer's authorized budget, so
+    this value can only ever be an honest LOWER-or-equal bound on what the buyer is charged."""
+    def _aware(dt):
+        if dt is None:
+            return None
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+    start = _aware(getattr(task, "assigned_at", None)) or _aware(getattr(task, "created_at", None))
+    if start is None:
         return 1
-    if ca.tzinfo is None:
-        ca = ca.replace(tzinfo=timezone.utc)
-    return max(1, int((datetime.now(timezone.utc) - ca).total_seconds()))
+    end = _aware(getattr(task, "completed_at", None)) or datetime.now(timezone.utc)
+    return max(1, int((end - start).total_seconds()))
 
 
 def _auto_settle_compute_tx(db, task):
@@ -3426,9 +3684,11 @@ def _auto_settle_compute_tx(db, task):
 
     Guards:
       * opt-out via AUTO_SETTLE_ON_RESULT=false (settlement then stays admin-driven);
-      * FAIL CLOSED for templates whose correctness needs manifest validation that is
-        not yet carried in the result payload (e.g. pytorch-matmul-v1) — never auto-pay
-        a result we cannot validate;
+      * RESULT-VERIFICATION GATE (audit #4/#8, settlement_verification.decide): a verifiable
+        template (server-issued challenge + correctness oracle, e.g. pytorch-matmul-v1) pays ONLY
+        on a VALID verdict — an INVALID verdict FAILS the tx (bills nothing), and a missing
+        challenge/manifest or INCONCLUSIVE verdict DEFERS to admin (fail-closed). Non-verifiable
+        types settle on content-hash binding + async cross-node re-verification;
       * everything downstream is idempotent + FSM-guarded, so a duplicate result or a
         concurrent admin action can't double-charge or double-pay.
     """
@@ -3438,13 +3698,16 @@ def _auto_settle_compute_tx(db, task):
     tx = db.query(ComputeTransaction).filter(ComputeTransaction.task_id == task.id).first()
     if not tx:
         return None                      # legacy booking / unpaid diagnostic job
-    if (getattr(task, "template", "") or "") == "pytorch-matmul-v1":
-        # The matmul manifest isn't part of JobResultModel yet, so we can't run
-        # matmul_validation here. Fail closed: leave capture/transfer to the admin
-        # path rather than pay on an unvalidated numeric result.
-        logger.info("tx %s: %s completed but manifest validation isn't wired; "
-                    "leaving settlement to the admin path (fail-closed)",
-                    tx.public_id, task.template)
+
+    import settlement_verification as _sv
+    _spec = db.query(SellerSpec).filter(SellerSpec.id == tx.spec_id).first() if tx.spec_id else None
+    action, reason = _sv.decide(task, tx, attest_pubkey=getattr(_spec, "attest_pubkey", None))
+    if action == _sv.FAIL:
+        logger.warning("tx %s: result verification FAILED (%s) — failing the tx, billing nothing",
+                       tx.public_id, reason)
+        return _auto_fail_compute_tx(db, task, reason=f"result verification failed: {reason}")
+    if action == _sv.DEFER:
+        logger.info("tx %s: settlement deferred to admin (%s)", tx.public_id, reason)
         return tx.status
     try:
         return _sc.settle_after_result(db, tx, metered_seconds=_observed_seconds(task),
@@ -4138,24 +4401,50 @@ def seller_trust(public_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/metrics/overview", tags=["marketplace"])
-def metrics_overview(db: Session = Depends(get_db),
+def metrics_overview(request: Request, db: Session = Depends(get_db),
                      scope: str = "all", since: Optional[str] = None,
                      until: Optional[str] = None):
     """Investor / operations metrics from real DB queries. `scope` = all|demo|real
     keeps seeded demo data separate from real traction; the response states which
     scope produced the numbers so the UI can badge demo data. Definitions:
-    /metrics/definitions and docs/METRIC_DEFINITIONS.md."""
+    /metrics/definitions and docs/METRIC_DEFINITIONS.md.
+
+    Public, but REAL money VOLUMES (gmv / platform_revenue / seller_payouts) are
+    business-confidential once real money flows, so for non-admin callers on the real/all
+    scopes those three absolutes are redacted to null with economics.restricted=true (audit
+    L1). Everyone still sees ratios, counts and buyer savings; the curated public money
+    surface is /metrics/traction. Demo scope is never redacted — it is clearly-labeled
+    synthetic data behind the public demo dashboard."""
     from metrics import compute_metrics
     if scope not in ("all", "demo", "real"):
         raise HTTPException(status_code=400, detail="scope must be all|demo|real")
-    return compute_metrics(db, cloud_reference_for, scope=scope, since=since,
+    data = compute_metrics(db, cloud_reference_for, scope=scope, since=since,
                            until=until, default_reference=float(AWS_REFERENCE_PRICE))
+    if scope != "demo" and not _viewer_is_admin(request, db):
+        econ = data.get("economics")
+        if isinstance(econ, dict):
+            for _k in ("gmv", "platform_revenue", "seller_payouts"):
+                if _k in econ:
+                    econ[_k] = None
+            econ["restricted"] = True
+    return data
 
 
 @app.get("/metrics/definitions", tags=["marketplace"])
 def metrics_definitions():
     """Plain-language definition of every metric — no vanity numbers without context."""
     return {"definitions": METRIC_DEFINITIONS}
+
+
+@app.get("/metrics/traction", tags=["marketplace"])
+def metrics_traction(db: Session = Depends(get_db)):
+    """PUBLIC investor traction — a curated, honest subset of the CANONICAL funding snapshot
+    (LIVE money only; TEST and demo excluded). Read-only, no auth, no PII, and no sensitive
+    absolutes (platform revenue, seller liability and payouts are omitted; GMV + ratios only).
+    Zeros are honest: the platform runs Stripe in TEST mode until launch, so real GMV is $0
+    by design — never a fabricated number. Powers the public /traction page."""
+    import funding_metrics as _fm
+    return _fm.public_traction(db)
 
 
 # ------------------- ADMIN (platform operators) -------------------
@@ -4198,10 +4487,159 @@ def require_admin(user: dict = Depends(get_current_user), db: Session = Depends(
     return me
 
 
+def _viewer_is_admin(request: Request, db: Session) -> bool:
+    """Best-effort, NON-raising admin check for endpoints that are public but redact
+    confidential fields for anonymous callers (e.g. /metrics/overview money volumes). Resolves
+    a Bearer header or the pb_session cookie if present; returns False for anonymous, invalid,
+    or non-admin callers — it NEVER raises, so it can't turn a public endpoint into a 401."""
+    raw = None
+    ah = request.headers.get("authorization") or ""
+    if ah.lower().startswith("bearer "):
+        raw = ah[7:].strip()
+    if not raw:
+        raw = request.cookies.get(SESSION_COOKIE)
+    if not raw:
+        return False
+    try:
+        claims = _verified_unrevoked_claims(db, raw)
+        return bool(claims) and _is_admin(get_user_by_username(db, claims.get("sub")))
+    except Exception:
+        return False
+
+
 @app.get("/admin/whoami")
 def admin_whoami(me=Depends(require_admin)):
     """200 only for admins — lets the UI reveal the Admin link."""
     return {"admin": True, "username": me.username}
+
+
+# ================= Desktop app releases (admin-uploadable, signed) =================
+# Ship a new Windows desktop build as a browser upload — no CI, no terminal. SECURITY MODEL: the
+# server STORES and SERVES the build; it NEVER signs it. Fleet auto-update is gated by the pinned
+# Ed25519 signature the agent verifies (desktop-app/updater.py), so the trust root is the OFFLINE
+# release key, not this endpoint or an admin account. The admin uploads the exe PLUS its signed
+# manifest (produced offline by scripts/sign_release.py); the pair is refused unless
+# sha256(exe) == manifest.sha256 and — when PETABYTE_RELEASE_PUBKEY is set — the manifest signature
+# verifies, so a bad/unsigned build is never even served.
+_DESKTOP_EXE = "PetabyteAgent.exe"
+_DESKTOP_MANIFEST = "PetabyteAgent.exe.manifest.json"
+_DESKTOP_MAX_EXE_BYTES = 300 * 1024 * 1024   # generous cap for an agent .exe; rejects absurd uploads
+
+
+def _desktop_release_dir() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "installers", "desktop")
+
+
+def _verify_release_manifest(manifest: dict, exe_sha256: str):
+    """(ok, reason). Refuse a mismatched exe/manifest pair, and — when a release pubkey is
+    configured — a manifest whose Ed25519 signature does not verify."""
+    core_keys = ("asset", "version", "sha256")
+    if not all(manifest.get(k) for k in core_keys) or not manifest.get("sig"):
+        return False, "manifest is missing asset/version/sha256/sig"
+    if str(manifest["sha256"]).lower() != exe_sha256.lower():
+        return False, "sha256 mismatch — the uploaded .exe does not match its manifest"
+    b64 = os.getenv("PETABYTE_RELEASE_PUBKEY", "").strip()
+    if b64:
+        try:
+            import base64 as _b64
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            from cryptography.exceptions import InvalidSignature
+            core = {k: manifest[k] for k in core_keys}
+            canon = json.dumps(core, sort_keys=True, separators=(",", ":")).encode()
+            Ed25519PublicKey.from_public_bytes(_b64.b64decode(b64)).verify(
+                _b64.b64decode(manifest["sig"]), canon)
+        except InvalidSignature:
+            return False, "manifest signature does not verify against PETABYTE_RELEASE_PUBKEY"
+        except Exception as e:  # noqa: BLE001
+            return False, f"signature check error: {e}"
+    return True, "ok"
+
+
+@app.post("/admin/desktop/release", tags=["admin"])
+async def admin_desktop_release(exe: UploadFile = File(...), manifest: UploadFile = File(...),
+                                me=Depends(require_admin)):
+    """Publish a new Windows desktop build: upload the .exe and its SIGNED manifest. It is then
+    served at /download/windows (new installs) and /desktop/latest.json (existing agents that point
+    PETABYTE_UPDATE_URL here). Signing stays offline — produce the manifest with
+    `python scripts/sign_release.py --key <offline key> --version X --exe PetabyteAgent.exe`."""
+    raw_manifest = await manifest.read()
+    if len(raw_manifest) > 64 * 1024:
+        raise HTTPException(status_code=400, detail="manifest too large")
+    try:
+        man = json.loads(raw_manifest)
+    except Exception:
+        raise HTTPException(status_code=400, detail="manifest is not valid JSON")
+
+    d = _desktop_release_dir()
+    os.makedirs(d, exist_ok=True)
+    tmp = os.path.join(d, _DESKTOP_EXE + ".incoming")
+    h = hashlib.sha256()
+    total = 0
+    try:
+        with open(tmp, "wb") as f:                     # stream to disk, hash as we go (never RAM-load)
+            while True:
+                chunk = await exe.read(1 << 20)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _DESKTOP_MAX_EXE_BYTES:
+                    raise HTTPException(status_code=413, detail="exe exceeds the size limit")
+                h.update(chunk)
+                f.write(chunk)
+        ok_v, reason = _verify_release_manifest(man, h.hexdigest())
+        if not ok_v:
+            raise HTTPException(status_code=400, detail=reason)
+        # Publish METADATA first, the exe LAST — each via atomic os.replace. If the process
+        # dies mid-publish, an updater that reads manifest/latest.json first can at worst see
+        # new metadata with the old exe (hash mismatch -> it retries later); the reverse order
+        # would serve a NEW exe described by the OLD manifest and stall the fleet on rejects.
+        latest = {"tag": str(man["version"]), "version": str(man["version"]),
+                  "exe_url": "/download/windows", "manifest_url": "/download/" + _DESKTOP_MANIFEST,
+                  "sha256": str(man["sha256"])}
+        man_tmp = os.path.join(d, _DESKTOP_MANIFEST + ".incoming")
+        with open(man_tmp, "wb") as f:
+            f.write(raw_manifest)
+        latest_tmp = os.path.join(d, "latest.json.incoming")
+        with open(latest_tmp, "w") as f:
+            json.dump(latest, f)
+        os.replace(man_tmp, os.path.join(d, _DESKTOP_MANIFEST))
+        os.replace(latest_tmp, os.path.join(d, "latest.json"))
+        os.replace(tmp, os.path.join(d, _DESKTOP_EXE))    # commit only the verified build
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+    logger.info("desktop release %s published by admin %s (%d bytes)",
+                man.get("version"), getattr(me, "username", "?"), total)
+    return {"status": "published", "bytes": total, **latest}
+
+
+@app.get("/desktop/latest.json")
+def desktop_latest():
+    """The domain-hosted 'latest release' the desktop updater reads when PETABYTE_UPDATE_URL points
+    here (private-safe — no GitHub). 404 until an admin publishes a build."""
+    p = os.path.join(_desktop_release_dir(), "latest.json")
+    if not os.path.exists(p):
+        raise HTTPException(status_code=404, detail="no desktop release published yet")
+    return FileResponse(p, media_type="application/json")
+
+
+@app.get("/download/" + _DESKTOP_MANIFEST)
+def desktop_manifest_file():
+    """The signed manifest the updater verifies before applying an update."""
+    p = os.path.join(_desktop_release_dir(), _DESKTOP_MANIFEST)
+    if not os.path.exists(p):
+        raise HTTPException(status_code=404, detail="no desktop release published yet")
+    return FileResponse(p, media_type="application/json")
+
+
+@app.get("/admin/desktop", response_class=HTMLResponse)
+def admin_desktop_page():
+    """Browser upload form for a new desktop build. The page is a plain form; the POST enforces
+    admin, so serving the form itself carries no secret."""
+    return HTMLResponse(DESKTOP_ADMIN_HTML)
 
 
 @app.get("/admin/funding", tags=["admin"])
@@ -5782,22 +6220,28 @@ async def payment_webhook(request: Request, db: Session = Depends(get_db)):
     """
     raw = await request.body()
     sig = request.headers.get("X-Signature", "")
-    if not verify_webhook_signature(PAYMENT_WEBHOOK_SECRET, raw, sig):
+    ts = request.headers.get("X-Timestamp")   # optional: enables replay-bounded verification
+    from utils import verify_payment_webhook
+    if not verify_payment_webhook(PAYMENT_WEBHOOK_SECRET, raw, sig, timestamp=ts):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
     try:
         evt = json.loads(raw)
-        event_id = evt["event_id"]
+        event_id = str(evt["event_id"])
         username = evt["data"]["username"]
-        amount = float(evt["data"]["amount"])
-    except (ValueError, KeyError, TypeError):
+        amount = Decimal(str(evt["data"]["amount"]))   # money is Decimal, never binary float
+    except (ValueError, KeyError, TypeError, ArithmeticError):
         raise HTTPException(status_code=400, detail="Malformed event")
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Invalid amount")
-    if webhook_already_processed(db, event_id):
+    # Atomic claim-and-credit: the event_id claim + the credit share one transaction, so a crash
+    # can't mark the event processed without crediting (or double-credit on retry).
+    from db import credit_user_from_webhook
+    outcome = credit_user_from_webhook(db, event_id, username, amount)
+    if outcome == "duplicate":
         return {"status": "ok", "duplicate": True}     # already credited
-    if not credit_user_by_username(db, username, amount):
+    if outcome == "unknown_user":
         raise HTTPException(status_code=404, detail="Unknown user")
-    return {"status": "ok", "credited": amount, "user": username}
+    return {"status": "ok", "credited": str(amount), "user": username}
 
 
 # =====================================================================
@@ -6002,6 +6446,19 @@ def payments_config():
             "test_mode": fake or not live,
             "publishable_key": pk}
 
+@app.get("/payments/coverage", tags=["payments"])
+def payments_coverage(country: str = None):
+    """Public, honest seller-payout coverage. With no args, returns the priority-market
+    capability matrix (the 20 highest-value GPU-supply markets, each resolved to its REAL
+    payout rail / currency / status). With ?country=XX, returns that single country's
+    capability record. Read-only; reveals no secrets. 'active_today' is the only
+    'payable right now' flag — the shipped dataset is honestly 0 until a real end-to-end
+    payout is verified per country."""
+    import payout_capabilities as _cap
+    if country:
+        return _cap.country_capability(country)
+    return _cap.priority_capability_matrix()
+
 @app.post("/payments/quote", tags=["payments"])
 def payments_quote(data: QuoteModel, user: dict = Depends(get_current_user),
                    db: Session = Depends(get_db)):
@@ -6112,6 +6569,64 @@ def payments_receipt(public_id: str, user: dict = Depends(get_current_user),
             "metered_seconds": tx.metering_seconds,
             "is_completed_payment": tx.status in ("PAYMENT_CAPTURED", "SELLER_TRANSFERRED", "COMPLETED"),
             "note": "The authorized maximum is a hold; you are charged only the final captured amount."}
+
+
+@app.get("/payments/{public_id}/proof", tags=["payments"])
+def payment_proof(public_id: str, user: dict = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    """The unified END-TO-END proof for one transaction — the single artifact a demo/DD wants:
+
+      * payment  — the Stripe payment (real test-object or live per `mode`): authorized max,
+        captured, refunded, metered seconds;
+      * compute  — the cryptographic per-job receipt (Ed25519 signature over the signed payload,
+        sha256 of the real output bytes, node pubkey) with a LIVE server re-verification;
+      * payout   — the provider payout: seller net, obligation state, and the Stripe transfer id.
+
+    Nothing here is simulated when the server runs the real gateway. Buyer / seller / admin scoped."""
+    import trust as _trust
+    _CAPTURED = ("PAYMENT_CAPTURED", "SELLER_TRANSFER_PENDING", "SELLER_TRANSFERRED", "COMPLETED")
+    me = get_user_by_username(db, _username(user))
+    tx = _sc.get_tx_by_public_id(db, public_id)
+    if not tx or (me.id not in (tx.buyer_id, tx.seller_id) and not _is_admin(me)):
+        raise HTTPException(status_code=404, detail="transaction not found")
+    task = (db.query(dbmod.Task).filter(dbmod.Task.id == tx.task_id).first()
+            if tx.task_id else None)
+    obl = (db.query(dbmod.PayoutObligation)
+           .filter(dbmod.PayoutObligation.compute_tx_id == tx.id).first())
+    cap = tx.captured_amount or 0
+    identity_holds = (cap == (tx.platform_fee_amount or 0) + (tx.seller_net_amount or 0)
+                      if cap else None)
+    return {
+        "transaction_id": tx.public_id,
+        "status": tx.status,
+        "mode": tx.mode,
+        "is_demo": tx.is_demo,
+        "currency": tx.currency,
+        "payment": {
+            "payment_intent_id": tx.stripe_payment_intent_id,
+            "authorized_maximum_minor": tx.authorization_amount,
+            "captured_minor": tx.captured_amount,
+            "refunded_minor": tx.refunded_amount,
+            "metered_seconds": tx.metering_seconds,
+            "captured": tx.status in _CAPTURED,
+        },
+        "compute": _trust.build_receipt(db, task) if task else None,
+        "payout": {
+            "seller_net_minor": tx.seller_net_amount,
+            "platform_fee_minor": tx.platform_fee_amount,
+            "transferred_minor": tx.transferred_amount,
+            "stripe_transfer_id": tx.stripe_transfer_id,
+            "obligation_state": (obl.state if obl else None),
+            "obligation_mode": (obl.mode if obl else None),
+            "paid": bool(tx.stripe_transfer_id) and (obl.state == "paid" if obl else False),
+            "hold_status": ("released" if (obl and obl.state == "paid")
+                            else "held" if obl else "none"),
+        },
+        "accounting_identity_holds": identity_holds,
+        "note": ("End-to-end proof: a real Stripe payment (test or live per `mode`), a "
+                 "cryptographically signed compute result you can re-verify offline, and the "
+                 "provider payout. Nothing is simulated when run against the real gateway."),
+    }
 
 
 @app.get("/payments/{public_id}/timeline", tags=["payments"])
@@ -7565,6 +8080,133 @@ def data_usage(user=Depends(data_api_caller), db: Session = Depends(get_db)):
     return usage_summary(db, user.id, free_quota=DATA_API_FREE_CALLS_MONTH)
 
 
+# ------------------- Inference API (pay-per-token, OpenAI-compatible) -------------------
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatCompletionRequest(BaseModel):
+    model: Optional[str] = None
+    messages: Optional[list[ChatMessage]] = None
+    prompt: Optional[str] = None          # convenience: a bare prompt becomes one user message
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+
+
+def _inference_prices():
+    """(price_in, price_out) in USD per 1M tokens, from config. Default 0 => free."""
+    def _f(name):
+        try:
+            return max(0.0, float(os.getenv(name, "0") or 0))
+        except ValueError:
+            return 0.0
+    return _f("INFERENCE_PRICE_PER_MTOK_IN"), _f("INFERENCE_PRICE_PER_MTOK_OUT")
+
+
+@app.post("/v1/chat/completions", tags=["inference"])
+def inference_chat_completions(data: ChatCompletionRequest, request: Request,
+                               user=Depends(data_api_caller), db: Session = Depends(get_db)):
+    """OpenAI-compatible chat completions, **billed per token** against your wallet.
+
+    Send a prompt, get an answer, pay for the tokens used — the managed-inference side of the
+    marketplace (buyers pay per token; sellers are still settled per hour for the GPU capacity
+    behind the warm pool). Point an OpenAI SDK at `<base>/v1` and use an `inference`-scoped key
+    as `X-API-KEY`. Pricing is `INFERENCE_PRICE_PER_MTOK_IN/OUT` (USD per 1M tokens; 0 = free);
+    the model runs on the configured `EDGE_INFER_UPSTREAM_URL` pool. See docs/INFERENCE_API.md."""
+    upstream = os.getenv("EDGE_INFER_UPSTREAM_URL", "").strip()
+    if not upstream:
+        raise HTTPException(status_code=503, detail="inference not available (no upstream configured)")
+    if not upstream.startswith(("http://", "https://")):
+        raise HTTPException(status_code=500, detail="EDGE_INFER_UPSTREAM_URL must be http(s)")
+
+    # light abuse cap on top of the per-token wallet throttle
+    ip = _client_ip(request) or "?"
+    if _rl_blocked(f"infer:{ip}", 600, 3600):
+        raise HTTPException(status_code=429, detail="rate limit: too many inference requests")
+    _rl_record_failure(f"infer:{ip}", 3600)
+
+    # The PUBLISHED sandbox key is read-only by contract and never billed — and inference
+    # costs real GPU time on the operator's upstream pool, so it can never be free-tier:
+    # letting the sandbox in here would be an unauthenticated, unbilled path to paid compute.
+    if getattr(user, "is_sandbox", False):
+        raise HTTPException(status_code=403, detail={
+            "code": "SANDBOX_KEY_NOT_ALLOWED",
+            "message": "The sandbox key cannot run inference. Mint an API key with the "
+                       "'inference' scope from your account page."})
+    sandbox = False
+    require_scope(user, "inference")
+
+    # Build OpenAI messages (accept either `messages` or a bare `prompt`).
+    if data.messages:
+        msgs = [{"role": m.role, "content": m.content} for m in data.messages]
+    elif data.prompt and data.prompt.strip():
+        msgs = [{"role": "user", "content": data.prompt.strip()}]
+    else:
+        raise HTTPException(status_code=400, detail="provide `messages` or `prompt`")
+    text_len = sum(len(m["content"] or "") for m in msgs)
+    if text_len == 0:
+        raise HTTPException(status_code=400, detail="empty prompt")
+    if text_len > 32000:
+        raise HTTPException(status_code=413, detail="prompt too long (32000 char cap)")
+
+    model = (data.model or "").strip()[:120] or os.getenv("EDGE_INFER_MODEL", "").strip() or "default"
+    max_tokens = max(1, min(int(data.max_tokens or 512), 4096))
+    price_in, price_out = _inference_prices()
+
+    # Pre-check the wallet against an UPPER-BOUND estimate BEFORE running the model, so unpaid
+    # work is never given away (charge the ACTUAL usage after). Free (price 0) skips this.
+    if not sandbox and (price_in > 0 or price_out > 0):
+        est_prompt = max(1, text_len // 4)               # ~4 chars/token heuristic
+        from decimal import Decimal as _D
+        est_max = float((_D(est_prompt) * _D(str(price_in)) + _D(max_tokens) * _D(str(price_out)))
+                        / _D(1_000_000))
+        me_row = get_user_by_id(db, user.id)
+        if not me_row or float(me_row.balance or 0) < est_max:
+            raise HTTPException(status_code=402, detail={
+                "code": "INSUFFICIENT_BALANCE",
+                "message": "Add funds to your wallet to run inference.",
+                "estimated_max_usd": round(est_max, 6)})
+
+    payload = {"model": model, "messages": msgs, "max_tokens": max_tokens, "stream": False}
+    if data.temperature is not None:
+        payload["temperature"] = data.temperature
+    try:
+        j = _edge_chat_upstream(upstream, os.getenv("EDGE_INFER_UPSTREAM_TOKEN", "").strip() or None,
+                                payload)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("inference upstream failed: %s", e.__class__.__name__)
+        raise HTTPException(status_code=502, detail="inference upstream failed")
+
+    usage = (j.get("usage") if isinstance(j, dict) else None) or {}
+    ptok = int(usage.get("prompt_tokens") or (text_len // 4) or 1)
+    ctok = int(usage.get("completion_tokens") or 0)
+    if not ctok:
+        try:
+            ctok = max(1, len(j["choices"][0]["message"]["content"] or "") // 4)
+        except (KeyError, IndexError, TypeError):
+            ctok = 0
+
+    if sandbox:
+        billing = {"billed": False, "sandbox": True, "charged": 0.0,
+                   "prompt_tokens": ptok, "completion_tokens": ctok, "tokens": ptok + ctok}
+    else:
+        from db import meter_tokens
+        m = meter_tokens(db, user.id, prompt_tokens=ptok, completion_tokens=ctok,
+                         price_in_per_mtok=price_in, price_out_per_mtok=price_out)
+        billing = {"billed": bool(m.get("billed")), "charged": m.get("charged", 0.0),
+                   "prompt_tokens": ptok, "completion_tokens": ctok, "tokens": ptok + ctok,
+                   "price_per_mtok_in": price_in, "price_per_mtok_out": price_out}
+        if not m.get("ok"):
+            billing["warning"] = "charge failed after generation (balance race) — not billed"
+
+    if isinstance(j, dict):
+        j["x_petabyte"] = billing
+        return j
+    return {"model": model, "choices": [], "x_petabyte": billing}
+
+
 @app.post("/admin/data/snapshot", tags=["admin"])
 def admin_data_snapshot(me=Depends(require_admin), db: Session = Depends(get_db)):
     """Admin: capture a price-index snapshot now (the maintenance loop also does this hourly)."""
@@ -8192,13 +8834,16 @@ def report_log(data: LogModel, agent=Depends(api_key_user),
 
 @app.websocket("/ws/tasks/{task_id}/logs")
 async def task_logs_ws(websocket: WebSocket, task_id: int, token: str = ""):
-    """Live log stream for a task the buyer owns. Auth via ?token=<JWT>."""
+    """Live log stream for a task the buyer owns. Auth via the HttpOnly session cookie (sent
+    automatically on the WS handshake) or, for CLI/API clients, a ?token=<JWT> query param."""
     await websocket.accept()
     db = SessionLocal()
     try:
         try:
-            claims = verify_token(token)
+            claims = _verified_unrevoked_claims(db, token or websocket.cookies.get(SESSION_COOKIE, ""))
         except ValueError:
+            await websocket.close(code=4401); return
+        if not claims:                       # revoked (signed-out) token: same as invalid
             await websocket.close(code=4401); return
         from db import Task
         buyer = get_user_by_username(db, claims.get("sub"))

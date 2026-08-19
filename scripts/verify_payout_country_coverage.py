@@ -19,11 +19,65 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import payout_capabilities as cap   # noqa: E402
 
 
+def _print_priority(m):
+    print("=" * 72)
+    print(f"  Petabyte priority-market payout capability "
+          f"(platform {m['platform_country']}, verified {m['verified_at']})")
+    print("=" * 72)
+    print(f"  {'CC':<4}{'COUNTRY':<18}{'RAIL':<18}{'CCY':<6}{'STATUS'}")
+    print("  " + "-" * 68)
+    for c in m["countries"]:
+        ccy = ",".join(c["settlement_currencies"][:2]) or "-"
+        rail = c["rail"] or "-"
+        print(f"  {c['country_code']:<4}{(c['country_name'] or '')[:17]:<18}"
+              f"{rail:<18}{ccy:<6}{c['status']}")
+    print("  " + "-" * 68)
+    print(f"  priority markets:        {m['priority_count']}")
+    print(f"  ACTIVE today (payable):  {m['active_today_count']}")
+    print(f"  capable (rail on file):  {m['capable_count']}")
+    print(f"  not supported yet:       {m['not_supported_count']}")
+    print(f"  blocked (sanctioned):    {m['blocked_count']}")
+    print("  status breakdown:")
+    for k, v in sorted(m["status_buckets"].items()):
+        print(f"    - {k}: {len(v)}  ({', '.join(v)})")
+    print("\n  NOTE: 'capable' means a rail exists on file, NOT that it pays today. Only "
+          "ACTIVE\n  countries are payable now; the shipped dataset is honestly 0 until "
+          "a real\n  end-to-end payout is verified per country.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", type=int, default=100)
     ap.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    ap.add_argument("--priority", action="store_true",
+                    help="verify the priority-market watch list (per-country capability) "
+                         "instead of the global coverage target")
     args = ap.parse_args()
+
+    if args.priority:
+        m = cap.priority_capability_matrix()
+        # honesty invariant: every priority country resolves to a known, consistent status
+        # and no country is falsely marked payable without passing the strict active rule.
+        _valid = {"active", "pending_provider_approval", "preview", "planned",
+                  "not_implemented", "not_supported", "blocked_sanctioned", "unknown"}
+        bad = [c for c in m["countries"] if c["status"] not in _valid
+               or c["status"] == "unknown"
+               # both directions: active_today must be true EXACTLY when status is "active" —
+               # an "active" row with active_today=False is just as contradictory.
+               or c["active_today"] != (c["status"] == "active")]
+        if args.json:
+            print(json.dumps(m, indent=2))
+        else:
+            _print_priority(m)
+        if bad:
+            print(f"\nRESULT: INCONSISTENT — {len(bad)} priority country(ies) resolved to "
+                  f"an unknown/contradictory status: {[c['country_code'] for c in bad]}",
+                  file=sys.stderr)
+            return EXIT_ERROR
+        print(f"\nRESULT: OK — {m['priority_count']} priority markets verified "
+              f"({m['active_today_count']} active today, {m['capable_count']} capable, "
+              f"{m['not_supported_count']} not supported, {m['blocked_count']} blocked).")
+        return EXIT_OK
 
     s = cap.coverage_summary()
     if args.json:

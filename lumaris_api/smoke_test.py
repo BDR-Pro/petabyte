@@ -54,7 +54,13 @@ def ok(label, cond):
 # ---- setup: seller + buyer, seller role, attested spec with 3 units ----
 c.post("/register_user", json={"username":"seller1","password":"hunter2-correct-horse"})
 c.post("/register_user", json={"username":"buyer1","password":"hunter2-correct-horse"})
-def login(u): return c.post("/login", data={"username":u,"password":"hunter2-correct-horse"}).json()["access_token"]
+def login(u):
+    # /login now also Set-Cookies an HttpOnly session on the shared client. This suite is
+    # Bearer-based, so drop that cookie after capturing the token — otherwise the ambient
+    # session would silently authenticate the many "no-auth -> 401" assertions below.
+    _r = c.post("/login", data={"username":u,"password":"hunter2-correct-horse"})
+    c.cookies.clear()
+    return _r.json()["access_token"]
 sh = {"Authorization":f"Bearer {login('seller1')}"}
 bh = {"Authorization":f"Bearer {login('buyer1')}"}
 c.post("/deposit", headers=bh, json={"amount":100000.0})  # fund buyer for all test bookings
@@ -285,6 +291,137 @@ ok("refunds & disputes policy is published (escrow protection + dispute SLA)",
 _prv=c.get("/privacy")
 ok("privacy page states the workload data lifecycle (encrypt / not read / not retained)",
    _prv.status_code==200 and "Data lifecycle" in _prv.text)
+# Non-technical UX: plain-language FAQ + a "Get the Windows app" button that is never a dead link.
+_faq=c.get("/faq")
+ok("plain-language FAQ answers non-tech seller+buyer fears (safe on my PC / when do I get paid)",
+   _faq.status_code==200 and "safe" in _faq.text.lower()
+   and "get paid" in _faq.text.lower() and "escrow" in _faq.text.lower())
+# No desktop build/URL configured in tests -> the download route must degrade to the honest
+# early-access page (200), never 404 and never claim a download that isn't there.
+_dl=c.get("/download/windows", follow_redirects=False)
+ok("the Windows-app button degrades honestly (early-access page, not a dead link) when no build exists",
+   _dl.status_code==200 and "early access" in _dl.text.lower() and "one command" in _dl.text.lower())
+_ins=c.get("/install")
+ok("the seller page leads with a friendly app option + links the FAQ",
+   _ins.status_code==200 and "Get the Windows app" in _ins.text and "/faq" in _ins.text)
+ok("the /install page funnels to the in-browser GPU self-test (/mysystem)", "/mysystem" in _ins.text)
+
+# WebGPU #1: in-browser self-benchmark. Public, CSP-clean, and clearly SEPARATE from the attested
+# benchmark — it must never claim to set trust/pricing.
+_ms=c.get("/mysystem")
+ok("/mysystem renders a WebGPU self-benchmark and funnels to /install",
+   _ms.status_code==200 and "webgpu" in _ms.text.lower() and "/install" in _ms.text)
+ok("/mysystem is honest: labelled indicative, not the verified/attested benchmark",
+   "indicative" in _ms.text.lower() and "verified" in _ms.text.lower()
+   and "benchmark_verified" not in _ms.text)
+
+# WebGPU #3: Edge-Inference SDK + demo + metered fallback endpoint.
+_edge=c.get("/edge")
+ok("/edge demo loads the Edge-Inference SDK and explains on-device + fallback",
+   _edge.status_code==200 and "/static/petabyte-edge.js" in _edge.text
+   and "fallback" in _edge.text.lower() and "on-device" in _edge.text.lower())
+_sdk=c.get("/static/petabyte-edge.js")
+ok("the Edge SDK is served with a JS content-type",
+   _sdk.status_code==200 and "javascript" in _sdk.headers.get("content-type","")
+   and "PetabyteEdge" in _sdk.text)
+_ei=c.post("/edge/infer", json={"prompt":"hello"})
+_eij=_ei.json() if _ei.status_code==200 else {}
+ok("POST /edge/infer returns a labelled prototype fallback (never fakes a real completion)",
+   _ei.status_code==200 and _eij.get("source")=="petabyte-fallback" and _eij.get("prototype") is True)
+ok("POST /edge/infer rejects an empty prompt", c.post("/edge/infer", json={"prompt":"  "}).status_code==400)
+# Even with an upstream pool configured, the KEYLESS /edge/infer must NEVER proxy to it —
+# that would be an unauthenticated free-compute hole. It stays a labelled prototype that
+# points at the metered /v1/chat/completions (audit: unbilled-inference finding).
+import os as _os
+_prev_up, _prev_model = _os.environ.get("EDGE_INFER_UPSTREAM_URL"), _os.environ.get("EDGE_INFER_MODEL")
+_os.environ["EDGE_INFER_UPSTREAM_URL"]="http://ollama.local:11434"
+_os.environ["EDGE_INFER_MODEL"]="llama3.2"
+_cap={}
+def _fake_upstream(base, key, payload, timeout=30.0):
+    _cap["base"]=base; _cap["payload"]=payload
+    return {"model": payload["model"],
+            "choices":[{"message":{"role":"assistant","content":"Petabyte rents verified GPUs by the hour."}}],
+            "usage":{"total_tokens":9}}
+_orig_up=main._edge_chat_upstream; main._edge_chat_upstream=_fake_upstream
+try:
+    _er=c.post("/edge/infer", json={"prompt":"what is petabyte?"}); _erj=_er.json()
+finally:
+    main._edge_chat_upstream=_orig_up
+    for _k,_v in (("EDGE_INFER_UPSTREAM_URL",_prev_up),("EDGE_INFER_MODEL",_prev_model)):
+        _os.environ.pop(_k,None) if _v is None else _os.environ.__setitem__(_k,_v)
+ok("keyless /edge/infer NEVER proxies a configured upstream (no unbilled compute)",
+   _er.status_code==200 and _erj.get("prototype") is True
+   and _erj.get("source")=="petabyte-fallback" and not _cap
+   and _erj.get("upgrade",{}).get("endpoint")=="/v1/chat/completions")
+# On-device inference (and its CSP widening) is OFF by default -> the CSP the browser gets must
+# stay locked down: no wasm-eval, no external model host in connect-src.
+_csp=c.get("/edge").headers.get("Content-Security-Policy","")
+ok("edge on-device is opt-in: default CSP stays locked (no wasm-unsafe-eval / no external connect-src)",
+   "wasm-unsafe-eval" not in _csp and "huggingface.co" not in _csp and "connect-src 'self';" in _csp)
+
+# --- Pay-per-token inference API (OpenAI-compatible /v1/chat/completions) ---
+import os as _os2
+# a funded caller with an inference-scoped key (isolated from buyer1's balance assertions)
+c.post("/register_user", json={"username":"infuser","password":"hunter2-correct-horse"})
+_iuh={"Authorization":f"Bearer {login('infuser')}"}
+c.post("/deposit", headers=_iuh, json={"amount":1000.0})
+_ikey=c.post("/create_api_key", headers=_iuh, params={"scopes":"inference"}).json()["api_key"]
+_ih={"X-API-KEY":_ikey}
+# auth (a dependency) runs before the body, so an invalid key is 401 regardless of upstream
+ok("/v1/chat/completions rejects an invalid key (401)",
+   c.post("/v1/chat/completions", headers={"X-API-KEY":"pk_not_a_real_key"}, json={"prompt":"hi"}).status_code==401)
+# with a VALID key but no upstream configured -> 503
+_pu=_os2.environ.pop("EDGE_INFER_UPSTREAM_URL",None)
+ok("/v1/chat/completions is 503 until an inference upstream is configured",
+   c.post("/v1/chat/completions", headers=_ih, json={"prompt":"hi"}).status_code==503)
+# configure + mock the upstream (an ollama/vLLM node); returns an OpenAI-shaped reply + usage
+_os2.environ["EDGE_INFER_UPSTREAM_URL"]="http://pool.local:11434"; _os2.environ["EDGE_INFER_MODEL"]="llama3.2"
+def _fake_chat(base, key, payload, timeout=30.0):
+    return {"model": payload["model"],
+            "choices":[{"message":{"role":"assistant","content":"Petabyte is a verified GPU marketplace."}}],
+            "usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20}}
+_orig_chat=main._edge_chat_upstream; main._edge_chat_upstream=_fake_chat
+try:
+    _os2.environ["INFERENCE_PRICE_PER_MTOK_IN"]="0"; _os2.environ["INFERENCE_PRICE_PER_MTOK_OUT"]="0"
+    _fr=c.post("/v1/chat/completions", headers=_ih,
+               json={"messages":[{"role":"user","content":"what is petabyte?"}]}); _frj=_fr.json()
+    ok("/v1/chat/completions returns a REAL OpenAI-shaped answer (free tier, not billed)",
+       _fr.status_code==200 and _frj["choices"][0]["message"]["content"].startswith("Petabyte")
+       and _frj["x_petabyte"]["billed"] is False and _frj["x_petabyte"]["tokens"]==20)
+    from db import SessionLocal as _SL, LedgerEntry as _LE, PLATFORM_REVENUE as _PR, CREDIT as _CR
+    from decimal import Decimal as _D
+    def _infrev():
+        s=_SL()
+        try:
+            return sum((_D(str(e.amount)) for e in s.query(_LE).filter(
+                _LE.entry_type=="inference", _LE.direction==_CR, _LE.account==_PR).all()), _D(0))
+        finally: s.close()
+    _rev0=_infrev()
+    _os2.environ["INFERENCE_PRICE_PER_MTOK_OUT"]="1000000"    # $1 / output token -> 8 tokens = $8
+    _pr=c.post("/v1/chat/completions", headers=_ih, json={"prompt":"cost this"}); _prj=_pr.json()
+    ok("/v1/chat/completions bills per token and books inference revenue to the ledger",
+       _pr.status_code==200 and _prj["x_petabyte"]["billed"] is True
+       and abs(_prj["x_petabyte"]["charged"]-8.0)<1e-6 and float(_infrev()-_rev0)>=8.0)
+    # a caller whose wallet can't cover the upper-bound estimate is refused BEFORE the model runs
+    c.post("/register_user", json={"username":"infbroke","password":"hunter2-correct-horse"})
+    _bk=c.post("/create_api_key", headers={"Authorization":f"Bearer {login('infbroke')}"},
+               params={"scopes":"inference"}).json()["api_key"]
+    ok("/v1/chat/completions returns 402 when the wallet can't cover the token estimate",
+       c.post("/v1/chat/completions", headers={"X-API-KEY":_bk}, json={"prompt":"x"}).status_code==402)
+    # the PUBLISHED sandbox key must never reach paid GPU inference (read-only by contract)
+    ok("/v1/chat/completions rejects the published sandbox key (403, never free compute)",
+       c.post("/v1/chat/completions", headers={"X-API-KEY": main.DATA_API_SANDBOX_KEY},
+              json={"prompt":"hi"}).status_code==403)
+finally:
+    main._edge_chat_upstream=_orig_chat
+    _os2.environ.pop("EDGE_INFER_UPSTREAM_URL",None) if _pu is None else _os2.environ.__setitem__("EDGE_INFER_UPSTREAM_URL",_pu)
+    for _k in ("EDGE_INFER_MODEL","INFERENCE_PRICE_PER_MTOK_IN","INFERENCE_PRICE_PER_MTOK_OUT"):
+        _os2.environ.pop(_k,None)
+# the developer docs page surfaces the new Inference API + Edge SDK + browser GPU test
+_dev=c.get("/developers")
+ok("/developers surfaces the Inference API, Edge SDK and browser GPU test",
+   _dev.status_code==200 and "/v1/chat/completions" in _dev.text and "/edge" in _dev.text
+   and "/mysystem" in _dev.text and "inference" in _dev.text.lower())
 
 # REFUND ON REAP: new booking, node dies, settle refunds buyer
 c.post("/heartbeat", headers={"X-API-KEY":s3key}, json={"spec_id":sid3})
@@ -312,6 +449,17 @@ ok("webhook valid signature credits", c.post("/webhooks/payment", content=body, 
 ok("webhook credited +25", round(c.get("/wallet", headers=b3h).json()["balance"]-bal0,2)==25.0)
 c.post("/webhooks/payment", content=body, headers={"X-Signature":_sign_wh(body)})   # replay
 ok("duplicate event not re-credited", round(c.get("/wallet", headers=b3h).json()["balance"]-bal0,2)==25.0)
+# replay-bounded (Stripe-style) scheme: sign "<ts>.<body>" + send X-Timestamp; stale ts rejected
+import time as _time
+def _sign_ts(b, ts): return _hmac.new(b"whsec_test", f"{ts}.".encode()+b, _hl.sha256).hexdigest()
+_nw = int(_time.time())
+_bts = json.dumps({"event_id":"evt_ts_1","type":"x","data":{"username":"buyer3","amount":10.0}}).encode()
+ok("webhook with a valid timestamped signature credits",
+   c.post("/webhooks/payment", content=_bts, headers={"X-Signature":_sign_ts(_bts,_nw),"X-Timestamp":str(_nw)}).status_code==200)
+_stale = _nw - 100000
+_bst = json.dumps({"event_id":"evt_ts_2","type":"x","data":{"username":"buyer3","amount":10.0}}).encode()
+ok("webhook with a STALE timestamp is rejected (replay window closed)",
+   c.post("/webhooks/payment", content=_bst, headers={"X-Signature":_sign_ts(_bst,_stale),"X-Timestamp":str(_stale)}).status_code==401)
 
 
 # ---- CONFIDENTIAL COMPUTING (TEE attestation) ----
@@ -437,7 +585,9 @@ ok("the audit chain verifies (tamper-evident) — intact over the recorded event
 _aaud=c.get("/account/audit", headers=adminh).json()
 ok("personal audit trail lists the caller's own actions",
    any(e["action"]=="team.create" for e in _aaud["events"]) and _aaud["integrity"]["intact"] is True)
-ok("personal audit requires auth", c.get("/account/audit").status_code==401)
+# "no auth" now means no Bearer AND no session cookie — the shared client `c` carries a
+# pb_session cookie from earlier logins (a cookie IS a valid session), so use a fresh client.
+ok("personal audit requires auth", TestClient(main.app).get("/account/audit").status_code==401)
 # tamper-evidence: editing a stored row breaks the chain (deletion/edit is detectable)
 import db as _auditdb
 _asess=_auditdb.SessionLocal()
@@ -2208,7 +2358,7 @@ _meh={"Authorization":f"Bearer {login('buyer1')}"}
 _me=c.get("/me", headers=_meh); ok("/me returns profile", _me.status_code==200 and {"username","role","balance","nodes","bookings"} <= set(_me.json()))
 ok("/account/specs lists my nodes", c.get("/account/specs", headers=_meh).status_code==200)
 ok("/account/bookings lists my jobs", c.get("/account/bookings", headers=_meh).status_code==200)
-ok("/me requires auth", c.get("/me").status_code in (401,403))
+ok("/me requires auth", TestClient(main.app).get("/me").status_code in (401,403))  # fresh client: no session cookie
 ok("nav has sign-in and sign-out", 'id="signinlink"' in _lt0 and 'id="signoutlink"' in _lt0)
 # node bootstrap with API key only (no creds): seller mints key, node registers+attests with it
 _nk=c.post("/create_api_key?days=90&label=node&scopes=node,jobs", headers=s5h).json()["api_key"]
@@ -2218,7 +2368,7 @@ ok("register_specs with API key only", _rs.status_code==200 and "spec_id" in _rs
 _ksid=_rs.json()["spec_id"]
 _katt={"cpu":8,"ram":32,"gpu_model":"L4","nonce":"kn","ts":int(time.time())}
 ok("prove/attest with API key only", c.post("/prove", headers=_kh, json={"spec_id":_ksid,"attestation":_katt,"signature":sign_proof(_VENDOR_SK,_katt),"pubkey":base64.b64encode(_VENDOR_SK.public_key().public_bytes_raw()).decode()}).status_code==200)
-ok("register_specs blocks no-auth", c.post("/register_specs", json={"cpu":1,"ram":1,"duration":1,"price_per_hour":1,"provider":"x","units":1}).status_code==401)
+ok("register_specs blocks no-auth", TestClient(main.app).post("/register_specs", json={"cpu":1,"ram":1,"duration":1,"price_per_hour":1,"provider":"x","units":1}).status_code==401)  # fresh client: no session cookie
 ok("login page offers Google sign-in", "auth/google/login" in c.get("/login").text)
 # --- private-repo readiness: agent installs from OUR server, not a GitHub clone ---
 ok("installer fetches the agent bundle from the server (works when repo is private)",
@@ -2284,11 +2434,18 @@ lg=c.get("/auth/google/login", follow_redirects=False)
 ok("google login redirects", lg.status_code in (302,307) and "callback" in lg.headers.get("location",""))
 cb=c.get("/auth/google/callback?code=stub&email=gtest@example.com", follow_redirects=False)
 loc=cb.headers.get("location","")
-ok("google callback issues JWT redirect to /console", cb.status_code in (302,307) and "/console#t=" in loc)
-gjwt=loc.split("t=")[1]
-gw=c.get("/wallet", headers={"Authorization":f"Bearer {gjwt}"})
-ok("google-issued JWT authenticates", gw.status_code==200)
-ok("google user is created/persistent", c.get("/auth/google/callback?code=x&email=gtest@example.com", follow_redirects=False).status_code in (302,307))
+# The session is delivered as an HttpOnly cookie now, NEVER a #t=JWT URL fragment (which would
+# leak into history / referrers / JS). Clean redirect, token in the cookie jar.
+ok("google callback redirects cleanly to /console (no token in the URL)",
+   cb.status_code in (302,303,307) and loc.rstrip("/").endswith("/console") and "#t=" not in loc)
+ok("google callback sets the HttpOnly session cookie (not a URL fragment)",
+   bool(c.cookies.get("pb_session")))
+# the callback set the session cookie on the client -> the browser is now authenticated by it
+ok("google-issued session cookie authenticates", c.get("/wallet").status_code==200)
+# The cookie VALUE is the JWT; capture it for the Bearer-style admin checks below, then clear
+# the jar so the shared client `c` has NO ambient session (keeps the no-auth assertions honest).
+gjwt=c.cookies.get("pb_session"); c.cookies.clear()
+ok("google user is created/persistent", c.get("/auth/google/callback?code=x&email=gtest@example.com", follow_redirects=False).status_code in (302,303,307))
 
 # ==== ADMIN CONSOLE (env-allowlisted, gated) ====
 os.environ["ADMIN_USERS"]="gtest@example.com"   # make the google user an admin (read dynamically)

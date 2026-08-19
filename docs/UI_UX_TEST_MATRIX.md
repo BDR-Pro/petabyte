@@ -75,10 +75,9 @@ the phone card view or reintroduce the iOS zoom-on-focus bug.
 | Surface | Human output | Colour off (NO_COLOR / pipe) | Machine (JSON) | Error UX | Exit codes | Automated |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|
 | `petabyte --help` | ✓ | ✓ | N/A | N/A | ✓ (0) | ✓ |
-| `petabyte specs` (table) | ✓ | ✓ | ✓ (array) | ✓ (empty state) | ✓ | ✓ |
-| `petabyte wallet` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `petabyte run` | ✓ (progress) | ✓ | ✓ | ✓ (no-match / timeout / missing file) | ✓ | ✓ |
-| `petabyte doctor` | ✓ | ✓ | ✓ | ✓ | ✓ (0/1) | ✓ |
+| `petabyte specs` (table) | ✓ | ✓ | N/A | ✓ (empty state) | ✓ | ✓ |
+| `petabyte wallet` | ✓ | ✓ | N/A | ✓ | ✓ | ✓ |
+| `petabyte run` | ✓ (progress) | ✓ | N/A | ✓ (no-match / timeout / missing file) | ✓ | ✓ |
 | agent `doctor` | ✓ | ✓ | ✓ (pure stdout) | ✓ | ✓ (0/1) | ✓ |
 | agent `--help` / `--version` | ✓ | ✓ | N/A | N/A | ✓ (0) | ✓ |
 | `provision.py` | ✓ (steps + panel) | ✓ | N/A | ✓ (missing key/url) | ✓ | ✓ |
@@ -86,8 +85,10 @@ the phone card view or reintroduce the iOS zoom-on-focus bug.
 Notes:
 - Colour is semantic (green=ok/online, yellow=pending, red=fail, cyan=info, dim=meta) and
   turns **off** automatically when stdout is not a TTY or `NO_COLOR` is set.
-- **Machine-readable contract preserved**: `--json` (and `PETABYTE_JSON`) emit pure,
-  valid JSON on stdout with *no* ANSI and *no* stray log lines — asserted directly.
+- **Machine-readable contract (seller agent CLI):** `--json` (and `PETABYTE_JSON`) emit
+  pure, valid JSON on stdout with *no* ANSI and *no* stray log lines — asserted directly.
+  The buyer `petabyte` client does **not** have a `--json` mode or a `doctor` command;
+  those are agent-CLI features.
 - Icons fall back to ASCII when the terminal can't encode Unicode (e.g. Windows cp1252),
   and output is verified cp1252-encodable so a legacy console never crashes.
 

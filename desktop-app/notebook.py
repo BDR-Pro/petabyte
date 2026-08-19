@@ -48,8 +48,13 @@ def _docker_available() -> bool:
 
 
 @timed
-def run_notebook_code(code: Union[str, List[str], dict], cpu: int = 1, ram: int = 2):
-    """Execute notebook code in a sandboxed container. Returns a list of outputs."""
+def run_notebook_code(code: Union[str, List[str], dict], cpu: int = 1, ram: int = 2,
+                      max_runtime_s: int = None):
+    """Execute notebook code in a sandboxed container. Returns a list of outputs.
+
+    max_runtime_s is the buyer's AUTHORIZED runtime budget (audit H1): the container is hard-
+    killed at min(NB_TIMEOUT, max_runtime_s) so a job can never consume more of the seller's GPU
+    than the buyer paid to authorize. None => the default wall timeout only."""
     if not _docker_available():
         # SECURITY: never fall back to host execution for untrusted code.
         return [{"type": "error",
@@ -70,8 +75,9 @@ def run_notebook_code(code: Union[str, List[str], dict], cpu: int = 1, ram: int 
     with open(in_path, "w", encoding="utf-8") as f:
         nbformat.write(nb, f)
 
+    container = "pb-nb-" + uuid.uuid4().hex[:12]
     cmd = [
-        "docker", "run", "--rm",
+        "docker", "run", "--rm", "--name", container,
         "--network", "none",                       # no exfiltration / LAN access
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
@@ -89,14 +95,25 @@ def run_notebook_code(code: Union[str, List[str], dict], cpu: int = 1, ram: int 
         "--output", "output.ipynb", "input.ipynb",
     ]
 
+    # Hard wall-clock kill = the smaller of the platform default and the buyer's authorized budget.
+    wall = WALL_TIMEOUT
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=WALL_TIMEOUT)
+        if max_runtime_s and int(max_runtime_s) > 0:
+            wall = min(WALL_TIMEOUT, int(max_runtime_s))
+    except (TypeError, ValueError):
+        pass
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=wall)
         if proc.returncode != 0:
+            shutil.rmtree(workdir, ignore_errors=True)
             return [{"type": "error", "value": f"Sandbox execution error: {proc.stderr[-2000:]}"}]
     except subprocess.TimeoutExpired:
+        # Our docker CLIENT timed out, but the daemon-owned container keeps running (--rm only
+        # fires when the container exits) — force-remove it so a timed-out notebook can't keep
+        # burning the seller's GPU/CPU, and drop the workspace instead of leaking it.
+        subprocess.run(["docker", "rm", "-f", container], capture_output=True, timeout=30)
+        shutil.rmtree(workdir, ignore_errors=True)
         return [{"type": "error", "value": "Execution timed out"}]
-    finally:
-        pass
 
     if not os.path.exists(out_path) or os.path.getsize(out_path) > MAX_OUTPUT_BYTES * 4:
         shutil.rmtree(workdir, ignore_errors=True)

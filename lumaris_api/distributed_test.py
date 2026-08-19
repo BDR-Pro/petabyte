@@ -202,8 +202,10 @@ ok("the cluster spec lists every node and is marked ready once all ranks registe
 ok("the cluster spec hands back ready-to-run launch commands for the standard schedulers",
    "mpirun" in cl["launch"] and "torchrun" in cl["launch"] and "ray_worker" in cl["launch"]
    and "10.8.0.1" in cl["launch"]["torchrun"])
-ok("hostfile/cluster are owner-only (an outsider agent JWT can't read them)",
-   c.get(f"/jobs/{job_id}/hostfile").status_code in (401, 422))
+# unauthenticated = no Bearer AND no session cookie; the shared client `c` holds a session
+# cookie (a cookie is a valid session now), so a fresh client models the true "no auth" case.
+ok("hostfile/cluster reject an unauthenticated caller (no Bearer, no session cookie)",
+   TestClient(main.app).get(f"/jobs/{job_id}/hostfile").status_code in (401, 422))
 
 # ---- completion: the job is done when EVERY rank finishes (no stitch step) ----
 _s = dbm.SessionLocal()

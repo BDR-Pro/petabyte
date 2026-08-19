@@ -118,6 +118,37 @@ ok("status reports a fresh last-backup age (seconds)", st["last_backup_age_secon
 ok("status carries a failed_count field", "failed_count" in st)
 s.close()
 
+# ---- restore DRILL: a backup restores into a FRESH scratch DB and the money ledger balances ----
+# (a backup you have never restored is not a backup — this is the tested-recovery half of DR)
+s = dbmod.SessionLocal()
+drill = bk.run_restore_drill(s)
+ok("restore drill succeeds end to end (backup -> restore -> verify)", drill["ok"] is True)
+ok("the RESTORED database reports the money ledger balanced", drill["restored_ledger_balanced"] is True)
+ok("restored row counts match the source (users + ledger_entries)",
+   drill["restored_counts"]["users"] == drill["source_counts"]["users"]
+   and drill["restored_counts"]["ledger_entries"] == drill["source_counts"]["ledger_entries"])
+ok("drill restored the sqlite engine here", drill["engine"] == "sqlite")
+# the drill must NOT touch the live DB — the canary is still present after it
+ok("the drill left the live database intact (canary still present)",
+   dbmod.get_user_by_username(s, "backup_canary_user") is not None)
+s.close()
+
+# ---- freshness (RPO): a just-made backup is fresh; one older than the RPO reports STALE ----
+import datetime as _dt   # noqa: E402
+s = dbmod.SessionLocal()
+fresh = bk.backup_freshness(s)
+ok("a just-created backup is within the default RPO (fresh)",
+   fresh["fresh"] is True and fresh["age_seconds"] is not None and fresh["rpo_seconds"] > 0)
+# age EVERY successful backup past the default RPO (7200s / 2h) -> the freshness gate must fire
+from sqlalchemy import update as _upd   # noqa: E402
+s.execute(_upd(dbmod.DatabaseBackup).values(
+    created_at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=3)))
+s.commit()
+stale = bk.backup_freshness(s)
+ok("a backup older than the RPO reports STALE — the monitoring gate fires",
+   stale["fresh"] is False and "exceeds RPO" in stale["reason"])
+s.close()
+
 # ---- guardrails: misconfig fails loudly, disabled refuses ----
 s = dbmod.SessionLocal()
 _bucket = os.environ.pop("S3_BUCKET")
@@ -141,6 +172,42 @@ except Exception:
 os.environ["BACKUP_ENABLED"] = "true"
 ok("BACKUP_ENABLED=false refuses to run", _disabled_raised)
 s.close()
+
+# ---- the pg scratch DB helper must keep the REAL password ----
+# str(URL) masks the password as '***'; a round-trip through make_url(str(url)) made psql
+# send the literal '***' and fail auth on any password-protected server (the CI drill).
+from sqlalchemy.engine import make_url  # noqa: E402
+
+_calls = []
+
+
+def _fake_run(args, **kw):
+    _calls.append(args)
+
+    class _P:
+        returncode = 0
+        stderr = b""
+    return _P()
+
+
+_real_engine, _real_run, _real_which = dbmod.engine, bk.subprocess.run, bk.shutil.which
+try:
+    class _Eng:
+        url = make_url("postgresql+psycopg2://postgres:s3cret@127.0.0.1:5432/petabyte_test")
+    dbmod.engine = _Eng()
+    bk.subprocess.run = _fake_run
+    bk.shutil.which = lambda name: "/usr/bin/psql"
+    _scratch_url = bk._prepare_pg_scratch()
+    _admin_uris = [next((x.split("--dbname=", 1)[1] for x in c if x.startswith("--dbname=")), "")
+                   for c in _calls]
+    ok("scratch admin psql URI carries the real password (not '***')",
+       all("s3cret" in u and "***" not in u for u in _admin_uris) and len(_admin_uris) == 2)
+    ok("returned scratch URL carries the real password (not '***')",
+       "s3cret" in _scratch_url and "***" not in _scratch_url)
+    ok("scratch URL targets the _restore_drill sibling database",
+       _scratch_url.endswith("/petabyte_test_restore_drill"))
+finally:
+    dbmod.engine, bk.subprocess.run, bk.shutil.which = _real_engine, _real_run, _real_which
 
 shutil.rmtree(_STUB_ROOT, ignore_errors=True)
 for f in ("backup_test.db", "backup_test.db-wal", "backup_test.db-shm"):

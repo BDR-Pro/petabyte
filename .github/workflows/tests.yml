@@ -12,6 +12,16 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:      # manual trigger — required for the opt-in real Mailgun send job
+  workflow_call:          # callable as a required gate by other workflows (deploy-server.yml)
+                          # so a push to main can NEVER reach production without this suite green
+    secrets:              # the ONLY secrets a caller may hand this suite (Stripe TEST keys for
+                          # the self-skipping integration job) — callers must never `inherit`.
+      STRIPE_SECRET_KEY:
+        required: false
+      STRIPE_PUBLISHABLE_KEY:
+        required: false
+      STRIPE_WEBHOOK_SECRET:
+        required: false
 
 # Least privilege: the whole suite only needs to read the repo. No job pushes, comments,
 # or mutates GitHub state — checkouts below also drop the persisted token.
@@ -48,12 +58,18 @@ jobs:
       - name: payout rails (irreversible USDC gated + fail-closed)
         working-directory: lumaris_api
         run: python payout_rails_test.py
+      - name: priority-market payout capability (per-country, honest)
+        working-directory: lumaris_api
+        run: python priority_country_test.py
       - name: email (mailgun, offline unit)
         working-directory: lumaris_api
         run: python email_test.py
       - name: matmul result validation (offline)
         working-directory: lumaris_api
         run: python matmul_validation_test.py
+      - name: settlement verification gate (pay only for verified work)
+        working-directory: lumaris_api
+        run: python settlement_verification_test.py
       - name: funding metrics (canonical, scope-separated, honest)
         working-directory: lumaris_api
         run: python funding_metrics_test.py
@@ -83,6 +99,9 @@ jobs:
       - name: wallet (add funds via stripe checkout)
         working-directory: lumaris_api
         run: python wallet_test.py
+      - name: desktop release (admin-uploadable signed builds; publish/serve/gating)
+        working-directory: lumaris_api
+        run: python desktop_release_test.py
       - name: seller integrity audits (anti-fraud)
         working-directory: lumaris_api
         run: python seller_audit_test.py
@@ -154,6 +173,10 @@ jobs:
         working-directory: lumaris_api
         run: python stripe_e2e_flow_test.py
 
+      - name: demo loop — headless onboard -> capture -> payout transfer -> unified proof
+        working-directory: lumaris_api
+        run: python demo_payout_loop_test.py
+
       - name: payout readiness — provider-agnostic seller eligibility (verified rail, not Connect)
         working-directory: lumaris_api
         run: python payout_readiness_test.py
@@ -199,6 +222,38 @@ jobs:
         env:
           DATABASE_URL: ""
         run: python ../scripts/audit_ledger_test.py
+
+      - name: Alembic migrations run up + down on real Postgres (schema change-management gate)
+        working-directory: lumaris_api
+        # `alembic upgrade head` builds the full schema from the models on an EMPTY DB, then
+        # `downgrade base` drops it, then upgrade again — proving the migration chain is applyable
+        # and reversible on real Postgres (SQLite can't prove FK/constraint DDL). A migration that
+        # doesn't run both ways fails CI here, before it reaches a deploy.
+        env:
+          DATABASE_URL: postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/alembic_ci
+        run: |
+          psql "postgresql://postgres:postgres@127.0.0.1:5432/postgres" -v ON_ERROR_STOP=1 \
+            -c 'DROP DATABASE IF EXISTS alembic_ci' -c 'CREATE DATABASE alembic_ci' \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-16 && \
+                 psql "postgresql://postgres:postgres@127.0.0.1:5432/postgres" -v ON_ERROR_STOP=1 \
+                   -c 'DROP DATABASE IF EXISTS alembic_ci' -c 'CREATE DATABASE alembic_ci'; }
+          alembic upgrade head
+          alembic current | grep -q '0002_type_hygiene' && echo "schema at head"
+          alembic downgrade base
+          alembic upgrade head
+
+      - name: DR restore drill — backup → restore into a scratch DB → verify ledger balances
+        working-directory: lumaris_api
+        # A backup you have never restored is not a backup. Dumps petabyte_test, restores it into a
+        # THROWAWAY `petabyte_test_restore_drill` DB, and asserts the money ledger balances + row
+        # counts match the source. Fails CI if recovery is broken. Offline object store (S3_STUB).
+        env:
+          DATABASE_URL: postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/petabyte_test
+          S3_STUB: "true"
+          S3_BUCKET: petabyte-ci-drill
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-16
+          python ../scripts/restore_drill.py
 
   config:
     # GitHub-config source of truth: manifest freshness, the validator (defaults,
@@ -456,6 +511,15 @@ jobs:
     # charged" is backed by a REAL server-side capture and does NOT fake GPU work. The real
     # self-hosted GPU hardware proof is a SEPARATE, independent job — see
     # .github/workflows/load_test.yml (smoke-gpu / scripts/smoke_gpu.py).
+    #
+    # Non-blocking (P1 signal, not a P0 release gate): a real-Chromium browser journey is the
+    # single most infra-flake-prone job here, and the deploy workflow reuses this whole workflow
+    # as its production gate (deploy-server.yml). Blocking prod on a browser flake — including a
+    # security hotfix deploy — would be stricter than this repo's own P0/P1 model, which treats
+    # browser E2E as "should pass", not "release-blocking". The independent Browser E2E workflow
+    # (browser-e2e.yml, on every push + a schedule) still runs this as a first-class, visible
+    # signal, so nothing is lost. The money/security/config/schema/Postgres jobs stay HARD gates.
+    continue-on-error: true
     permissions:
       contents: read
     runs-on: ubuntu-latest

@@ -4,6 +4,16 @@
     "platform_country": "US",
     "verified_at": "2026-08-05",
     "honesty_note": "The platform HAS an approved Stripe Connect account (owner-confirmed 2026-08-05), but the code still runs Stripe in TEST MODE and no country has been live end-to-end payout-verified yet. Therefore NO country is 'active' yet: Stripe Connect countries are 'implemented' and 'pending_provider_approval'. A row flips to approved=true + availability_status=active ONLY after a real end-to-end payout is verified for that country (see docs/PAYMENTS_AND_PAYOUTS_ROADMAP.md, Step 1). Do NOT advertise a country as supported before that.",
+    "priority_countries": [
+      "US", "GB", "DE", "CA", "FR", "NL", "SE", "AU", "JP", "SG",
+      "PL", "ES", "IT", "BR", "AE", "IN", "KR", "NG", "KE", "RU"
+    ],
+    "priority_countries_note": "The 20 highest-value GPU-supply markets we track for seller-payout readiness. This is a WATCH list (which markets to verify), NOT a capability claim: each country is resolved to its real payout capability from the rows below (or to not_supported / blocked_sanctioned when it has no row / is embargoed). Deliberately includes markets we cannot yet serve (IN, KR = no Stripe Connect connected-account support), markets whose rail is planned-not-implemented (NG global-payouts, KE Circle-USDC), and an embargoed market (RU) so the per-capability verification exercises every honest outcome. See scripts/verify_payout_country_coverage.py --priority and docs/PRIORITY_COUNTRY_COVERAGE.md.",
+    "priority_country_names": {
+      "IN": "India",
+      "KR": "South Korea",
+      "RU": "Russia"
+    },
     "availability_status_values": [
       "active",
       "pending_provider_approval",

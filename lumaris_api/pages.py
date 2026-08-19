@@ -3,7 +3,9 @@
 Brand: Petabyte — deep-navy background with teal/cyan bioluminescent
 accents and an amber energy accent, Sora (display) + Figtree (body) +
 JetBrains Mono (data). The hexagon node mark (/static/petabyte-logo.png) is the
-signature. Token persists in localStorage as 'pb_token' across pages.
+signature. The session JWT lives in an HttpOnly `pb_session` cookie (never localStorage, so
+XSS can't read it); the readable `pb_csrf` cookie is the double-submit CSRF token and the
+"signed in" hint. api() sends the cookie automatically and adds X-CSRF-Token on writes.
 """
 import re
 
@@ -31,7 +33,7 @@ _HEAD = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
  "sameAs":["https://github.com/BDR-Pro","https://x.com/engcool"]}
 </script>
 <script>(function(){try{var l=localStorage.getItem('pb_lang')||'en';document.documentElement.setAttribute('lang',l);document.documentElement.setAttribute('dir',l==='ar'?'rtl':'ltr');}catch(e){}})();</script>
-<script>(function(){try{document.documentElement.setAttribute('data-auth',localStorage.getItem('pb_token')?'in':'out');}catch(e){}})();</script>
+<script>(function(){try{document.documentElement.setAttribute('data-auth',(document.cookie.indexOf('pb_csrf=')>=0)?'in':'out');}catch(e){}})();</script>
 <script>(function(){try{var t=localStorage.getItem('pb_theme');if(t!=='light'&&t!=='dark')t=(window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';document.documentElement.setAttribute('data-theme',t);document.documentElement.setAttribute('data-bs-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');document.documentElement.setAttribute('data-bs-theme','dark');}})();</script>
 <link rel="icon" type="image/png" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/static/petabyte-mark-180.png">
@@ -361,6 +363,14 @@ html[dir="rtl"] .arrow-fwd::after{content:"←"}
    A host checks "is my node earning?" from their phone, in bed. A 7-column table
    scrolled sideways is useless there. Below 720px every .tbl collapses into stacked
    cards, each row labelled by its header via data-l. */
+@media(max-width:480px){
+  /* Phone ergonomics contract (enforced by browser_ui_test): text inputs at ≥16px so iOS
+     never zooms on focus, and every tappable control at the ~44px HIG tap-target minimum.
+     min-width:0/max-width:100% lets a control with long intrinsic content (e.g. a select's
+     widest option) shrink inside its flex row instead of pushing the page sideways. */
+  input:not([type=checkbox]):not([type=radio]),select,textarea{font-size:16px;min-width:0;max-width:100%}
+  button,.btn{min-height:44px}
+}
 @media(max-width:720px){
   .wrap{padding:0 16px}
   h1{font-size:clamp(28px,8vw,40px)!important}
@@ -432,7 +442,7 @@ _FOOT = """<footer>
     <a href="/wiki">Wiki</a><a href="/docs">API reference</a><a href="/catalog" data-ar="القوالب">Templates</a><a href="/developers">Quickstart</a><a href="/keys">API keys</a>
   </div>
   <div class="fcol"><div class="fh">Company</div>
-    <a href="/security">Security &amp; trust</a><a href="/investors">About</a><a href="/status">Status</a>
+    <a href="/faq">Help &amp; FAQ</a><a href="/security">Security &amp; trust</a><a href="/investors">About</a><a href="/status">Status</a>
   </div>
   <div class="fcol"><div class="fh">Legal</div>
     <a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/acceptable-use">Acceptable use</a>
@@ -444,19 +454,28 @@ _FOOT = """<footer>
 <span>verified compute · escrowed settlement</span>
 </div></footer>"""
 
-# token bootstrap: capture #t=JWT from the OAuth redirect, persist across pages
+# Auth is a browser HttpOnly cookie now (the JWT is NOT in localStorage, so an XSS payload
+# can't read the session). The readable pb_csrf cookie is the double-submit token AND the
+# "signed in" hint. No more #t=JWT fragment capture — the cookie is set server-side on login.
 _AUTHJS = """<script>
-(function(){var h=location.hash.match(/t=([^&]+)/);if(h){localStorage.setItem('pb_token',decodeURIComponent(h[1]));document.documentElement.setAttribute('data-auth','in');history.replaceState(null,'',location.pathname);}})();
 (function(){try{var m=location.search.match(/[?&]ref=([A-Za-z0-9]{4,16})/);if(m){localStorage.setItem('pb_ref',m[1].toUpperCase());}}catch(e){}})();
-function tok(){return localStorage.getItem('pb_token');}
+function pbCookie(n){var m=document.cookie.match(new RegExp('(?:^|; )'+n.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+'=([^;]*)'));return m?decodeURIComponent(m[1]):'';}
+// The JWT lives in an HttpOnly cookie the browser attaches automatically; JS can't read it.
+// tok() is kept only so CLI-facing curl snippets keep a slot; in the browser it is empty.
+function tok(){return '';}
 // HTML-escape any user-controlled value before it goes into innerHTML. Server-side
 // validation (main.py _clean_label) already rejects HTML metachars at write time; this is
 // defence-in-depth at the DOM sink and also neutralises any legacy row stored before that.
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 (function(){try{var p=location.pathname.replace(new RegExp('[/]$'),'')||'/';document.querySelectorAll('.navlinks a').forEach(function(a){if(a.getAttribute('href')===p)a.classList.add('active');});}catch(e){}})();
-function authed(){return !!tok();}
+// signed-in hint = the readable CSRF cookie the server sets beside the HttpOnly session.
+function authed(){return !!pbCookie('pb_csrf');}
 async function api(p,o){o=o||{};o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});
- if(tok())o.headers['Authorization']='Bearer '+tok();var r=await fetch(p,o);var b={};try{b=await r.json()}catch(e){}return {ok:r.ok,status:r.status,body:b};}
+ if(tok())o.headers['Authorization']='Bearer '+tok();
+ o.credentials='same-origin';                       // send the session cookie on same-origin calls
+ var m=(o.method||'GET').toUpperCase();
+ if(m!=='GET'&&m!=='HEAD'&&m!=='OPTIONS'){var ct=pbCookie('pb_csrf');if(ct)o.headers['X-CSRF-Token']=ct;}  // CSRF double-submit
+ var r=await fetch(p,o);var b={};try{b=await r.json()}catch(e){}return {ok:r.ok,status:r.status,body:b};}
 // In-app toast for success/error/info feedback — replaces jarring browser toast(,'err') popups.
 // kind: 'ok' (success) | 'err' (failure) | 'info'. Auto-dismisses; errors linger a little longer.
 function toast(msg,kind){
@@ -518,7 +537,9 @@ function applyLang(){
 document.addEventListener('DOMContentLoaded', applyLang);
 
 function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-theme')==='light'?'dark':'light';h.setAttribute('data-theme',t);h.setAttribute('data-bs-theme',t);try{localStorage.setItem('pb_theme',t);}catch(e){}}
-function signout(){try{localStorage.removeItem('pb_token');}catch(e){}location.href='/';}
+// The session cookie is HttpOnly, so JS can't delete it — sign-out must hit the server, which
+// clears it (POST /logout is CSRF-exempt). Redirect home regardless of the network outcome.
+function signout(){try{fetch('/logout',{method:'POST',credentials:'same-origin'}).finally(function(){location.href='/';});}catch(e){location.href='/';}}
 (function(){var si=document.getElementById('signinlink'),so=document.getElementById('signoutlink');
  if(authed()){if(si)si.style.display='none';if(so)so.style.display='';}else{if(si)si.style.display='';if(so)so.style.display='none';}})();
 (async function(){try{if(authed()){var cl=document.getElementById('consolelink');if(cl)cl.style.display='';var r=await api('/me');if(r.ok){var m=document.getElementById('mename');if(m){m.textContent='● '+r.body.username;m.style.display='';}
@@ -642,6 +663,9 @@ async function pbConfirm(name,hours){
   }
   if(confirm(L.join(String.fromCharCode(10)))) pbLaunch(name,hours);
 }
+// The copyable one-liner is the friendly Petabyte CLI command (petabyte launch <template>), not a
+// raw curl with a bearer token — same thing the "Launch" button does, but readable and paste-safe.
+// `petabyte launch` maps to POST /launch (see lumaris_api/cli/petabyte.py). Install: pip install petabyte-client.
 function pbCmd(name,hours){return 'petabyte launch '+name+' --hours '+(hours||2);}
 function pbCmdHtml(name,hours){return '<span class="tk-p">petabyte</span> <span class="tk-c">launch</span> <span class="tk-a">'+esc(name)+'</span> <span class="tk-f">--hours</span> <span class="tk-n">'+(hours||2)+'</span>';}
 async function pbCopy(name,btn){var c=window._PBCMDS[name]||'';try{await navigator.clipboard.writeText(c);}catch(e){
@@ -892,7 +916,7 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 <div class="wrap" style="padding:40px 24px 8px">
   <div class="lbl" style="margin-bottom:4px">Launch anything</div>
   <h2 style="font-size:clamp(22px,3vw,30px);margin-bottom:6px">Games, art tools, AI — <span class="grad-teal">in one click or one line.</span></h2>
-  <p class="mut" style="max-width:62ch;margin-bottom:18px">Each of these is ready to run. Press Launch — or copy the one-line command if you prefer — and we set it up on the cheapest trusted machine and hand you the link.</p>
+  <p class="mut" style="max-width:62ch;margin-bottom:18px">Each of these is ready to run. Press Launch — or copy the one-line command if you prefer — and we set it up on the cheapest trusted machine and hand you the link. Prefer the terminal? <code>pip install petabyte-client</code>, then paste the command.</p>
   <div id="launchgrid"></div>
   <div id="launchresult" style="display:none"></div>
 </div>
@@ -928,7 +952,7 @@ LANDING_HTML = _page("Petabyte — the compute exchange",
 </div></div>
 
 <!-- NEWSLETTER (Mailgun mailing list via /newsletter/subscribe) -->
-<div class="wrap" style="padding:10px 24px 40px">
+<div class="wrap" id="newsletter" style="padding:10px 24px 40px">
   <div class="card" style="max-width:560px;margin:0 auto;text-align:center">
     <div class="lbl" data-ar="النشرة البريدية">Newsletter</div>
     <h2 style="font-size:19px;margin:6px 0 6px" data-ar="تابع تطوّر Petabyte">Follow how Petabyte is built</h2>
@@ -1095,10 +1119,26 @@ INSTALL_HTML = _page("Petabyte — become a seller",
   <div class="eyebrow"><span class="dot"></span> <span data-ar="تسجيل جهاز">node onboarding</span></div>
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px" data-ar="أدرِج كرت رسوماتك بأمرٍ واحد">List your GPU in <span class="grad-teal">one command</span></h1>
   <p class="mut" style="max-width:56ch" data-ar="أي جهاز NVIDIA يمكن أن يصبح عقدة. يتحقق المُثبِّت من عتادك، ويعزل المهام داخل Docker، ويجعلك متصلاً خلال ٣٠ ثانية تقريباً. دون حصرية.">Any NVIDIA machine can become a node. The installer verifies your hardware, sandboxes jobs in Docker, and brings you online in ~30 seconds. No exclusivity.</p>
+  <p class="mut" style="font-size:13px;margin-top:6px" data-ar="لست متأكداً أن كرت رسوماتك مؤهل؟ اختبره في متصفحك خلال ثوانٍ — دون تثبيت.">Not sure your GPU qualifies? <a class="teal" href="/mysystem">Test it in your browser in seconds →</a> (no install)</p>
+</div>
+<!-- choose how to start: the friendly Windows app first, the one-command path second -->
+<div class="wrap" style="padding:6px 22px 0">
+  <div class="cols c2" style="gap:14px">
+    <div class="card" style="border-color:rgba(79,214,201,.35)">
+      <div class="lbl" data-ar="الأسهل · تطبيق ويندوز">Easiest · Windows app <span class="mut">(no terminal)</span></div>
+      <p class="mut" style="margin:2px 0 12px" data-ar="نزّله وشغّله بنقرتين. يتحقق من كرت رسوماتك ويصلك بالمنصة — دون سطر أوامر. قيد الإطلاق التجريبي: إن لم تتوفر نسخة لجهازك بعد، استخدم الإعداد بأمرٍ واحد جهةَ اليسار وسنراسلك عند جاهزية التطبيق.">Download it, double-click, done — it checks your GPU and brings you online with no command line. <b class="teal">Early access:</b> if a build isn't posted for your machine yet, you'll get the 30-second setup shown here and an email when the app is ready.</p>
+      <a class="btn btn-teal arrow-fwd" href="/download/windows" data-ar="نزّل تطبيق ويندوز">Get the Windows app</a>
+    </div>
+    <div class="card">
+      <div class="lbl am" data-ar="أو أمرٌ واحد · يعمل الآن">Or one command · works now <span class="mut">(any OS)</span></div>
+      <p class="mut" style="margin:2px 0 12px" data-ar="الصق محفظتك أدناه واحصل على سطرٍ واحد تنسخه وتلصقه — لينكس أو ويندوز أو ماك. يتصل خلال ٣٠ ثانية، دون أي إعداد.">Paste your wallet just below and copy one line — Linux, Windows or macOS. Online in ~30 seconds, nothing to configure.</p>
+      <a class="btn" href="#start" data-ar="ابدأ بأمرٍ واحد">Use the one-command setup ↓</a>
+    </div>
+  </div>
 </div>
 <!-- PRIMARY path: as easy as starting a miner — paste a wallet, no account needed -->
 <div class="wrap" style="padding:6px 22px 0">
-  <div class="card" style="border-color:rgba(240,180,41,.35);background:linear-gradient(180deg,rgba(240,180,41,.06),transparent)">
+  <div id="start" class="card" style="border-color:rgba(240,180,41,.35);background:linear-gradient(180deg,rgba(240,180,41,.06),transparent)">
     <div class="lbl am" data-ar="ابدأ مثل المُعدِّن · بلا حساب">Start like a miner · no account</div>
     <p class="mut" style="margin-bottom:6px" data-ar="الصق محفظة USDC التي تريد أن تُدفع إليها. هذه هويتك وعنوان استلامك — بلا بريد، بلا كلمة مرور. شغّل الأمر الوحيد الذي نعطيك إياه، ويتصل كرت رسوماتك. (السحب لاحقاً يتطلب تحقق هوية سريع كما يفرض النظام.)">Paste the USDC wallet you want to be paid to. That's your identity <i>and</i> your payout address — no email, no password. Run the one command we hand back and your GPU is online. <b class="teal">Withdrawing later needs a quick identity check</b>, as regulation requires.</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
@@ -1163,6 +1203,9 @@ $env:PETABYTE_ACTION="uninstall"; irm https://petabyte.market/manage.ps1 | iex</
   <div class="card" style="margin-top:16px"><div class="lbl am" data-ar="استلم أرباحك">Get paid</div>
     <p class="mut" data-ar="رصيد واحد. اسحب في أي وقت أو وفق جدول أسبوعي — تحويل بنكي أو USDC أو بطاقة هدية. فعّل خيار التعدين عند الخمول لتكسب دخلاً في الخلفية كلما لم يكن جهازك مؤجراً.">One balance. Withdraw anytime or on a weekly schedule — bank, USDC, or gift card. Opt in to idle-fallback and earn a background trickle whenever the node isn't rented. <a class="teal" href="/console">Open the console →</a></p>
   </div>
+  <div class="card" style="margin-top:16px"><div class="lbl" data-ar="أسئلة شائعة">Common questions</div>
+    <p class="mut" data-ar="هل هو آمن على جهازي؟ هل يبطئ ألعابي؟ ماذا لو أساء المستأجر استخدام إنترنتي؟ متى وكيف أُدفَع؟ إجابات واضحة بلا مصطلحات.">Is it safe on my computer? Will it slow my games? What if a renter misuses my internet? When and how do I get paid? Plain answers, no jargon. <a class="teal" href="/faq">Read the FAQ →</a></p>
+  </div>
   <div class="card" style="margin-top:16px"><div class="lbl" data-ar="تفكّر في شراء كرت رسومات؟">Thinking of buying a GPU to rent?</div>
     <p class="mut" data-ar="احسب الأرباح الصافية، ومتى يسترد الكرت ثمنه، والعائد السنوي لكل كرت — بأرقام شفافة يمكنك تعديلها.">See net earnings, payback time and 1-year ROI per card — transparent numbers you can tune to your own electricity and utilization. <a class="teal" href="/roi">Open the ROI calculator →</a></p>
   </div>
@@ -1219,6 +1262,376 @@ async function walletStart(a1, btn){
 (function(){var si=document.getElementById('iksignin'),gn=document.getElementById('ikgen');
   if(authed()){if(gn)gn.style.display='';}else{if(si)si.style.display='';}})();
 </script>""")
+
+
+# In-browser WebGPU self-benchmark — a zero-install "will my machine work / how fast is it" check
+# that funnels prospective sellers into /install. Deliberately CSP-clean: pure WGSL, NO external
+# fetch, NO wasm, NO model download — so it needs no CSP relaxation. It is INDICATIVE ONLY and is
+# kept strictly separate from the attested `benchmark` task type (agent-side, Ed25519-signed, sets
+# trust/pricing). The page says so loudly: a browser cannot identify the real GPU and is throttled.
+MYSYSTEM_HTML = _page("Petabyte — test your GPU in your browser",
+    desc="Run a free WebGPU benchmark in your browser — no install. See a rough GPU score in seconds, then bring your GPU online to earn with the verified agent benchmark.",
+    path="/mysystem", body="""
+<div class="wrap" style="padding:52px 22px 8px;max-width:820px">
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="اختبر جهازك">test your GPU</span></div>
+  <h1 style="font-size:clamp(28px,5vw,40px);margin:14px 0 8px" data-ar="اختبر كرت رسوماتك في متصفحك">Test your GPU <span class="grad-teal">in your browser</span></h1>
+  <p class="mut" style="max-width:62ch" data-ar="فحص سريع بلا تثبيت: يشغّل WebGPU مباشرةً في متصفحك ويعطيك تقديراً لأداء كرت رسوماتك خلال ثوانٍ. رقم استرشادي فقط — المتصفح لا يستطيع تحديد نوع كرتك بدقة ويحدّ من الأداء. للأرقام الموثّقة التي تحدّد أرباحك، ثبّت الوكيل.">A no-install check: it runs a small WebGPU compute test right here and estimates your GPU's throughput in seconds. This is an <b>indicative</b> number only — the browser can't identify your exact GPU and throttles performance. For the <b class="teal">verified</b> benchmark that sets your earnings, install the agent.</p>
+</div>
+
+<div class="wrap" style="padding:8px 22px 0;max-width:820px">
+  <div class="card">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-teal" id="runbtn" data-ar="شغّل الفحص">Run the benchmark</button>
+      <span id="status" class="mut mono" style="font-size:13px"></span>
+    </div>
+    <div id="results" style="display:none;margin-top:16px">
+      <div class="cols c2" style="gap:12px">
+        <div class="card" style="margin:0"><div class="lbl">Est. FP32 throughput</div><div id="r_gflops" style="font-size:26px;font-weight:700" class="grad-teal">—</div><div class="mut" style="font-size:12px">GFLOP/s (dense matmul, indicative)</div></div>
+        <div class="card" style="margin:0"><div class="lbl">Rough class</div><div id="r_class" style="font-size:22px;font-weight:700">—</div><div class="mut" style="font-size:12px" id="r_class_note">based on the browser result</div></div>
+      </div>
+      <div class="card" style="margin-top:12px"><div class="lbl">What the browser can see</div>
+        <table style="width:100%;border-collapse:collapse;font-size:13.5px" id="r_table"></table>
+        <p class="mut" style="font-size:11.5px;margin-top:10px">WebGPU deliberately hides your exact GPU for privacy, caps memory well below a datacenter card, and doesn't expose tensor cores — so a real H100 and a laptop can't be told apart from here, and true peak FP16/tensor throughput isn't measurable in a browser. That's why this is a screening tool, not a certificate.</p>
+      </div>
+    </div>
+    <div id="nowebgpu" style="display:none;margin-top:14px">
+      <div class="card" style="margin:0;border-color:rgba(240,180,41,.35)"><div class="lbl am">WebGPU not available</div>
+        <p class="mut" style="margin:2px 0 0">Your browser didn't expose WebGPU. Try the latest Chrome, Edge, or Firefox on a machine with a GPU. Either way, the <b class="teal">agent</b> runs a native CUDA benchmark that doesn't depend on your browser — that's the one that counts.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap" style="padding:14px 22px 30px;max-width:820px">
+  <div class="card" style="border-color:rgba(79,214,201,.35);background:linear-gradient(180deg,rgba(79,214,201,.06),transparent)">
+    <div class="lbl" data-ar="الخطوة التالية">Next step · earn from this GPU</div>
+    <p class="mut" style="margin:2px 0 12px" data-ar="ثبّت الوكيل لتشغيل مقياس الأداء الموثّق (موقّع على جهازك) الذي يحدّد سعرك، ثم استقبل مهام مدفوعة.">Install the agent to run the <b>verified, signed</b> benchmark on your machine — that's what sets your hourly price and lets you accept paid jobs.</p>
+    <a class="btn btn-teal arrow-fwd" href="/install" data-ar="أدرِج كرت رسوماتك">Bring this GPU online →</a>
+  </div>
+</div>
+
+<script>
+(function(){
+  var runbtn=document.getElementById('runbtn'), statusEl=document.getElementById('status');
+  var results=document.getElementById('results'), nowebgpu=document.getElementById('nowebgpu');
+  function set(s){ statusEl.textContent=s; }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+  function fmtBytes(b){ if(!b) return '—'; var g=b/1073741824; if(g>=1) return g.toFixed(2)+' GB'; return (b/1048576).toFixed(0)+' MB'; }
+  function classify(g){
+    if(g>=8000) return ['Datacenter-class','looks like a strong discrete/datacenter GPU (indicative)'];
+    if(g>=2500) return ['High-end desktop','a capable desktop GPU — great for paid inference/render'];
+    if(g>=700)  return ['Mainstream GPU','a usable GPU; smaller models and batch jobs'];
+    if(g>=120)  return ['Entry / laptop','light workloads; the agent may still qualify it'];
+    return ['Integrated / weak','likely integrated graphics — limited for paid compute'];
+  }
+  if(!('gpu' in navigator) || !navigator.gpu){ runbtn.disabled=true; nowebgpu.style.display=''; set('WebGPU unavailable in this browser.'); return; }
+
+  var N=512, WG=16;
+  var SHADER =
+    '@group(0) @binding(0) var<storage, read> A : array<f32>;\\n'+
+    '@group(0) @binding(1) var<storage, read> B : array<f32>;\\n'+
+    '@group(0) @binding(2) var<storage, read_write> C : array<f32>;\\n'+
+    '@compute @workgroup_size('+WG+','+WG+')\\n'+
+    'fn main(@builtin(global_invocation_id) gid : vec3<u32>) {\\n'+
+    '  let row = gid.x; let col = gid.y;\\n'+
+    '  if (row >= '+N+'u || col >= '+N+'u) { return; }\\n'+
+    '  var acc : f32 = 0.0;\\n'+
+    '  for (var k : u32 = 0u; k < '+N+'u; k = k + 1u) { acc = acc + A[row*'+N+'u + k] * B[k*'+N+'u + col]; }\\n'+
+    '  C[row*'+N+'u + col] = acc;\\n'+
+    '}';
+
+  async function bench(){
+    runbtn.disabled=true; results.style.display='none'; set('requesting GPU adapter…');
+    var adapter = await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
+    if(!adapter){ nowebgpu.style.display=''; set('no WebGPU adapter.'); runbtn.disabled=false; return; }
+    var hasF16 = adapter.features && adapter.features.has && adapter.features.has('shader-f16');
+    var device = await adapter.requestDevice();
+    device.addEventListener && device.addEventListener('uncapturederror', function(e){ set('GPU error: '+e.error.message); });
+    var info={}; try{ info = adapter.info || (adapter.requestAdapterInfo ? await adapter.requestAdapterInfo() : {}); }catch(e){}
+
+    set('allocating buffers…');
+    var bytes=N*N*4;
+    function buf(usage){ return device.createBuffer({size:bytes, usage:usage}); }
+    var A=buf(GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);
+    var B=buf(GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);
+    var C=buf(GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC);
+    var fill=new Float32Array(N*N); for(var i=0;i<fill.length;i++) fill[i]=(i%97)*0.01+0.5;
+    device.queue.writeBuffer(A,0,fill); device.queue.writeBuffer(B,0,fill);
+    var mod=device.createShaderModule({code:SHADER});
+    var pipe=device.createComputePipeline({layout:'auto', compute:{module:mod, entryPoint:'main'}});
+    var bind=device.createBindGroup({layout:pipe.getBindGroupLayout(0), entries:[
+      {binding:0,resource:{buffer:A}},{binding:1,resource:{buffer:B}},{binding:2,resource:{buffer:C}}]});
+    var groups=Math.ceil(N/WG);
+
+    async function runIters(iters){
+      var enc=device.createCommandEncoder(); var pass=enc.beginComputePass();
+      pass.setPipeline(pipe); pass.setBindGroup(0,bind);
+      for(var i=0;i<iters;i++){ pass.dispatchWorkgroups(groups,groups); }
+      pass.end(); device.queue.submit([enc.finish()]); await device.queue.onSubmittedWorkDone();
+    }
+    set('warming up…'); await runIters(4);
+    // grow iteration count until a run takes >=150ms, for a stable estimate
+    var iters=8, elapsed=0, t0;
+    for(var tries=0; tries<8; tries++){
+      t0=performance.now(); await runIters(iters); elapsed=performance.now()-t0;
+      if(elapsed>=150) break; iters=Math.min(iters*2, 1024);
+      set('measuring… ('+iters+' passes)');
+    }
+    var best=elapsed;
+    // second timed run, keep the faster (less noise / scheduler warmup)
+    t0=performance.now(); await runIters(iters); var e2=performance.now()-t0; if(e2<best) best=e2;
+    var flops=2*N*N*N*iters, gflops=flops/1e9/(best/1000);
+
+    // touch the output so the write can't be optimized away
+    try{ var rb=device.createBuffer({size:16, usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
+      var e3=device.createCommandEncoder(); e3.copyBufferToBuffer(C,0,rb,0,16); device.queue.submit([e3.finish()]);
+      await rb.mapAsync(GPUMapMode.READ); rb.unmap(); }catch(e){}
+
+    var g=Math.round(gflops), cls=classify(g);
+    document.getElementById('r_gflops').textContent=g.toLocaleString();
+    document.getElementById('r_class').textContent=cls[0];
+    document.getElementById('r_class_note').textContent=cls[1];
+    var rows=[
+      ['Vendor', esc(info.vendor)||'(hidden by browser)'],
+      ['Architecture', esc(info.architecture)||'(hidden)'],
+      ['Description', esc(info.description)||'(hidden)'],
+      ['FP16 (shader-f16)', hasF16?'supported':'not exposed'],
+      ['Max buffer size', fmtBytes(device.limits.maxBufferSize)],
+      ['Max storage binding', fmtBytes(device.limits.maxStorageBufferBindingSize)],
+      ['Test', N+'×'+N+' matmul · '+iters+' passes · best '+best.toFixed(0)+' ms']
+    ];
+    document.getElementById('r_table').innerHTML=rows.map(function(r){
+      return '<tr><td style="padding:5px 8px;color:var(--muted);white-space:nowrap">'+r[0]+'</td><td style="padding:5px 8px;font-family:ui-monospace,monospace">'+r[1]+'</td></tr>';
+    }).join('');
+    results.style.display=''; set('done · indicative only'); runbtn.disabled=false;
+    try{ device.destroy&&device.destroy(); }catch(e){}
+  }
+  runbtn.addEventListener('click', function(){ bench().catch(function(err){ set('benchmark failed: '+(err&&err.message||err)); runbtn.disabled=false; }); });
+})();
+</script>""")
+
+
+# Edge-Inference SDK demo (#3-reframed): run an AI feature on the VISITOR'S own WebGPU (free to
+# the site) with a metered Petabyte-API fallback — the consent-based inverse of "mine visitors
+# for ads". The SDK is /static/petabyte-edge.js; the paid fallback is POST /edge/infer. On-device
+# model loading is opt-in (EDGE_INFERENCE_ENABLED widens the CSP); by default the demo uses the
+# fallback path, which always works. Nothing here fakes a real completion.
+EDGE_HTML = _page("Petabyte — Edge Inference SDK",
+    desc="Add an AI feature that runs on your visitors' own GPUs (free), with a metered Petabyte GPU fallback. The ad-free way to monetize and power web apps.",
+    path="/edge", body="""
+<div class="wrap" style="padding:52px 22px 8px;max-width:860px">
+  <div class="eyebrow"><span class="dot"></span> <span>developer preview · edge inference</span></div>
+  <h1 style="font-size:clamp(28px,5vw,40px);margin:14px 0 8px">AI on your visitors' GPUs — <span class="grad-teal">not ads</span></h1>
+  <p class="mut" style="max-width:64ch">Drop in one script and your site gets an AI feature that runs <b>on the visitor's own GPU</b> via WebGPU — free to you. When a visitor has no capable GPU, it falls back to a <b class="teal">metered Petabyte GPU</b> through the API. The user asked for the feature and their device serves it — the honest inverse of mining visitors for ad revenue.</p>
+</div>
+
+<div class="wrap" style="padding:8px 22px 0;max-width:860px">
+  <div class="card">
+    <div class="lbl">Live demo</div>
+    <div id="edgecap" class="mono mut" style="font-size:12.5px;margin:2px 0 10px">detecting capabilities…</div>
+    <textarea id="edgeprompt" rows="3" style="width:100%;font-family:inherit;resize:vertical" placeholder="Ask something…">Explain what a GPU marketplace is, in one sentence.</textarea>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:10px">
+      <button class="btn btn-teal" id="edgerun">Run</button>
+      <label class="mut" style="font-size:13px;display:flex;gap:6px;align-items:center">
+        <input type="checkbox" id="edgeondevice"/> try on-device (WebGPU)</label>
+      <span id="edgestatus" class="mono mut" style="font-size:12.5px"></span>
+    </div>
+    <div id="edgeout" style="display:none;margin-top:14px">
+      <div style="margin-bottom:8px"><span id="edgesrc" class="lbl" style="display:inline-block;padding:3px 9px;border-radius:999px"></span></div>
+      <div id="edgetext" class="card" style="margin:0;white-space:pre-wrap"></div>
+    </div>
+    <p class="mut" style="font-size:11.5px;margin-top:12px">On-device model loading is <b>off by default</b> (it needs the operator to set <span class="mono">EDGE_INFERENCE_ENABLED=true</span>, which widens the page CSP to fetch model weights). Until then — and on any device without WebGPU — this demo uses the Petabyte API fallback, which is itself a <b>prototype</b> responder here (production routes to a rented GPU). Nothing on this page fakes a real model output.</p>
+  </div>
+</div>
+
+<div class="wrap" style="padding:14px 22px 0;max-width:860px">
+  <div class="cols c2" style="gap:14px">
+    <div class="card" style="margin:0"><div class="lbl teal">On-device (visitor's GPU)</div>
+      <p class="mut" style="font-size:13px;margin:4px 0 0">Runs the model in the browser with WebGPU. <b>$0</b> inference cost to your site. Private — the prompt never leaves the device.</p></div>
+    <div class="card" style="margin:0"><div class="lbl am">Fallback (Petabyte GPU)</div>
+      <p class="mut" style="font-size:13px;margin:4px 0 0">No GPU on the visitor's device? The same call is served by a metered Petabyte GPU via the API — <b>you only pay when the client can't.</b></p></div>
+  </div>
+</div>
+
+<div class="wrap" style="padding:14px 22px 30px;max-width:860px">
+  <div class="card"><div class="lbl">Integrate in three lines</div>
+    <pre style="white-space:pre-wrap">&lt;script src="https://petabyte.market/static/petabyte-edge.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+  PetabyteEdge.configure({ apiBase: 'https://petabyte.market', model: 'onnx-community/Qwen2.5-0.5B-Instruct' });
+  const r = await PetabyteEdge.infer('Summarize: ' + text);   // r.source = 'on-device' | 'petabyte'
+&lt;/script&gt;</pre>
+    <p class="mut" style="font-size:12.5px;margin-top:9px">Full contract and the production fallback wiring: <a class="teal" href="https://github.com/BDR-Pro/petabyte/blob/main/docs/EDGE_INFERENCE.md">docs/EDGE_INFERENCE.md</a>. Developer keys: <a class="teal" href="/keys">/keys</a>.</p>
+  </div>
+</div>
+
+<script src="/static/petabyte-edge.js"></script>
+<script>
+(function(){
+  var cap=document.getElementById('edgecap'), runb=document.getElementById('edgerun');
+  var out=document.getElementById('edgeout'), txt=document.getElementById('edgetext');
+  var srcb=document.getElementById('edgesrc'), st=document.getElementById('edgestatus');
+  var od=document.getElementById('edgeondevice');
+  if(!global_ok()){ cap.textContent='PetabyteEdge SDK failed to load.'; return; }
+  function global_ok(){ return typeof PetabyteEdge!=='undefined'; }
+  PetabyteEdge.configure({ apiBase:'' });
+  PetabyteEdge.capabilities().then(function(c){
+    if(c.webgpu){ cap.textContent='WebGPU: available'+(c.f16?' · FP16 supported':'')+'  — you can try on-device.'; od.checked=false; }
+    else { cap.textContent='WebGPU: not available — requests will use the Petabyte fallback.'; od.checked=false; od.disabled=true; }
+  });
+  runb.addEventListener('click', function(){
+    var p=document.getElementById('edgeprompt').value.trim(); if(!p){ st.textContent='enter a prompt'; return; }
+    runb.disabled=true; out.style.display='none'; st.textContent = od.checked ? 'loading on-device model…' : 'calling Petabyte fallback…';
+    var t0=performance.now();
+    PetabyteEdge.infer(p, { allowOnDevice: od.checked,
+      onProgress:function(x){ if(x&&x.status) st.textContent='on-device: '+x.status+(x.progress?(' '+Math.round(x.progress)+'%'):''); },
+      onFallback:function(e){ st.textContent='on-device unavailable ('+(e&&e.message||e)+') → fallback'; }
+    }).then(function(r){
+      var ms=Math.round(performance.now()-t0);
+      var onDev = r.source==='on-device';
+      srcb.textContent = onDev ? 'served on-device · $0 to the site' : 'served by Petabyte fallback (metered)';
+      srcb.style.background = onDev ? 'rgba(79,214,201,.18)' : 'rgba(240,180,41,.18)';
+      srcb.style.color = onDev ? 'var(--teal)' : 'var(--amber)';
+      txt.textContent = r.text || '(empty)';
+      out.style.display=''; st.textContent='done · '+ms+' ms'; runb.disabled=false;
+    }).catch(function(e){ st.textContent='error: '+(e&&e.message||e); runb.disabled=false; });
+  });
+})();
+</script>""")
+
+
+# Honest landing for the "Get the Windows app" button while the one-click desktop build is not yet
+# published (no GitHub release exists). It never 404s and never pretends a download is there: it
+# points to the working 30-second setup and offers to notify. Once a build ships, set DESKTOP_APP_URL
+# (or serve the .exe from your domain) and /download/windows redirects/serves it instead — see
+# web_routes.download_windows.
+DESKTOP_SOON_HTML = _page("Petabyte — Windows app (early access)",
+    desc="The one-click Petabyte Windows app is in early access. Start earning today with the 30-second one-command setup, and get notified when the app is ready.",
+    path="/download/windows", body="""
+<div class="wrap" style="padding:60px 22px 10px;max-width:720px">
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="تطبيق ويندوز">windows app</span></div>
+  <h1 style="font-size:clamp(28px,5vw,40px);margin:16px 0 10px" data-ar="التطبيق بنقرة واحدة قيد الإطلاق التجريبي">The one-click app is in <span class="grad-teal">early access</span></h1>
+  <p class="mut" style="max-width:60ch" data-ar="نجهّز تطبيق ويندوز الذي تُنزّله وتشغّله بنقرتين. حتى ذلك الحين، أسرع طريقة لإدراج كرت رسوماتك هي الإعداد بأمرٍ واحد — يستغرق نحو ٣٠ ثانية ولا يتطلب حساباً.">We're finishing the double-click Windows app. Until it's posted, the fastest way to bring your GPU online is the one-command setup — about 30 seconds, no account needed. It's the same signed agent the app will install.</p>
+  <div class="card" style="margin-top:22px;border-color:rgba(240,180,41,.35);background:linear-gradient(180deg,rgba(240,180,41,.06),transparent)">
+    <div class="lbl am" data-ar="ابدأ الآن">Start now</div>
+    <p class="mut" style="margin:2px 0 12px" data-ar="الصق محفظتك واحصل على أمرٍ واحد تنسخه — يعمل على ويندوز (عبر WSL) ولينكس وماك.">Paste your wallet and copy one command — works on Windows (via WSL), Linux and macOS.</p>
+    <a class="btn btn-amber arrow-fwd" href="/install#start" data-ar="اذهب إلى الإعداد بأمرٍ واحد">Go to the one-command setup</a>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div class="lbl" data-ar="أخبِرني حين يجهز">Tell me when the app is ready</div>
+    <p class="mut" data-ar="اترك بريدك في نشرة الصفحة الرئيسية وسنراسلك عند نزول تطبيق ويندوز. أو اقرأ الأسئلة الشائعة أولاً.">Leave your email in the newsletter on the <a class="teal" href="/#newsletter">home page</a> and we'll email you when the Windows app lands. New to this? <a class="teal" href="/faq">Read the FAQ →</a></p>
+  </div>
+</div>""")
+
+
+DESKTOP_ADMIN_HTML = _page("Petabyte — publish desktop app",
+    desc="Admin-only: upload a new signed Windows desktop build. Serves it to new installs and to existing agents' auto-update, with no CI or terminal.",
+    path="/admin/desktop", body="""
+<div class="wrap" style="padding:56px 22px 10px;max-width:760px">
+  <div class="eyebrow"><span class="dot"></span> <span>admin · desktop releases</span></div>
+  <h1 style="font-size:clamp(26px,4.5vw,38px);margin:14px 0 8px">Publish the <span class="grad-teal">Windows app</span></h1>
+  <p class="mut" style="max-width:64ch">Upload a new build and it goes live immediately — <b>new sellers</b> get it from the Download button, and <b>existing agents</b> auto-update from it (when pointed at this server). No CI run, no server login. Admins only.</p>
+  <p id="dcur" class="mono mut" style="font-size:12.5px;margin-top:8px">checking current version…</p>
+
+  <div class="card" style="margin-top:16px;border-color:rgba(79,214,201,.3)">
+    <div class="lbl">1 · Sign the build (offline, once per release)</div>
+    <p class="mut" style="margin:2px 0 8px">The signing key never touches this server — that's what keeps a stolen admin login from pushing malware. On your build machine, produce the signed manifest:</p>
+    <pre style="white-space:pre-wrap;word-break:break-word">python scripts/sign_release.py --key release_ed25519.pem \\
+  --version 1.4.0 --exe dist/PetabyteAgent.exe --out-dir dist</pre>
+    <p class="mut" style="font-size:12.5px">That writes <span class="mono">PetabyteAgent.exe.manifest.json</span> next to the exe. (CI already does this on a tagged release.)</p>
+  </div>
+
+  <div class="card" style="margin-top:14px;border-color:rgba(240,180,41,.35);background:linear-gradient(180deg,rgba(240,180,41,.06),transparent)">
+    <div class="lbl am">2 · Upload both files</div>
+    <form id="dform" style="margin-top:8px">
+      <div class="field" style="margin-bottom:10px"><span>PetabyteAgent.exe</span>
+        <input id="dexe" type="file" accept=".exe" required/></div>
+      <div class="field" style="margin-bottom:14px"><span>PetabyteAgent.exe.manifest.json</span>
+        <input id="dman" type="file" accept=".json,application/json" required/></div>
+      <button class="btn btn-amber" id="dbtn" type="submit">Publish this build</button>
+      <span id="dmsg" class="mono" style="font-size:12.5px;margin-inline-start:10px"></span>
+    </form>
+    <p class="mut" style="font-size:12px;margin-top:10px">The server refuses the pair unless the exe's checksum matches the signed manifest (and, if a release key is configured here, unless the signature verifies) — so a mismatched or unsigned build is never served.</p>
+  </div>
+  <div style="margin-top:14px"><a class="teal" href="/download/windows">Preview the download page →</a></div>
+</div>
+<script>
+(async function(){try{var r=await fetch('/desktop/latest.json',{credentials:'same-origin'});
+  var el=document.getElementById('dcur');
+  if(r.ok){var j=await r.json();el.textContent='Current published version: '+(j.version||'?');}
+  else{el.textContent='No desktop build published yet.';}}catch(e){}})();
+document.getElementById('dform').addEventListener('submit', async function(ev){
+  ev.preventDefault();
+  var exe=document.getElementById('dexe').files[0], man=document.getElementById('dman').files[0];
+  var msg=document.getElementById('dmsg'), btn=document.getElementById('dbtn');
+  if(!exe||!man){msg.style.color='var(--amber)';msg.textContent='Pick both files.';return;}
+  var fd=new FormData();fd.append('exe',exe);fd.append('manifest',man);
+  var ct=(document.cookie.match(/(?:^|; )pb_csrf=([^;]+)/)||[])[1];
+  btn.disabled=true;var lbl=btn.textContent;btn.textContent='Uploading…';msg.style.color='';msg.textContent='';
+  try{
+    var r=await fetch('/admin/desktop/release',{method:'POST',credentials:'same-origin',
+      headers: ct?{'X-CSRF-Token':decodeURIComponent(ct)}:{}, body:fd});
+    var j=await r.json().catch(function(){return {};});
+    if(r.ok){msg.style.color='var(--teal)';msg.textContent='✓ published v'+(j.version||'?')+' ('+(j.bytes||0)+' bytes) — live now';
+      document.getElementById('dcur').textContent='Current published version: '+(j.version||'?');}
+    else if(r.status===401||r.status===403){msg.style.color='var(--amber)';msg.textContent='Admins only — sign in as a platform admin first.';}
+    else{msg.style.color='var(--amber)';msg.textContent='Rejected: '+((j&&j.detail)||('HTTP '+r.status));}
+  }catch(e){msg.style.color='var(--amber)';msg.textContent='Network error — try again.';}
+  finally{btn.disabled=false;btn.textContent=lbl;}
+});
+</script>""")
+
+
+FAQ_HTML = _page("Petabyte — FAQ",
+    desc="Plain-language answers for GPU owners and buyers: is it safe on my computer, will it slow my games, what if a renter misuses my internet, when do I get paid, is my data safe, and is Petabyte a real company.",
+    path="/faq", body="""
+<div class="wrap" style="padding:56px 22px 6px;max-width:820px">
+  <div class="eyebrow"><span class="dot"></span> <span data-ar="الأسئلة الشائعة">plain-language answers</span></div>
+  <h1 style="font-size:clamp(28px,5vw,42px);margin:16px 0 8px" data-ar="أسئلة شائعة">Questions, answered <span class="grad-teal">plainly</span></h1>
+  <p class="mut" style="max-width:62ch" data-ar="بلا مصطلحات تقنية. إن بقي سؤال، راسلنا على support@petabyte.market.">No jargon. If something's still unclear, email <a class="teal" href="mailto:support@petabyte.market">support@petabyte.market</a>.</p>
+</div>
+
+<div class="wrap" style="padding:6px 22px 0;max-width:820px">
+  <h2 style="font-size:20px;margin:22px 0 8px" data-ar="لمالكي كروت الرسومات">If you're renting out your GPU</h2>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">Is it safe to run on my computer?</div>
+    <p class="mut">Yes. Other people's work runs inside an isolated sandbox (a locked-down Docker container) that <b class="teal">cannot see your files, your games, or the rest of your PC</b>. It has no special privileges and is walled off from your home network. You can pause it or remove it completely with one command at any time.</p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">Will it slow down my gaming or spike my power bill?</div>
+    <p class="mut">It only takes work when your machine is idle, and you stay in control of when it runs. You set (or auto-price) your hourly rate, and the <a class="teal" href="/roi">ROI calculator</a> shows your earnings <b>after</b> electricity so you can see the real number before you start.</p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">What if a renter tries to do something illegal over my internet?</div>
+    <p class="mut">They can't use your connection freely. Jobs are network-locked: a firewall on your machine blocks them from your local network and the internet except for what a job openly declares, and batch jobs get <b class="teal">no network at all</b>. The work is sandboxed and attributed, not run loose on your IP.</p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">When and how do I get paid?</div>
+    <p class="mut">Everything lands in one balance. Withdraw anytime or on a weekly schedule, by <b>bank transfer, USDC, or gift card</b>. Earnings clear after a short hold, and — because this is real money — withdrawing requires a quick one-time identity check, as regulation requires.</p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">How do I stop or uninstall?</div>
+    <p class="mut">Pause or remove it in one command — no lock-in, no exclusivity. If we turned on Windows' WSL feature to run the agent, uninstalling turns it back off.</p></div>
+
+  <h2 style="font-size:20px;margin:30px 0 8px" data-ar="للمشترين">If you're renting GPUs to run something</h2>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">Is my code and data safe on a stranger's computer?</div>
+    <p class="mut">Your work is encrypted on the way there, runs in an isolated container, and is removed afterward; every result is cryptographically signed by the exact machine that produced it, so you know it ran where we say. <span class="mut">Honest note: for workloads that need the strongest guarantee, hardware-encrypted (confidential-computing) nodes are on our roadmap — see <a class="teal" href="/security">Security &amp; trust</a>.</span></p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">What if the GPU fails or my job doesn't finish?</div>
+    <p class="mut">Your money sits in <b class="teal">escrow</b> and is released only for work actually delivered — if a machine drops mid-job, you're refunded. See the <a class="teal" href="/refunds">refunds &amp; disputes</a> policy.</p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">How much does it cost, and how do I pay?</div>
+    <p class="mut">You pay by the hour, and every GPU is shown against public cloud prices <b>before</b> you commit, so you can see the saving. You add funds to a wallet and the cost comes out as you run.</p></div>
+
+  <h2 style="font-size:20px;margin:30px 0 8px" data-ar="الثقة والشركة">Trust &amp; the company</h2>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">Is this real — or a scam?</div>
+    <p class="mut">Petabyte is a real company (Petabyte, Inc., operated from Riyadh). Every machine must <b class="teal">cryptographically prove what GPU it actually has</b> before it can earn — unverified nodes are labeled as such. We publish a <a class="teal" href="/security">security policy</a> with a bug-bounty channel, a <a class="teal" href="/refunds">refunds policy</a>, and live <a class="teal" href="/status">status</a> and <a class="teal" href="/metrics">metrics</a>.</p></div>
+
+  <div class="card" style="margin-bottom:12px"><div class="lbl">Who do I contact if something goes wrong?</div>
+    <p class="mut">Email <a class="teal" href="mailto:support@petabyte.market">support@petabyte.market</a> for help, or <a class="teal" href="mailto:security@petabyte.market">security@petabyte.market</a> to report a vulnerability. You can also <a class="teal" href="/book-a-demo">book a call</a>.</p></div>
+</div>
+
+<div class="wrap" style="padding:10px 22px 40px;max-width:820px">
+  <a class="btn btn-teal arrow-fwd" href="/install">List your GPU</a>
+  <a class="btn" href="/marketplace" style="margin-inline-start:8px">Browse GPUs to rent</a>
+</div>""")
 
 
 ROI_HTML = _page("Petabyte — GPU ROI calculator",
@@ -1361,7 +1774,7 @@ function roiRecalc(){
 
 
 DEVELOPERS_HTML = _page("Petabyte — developers",
-    desc="Two APIs: rent GPUs and run jobs (Developer API), or buy live GPU-market data (Data API). Interactive Scalar references, scoped keys, try-free sandbox.", path="/developers", body="""
+    desc="Three APIs: rent GPUs and run jobs (Developer API), buy live GPU-market data (Data API), or send a prompt and pay per token (Inference API, OpenAI-compatible). Scoped keys, try-free sandbox.", path="/developers", body="""
 <div class="wrap" style="padding:48px 22px 10px">
   <div class="eyebrow"><span class="dot"></span> API reference</div>
   <h1 style="font-size:clamp(30px,5vw,40px);margin:16px 0 8px">Build on the <span class="grad-teal">exchange</span></h1>
@@ -1380,8 +1793,14 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
       <a class="btn btn-teal arrow-fwd" href="/data">Open the Data API reference </a>
     </div>
   </div>
+  <div class="card" style="margin-top:14px;border-color:rgba(79,214,201,.4);background:linear-gradient(180deg,rgba(79,214,201,.08),transparent)">
+    <div class="lbl">Inference API <span class="mut">· pay-per-token · OpenAI-compatible · new</span></div>
+    <p class="mut" style="font-size:13.5px;margin:6px 0 10px">Send a prompt, get an answer, <b class="teal">pay per token</b>. Point any OpenAI SDK at <code class="teal">/v1</code>. It runs on the marketplace's warm GPU pool and bills your wallet per token (input + output). Scoped key carries <code class="teal">inference</code>.</p>
+    <div class="codeline" style="margin:2px 0 10px"><code>curl -s https://petabyte.market/v1/chat/completions -H "X-API-KEY: pk_…" -H "Content-Type: application/json" -d '{"model":"llama3.2","messages":[{"role":"user","content":"hello"}]}'</code></div>
+    <p class="mut" style="font-size:12px;margin:0">Prefer to run it on your users' own GPUs for free? The <a class="teal" href="/edge">Edge-Inference SDK</a> runs the model in the browser via WebGPU and falls back to this API automatically. New here? <a class="teal" href="/mysystem">Test your GPU in the browser →</a></p>
+  </div>
   <div class="card" style="margin-top:14px;border-color:rgba(255,255,255,.10)">
-    <p class="mut" style="font-size:12.5px;margin:0"><b>Two products, two references — they share no endpoint.</b> Nothing in the Data API appears in the Developer API, and vice-versa. The Data API is gated to <code class="teal">data</code>-scoped keys — a <code class="teal">node</code>/<code class="teal">jobs</code> key is refused there (403). Full combined schema at <a class="teal" href="/docs">/docs</a>.</p>
+    <p class="mut" style="font-size:12.5px;margin:0"><b>Three products, separate references.</b> The Developer API (rent GPUs / run jobs), the Data API (buy market data), and the Inference API (pay-per-token LLM calls) each carry their own key scope — <code class="teal">node</code>/<code class="teal">jobs</code>, <code class="teal">data</code>, and <code class="teal">inference</code> respectively — and a key is refused (403) outside its scope. Full combined schema at <a class="teal" href="/docs">/docs</a>.</p>
   </div>
 </div>
 <div class="wrap" style="padding:20px 22px 6px">
@@ -1438,6 +1857,11 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
       GET /api/v1/data/benchmarks <span class="mut">authenticity dataset</span><br>
       GET /api/v1/data/usage <span class="mut">your quota (free)</span></p>
       <p class="mut" style="font-size:12px;margin-top:8px">Needs a <code class="teal">data</code>-scoped key. A free monthly quota, then pay-as-you-go from your wallet balance. Datasets are aggregate/anonymized — no seller identity.</p></div>
+    <div class="card" style="border-color:rgba(79,214,201,.3)"><div class="lbl">Inference API <span class="mut">· pay-per-token</span></div>
+      <p class="mono" style="font-size:12.5px;line-height:2.05">
+      POST /v1/chat/completions <span class="mut">OpenAI-compatible chat</span><br>
+      POST /edge/infer <span class="mut">Edge-SDK fallback endpoint</span></p>
+      <p class="mut" style="font-size:12px;margin-top:8px">Needs an <code class="teal">inference</code>-scoped key; billed per token from your wallet (priced by <code>INFERENCE_PRICE_PER_MTOK_*</code>). Any OpenAI SDK works against <code class="teal">/v1</code>. See <a class="teal" href="https://github.com/BDR-Pro/petabyte/blob/main/docs/INFERENCE_API.md">INFERENCE_API.md</a>.</p></div>
     <div class="card" style="border-color:rgba(79,214,201,.3);background:linear-gradient(180deg,rgba(79,214,201,.05),transparent)">
       <div class="lbl">Try it free <span class="mut">· no signup</span></div>
       <p class="mut" style="font-size:12.5px;margin:2px 0 10px">Two ways to explore before you spend a cent:</p>
@@ -1452,6 +1876,7 @@ DEVELOPERS_HTML = _page("Petabyte — developers",
   <div style="margin-top:18px;display:flex;gap:12px;flex-wrap:wrap">
     <a class="btn btn-amber" href="/devs">Developer API reference →</a>
     <a class="btn btn-teal" href="/data">Data API reference →</a>
+    <a class="btn btn-teal" href="/edge">Edge-Inference SDK →</a>
     <a class="btn" href="/docs" style="border:1px solid rgba(255,255,255,.18)">Full schema (/docs) →</a>
   </div>
 </div>""")
@@ -1542,6 +1967,18 @@ INVESTORS_HTML = _page("Petabyte — investors", """
     <div class="card" style="padding:16px"><b class="amber" style="font-family:var(--disp);font-size:14px">Idle Fallback</b><p class="mut" style="font-size:12.5px;margin-top:5px">Hard-preempt utilization capture</p></div>
   </div>
 </div>
+<div class="wrap" style="padding:22px 22px 0">
+  <div id="inv_live" class="panel" style="display:none;padding:18px 20px;border-inline-start:3px solid var(--teal);background:linear-gradient(100deg,rgba(79,214,201,.07),rgba(44,158,155,.03))">
+    <div class="lbl">Live traction <span class="mini mut mono" id="inv_asof"></span></div>
+    <div class="stats" style="margin-top:10px">
+      <div class="stat"><div class="n grad-teal" id="inv_gmv">—</div><div class="l">GMV (captured, live)</div></div>
+      <div class="stat"><div class="n teal" id="inv_jobs">—</div><div class="l">Paid jobs</div></div>
+      <div class="stat"><div class="n" id="inv_gpus">—</div><div class="l">GPUs online</div></div>
+      <div class="stat"><div class="n" id="inv_take">—</div><div class="l">Gross take rate</div></div>
+    </div>
+    <p class="mini mut" style="margin-top:8px">Live, LIVE-money-only figures from the ledger. <a class="teal" href="/traction">Full traction →</a></p>
+  </div>
+</div>
 <div class="wrap" style="padding:22px 22px 8px">
   <div class="stats">
     <div class="stat"><div class="n grad-teal">Live</div><div class="l">Core marketplace infra</div></div>
@@ -1549,13 +1986,90 @@ INVESTORS_HTML = _page("Petabyte — investors", """
     <div class="stat"><div class="n teal">&lt;HS</div><div class="l">vs hyperscaler on-demand</div></div>
     <div class="stat"><div class="n teal">Pre</div><div class="l">Revenue stage</div></div>
   </div>
+  <p class="mini mut" style="margin-top:12px;text-align:center">Numbers are wired to the ledger, not the deck — see <a class="teal" href="/traction">live traction</a> and <a class="teal" href="/trust">verifiable receipts</a>.</p>
 </div>
 <div class="wrap" style="padding:22px 22px 8px">
   <div class="card" style="text-align:center;background:linear-gradient(100deg,rgba(245,178,61,.08),rgba(79,214,201,.05));border-color:rgba(79,214,201,.3)">
     <p style="font-family:var(--disp);font-weight:600;font-size:18px">Building the Gulf's compute exchange.</p>
     <p class="mut" style="margin-top:7px">For the deck, model, and a live demo — <a class="teal" href="mailto:info@petabyte.market">info@petabyte.market</a></p>
   </div>
-</div>""")
+</div>
+<script>
+(async function(){
+  try{
+    var r=await api('/metrics/traction');
+    if(!r||!r.ok||!r.body||!r.body.has_real_data)return;   // pre-revenue: keep the honest static tiles
+    var b=r.body;
+    document.getElementById('inv_gmv').textContent='$'+((b.gmv_captured_minor||0)/100).toLocaleString(undefined,{maximumFractionDigits:0});
+    document.getElementById('inv_jobs').textContent=String(b.paid_jobs||0);
+    document.getElementById('inv_gpus').textContent=String(b.active_gpus_online||0);
+    document.getElementById('inv_take').textContent=(b.take_rate_gross==null)?'—':((b.take_rate_gross*100).toFixed(1)+'%');
+    document.getElementById('inv_asof').textContent='· live '+(b.as_of||'').slice(0,10);
+    document.getElementById('inv_live').style.display='block';
+  }catch(e){}
+})();
+</script>""")
+
+
+TRACTION_HTML = _page("Petabyte — traction", """
+<div class="hero"><div class="wrap" style="padding:52px 22px 8px">
+  <img class="hexbg" src="/static/petabyte-logo.png" alt=""/>
+  <div class="eyebrow"><span class="dot"></span> live traction · public</div>
+  <h1 style="font-size:clamp(28px,5vw,44px);margin:18px 0 10px;max-width:22ch">Traction, <span class="grad-teal">computed live</span> from the ledger.</h1>
+  <p class="mut" style="max-width:74ch">Every number on this page is a live query over the same authoritative database rows the money moves through — never a slide, never fabricated. We show <b class="teal">LIVE money only</b>: test-mode and demo activity are excluded and never counted as real traction. Zeros are honest — the platform runs Stripe in TEST mode until launch.</p>
+</div></div>
+<div class="wrap" style="padding:14px 22px 8px">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <span class="mini mono" id="t_asof">loading…</span>
+    <a class="btn-ghost" href="/trust" style="margin-inline-start:auto">Verify a job receipt →</a>
+    <a class="btn-ghost" href="/investors">Investor overview →</a>
+  </div>
+  <div id="t_banner" class="card" style="display:none;margin-top:12px"></div>
+  <div class="stats" style="margin-top:12px">
+    <div class="stat"><div class="l">GMV (captured, live)</div><div class="n amber" id="t_gmv">—</div><div class="mini" id="t_netgmv"></div></div>
+    <div class="stat"><div class="l">Paid jobs</div><div class="n teal" id="t_jobs">—</div><div class="mini" id="t_settled"></div></div>
+    <div class="stat"><div class="l">GPUs online</div><div class="n" id="t_gpus">—</div><div class="mini" id="t_gpuhrs"></div></div>
+    <div class="stat"><div class="l">Active buyers / sellers</div><div class="n" id="t_parties">—</div><div class="mini" id="t_sellers"></div></div>
+  </div>
+  <div class="panel" style="margin-top:12px;padding:16px 18px;display:flex;flex-wrap:wrap;gap:28px">
+    <div><span class="mini">Gross take rate</span><div class="mono teal" id="t_take" style="font-size:18px">—</div></div>
+    <div><span class="mini">Job success rate</span><div class="mono" id="t_success" style="font-size:18px">—</div></div>
+    <div><span class="mini">GPU utilization</span><div class="mono" id="t_util" style="font-size:18px">—</div></div>
+  </div>
+  <p class="mini mut" id="t_note" style="margin:14px 2px 8px"></p>
+  <div class="card" style="margin:10px 0 34px;background:linear-gradient(100deg,rgba(79,214,201,.06),rgba(44,158,155,.02))">
+    <div class="lbl">How we count</div>
+    <p class="mut" style="max-width:92ch">GMV is captured money on real (LIVE, non-demo) compute transactions — one canonical definition, not a hand-picked figure. Job success, take rate and utilization are ratios over the same rows; a rate with no denominator shows <span class="mono">—</span> (undefined), never a faked 0%. See the <a class="teal" href="/trust">trust page</a> for cryptographic per-job receipts and the double-entry ledger balance.</p>
+  </div>
+</div>
+<script>
+function td(minor){if(minor===null||minor===undefined)return '—';return '$'+(minor/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function tp(rate){if(rate===null||rate===undefined)return '—';return (rate*100).toFixed(1)+'%';}
+function tn(n){return (n===null||n===undefined)?'—':String(n);}
+async function tload(){
+  var r=await api('/metrics/traction');
+  if(!r||!r.ok){document.getElementById('t_asof').textContent='metrics unavailable';return;}
+  var b=r.body;
+  document.getElementById('t_asof').textContent='live · '+(b.as_of||'').slice(0,19).replace('T',' ')+'Z';
+  var ban=document.getElementById('t_banner');
+  if(!b.has_real_data){ban.style.display='block';ban.style.borderColor='rgba(240,180,80,.5)';
+    ban.innerHTML='<div class="lbl" style="color:var(--warn)">Pre-revenue — no live transactions yet</div><p class="mut">Real GMV is $0 by design: the platform runs Stripe in TEST mode until launch, and we never show test or demo activity as real traction. This page will fill in automatically the moment real money moves — the numbers are wired to the ledger, not to a slide.</p>';}
+  else{ban.style.display='none';}
+  document.getElementById('t_gmv').textContent=td(b.gmv_captured_minor);
+  document.getElementById('t_netgmv').textContent='net of refunds '+td(b.net_gmv_minor);
+  document.getElementById('t_jobs').textContent=tn(b.paid_jobs);
+  document.getElementById('t_settled').textContent=tn(b.settled_jobs)+' settled';
+  document.getElementById('t_gpus').textContent=tn(b.active_gpus_online);
+  document.getElementById('t_gpuhrs').textContent=tn(b.gpu_hours_available)+' GPU-hours available';
+  document.getElementById('t_parties').textContent=tn(b.active_buyers)+' / '+tn(b.active_sellers);
+  document.getElementById('t_sellers').textContent='buyers / sellers (real, paid)';
+  document.getElementById('t_take').textContent=tp(b.take_rate_gross);
+  document.getElementById('t_success').textContent=tp(b.job_success_rate);
+  document.getElementById('t_util').textContent=tp(b.utilization);
+  document.getElementById('t_note').textContent=b.note;
+}
+tload();
+</script>""")
 
 
 ADMIN_HTML = _page("Petabyte — admin", """
@@ -1612,6 +2126,7 @@ ADMIN_HTML = _page("Petabyte — admin", """
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <a class="btn btn-ghost" href="/metrics">Marketplace metrics</a>
       <a class="btn btn-ghost" href="/admin/funding-view">Funding metrics</a>
+      <a class="btn btn-ghost" href="/admin/desktop">Publish desktop app</a>
       <a class="btn btn-ghost" href="/status">Public status</a>
     </div>
     <p class="mini" style="margin-top:8px">Full time-series (per-endpoint latency, error rates, background workers) live in Grafana; these tiles are the at-a-glance operational heartbeat, refreshed every 20s.</p>
@@ -1878,7 +2393,7 @@ function fd(minor){if(minor===null||minor===undefined)return '—';return '$'+(m
 function fp(rate){if(rate===null||rate===undefined)return '—';return (rate*100).toFixed(1)+'%';}
 function fnum(n){return (n===null||n===undefined)?'—':String(n);}
 async function fboot(){
-  if(!tok()){document.getElementById('fsignin').style.display='block';return;}
+  if(!authed()){document.getElementById('fsignin').style.display='block';return;}
   var w=await api('/admin/whoami');
   if(!w.ok){document.getElementById(w.status===403?'fdenied':'fsignin').style.display='block';return;}
   document.getElementById('fconsole').style.display='block';fload('real');
@@ -1988,7 +2503,7 @@ async function forgot(){
 async function login(u,p,otp){
   var body='username='+encodeURIComponent(u)+'&password='+encodeURIComponent(p);
   if(otp)body+='&otp='+encodeURIComponent(otp);
-  var r = await fetch('/login', {method:'POST',
+  var r = await fetch('/login', {method:'POST', credentials:'same-origin',
     headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:body});
   var b={};try{b=await r.json()}catch(e){}
   return {ok:r.ok, token:b.access_token, code:(b.error&&b.error.code)||null, status:r.status};
@@ -2021,7 +2536,9 @@ async function go(){
       if(res.code==='TOTP_INVALID'){document.getElementById('otprow').style.display='';
         fail("That code is incorrect or expired — try again.");return;}
       fail(mode==="register"?"Account created — but sign-in failed. Try signing in.":"Wrong username or password.");return;}
-    localStorage.setItem('pb_token', res.token);document.documentElement.setAttribute('data-auth','in');
+    // The server set the HttpOnly session + readable pb_csrf cookies on the /login response;
+    // nothing to store in JS (the JWT is deliberately not reachable from JS anymore).
+    document.documentElement.setAttribute('data-auth','in');
     location.href='/console';
   }catch(e){fail("Network error — check your connection and try again.");}
 }
@@ -3036,6 +3553,7 @@ TRUST_HTML = _page("Petabyte — trust &amp; transparency",
   <div class="eyebrow"><span class="dot"></span> trust &amp; transparency</div>
   <h1 style="font-size:clamp(34px,5vw,54px);margin:16px 0 12px">Don't trust us. <span class="grad">Verify.</span></h1>
   <p class="mut" style="font-size:16px;max-width:64ch">Every number below is a live database aggregate — zeros mean zero, nothing is invented. Each completed job carries a cryptographic receipt you can re-check yourself.</p>
+  <p class="mini" style="margin-top:12px">The same honesty applies to the money: see <a class="teal" href="/traction">live marketplace traction →</a> (LIVE-money-only, computed from the ledger).</p>
 </div></div>
 
 <div class="wrap" style="padding:26px 24px 8px">
@@ -4131,7 +4649,7 @@ async function clusterShow(j){
 }
 function clOpenManifest(id){location.href='/jobs/manifest/'+id;}
 async function clVpnDownload(id){
- try{var r=await fetch('/jobs/'+id+'/vpn_config',{headers:{'Authorization':'Bearer '+tok()}});
+ try{var r=await fetch('/jobs/'+id+'/vpn_config',{credentials:'same-origin'});
   if(!r.ok){toast('VPN config not available for this cluster.','err');return;}
   var text=await r.text();var b=new Blob([text],{type:'text/plain'});
   var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='petabyte-cluster-'+id+'.conf';
@@ -5127,10 +5645,11 @@ async function loadMetrics(){
     tile('Jobs completed',j.completed,DEFS.completion_rate_pct)+
     tile('Jobs failed',j.failed,'Buyer jobs that reported failure')+
     tile('Completion rate',(j.completion_rate_pct==null?'—':j.completion_rate_pct+'%'),DEFS.completion_rate_pct);
+  var mvol=function(v){return e.restricted?'🔒 admin':money(v);};   // money volumes redacted for non-admins (L1)
   document.getElementById('grp_econ').innerHTML=
-    tile('GMV',money(e.gmv),DEFS.gmv)+
-    tile('Platform revenue',money(e.platform_revenue),DEFS.platform_revenue)+
-    tile('Seller payouts',money(e.seller_payouts),DEFS.seller_payouts)+
+    tile('GMV',mvol(e.gmv),DEFS.gmv)+
+    tile('Platform revenue',mvol(e.platform_revenue),DEFS.platform_revenue)+
+    tile('Seller payouts',mvol(e.seller_payouts),DEFS.seller_payouts)+
     tile('Effective take rate',e.effective_take_rate_pct+'%',DEFS.effective_take_rate_pct)+
     tile('Avg $/hr',(e.avg_hourly_price==null?'—':money(e.avg_hourly_price)),'Mean listed hourly price of online nodes')+
     tile('Buyer savings vs cloud',money(e.buyer_savings_vs_cloud),DEFS.buyer_savings_vs_cloud);

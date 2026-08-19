@@ -23,6 +23,7 @@ Run:  python -m playwright install chromium   # once
 """
 import base64
 import os
+import re
 import sys
 import threading
 import time
@@ -75,9 +76,15 @@ def _no_overflow(page) -> bool:
         "() => (document.documentElement.scrollWidth - document.documentElement.clientWidth) <= 2")
 
 
-def _auth(page, token):
+def _auth(page, username):
+    # Sign the browser in through the real POST /login: the server sets the HttpOnly
+    # pb_session cookie + the SIGNED pb_csrf cookie. enforce_csrf verifies the HMAC, so a
+    # fabricated pb_csrf value would 403 every write the UI makes.
+    page.context.clear_cookies()
+    r = page.context.request.post(B + "/login", form={"username": username, "password": PW})
+    if r.status != 200:
+        raise RuntimeError(f"browser /login failed for {username}: HTTP {r.status}")
     page.goto(B + "/")
-    page.evaluate("t => localStorage.setItem('pb_token', t)", token)
 
 
 def _bearer(t):
@@ -160,7 +167,7 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         errs = []
         _attach_error_capture(page, errs)
-        _auth(page, buyer_t)
+        _auth(page, "buyer1")
         page.goto(B + "/buy/" + pub, wait_until="domcontentloaded")
         page.wait_for_selector("#buy_pay", state="visible", timeout=20000)
         ok("buy: Rent & run button is visible", page.locator("#buy_pay").is_visible())
@@ -180,19 +187,19 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         errs = []
         _attach_error_capture(page, errs)
         page.on("dialog", lambda d: d.accept("E2E launch template"))  # save-as-template prompt()
-        _auth(page, buyer_t)
+        _auth(page, "buyer1")
         # template-first
         page.goto(B + "/launch", wait_until="domcontentloaded")
         page.wait_for_selector("#tgrid .pick", timeout=20000)
         ok("launch: workload cards render from the curated catalog (/templates)",
            page.locator("#tgrid .pick").count() >= 5)
-        page.click('#tgrid .pick[data-v="pytorch"]')
+        page.click('#tgrid .pick[data-v="jupyter"]')
         page.wait_for_selector("#costbody .sumrow", timeout=20000)
         cost = page.text_content("#costbody") or ""
         ok("launch: server-priced cost panel appears after choosing a template",
            "$" in cost and "Estimated total" in cost)
         ok("launch: the chosen template is visually selected (aria-checked)",
-           page.get_attribute('#tgrid .pick[data-v="pytorch"]', "aria-checked") == "true")
+           page.get_attribute('#tgrid .pick[data-v="jupyter"]', "aria-checked") == "true")
         ok("launch: a Review & Launch action is offered to the signed-in buyer",
            page.locator("#reviewbtn").is_visible())
         # change the template — selection must move
@@ -200,7 +207,7 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         page.wait_for_timeout(300)
         ok("launch: changing the template updates the selection",
            page.get_attribute('#tgrid .pick[data-v="ollama"]', "aria-checked") == "true"
-           and page.get_attribute('#tgrid .pick[data-v="pytorch"]', "aria-checked") == "false")
+           and page.get_attribute('#tgrid .pick[data-v="jupyter"]', "aria-checked") == "false")
         # save a reusable launch template (localStorage, no secrets) + survive reload
         page.click("#savetplbtn")
         page.wait_for_timeout(400)
@@ -234,7 +241,7 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         apage.goto(B + "/launch", wait_until="domcontentloaded")
         apage.wait_for_selector("#tgrid .pick", timeout=20000)
         ok("launch [anon]: guests see a sign-in prompt", apage.locator("#lc_signedout").is_visible())
-        apage.click('#tgrid .pick[data-v="pytorch"]')
+        apage.click('#tgrid .pick[data-v="jupyter"]')
         apage.wait_for_timeout(800)
         ok("launch [anon]: the launch action is hidden until sign-in",
            not apage.locator("#reviewbtn").is_visible())
@@ -247,7 +254,7 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         errs = []
         _attach_error_capture(page, errs)
-        _auth(page, seller_t)
+        _auth(page, "seller1")
         page.goto(B + "/seller/payouts", wait_until="domcontentloaded")
         page.wait_for_selector("#nodes_box", timeout=20000)
         page.wait_for_function(
@@ -264,17 +271,24 @@ def run(pw, buyer_t, seller_t, pub, role_t):
            "; ".join(m for k, m in errs if _serious(m))[:120])
         page.close()
 
-        # ---------- BUYER value prop: lead with cheap-vs-hyperscaler savings ----------
-        print("\n-- buyer: marketplace leads with savings vs AWS/GCP/Azure --")
+        # ---------- BUYER value prop: every GPU is priced against the public cloud ----------
+        # (The old dedicated #savingsbanner was replaced by the redesign: /marketplace now
+        # carries a per-row "vs cloud −N%" column + the #mnote explainer, and the "up to N%
+        # cheaper than the big cloud" proof strip lives on the landing page.)
+        print("\n-- buyer: marketplace shows the saving vs public cloud rates --")
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         errs = []
         _attach_error_capture(page, errs)
         page.goto(B + "/marketplace", wait_until="domcontentloaded")
-        page.wait_for_selector("#savingsbanner", state="visible", timeout=20000)
-        banner = page.text_content("#savingsbanner") or ""
-        ok("savings banner is visible on the marketplace", page.locator("#savingsbanner").is_visible())
-        ok("savings banner names a hyperscaler (AWS)", "AWS" in banner)
-        ok("savings banner shows a concrete percentage", "%" in banner)
+        # the seeded below-reference H100 must render a concrete −N% saving
+        page.wait_for_function(
+            "() => { var e=document.getElementById('mrows');"
+            " return e && /−\\d+%/.test(e.textContent); }", timeout=20000)
+        note = page.text_content("#mnote") or ""
+        rows = page.text_content("#mrows") or ""
+        ok("marketplace explains the vs-cloud comparison", "cloud" in note.lower())
+        ok("a listed GPU shows a concrete saving percentage (−N%)",
+           bool(re.search(r"−\d+%", rows)))
         ok("marketplace savings: no serious JS errors", not [m for k, m in errs if _serious(m)],
            "; ".join(m for k, m in errs if _serious(m))[:120])
         page.close()
@@ -284,57 +298,52 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         errs = []
         _attach_error_capture(page, errs)
-        _auth(page, role_t)
+        _auth(page, "roleswitch_web")
         page.goto(B + "/account", wait_until="domcontentloaded")
-        page.wait_for_selector("#roleswitch", state="visible", timeout=20000)
-        label = page.text_content("#roleswitch") or ""
-        ok("role-switch control is visible for a signed-in user",
-           page.locator("#roleswitch").is_visible())
-        ok("role-switch invites a buyer to sell (earnings framing)",
-           "seller" in label.lower() or "earn" in label.lower())
-        page.click("#roleswitch")
+        # The redesign replaced the #roleswitch control with the account page's
+        # "List your GPU · Become a seller" card that links straight to /install.
+        page.wait_for_selector('a.card[href="/install"]', state="visible", timeout=20000)
+        label = page.text_content('a.card[href="/install"]') or ""
+        ok("the become-a-seller entry is visible for a signed-in user",
+           page.locator('a.card[href="/install"]').first.is_visible())
+        ok("it invites a buyer to sell (seller/GPU framing)",
+           "seller" in label.lower() or "gpu" in label.lower())
+        page.locator('a.card[href="/install"]').first.click()
         page.wait_for_url("**/install", timeout=20000)
-        ok("switching to seller lands on the onboarding page", "/install" in page.url)
+        ok("becoming a seller lands on the onboarding page", "/install" in page.url)
         ok("role switch: no serious JS errors", not [m for k, m in errs if _serious(m)],
            "; ".join(m for k, m in errs if _serious(m))[:120])
         page.close()
 
-        # ---------- SELLER value prop: the earnings calculator is LIVE + correct ----------
-        print("\n-- seller: NiceHash-style earnings calculator responds to the slider --")
+        # ---------- SELLER value prop: the ROI/earnings calculator is LIVE ----------
+        # (The redesign moved the inline /install calculator (#calc_*) to the dedicated /roi
+        # page — /install links to it, and /roi computes per-GPU earnings/payback from the
+        # server's hardware-reference data with a live rented-hours slider.)
+        print("\n-- seller: ROI calculator renders live numbers and tracks the hours slider --")
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         errs = []
         _attach_error_capture(page, errs)
         page.goto(B + "/install", wait_until="domcontentloaded")
-        page.wait_for_selector("#calc_month", timeout=15000)
-        page.fill("#calc_price", "2.00")
-
-        def month_at(util):
-            page.eval_on_selector(
-                "#calc_util",
-                "(el, v) => { el.value = String(v); el.dispatchEvent(new Event('input', {bubbles:true})); }",
-                util)
-            txt = (page.text_content("#calc_month") or "$0").replace("$", "").replace(",", "")
-            try:
-                return int(txt)
-            except ValueError:
-                return 0
-
-        high = month_at(100)
-        low = month_at(25)
-        ok("calculator shows a non-zero monthly estimate", high > 0, str(high))
-        ok("dragging utilization up increases earnings (slider is live)", high > low, f"{high} vs {low}")
-        ok("earnings scale correctly with utilization (100% == 4x25%)",
-           abs(high - low * 4) <= 5, f"{high} vs {low}*4")
-        label = page.text_content("#calc_util_val") or ""
-        ok("the utilization % label tracks the slider", "25%" in label or "100%" in label, label)
-        # 'Suggest a price' pulls a server-derived rate into the calculator
-        page.fill("#pgpu", "H100")
-        page.click("button:has-text('Suggest a price')")
+        ok("install page points sellers at the ROI calculator",
+           page.locator('a[href="/roi"]').count() >= 1)
+        page.goto(B + "/roi", wait_until="domcontentloaded")
         page.wait_for_function(
-            "() => { var p = document.getElementById('calc_price'); return p && parseFloat(p.value) > 0; }",
-            timeout=10000)
-        ok("'Suggest a price' fills a server-derived rate",
-           float(page.input_value("#calc_price")) > 0)
+            "() => { var e=document.getElementById('roirows');"
+            " return e && /\\$/.test(e.textContent) && !/Loading/.test(e.textContent); }",
+            timeout=15000)
+        ok("ROI table renders per-GPU dollar figures", "$" in (page.text_content("#roirows") or ""))
+
+        def rows_at(hours):
+            page.eval_on_selector(
+                "#hours",
+                "(el, v) => { el.value = String(v); el.dispatchEvent(new Event('input', {bubbles:true})); }",
+                hours)
+            return page.text_content("#roirows") or ""
+
+        at24 = rows_at(24)
+        at2 = rows_at(2)
+        ok("the rented-hours slider is LIVE (numbers change with hours)", at24 != at2)
+        ok("the hours label tracks the slider", "2 h" in (page.text_content("#hoursv") or ""))
         page.set_viewport_size({"width": 390, "height": 844})
         ok("calculator [mobile]: output grid does not overflow", _no_overflow(page))
         ok("calculator: no serious JS errors", not [m for k, m in errs if _serious(m)],
@@ -383,8 +392,9 @@ def run(pw, buyer_t, seller_t, pub, role_t):
            "; ".join(x for k, x in errs if _serious(x))[:120])
         page.close()
 
-        # inputs on the auth + onboarding forms must also be zoom-proof, and long code wraps
-        for path, sel in [("/login", "#u"), ("/install", "#calc_price")]:
+        # inputs on the auth + calculator forms must also be zoom-proof, and long code wraps
+        # (the /install inline calculator moved to /roi — its #kwh input is the analog)
+        for path, sel in [("/login", "#u"), ("/roi", "#kwh")]:
             page = browser.new_page(viewport={"width": 390, "height": 844}, is_mobile=True)
             page.goto(B + path, wait_until="domcontentloaded")
             page.wait_for_selector(sel, timeout=15000)

@@ -1,0 +1,17 @@
+[Unit]
+Description=Run the Lumaris payout worker every 5 minutes
+# Without this timer installed, tools/payout_worker.py never runs and queued seller
+# withdrawals sit forever. The service is safe to run continuously (idempotent, stub by
+# default), so a fixed cadence is the whole mechanism.
+
+[Timer]
+# First run shortly after boot so a reboot doesn't leave payouts stranded, then every 5 min.
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+# If the box was off when a tick was due, run once on the next boot (don't skip the queue).
+Persistent=true
+Unit=lumaris-payout.service
+
+[Install]
+WantedBy=timers.target

@@ -8,7 +8,7 @@ Precedence: **GitHub Secrets > ENV_VARS > manifest defaults** (secret keys are r
 
 Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **deployment** = GitHub Actions → server (never written into the server runtime env).
 
-## Variables (non-sensitive) (217)
+## Variables (non-sensitive) (229)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
@@ -20,6 +20,8 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `AFFILIATE_NEWEGG_WRAP` | no | platform | *(empty)* | `…` | api/main.py | — | — |
 | `AFFILIATE_PCPARTPICKER_URL` | no | platform | *(empty)* | `…` | — | — | — |
 | `AFFILIATE_WASABI_URL` | no | platform | *(empty)* | `…` | — | — | — |
+| `AGENT_CONTAINER_USER` | no | platform | *(empty)* | `…` | api/main.py | — | — |
+| `AGENT_STRICT_ROOTFS` | no | platform | `false` | `false` | api/main.py | — | — |
 | `AGENT_TELEMETRY_ENABLED` | no | gpu | `true` | `true` | agent/agent_telemetry.py | format: bool; one of: true / false | Seller-agent telemetry export (degrade-safe if obs down). |
 | `AGENT_VPN_ADDR` | no | gpu | *(empty)* | `…` | agent/distributed_run.py | — | This node's cluster-reachable (VPN) address advertised to peer ranks at rendezvous. Auto-detected from the interface if unset. |
 | `AGENT_VPN_ENABLED` | no | platform | `false` | `false` | agent/wireguard.py | — | — |
@@ -32,6 +34,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `BACKUP_ENABLED` | no | platform | `true` | `true` | api/backup.py | — | — |
 | `BACKUP_RESCHEDULE_GRACE_S` | no | platform | `900` | `900` | api/db.py | — | — |
 | `BACKUP_RETENTION` | no | platform | `30` | `30` | api/backup.py | — | — |
+| `BACKUP_RPO_SECONDS` | no | platform | `7200` | `7200` | api/backup.py | — | — |
 | `BACKUP_S3_PREFIX` | no | platform | `db-backups` | `db-backups` | api/backup.py | — | — |
 | `BASE_DOMAIN`<br>`aka APP_DOMAIN` | no | platform | `petabyte.market` | `petabyte.market` | api/main.py | format: hostname | Public application domain. |
 | `BIND` | no | platform | `127.0.0.1:8000` | `127.0.0.1:8000` | api/deploy/gunicorn_conf.py | — | gunicorn bind address; keep 127.0.0.1 behind nginx (never public). |
@@ -46,6 +49,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `DATA_SNAPSHOT_INTERVAL_S` | no | platform | `3600` | `3600` | api/main.py | — | — |
 | `DEFAULT_LANDING_VIDEO_ID` | no | platform | `UUSWYaxboDA` | `UUSWYaxboDA` | api/main.py | — | — |
 | `DEPLOY_CONFIG_FROM_GITHUB` | no | deployment | `false` | `false` | GitHub Actions deploy | — | Rollout gate. When 'true' the deploy generates the server env from GitHub config and pushes it; until then deploys stay code-only. Flip to true after entering all Secrets. |
+| `DESKTOP_APP_URL` | no | platform | *(empty)* | `…` | api/web_routes.py | — | — |
 | `DISK_DATA_DIR` | no | gpu | `/var/lib/petabyte/disk` | `/var/lib/petabyte/disk` | agent/disk_node.py | — | Host dir where a storage node keeps its data (per-node subdir). |
 | `DISK_PAYOUT_WALLET` | no | gpu | *(empty)* | `…` | agent/task_fetcher.py | — | Petabyte's platform storage wallet set on every disk node (earnings pool centrally, credited per node — no per-seller wallet). |
 | `DISK_PROVIDER` | no | platform | `storj` | `storj` | api/storage_providers.py | format: string | Default storage-network adapter for disk-rental reconciliation (storj\|btfs\|sia). |
@@ -66,6 +70,9 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `E2E_SELLER_B_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e second seller (isolation, TEST). |
 | `E2E_SELLER_USERNAME` | no | ci | *(empty)* | `…` | — | — | browser-e2e seller login (TEST account). |
 | `EARNINGS_HOLD_HOURS` | no | platform | `24` | `24` | api/db.py | — | — |
+| `EDGE_INFERENCE_ENABLED` | no | platform | `false` | `false` | api/main.py | — | — |
+| `EDGE_INFER_MODEL` | no | platform | *(empty)* | `…` | api/main.py | — | — |
+| `EDGE_INFER_UPSTREAM_URL` | no | platform | *(empty)* | `…` | api/main.py | — | — |
 | `EMAIL_FROM` | no | platform | `no-reply@petabyte.market` | `no-reply@petabyte.market` | api/notify_providers.py | — | — |
 | `EMAIL_PROVIDER` | no | platform | `mailgun` | `mailgun` | api/notify_providers.py | one of: mailgun / ses / sendgrid / postmark | Notification email provider. |
 | `EMAIL_TOKEN_TTL_MIN` | no | platform | `15` | `15` | api/db.py | format: int | — |
@@ -74,7 +81,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `ENABLE_OTEL` | no | platform | `true` | `true` | — | format: bool; one of: true / false | Enable OpenTelemetry tracing. (reserved: standardized in GitHub config). |
 | `ENABLE_PROMETHEUS` | no | platform | `true` | `true` | — | format: bool; one of: true / false | Enable Prometheus metrics scraping. (reserved: standardized in GitHub config). |
 | `ENABLE_SENTRY` | no | platform | `false` | `false` | — | format: bool; one of: true / false | Enable Sentry error reporting (also needs SENTRY_DSN). (reserved: standardized in GitHub config). |
-| `ENVIRONMENT`<br>`aka APP_ENV` | no | platform | `development` | `development` | api/backup.py, api/main.py, api/stripe_gateway.py, api/utils.py | one of: development / test / staging / production | Must be 'production' in prod; never leave stubs enabled. |
+| `ENVIRONMENT`<br>`aka APP_ENV` | no | platform | `development` | `development` | api/auth.py, api/backup.py, api/main.py, api/stripe_gateway.py, api/utils.py | one of: development / test / staging / production | Must be 'production' in prod; never leave stubs enabled. |
 | `ENV_VARS` | no | deployment | *(empty)* | `…` | GitHub Actions deploy | — | THE single Repository Variable holding ALL non-sensitive config as KEY=value; pairs (semicolon-separated, newlines allowed). Generate it with `python scripts/env_bundle.py generate`. Secrets are NEVER placed here — they stay as individual GitHub Secrets. |
 | `GEOIP_DB` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 | `GEOIP_STUB` | no | platform | `true` | `true` | api/utils.py | format: bool; one of: true / false | GeoIP stub. |
@@ -90,6 +97,8 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `HEARTBEAT_TIMEOUT_S` | no | platform | `60` | `60` | api/db.py | format: int | Seconds before a silent node is reaped. |
 | `HF_ENDPOINT` | no | platform | `https://huggingface.co` | `https://huggingface.co` | api/modelhub/providers/huggingface.py | — | — |
 | `IDLE_MINING` | no | gpu | `false` | `false` | agent/task_fetcher.py | format: bool | Enable idle NiceHash mining when no paid job is running. |
+| `INFERENCE_PRICE_PER_MTOK_IN` | no | platform | `0` | `0` | — | — | — |
+| `INFERENCE_PRICE_PER_MTOK_OUT` | no | platform | `0` | `0` | — | — | — |
 | `INSTANT_PAYOUT_FEE_MIN` | no | platform | `0.50` | `0.50` | api/db.py | — | — |
 | `INSTANT_PAYOUT_FEE_PCT` | no | platform | `0.015` | `0.015` | api/db.py | — | — |
 | `JOB_POLL_INTERVAL` | no | gpu | `5` | `5` | agent/task_fetcher.py | format: int | Seconds between /jobs/next polls. |
@@ -137,6 +146,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `OTEL_TRACE_SAMPLE_RATIO` | no | platform | `1.0` | `1.0` | — | format: float | Trace sample ratio (1.0 in test/pilot/investor demo). |
 | `PAYMENTS_LIVE_ENABLED` | no | platform | `false` | `false` | api/db.py, api/main.py, api/stripe_gateway.py | format: bool; one of: true / false | Live requires PAYMENTS_LIVE_ENABLED=true AND STRIPE_ALLOW_LIVE=true AND ENVIRONMENT=production AND live keys. |
 | `PAYMENTS_MODE` | no | platform | `sandbox` | `sandbox` | api/db.py, api/main.py | one of: sandbox / test / live | Payment mode label. |
+| `PAYOUT_AUTONET_CLAWBACK` | no | platform | `false` | `false` | api/payout_routing.py | — | — |
 | `PAYOUT_CAPABILITIES_PATH` | no | platform | *(empty)* | `…` | api/payout_capabilities.py | — | — |
 | `PAYOUT_COOLING_OFF_H` | no | platform | `24` | `24` | api/db.py, api/stripe_connect.py | format: int | — |
 | `PAYOUT_HOLD_DAYS` | no | platform | `14` | `14` | api/stripe_connect.py | format: int | Earnings risk-hold before biweekly payout. |
@@ -150,6 +160,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `PETABYTE_OFFLINE_TEST` | no | platform | *(empty)* | `` | api/main.py | one of:  / 0 / 1 / true / false | Must be unset/0 in production. |
 | `PETABYTE_REGISTRY_URL` | no | platform | *(empty)* | `…` | api/modelhub/providers/registry.py | — | — |
 | `PETABYTE_RELEASE_PUBKEY` | no | platform/deployment | *(empty)* | `…` | api/main.py | — | Base64 Ed25519 PUBLIC release key (not a secret). The release workflow pins it into the exe at build time; the API reads it to pin the key into the served install.sh for Linux/WSL signed auto-update. Pairs with RELEASE_SIGNING_KEY. |
+| `PETABYTE_SKIP_INIT_DB` | no | platform | *(empty)* | `…` | api/alembic/env.py, api/db.py | — | — |
 | `PETABYTE_SPEC_ID` | **yes** | gpu | *(empty)* | `60` | agent/agent_cli.py, agent/task_fetcher.py, agent/ui.py | format: int | The spec id this node serves. |
 | `PETABYTE_UPDATE_INTERVAL_S` | no | gpu | `3600` | `3600` | GPU node agent | format: int | Agent self-update check interval (s). |
 | `PETABYTE_UPDATE_REPO` | no | gpu | *(empty)* | `…` | GPU node agent | — | Agent self-update source repo (optional). |
@@ -189,7 +200,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `S3_SSE` | no | platform | `AES256` | `AES256` | api/utils.py | — | — |
 | `S3_STUB` | no | platform | `true` | `true` | api/main.py, api/utils.py | format: bool; one of: true / false | S3 stub. |
 | `SANCTIONS_EXTRA_COUNTRIES` | no | platform | *(empty)* | `…` | api/sanctions.py | — | — |
-| `SANCTIONS_SCREEN_PROVIDER` | no | platform | *(empty)* | `…` | api/payout_providers.py | — | — |
+| `SANCTIONS_SCREEN_PROVIDER` | no | platform | *(empty)* | `…` | api/payout_providers.py, api/stripe_connect.py | — | — |
 | `SANDBOX_IMAGE` | no | gpu | `python:3.12-slim` | `python:3.12-slim` | agent/notebook.py | — | Container image for the notebook sandbox. |
 | `SELLER_AUDIT_SAMPLE_RATE` | no | platform | `0.25` | `0.25` | api/seller_audit.py | format: float | — |
 | `SELLER_FRAUD_PENALTY` | no | platform | `40` | `40` | api/seller_audit.py | format: int | — |
@@ -200,6 +211,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `SENTRY_PROFILES_SAMPLE_RATE` | no | platform | `0.0` | `0.0` | — | format: float | — |
 | `SENTRY_RELEASE` | no | observability | *(empty)* | `…` | — | — | Sentry release tag (defaults to RELEASE / GITHUB_SHA). |
 | `SENTRY_TRACES_SAMPLE_RATE` | no | platform | `0.1` | `0.1` | — | format: float | — |
+| `SETTLEMENT_REQUIRE_VERIFICATION` | no | platform | `true` | `true` | api/settlement_verification.py | — | — |
 | `STORAGE_STUB` | no | platform | `false` | `false` | api/storage_providers.py | format: bool | Offline stub for storage earnings (tests). Real path needs provider creds. |
 | `STORAGE_STUB_EARNINGS` | no | platform | *(empty)* | `…` | api/storage_providers.py | format: string | Test-only JSON {node_id: usd} for the storage-earnings stub. |
 | `STORAGE_TAKE_RATE` | no | platform | `0.10` | `0.10` | api/main.py, api/tools/disk_reconcile.py | format: float | Platform commission on storage-network (disk-rental) earnings. |
@@ -230,10 +242,11 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `WG_INTERFACE` | no | platform | `wg0` | `wg0` | api/utils.py | — | — |
 | `WG_PUBLIC_KEY` | no | platform | *(empty)* | `…` | api/utils.py | — | — |
 
-## Secrets (credentials — never printed, no defaults) (55)
+## Secrets (credentials — never printed, no defaults) (59)
 
 | Name | Required | Scope | Default | Example | Used by | Validation | Production notes |
 |---|---|---|---|---|---|---|---|
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/auth.py | — | — |
 | `AWS_ACCESS_KEY_ID` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | — |
 | `AWS_SECRET_ACCESS_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | — |
 | `CAL_WEBHOOK_SECRET` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
@@ -249,6 +262,7 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `E2E_BUYER_ZERO_PASSWORD` | no | ci | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | browser-e2e zero-balance-buyer password (TEST). |
 | `E2E_SELLER_B_PASSWORD` | no | ci | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | browser-e2e second-seller password (TEST). |
 | `E2E_SELLER_PASSWORD` | no | ci | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | browser-e2e seller password (TEST account). |
+| `EDGE_INFER_UPSTREAM_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
 | `GATEWAY_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, gateway/gateway.py | — | — |
 | `GOOGLE_CLIENT_ID` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
 | `GOOGLE_CLIENT_SECRET` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
@@ -273,15 +287,17 @@ Scope legend: **platform** = API server · **gpu** = seller GPU node agent · **
 | `PROMETHEUS_METRICS_TOKEN` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
 | `PROMETHEUS_REMOTE_WRITE_PASSWORD` | no | observability | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | Prometheus remote-write basic-auth password. |
 | `PROMETHEUS_REMOTE_WRITE_USERNAME` | no | observability | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | Prometheus remote-write basic-auth user. |
+| `PYPI_API_TOKEN` | no | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | PyPI API token that release-cli.yml uses to publish the `petabyte` CLI on a `cli-v*` tag. Unset -> the workflow builds + verifies the wheel but does NOT publish (no hard fail). See release-cli.yml for the one-time setup. |
 | `REDIS_PASSWORD` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/redis_client.py | — | — |
 | `REDIS_URL` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/redis_client.py | — | — |
 | `RELEASE_SIGNING_KEY` | no | deployment | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | GitHub Actions deploy | — | Ed25519 PEM PRIVATE key that signs desktop-agent releases (release-desktop.yml -> scripts/sign_release.py). Offline key; generate via the release-keygen workflow. Unset -> the exe publishes UNSIGNED and auto-update is fail-closed. |
+| `RESTORE_DRILL_TARGET_URL` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/backup.py | — | — |
 | `SECRET_KEY` | **yes** | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/auth.py, api/main.py, api/stripe_demo.py | — | — |
 | `SENDGRID_API_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/notify_providers.py | — | — |
 | `SERVER_PRIVATE_KEY` | **yes** | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/audit_js.py, api/stripe_demo.py, api/utils.py | — | — |
 | `STRIPE_API_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/payout_providers.py | — | — |
 | `STRIPE_PUBLISHABLE_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, api/stripe_gateway.py, api/wallet_funding.py | — | — |
-| `STRIPE_SECRET_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, api/stripe_gateway.py | — | — |
+| `STRIPE_SECRET_KEY` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py, api/stripe_connect.py, api/stripe_gateway.py | — | — |
 | `STRIPE_WEBHOOK_SECRET` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/main.py | — | — |
 | `TEE_TRUSTED_ROOT` | no | platform | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | api/utils.py | — | — |
 | `TEMPO_PASSWORD` | no | observability | **NO DEFAULT** (secret) | `<set in GitHub Secrets>` | — | — | Tempo push auth password. |

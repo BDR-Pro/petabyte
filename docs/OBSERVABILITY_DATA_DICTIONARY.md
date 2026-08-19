@@ -54,6 +54,10 @@ Two invariants hold throughout:
 | `petabyte_payment_capture_duration_seconds` | Histogram | `payment_mode`, `environment` | Capture latency at Stripe. |
 | `petabyte_seller_transfers_total` | Counter | `outcome`, `payment_mode`, `environment` | Transfers of net earning to seller connected accounts. |
 | `petabyte_refunds_total` | Counter | `payment_mode`, `environment` | Refunds issued. |
+| `petabyte_gmv_captured_minor_total` | Counter | `payment_mode`, `environment` | Gross captured amount (minor units). GMV "today" = `increase(...[24h])`. Split by `payment_mode` so a LIVE panel never sums TEST money. |
+| `petabyte_platform_fees_minor_total` | Counter | `payment_mode`, `environment` | Platform commission captured (minor units). |
+| `petabyte_seller_earnings_minor_total` | Counter | `payment_mode`, `environment` | Seller net earned at capture (minor units). |
+| `petabyte_processing_fees_minor_total` | Counter | `payment_mode`, `environment` | Estimated card-processing fee the platform bears (minor units). Net margin = `platform_fees - processing_fees`; can be negative on small jobs. |
 | `petabyte_webhooks_total` | Counter | `category`, `outcome`, `environment` | Stripe webhooks processed, by category and outcome. |
 | `petabyte_webhook_invalid_signature_total` | Counter | `environment` | Webhooks that failed signature verification (misconfig or spoofing). |
 | `petabyte_webhook_duplicate_total` | Counter | `environment` | Duplicate webhook deliveries absorbed idempotently. |
@@ -93,6 +97,14 @@ Two invariants hold throughout:
 |---|---|---|---|
 | `petabyte_telemetry_export_failures_total` | Counter | `exporter`, `environment` | Telemetry export failures per backend (degrade-mode signal; no app impact). |
 
+### Marketing / newsletter
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `petabyte_newsletter_subscribe_requests_total` | Counter | `environment` | Newsletter signup requests received. |
+| `petabyte_newsletter_subscribe_success_total` | Counter | `outcome`, `environment` | Signups accepted. `outcome`: `new` / `duplicate`. |
+| `petabyte_newsletter_subscribe_failures_total` | Counter | `reason`, `environment` | Signup failures. `reason`: `mailgun` / `db`. |
+
 ### GPU hardware (DCGM exporter, per node)
 
 | Metric | Type | Meaning |
@@ -100,6 +112,93 @@ Two invariants hold throughout:
 | `DCGM_FI_DEV_GPU_TEMP` | Gauge | GPU temperature (°C). Thermal / overheat signal. |
 | `DCGM_FI_DEV_GPU_UTIL` | Gauge | GPU utilization (%). Distinguishes a working job from a hung one. |
 | `DCGM_FI_DEV_XID_ERRORS` | Counter/Gauge | NVIDIA XID hardware error events. Precedes node loss / result corruption. |
+
+## Business & integrity gauges (scrape-time collector)
+
+The counters/histograms above are incremented in-process as events happen. The gauges
+below are different: they are computed **live from the database on every scrape** by the
+marketplace collector (`_marketplace_metrics` in `main.py`, registered via
+`register_marketplace_collector`) and served on `/internal/metrics`. They are point-in-time
+snapshots — never `rate()`/`increase()` them. Each query runs in its own guarded block, so a
+failure in one family never drops the others. All labels are bounded enumerations (never an
+id); `environment` is present on every gauge and omitted from the tables below for brevity.
+
+The supply gauges already listed under **Jobs / marketplace** (`petabyte_gpus_online`,
+`petabyte_gpus_available`, `petabyte_gpus_reserved`, `petabyte_jobs_running`) and under
+**Agents / fleet** (`petabyte_agents_online`) are emitted by this same collector.
+
+### Supply / marketplace
+
+| Metric | Type | Extra labels | Meaning |
+|---|---|---|---|
+| `petabyte_sellers_registered` | Gauge | — | Distinct sellers with a listing. |
+| `petabyte_sellers_online` | Gauge | — | Sellers with a fresh heartbeat. |
+| `petabyte_sellers_offline` | Gauge | — | Sellers with all specs offline. |
+| `petabyte_sellers_stale` | Gauge | — | Specs marked online but heartbeat expired. |
+| `petabyte_available_gpu_hours` | Gauge | — | Available GPU-hours (units × max hrs). |
+| `petabyte_gpus_by_model` | Gauge | `gpu_class` | Online GPUs by class. |
+| `petabyte_gpus_by_country` | Gauge | `country` | Online GPUs by country (normalized 2-letter, `unknown` when empty). |
+
+### Financial integrity (ledger + payout backlog)
+
+| Metric | Type | Extra labels | Meaning |
+|---|---|---|---|
+| `petabyte_ledger_balanced` | Gauge | — | `1` iff the double-entry ledger balances (every tx and overall). **Alert on `0`.** |
+| `petabyte_ledger_imbalanced_tx` | Gauge | — | Ledger transactions whose debits ≠ credits. **Must stay 0.** |
+| `petabyte_ledger_net_minor` | Gauge | — | Signed ledger sum (credits − debits) across all entries. **Must stay 0.** |
+| `petabyte_payout_obligations_unbatched` | Gauge | — | Settled obligations owed to sellers but not yet placed in a batch. |
+| `petabyte_oldest_unbatched_payout_age_seconds` | Gauge | — | Age of the oldest unbatched payout obligation (payout backlog). |
+| `petabyte_seller_payable_minor` | Gauge | `payment_mode` | Outstanding seller payable (minor units), split by money mode. |
+
+### Trust & integrity (the verification moat)
+
+Same honest counts as the public `/trust` page (single source of truth).
+
+| Metric | Type | Extra labels | Meaning |
+|---|---|---|---|
+| `petabyte_attested_gpus` | Gauge | — | Attested GPUs (verifiable listings). |
+| `petabyte_confidential_nodes_active` | Gauge | — | Nodes holding a fresh confidential (TEE) attestation. |
+| `petabyte_jobs_completed_total` | Gauge | — | Completed jobs (lifetime; a snapshot gauge despite the `_total` name). |
+| `petabyte_results_content_bound` | Gauge | — | Results bound to the sha256 of the real output bytes. |
+| `petabyte_verifiable_receipts` | Gauge | — | Jobs with a retained node signature (buyer-verifiable receipt). |
+| `petabyte_sellers_fraud_flagged` | Gauge | — | Sellers with fraud on record (payouts frozen pending review). |
+| `petabyte_trust_tier_gpus` | Gauge | `tier` | Attested GPUs by trust tier. |
+| `petabyte_quorum_checks` | Gauge | `status` | Redundant re-execution (quorum) checks by outcome. |
+
+### Disaster recovery (database backups)
+
+| Metric | Type | Extra labels | Meaning |
+|---|---|---|---|
+| `petabyte_db_backup_last_age_seconds` | Gauge | — | Seconds since the last SUCCESSFUL backup (`-1` if none yet). **Alert when it grows.** |
+| `petabyte_db_backups_ok` | Gauge | — | Successful backups currently retained. |
+| `petabyte_db_backups_failed` | Gauge | — | Failed backup attempts on record. |
+| `petabyte_db_backup_bytes` | Gauge | — | Total compressed size of retained backups. |
+
+### Operations (VMs, clusters, disk, teams, escrow)
+
+| Metric | Type | Extra labels | Meaning |
+|---|---|---|---|
+| `petabyte_vms_active` | Gauge | — | Buyer VMs active (starting/running/migrating). |
+| `petabyte_vm_migrations_cumulative` | Gauge | — | Cumulative VM failovers/migrations across all routes. |
+| `petabyte_distributed_clusters` | Gauge | `status` | Distributed (multi-node) clusters by status. |
+| `petabyte_disk_rental_nodes` | Gauge | — | Nodes actively renting spare disk. |
+| `petabyte_disk_rental_gb_pledged` | Gauge | — | Total GB pledged for disk rental. |
+| `petabyte_disk_rental_gb_used` | Gauge | — | GB actually reported used across disk-rental nodes. |
+| `petabyte_teams_total` | Gauge | — | Teams (shared-wallet orgs). |
+| `petabyte_teams_pooled_balance_usd` | Gauge | — | Total balance pooled in team wallets (USD). |
+| `petabyte_escrow_held_usd` | Gauge | — | Buyer money currently held in escrow (live only, USD). |
+| `petabyte_wallet_balance_usd` | Gauge | — | Total buyer wallet balance across all users (USD). |
+| `petabyte_pending_tasks` | Gauge | `queue` | Buyer tasks awaiting a node. |
+| `petabyte_oldest_pending_task_age_seconds` | Gauge | `queue` | Age of the oldest pending task (0 when empty). |
+
+### Data-API monetization
+
+| Metric | Type | Extra labels | Meaning |
+|---|---|---|---|
+| `petabyte_data_api_revenue_usd` | Gauge | — | All-time data-API revenue booked to platform revenue (USD). |
+| `petabyte_data_api_revenue_usd_month` | Gauge | — | Data-API revenue this calendar month (USD). |
+| `petabyte_data_api_billed_calls` | Gauge | — | All-time billed (paid) data-API calls. |
+| `petabyte_data_api_paying_accounts_month` | Gauge | — | Accounts that paid for data-API calls this month. |
 
 ## Stable log `event_name` values
 

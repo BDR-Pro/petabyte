@@ -46,6 +46,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Test gate: the FULL suite (sqlite + the Postgres "one that counts" + config + docker
+  # build + secret scan) must pass before anything touches production. Previously `deploy`
+  # only depended on config/secret validation, so a push to main that broke the money code
+  # but kept valid config would still ship. Reusing tests.yml (workflow_call) keeps a single
+  # source of truth for what "green" means — the deploy bar is exactly the CI bar.
+  tests:
+    name: test gate
+    uses: ./.github/workflows/tests.yml
+    # Pass ONLY what the test suite declares it can use (the Stripe TEST-mode keys for the
+    # self-skipping integration job) — never `secrets: inherit`, which would hand the reusable
+    # workflow every deployment secret (SSH key included).
+    secrets:
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+      STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+
   configuration-preflight:
     runs-on: ubuntu-latest
     environment: TEST
@@ -100,6 +116,7 @@ jobs:
 
   deploy:
     needs:
+      - tests
       - configuration-preflight
 
     runs-on: ubuntu-latest

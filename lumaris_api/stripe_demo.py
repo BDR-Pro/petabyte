@@ -124,7 +124,7 @@ transferred_total = sum(t.transferred_amount for t in s.query(dbmod.ComputeTrans
     dbmod.ComputeTransaction.seller_id == seller.id).all())
 line(f"    SELLER earnings: net={money(seller_net_total)}  transferred={money(transferred_total)}")
 plat = dbmod.get_or_create_platform(s)
-line(f"    ADMIN: platform commission (ledger) = {dbmod.account_balance(s, dbmod.PLATFORM_REVENUE)} minor")
+line(f"    ADMIN: platform commission (ledger) = {dbmod.account_balance(s, dbmod.PLATFORM_REVENUE_MINOR)} minor")
 
 # Full ledger
 line("\nADMIN — internal double-entry ledger for this transaction:")

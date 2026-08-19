@@ -155,6 +155,23 @@ balance is never inferred by summing Stripe payouts. All rails consume the same
 and vice versa. A fake connected account can never be reused once the process runs the real
 gateway (`ConnectedAccountModeMismatch`, fail closed).
 
+## Disbursement execution (two schedulers)
+
+Two independent mechanisms actually move money out, matching the two accrual paths:
+
+- **Legacy wallet withdrawals — `tools/payout_worker.py`, on a systemd timer.**
+  `deploy.sh`/`update.sh` install and enable **`lumaris-payout.timer`**, which runs the
+  worker **every 5 minutes**. It calls `run_due_schedules(db)` (fires any due
+  `PayoutSchedule`) then `process_payouts(db, pending_payouts(db), …)` to send queued
+  wallet `Payout` rows via `payout_providers`. Safe by default: while `PAYOUT_STUB=true`
+  it simulates sends until a real provider is configured. This drains the internal
+  wallet/escrow earnings path (see "Legacy wallet/escrow bookings" above).
+- **Connect obligation batches — `scripts/run_biweekly_payouts.py`, manual cron.**
+  The provider-neutral `PayoutObligation`/`PayoutBatch` path is disbursed by
+  `payout_routing.run_scheduled_payouts(...)`, invoked by `scripts/run_biweekly_payouts.py`.
+  This is **not** wired into a shipped systemd unit — schedule it yourself (e.g. a
+  biweekly cron on the API host) once you go live on Connect payouts.
+
 ## The 14-day hold
 
 Capture creates a **held** `PayoutObligation` (`accrued`), available only after the configured

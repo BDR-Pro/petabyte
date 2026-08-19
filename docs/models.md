@@ -4,8 +4,13 @@ Petabyte gives open models the convenience of Hugging Face / `ollama pull` / Doc
 **provider-independent** local layer. One identifier, one command:
 
 ```bash
+pip install petabyte-client          # installs the `petabyte` command (model hub bundled)
 petabyte model pull meta-llama/Llama-3.1-8B-Instruct
 ```
+
+The model-hub commands ship **in the pip client** — `pip install petabyte-client` is enough
+(the hub is pure standard library, so it adds no dependency beyond `httpx`). From a source
+checkout you can also run `python -m modelhub …`.
 
 You never touch a storage URL, pick individual `.safetensors` shards, manage checksums, or babysit a
 download. Petabyte resolves the identifier, selects the compatible files, verifies hashes, resumes

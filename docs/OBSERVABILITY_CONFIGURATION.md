@@ -40,7 +40,7 @@ read directly by `lumaris_api/observability.py`.
 | `LOG_REDACTION_ENABLED` | `true` | Centralized redaction of secrets/PII by key name and value pattern before anything is logged or exported. Keep true everywhere. |
 | `LOG_LEVEL` | `info` | Root log verbosity. |
 | `SENTRY_DSN` _(secret)_ | _(empty)_ | Sentry project DSN. Enables error reporting (with `ENABLE_SENTRY=true`). |
-| `SENTRY_TRACES_SAMPLE_RATE` | provider default | Sentry performance-trace sampling rate. |
+| `SENTRY_TRACES_SAMPLE_RATE` | `0.1` | Sentry performance-trace sampling rate (10% of transactions by default). |
 | `REDIS_URL` _(secret)_ | _(empty)_ | Redis connection URL (with credentials). Optional — absence triggers in-process degrade (`redis.unavailable`). |
 | `OTEL_EXPORTER_OTLP_HEADERS` _(secret)_ | _(empty)_ | Auth headers for the OTLP exporter (e.g. bearer/API key for the Collector). |
 

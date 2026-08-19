@@ -79,10 +79,16 @@ def audit(session) -> None:
     captured_txs = (session.query(d.ComputeTransaction)
                     .filter(d.ComputeTransaction.captured_amount > 0).all())
     for tx in captured_txs:
-        got = legs_sum(tx.public_id, "compute_capture", d.EXTERNAL_PAYMENTS, d.DEBIT)
+        # STD-E: the compute path posts MINOR units to external:payments:minor. Captures made
+        # BEFORE the account split still live on the dollar external:payments account, so the
+        # audit accepts a tx's legs on either account (each tx posted to exactly one) — a
+        # legacy row must not read as a discrepancy.
+        got = (legs_sum(tx.public_id, "compute_capture", d.EXTERNAL_PAYMENTS_MINOR, d.DEBIT)
+               + legs_sum(tx.public_id, "compute_capture", d.EXTERNAL_PAYMENTS, d.DEBIT))
         if got != Decimal(tx.captured_amount):
             fail(f"[vs-bookings] tx {tx.public_id}: captured_amount={tx.captured_amount} "
-                 f"but signed compute_capture legs on {d.EXTERNAL_PAYMENTS} sum to {got} "
+                 f"but signed compute_capture legs on {d.EXTERNAL_PAYMENTS_MINOR} (+ legacy "
+                 f"{d.EXTERNAL_PAYMENTS}) sum to {got} "
                  f"(a wrong-direction leg subtracts here)")
 
     # ---- #36 ledger vs payouts ----

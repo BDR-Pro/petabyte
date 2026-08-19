@@ -41,10 +41,14 @@ run_suite "adversarial (sqlite)"  python adversarial_test.py
 run_suite "stripe connect (sqlite)" python stripe_test.py
 run_suite "payout routing (sqlite)" python payout_test.py
 run_suite "payout rails (irreversible USDC gated + fail-closed)" python payout_rails_test.py
+run_suite "priority-market payout capability (per-country, honest)" python priority_country_test.py
+run_suite "demo loop (headless onboard -> capture -> payout transfer -> unified proof)" python demo_payout_loop_test.py
 run_suite "email (mailgun, offline)" python email_test.py
 run_suite "matmul result validation (offline)" python matmul_validation_test.py
+run_suite "settlement verification gate (pay only for verified work)" python settlement_verification_test.py
 run_suite "account (reset + cal webhook + demo notify)" python account_test.py
 run_suite "wallet (add funds via stripe checkout)" python wallet_test.py
+run_suite "desktop release (admin-uploadable signed builds)" python desktop_release_test.py
 run_suite "seller integrity audits (anti-fraud)" python seller_audit_test.py
 run_suite "quorum verification (redundant re-execution)" python quorum_test.py
 run_suite "real-job re-verification (content-hash quorum on real work)" python reverify_test.py

@@ -52,7 +52,7 @@ sequenceDiagram
     P->>P: metered 1800s (30m) -> settle -> capture 125
     P->>S: capture amount_to_capture=125 [idem petabyte:capture:{tx}:{v}]
     S-->>P: succeeded, amount_received=125, capturable=0 (175 auth released)
-    P->>P: ledger DEBIT external:payments 125; CREDIT platform_revenue 12 + seller_payable 113
+    P->>P: ledger DEBIT external:payments:minor 125; CREDIT platform_revenue:minor 12 + seller_payable 113
 ```
 
 ## Job never starts (fair-failure policy)

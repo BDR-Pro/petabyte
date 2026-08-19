@@ -76,8 +76,8 @@ def _mk_tx(pub, captured):
 # ---- a CORRECT capture: external:payments DEBITED by captured_amount -> reconciles ----
 _mk_tx("ctx_ok", 1000)
 d.post(s, "compute_transaction", legs=[
-    (d.EXTERNAL_PAYMENTS, d.DEBIT, 1000),
-    (d.PLATFORM_REVENUE, d.CREDIT, 100),
+    (d.EXTERNAL_PAYMENTS_MINOR, d.DEBIT, 1000),
+    (d.PLATFORM_REVENUE_MINOR, d.CREDIT, 100),
     (_SELLER_PAYABLE, d.CREDIT, 900),
 ], reference_id="ctx_ok", entry_type="compute_capture")
 s.commit()
@@ -90,8 +90,8 @@ ok("a correctly-directed capture reconciles (no problems)", problems == [])
 # zero-sum checks pass; only a sign-aware reconciliation can catch it.
 _mk_tx("ctx_bad", 1000)
 d.post(s, "compute_transaction", legs=[
-    (d.EXTERNAL_PAYMENTS, d.CREDIT, 1000),          # <-- wrong direction, same magnitude
-    (d.PLATFORM_REVENUE, d.DEBIT, 100),
+    (d.EXTERNAL_PAYMENTS_MINOR, d.CREDIT, 1000),          # <-- wrong direction, same magnitude
+    (d.PLATFORM_REVENUE_MINOR, d.DEBIT, 100),
     (_SELLER_PAYABLE, d.DEBIT, 900),
 ], reference_id="ctx_bad", entry_type="compute_capture")
 s.commit()

@@ -125,6 +125,25 @@ pip install -r requirements.txt
 uvicorn main:app --reload     # http://localhost:8000/docs
 ```
 
+### CLI (the `petabyte` client)
+
+The buyer client is a separate, dependency-light pip package (only `httpx`; the model hub
+is bundled) — installing it never drags in the server:
+
+```bash
+pip install petabyte-client                    # installs the `petabyte` command
+export PETABYTE_API_URL=https://petabyte.market
+petabyte register -u alice -p secret && petabyte login -u alice -p secret
+petabyte specs                                  # cheapest-first GPU table
+petabyte launch ollama --hours 2                # one-click app on the cheapest verified GPU
+petabyte run job.ipynb --gpu H100 --hours 1     # run a notebook/.py on a rented GPU
+petabyte pull Qwen/Qwen3-8B                      # verified, resumable model download
+```
+
+The client wheel is **MIT-licensed** (`lumaris_api/cli/LICENSE`); the server and the rest of
+this repository remain under the proprietary root `LICENSE`. See
+[`lumaris_api/cli/README.md`](lumaris_api/cli/README.md) and [`docs/models.md`](docs/models.md).
+
 ---
 
 ## API overview

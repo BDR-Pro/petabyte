@@ -137,8 +137,9 @@ systemctl enable --now petabyte-agent
 
 # Auto-update: OFF by default. The current update channel is NOT cryptographically
 # signed (see update.sh), so a compromised server or GitHub account could push code
-# that runs on this machine. Until release signing is in place, updating is opt-in:
-# set PETABYTE_AUTO_UPDATE=true to enable the 6-hourly timer.
+# that runs on this machine. The update channel is Ed25519-signed and fail-closed
+# (update.sh refuses unsigned bundles); auto-update stays opt-in as a conservative
+# default: set PETABYTE_AUTO_UPDATE=true to enable the 6-hourly timer.
 if [ "${PETABYTE_AUTO_UPDATE:-false}" = "true" ] && [ -f "$APP/petabyte-agent-update.service" ]; then
   chmod +x "$APP/update.sh" 2>/dev/null || true
   cp "$APP/petabyte-agent-update.service" /etc/systemd/system/petabyte-agent-update.service
@@ -146,9 +147,9 @@ if [ "${PETABYTE_AUTO_UPDATE:-false}" = "true" ] && [ -f "$APP/petabyte-agent-up
   systemctl daemon-reload
   systemctl enable --now petabyte-agent-update.timer
   echo "==> auto-update ENABLED (petabyte-agent-update.timer, every 6h)."
-  echo "    WARNING: the update channel is not signed yet — see update.sh."
+  echo "    Updates are signature-verified against a pinned key (see update.sh)."
 else
-  echo "==> auto-update disabled (unsigned channel). Update manually with: petabyte update"
+  echo "==> auto-update disabled (opt-in). Update manually with: petabyte update"
   echo "    or re-run the installer with PETABYTE_AUTO_UPDATE=true to opt in."
 fi
 

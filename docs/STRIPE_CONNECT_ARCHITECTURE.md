@@ -1,9 +1,14 @@
 # Stripe Connect Architecture
 
 How Petabyte moves money for a paid compute job. This is the authoritative real-money
-path (test mode first); the older internal-wallet path (`/deposit` + HMAC webhook)
-remains only as the credential-free sandbox/offline-demo mode and is selected by
-config — the two never run as competing systems.
+path for **per-job compute settlement** (test mode first). It is separate from the
+internal **wallet** path (`/deposit`, and the HMAC-verified `POST /webhooks/payment`),
+which funds a user's wallet balance. `/deposit` is gated by `PAYMENTS_MODE` (it mints
+test credits in `sandbox` and returns 403 in `live`), but the HMAC credit webhook is
+**always mounted** — it is not config-gated to a demo mode. The two paths never touch
+the same ledger accounts: the wallet path posts to the **dollar-scale** accounts and
+the Connect compute path posts to the **minor-unit** accounts (see below), so their
+balances are never summed together.
 
 ## Components
 
@@ -42,19 +47,27 @@ The Stripe processing fee is borne by the **platform** and tracked **separately*
 
 ## Ledger accounts (double-entry, reused)
 
+**Unit scales are deliberately separate.** The Connect compute path posts in **integer
+minor units** to `*:minor` accounts; the dollar-scale wallet/booking accounts of the
+same base name are a *different* account and are never summed with them (see
+`db.py`: `EXTERNAL_PAYMENTS`/`PLATFORM_REVENUE` are dollars,
+`EXTERNAL_PAYMENTS_MINOR`/`PLATFORM_REVENUE_MINOR` are minor units;
+`stripe_connect.py` imports the `*_MINOR` ones aliased to the short names, so every
+posting below is on the minor-unit accounts).
+
 | Account | Meaning |
 |---|---|
-| `external:payments` | The card / customer side. |
-| `platform_revenue` | Petabyte's commission. |
+| `external:payments:minor` | The card / customer side (minor units — Connect card clearing). |
+| `platform_revenue:minor` | Petabyte's compute commission (minor units). |
 | `seller_payable:{id}` | Owed to a seller after capture, before transfer. |
 | `external:stripe_transfers` | Money sent out to connected accounts. |
 | `stripe:fees` | Processing-fee cost to the platform. |
 
 Postings:
-- **Capture:** DEBIT `external:payments` (captured) → CREDIT `platform_revenue` (fee) + CREDIT `seller_payable` (net).
-- **Transfer:** DEBIT `seller_payable` → CREDIT `external:stripe_transfers` (net).
-- **Refund:** CREDIT `external:payments` (refund) ← DEBIT `platform_revenue` (+ DEBIT `seller_payable` for the seller's share).
-- **Transfer reversal:** DEBIT `external:stripe_transfers` → CREDIT `seller_payable` (clawback).
+- **Capture:** DEBIT `external:payments:minor` (captured) → CREDIT `platform_revenue:minor` (fee) + CREDIT `seller_payable:{id}` (net). **Plus a separate balanced entry** DEBIT `stripe:fees` → CREDIT `external:payments:minor` (estimated card-processing fee the platform bears).
+- **Transfer:** DEBIT `seller_payable:{id}` → CREDIT `external:stripe_transfers` (net).
+- **Refund:** CREDIT `external:payments:minor` (refund) ← DEBIT `platform_revenue:minor` (+ DEBIT `seller_payable:{id}` for the seller's share).
+- **Transfer reversal:** DEBIT `external:stripe_transfers` → CREDIT `seller_payable:{id}` (clawback).
 
 ## End-to-end sequence (successful paid job)
 

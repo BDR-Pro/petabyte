@@ -246,7 +246,7 @@ def run_to_metered(seconds):
     c.post(f"/admin/payments/{tid}/meter", headers=admin, json={"actual_seconds": seconds})
     return tid
 
-spec_c = make_online_spec("seller_a", price=2.50, units=10)
+spec_c = make_online_spec("seller_a", price=2.50, units=20)
 tid = run_to_metered(1800)      # 30 min -> 125 minor
 cap = c.post(f"/admin/payments/{tid}/capture", headers=admin).json()
 ok("partial capture bills ACTUAL metered usage (125), not the 300 authorization",
@@ -263,7 +263,7 @@ c.post(f"/admin/payments/{tid}/capture", headers=admin)
 s = dbmod.SessionLocal()
 n_cap_entries = s.query(dbmod.LedgerEntry).filter(
     dbmod.LedgerEntry.entry_type == "compute_capture",
-    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS).count()
+    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS_MINOR).count()
 ok("duplicate capture is a no-op (amount unchanged, one capture per tx across suite)",
    GW.payment_intents[pid]["amount_received"] == before)
 s.close()
@@ -287,7 +287,7 @@ def _fee_legs(direction, account):
                     dbmod.LedgerEntry.account == account,
                     dbmod.LedgerEntry.direction == direction).all())
 _dr = _fee_legs(dbmod.DEBIT, dbmod.acct_stripe_fees())
-_cr = _fee_legs(dbmod.CREDIT, dbmod.EXTERNAL_PAYMENTS)
+_cr = _fee_legs(dbmod.CREDIT, dbmod.EXTERNAL_PAYMENTS_MINOR)
 ok("processing fee posted as ONE balanced stripe:fees entry (idempotent across the dup capture)",
    len(_dr) == 1 and len(_cr) == 1 and int(_dr[0].amount) == _exp_fee and int(_cr[0].amount) == _exp_fee)
 ok("net contribution margin is negative on a small job (commission 12 - fee 33)",
@@ -429,6 +429,22 @@ tid_pr = run_to_metered(3600)
 c.post(f"/admin/payments/{tid_pr}/capture", headers=admin)
 pr = c.post(f"/admin/payments/{tid_pr}/refund", headers=admin, json={"amount": 100, "reason": "partial"}).json()
 ok("partial refund refunds only the requested amount", pr["refunded_amount"] == 100 and pr["status"] != "REFUNDED")
+# H3: a PARTIAL refund of a not-yet-paid obligation must PROPORTIONALLY REDUCE the obligation's
+# net, so the biweekly batch pays the post-refund amount — not the full pre-refund net (which
+# used to let the platform eat the refunded seller share on every partial-refunded job).
+_spr = dbmod.SessionLocal()
+_txpr = sc.get_tx_by_public_id(_spr, tid_pr)
+_oblpr = _spr.query(dbmod.PayoutObligation).filter(
+    dbmod.PayoutObligation.compute_tx_id == _txpr.id).first()
+# Pin the EXACT post-refund net (pricing.refund_split's proportional clawback), so a
+# wrong-but-smaller reduction (e.g. straight to 0) can't pass a mere range check.
+_expected_net = _txpr.seller_net_amount - (_txpr.seller_net_amount * _txpr.refunded_amount
+                                           // _txpr.captured_amount)
+ok("partial refund REDUCES the unpaid obligation net (batch won't overpay) [H3]",
+   _oblpr is not None and _oblpr.state in ("accrued", "available")
+   and _oblpr.net_amount_minor == _expected_net
+   and _expected_net < _txpr.seller_net_amount)
+_spr.close()
 
 # TWO partial refunds that CUMULATIVELY equal the capture must REVERSE the unpaid obligation
 # and reconcile. Regression: the reversal used to gate on a single refund's `amount`, so two
@@ -492,6 +508,64 @@ ok("full refund of an UNPAID obligation reverses it (never paid out) + reconcile
    _oup.state == "reversed" and _txup.reconciliation_status == "reconciled")
 _s.close()
 
+# ---- M2: an OUT-OF-BAND refund (charge.refunded webhook — e.g. issued directly in the Stripe
+# Dashboard, or Stripe's own auto-refund) must post the SAME balanced ledger + seller clawback
+# as an admin refund. Previously the webhook only bumped refunded_amount, so the double-entry
+# ledger silently unbalanced and the seller was still due their full share on the batch run. ----
+# (a) BEFORE transfer: the unpaid obligation must be reversed and the ledger must balance.
+tid_oob = run_to_metered(3600)
+c.post(f"/admin/payments/{tid_oob}/capture", headers=admin)
+_s = dbmod.SessionLocal()
+_pi_oob = sc.get_tx_by_public_id(_s, tid_oob).stripe_payment_intent_id
+_s.close()
+_s = dbmod.SessionLocal()
+sc.process_webhook_event(_s, {"id": "evt_oob_full", "type": "charge.refunded",
+    "data": {"object": {"payment_intent": _pi_oob, "amount_refunded": 250}}})
+_s.close()
+_s = dbmod.SessionLocal()
+_txoob = sc.get_tx_by_public_id(_s, tid_oob)
+_ooblegs = (_s.query(dbmod.LedgerEntry).join(dbmod.LedgerTx, dbmod.LedgerEntry.tx_id == dbmod.LedgerTx.id)
+            .filter(dbmod.LedgerTx.reference_id == tid_oob,
+                    dbmod.LedgerEntry.entry_type == "compute_refund",
+                    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS_MINOR,
+                    dbmod.LedgerEntry.direction == dbmod.CREDIT).all())
+_oob_obl = _s.query(dbmod.PayoutObligation).filter(
+    dbmod.PayoutObligation.compute_tx_id == _txoob.id).first()
+_oob_bal, _ = dbmod.ledger_is_balanced(_s)
+_s.close()
+ok("M2: out-of-band charge.refunded records the full refund + drives tx to REFUNDED",
+   _txoob.refunded_amount == 250 and _txoob.status == "REFUNDED")
+ok("M2: out-of-band refund POSTS the ledger legs (EXTERNAL_PAYMENTS credit) — not just a counter",
+   len(_ooblegs) == 1 and int(_ooblegs[0].amount) == 250)
+ok("M2: out-of-band refund reverses the unpaid seller obligation (seller not overpaid)",
+   _oob_obl is not None and _oob_obl.state == "reversed")
+ok("M2: ledger stays balanced after the out-of-band refund", _oob_bal)
+# idempotent: replaying the SAME event id is a no-op (StripeWebhookEvent at-most-once).
+_s = dbmod.SessionLocal()
+_dup = sc.process_webhook_event(_s, {"id": "evt_oob_full", "type": "charge.refunded",
+    "data": {"object": {"payment_intent": _pi_oob, "amount_refunded": 250}}})
+_s.close()
+ok("M2: a duplicate charge.refunded event is a no-op (at-most-once)", _dup.get("duplicate") is True)
+
+# (b) AFTER transfer: the out-of-band refund must claw the seller net back via a transfer reversal.
+tid_oob2 = run_to_metered(3600)
+c.post(f"/admin/payments/{tid_oob2}/capture", headers=admin)
+c.post(f"/admin/payments/{tid_oob2}/transfer", headers=admin)
+_s = dbmod.SessionLocal()
+_pi_oob2 = sc.get_tx_by_public_id(_s, tid_oob2).stripe_payment_intent_id
+_s.close()
+_s = dbmod.SessionLocal()
+sc.process_webhook_event(_s, {"id": "evt_oob_xfer", "type": "charge.refunded",
+    "data": {"object": {"payment_intent": _pi_oob2, "amount_refunded": 250}}})
+_s.close()
+_s = dbmod.SessionLocal()
+_txoob2 = sc.get_tx_by_public_id(_s, tid_oob2)
+_oob2_bal, _ = dbmod.ledger_is_balanced(_s)
+_s.close()
+ok("M2: out-of-band refund AFTER transfer claws back the seller net via a reversal",
+   _txoob2.reversed_amount > 0 and _txoob2.refunded_amount == 250)
+ok("M2: ledger balanced after the out-of-band post-transfer clawback", _oob2_bal)
+
 # REGRESSION (defect B): a DUPLICATE identical partial refund must NOT double-count.
 # Previously refunded_amount went 100 -> 200 for a single Stripe refund.
 tid_dup = run_to_metered(3600)
@@ -504,7 +578,7 @@ _sdup = dbmod.SessionLocal()
 _txd = sc.get_tx_by_public_id(_sdup, tid_dup)
 _nref = _sdup.query(dbmod.LedgerEntry).filter(
     dbmod.LedgerEntry.entry_type == "compute_refund",
-    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS,
+    dbmod.LedgerEntry.account == dbmod.EXTERNAL_PAYMENTS_MINOR,
     dbmod.LedgerEntry.booking_id.is_(None)).count()
 _sdup.close()
 ok("duplicate refund posts the refund ledger leg only once",
@@ -626,12 +700,12 @@ bal, broken = dbmod.ledger_is_balanced(s)
 ok("ledger balances across the entire Stripe lifecycle", bal and not broken)
 # duplicate external reference (idempotency_key) is rejected by the ledger
 from sqlalchemy.exc import IntegrityError
-dbmod.post(s, "compute_transaction", legs=[(dbmod.EXTERNAL_PAYMENTS, dbmod.DEBIT, 10),
-           (dbmod.PLATFORM_REVENUE, dbmod.CREDIT, 10)], idempotency_key="dup-key-xyz")
+dbmod.post(s, "compute_transaction", legs=[(dbmod.EXTERNAL_PAYMENTS_MINOR, dbmod.DEBIT, 10),
+           (dbmod.PLATFORM_REVENUE_MINOR, dbmod.CREDIT, 10)], idempotency_key="dup-key-xyz")
 raised = False
 try:
-    dbmod.post(s, "compute_transaction", legs=[(dbmod.EXTERNAL_PAYMENTS, dbmod.DEBIT, 10),
-               (dbmod.PLATFORM_REVENUE, dbmod.CREDIT, 10)], idempotency_key="dup-key-xyz")
+    dbmod.post(s, "compute_transaction", legs=[(dbmod.EXTERNAL_PAYMENTS_MINOR, dbmod.DEBIT, 10),
+               (dbmod.PLATFORM_REVENUE_MINOR, dbmod.CREDIT, 10)], idempotency_key="dup-key-xyz")
     s.commit()
 except IntegrityError:
     raised = True; s.rollback()
@@ -687,7 +761,7 @@ def _legs_for(public_id, entry_type, account=None):
     if account:
         q = q.filter(dbmod.LedgerEntry.account == account)
     return q.count()
-n_cap_legs = _legs_for(tid_cc, "compute_capture", dbmod.EXTERNAL_PAYMENTS)
+n_cap_legs = _legs_for(tid_cc, "compute_capture", dbmod.EXTERNAL_PAYMENTS_MINOR)
 pi_cc = GW.payment_intents[_txcc.stripe_payment_intent_id]
 ok(f"concurrent capture charges once (captured={_txcc.captured_amount}, PI received={pi_cc['amount_received']})",
    _txcc.captured_amount == 250 and pi_cc["amount_received"] == 250)
@@ -928,6 +1002,112 @@ ok("finding B: ledger stays balanced despite telemetry raising throughout settle
    _balB and not _brokenB)
 
 
+# ============ H1: buyer runtime budget is WIRED into the job payload ============
+# The ORM has no Task->ComputeTransaction relationship, so the budget must be looked up by
+# task_id from the DB session — a regression guard that max_runtime_s is actually emitted (an
+# earlier attempt relied on task.compute_tx, which is always None -> budget silently dropped).
+import json as _json_h1
+_rtid = run_to_metered(3600)
+_rs = dbmod.SessionLocal()
+_rtx = sc.get_tx_by_public_id(_rs, _rtid)
+_rtask = _rs.query(dbmod.Task).filter(dbmod.Task.id == _rtx.task_id).first()
+_budget = main._job_runtime_budget_s(_rtask, _rs)
+import pricing as _pr_h1
+_expect = _pr_h1.authorized_seconds(_json_h1.loads(_rtx.pricing_snapshot), _rtx.authorization_amount)
+ok("H1 wiring: runtime budget is looked up by task_id from the DB (not a missing ORM rel)",
+   isinstance(_budget, int) and _budget > 0 and _budget == _expect)
+_rtask.task_type = "notebook"; _rtask.code = "print(1)"; _rs.add(_rtask); _rs.commit()
+_pl = main._build_job_payload(_rtask, _rs)
+ok("H1 wiring: the notebook job payload carries max_runtime_s (agent hard-kills at the budget)",
+   _pl.get("max_runtime_s") == _budget)
+_rs.close()
+
+
+# ============ STD-C: operator-gated strict buyer-container isolation ============
+# read-only rootfs / non-root are OPT-IN (AGENT_STRICT_ROOTFS / AGENT_CONTAINER_USER). Forcing them
+# universally would break arbitrary buyer images (s6-overlay servers, cache-writing model servers),
+# so the DEFAULT payload must carry NEITHER — and flipping the env must inject BOTH into the job.
+import os as _os_stdc
+class _StubTaskC:
+    id = 424242; task_type = "transcode"; template_params = "{}"; compute_tx = None
+    backup_enabled = False; backup_interval_s = 0; volume = None; latest_checkpoint_ref = None
+for _v in ("AGENT_STRICT_ROOTFS", "AGENT_CONTAINER_USER"):
+    _os_stdc.environ.pop(_v, None)
+ok("STD-C: strict isolation is OFF by default (empty kwargs)", main._strict_isolation_kw() == {})
+_pl_off = main._build_job_payload(_StubTaskC(), None)
+ok("STD-C: default transcode payload carries no read_only / run_as (image never silently broken)",
+   "read_only" not in _pl_off and "run_as" not in _pl_off)
+_os_stdc.environ["AGENT_STRICT_ROOTFS"] = "true"
+_os_stdc.environ["AGENT_CONTAINER_USER"] = "65534:65534"
+try:
+    _kw = main._strict_isolation_kw()
+    ok("STD-C: AGENT_STRICT_ROOTFS on -> read_only=True in the profile",
+       _kw.get("read_only") is True)
+    ok("STD-C: AGENT_CONTAINER_USER on -> run_as forwarded to the agent",
+       _kw.get("run_as") == "65534:65534")
+    _pl_on = main._build_job_payload(_StubTaskC(), None)
+    ok("STD-C: with the flags on, the transcode payload forwards read_only + run_as to the agent",
+       _pl_on.get("read_only") is True and _pl_on.get("run_as") == "65534:65534")
+finally:
+    for _v in ("AGENT_STRICT_ROOTFS", "AGENT_CONTAINER_USER"):
+        _os_stdc.environ.pop(_v, None)
+
+
+# ============ STD-E: ledger unit scales don't collide on shared accounts ============
+# The wallet/booking path posts Decimal DOLLARS; the Stripe-Connect compute path posts integer
+# MINOR units. They used to share external:payments / platform_revenue, so account_balance() summed
+# $10 (posts 10) with a $10 card capture (posts 1000) into a meaningless 1010. Now the minor path
+# lives on external:payments:minor / platform_revenue:minor, so each scale's balance is isolated.
+_se = dbmod.SessionLocal()
+_ext_d0 = dbmod.account_balance(_se, dbmod.EXTERNAL_PAYMENTS)         # dollar clearing account
+_ext_m0 = dbmod.account_balance(_se, dbmod.EXTERNAL_PAYMENTS_MINOR)   # minor clearing account
+# a $10.00 wallet-scale deposit (DEBIT external:payments by dollars) ...
+dbmod.post(_se, "deposit", legs=[(dbmod.EXTERNAL_PAYMENTS, dbmod.DEBIT, dbmod.D("10")),
+           (dbmod.acct_buyer(999999), dbmod.CREDIT, dbmod.D("10"))],
+           reference_id="stde_dollar_probe", entry_type="deposit")
+# ... and a 1000-minor (= $10.00) compute-capture-scale post (DEBIT external:payments:minor by cents)
+dbmod.post(_se, "compute_transaction",
+           legs=[(dbmod.EXTERNAL_PAYMENTS_MINOR, dbmod.DEBIT, 1000),
+                 (dbmod.acct_seller_payable(999999), dbmod.CREDIT, 1000)],
+           reference_id="stde_minor_probe", entry_type="compute_capture")
+_se.commit()
+ok("STD-E: a $10 wallet deposit moves the DOLLAR external:payments balance by exactly -10 (not -1010)",
+   dbmod.account_balance(_se, dbmod.EXTERNAL_PAYMENTS) - _ext_d0 == dbmod.D("-10"))
+ok("STD-E: a 1000-minor compute capture moves the MINOR external:payments balance by exactly -1000",
+   dbmod.account_balance(_se, dbmod.EXTERNAL_PAYMENTS_MINOR) - _ext_m0 == dbmod.D("-1000"))
+ok("STD-E: the dollar and minor accounts are DISTINCT keys (account_balance never sums cross-scale)",
+   dbmod.EXTERNAL_PAYMENTS != dbmod.EXTERNAL_PAYMENTS_MINOR
+   and dbmod.PLATFORM_REVENUE != dbmod.PLATFORM_REVENUE_MINOR)
+_se.close()
+
+
+# ============ M1: server-authoritative metering window (dispatch -> result) ============
+from datetime import datetime as _dtm1, timedelta as _tdm1, timezone as _tzm1
+class _StubTaskM1:
+    def __init__(self, created_at=None, assigned_at=None, completed_at=None):
+        self.created_at = created_at; self.assigned_at = assigned_at; self.completed_at = completed_at
+_bt = _dtm1(2026, 1, 1, tzinfo=_tzm1.utc)
+_m1 = _StubTaskM1(created_at=_bt, assigned_at=_bt + _tdm1(hours=1),
+                  completed_at=_bt + _tdm1(hours=1, seconds=120))
+ok("M1: billable seconds = dispatch->result (120s), NOT created->result (queue wait excluded)",
+   main._observed_seconds(_m1) == 120)
+_m1n = _StubTaskM1(created_at=_dtm1(2026, 1, 1), assigned_at=_dtm1(2026, 1, 1, 0, 0, 0),
+                   completed_at=_dtm1(2026, 1, 1, 0, 1, 30))
+ok("M1: naive timestamps are treated as UTC (90s window)", main._observed_seconds(_m1n) == 90)
+ok("M1: an un-dispatched task falls back conservatively to a >=1s window",
+   main._observed_seconds(_StubTaskM1(created_at=_bt)) >= 1)
+
+
+# ============ L1: /metrics/overview redacts real money volumes for non-admins ============
+_anon_econ = c.get("/metrics/overview?scope=real").json()["economics"]
+ok("L1: anonymous /metrics/overview real-scope redacts the money volumes",
+   _anon_econ.get("restricted") is True and _anon_econ["gmv"] is None
+   and _anon_econ["platform_revenue"] is None and _anon_econ["seller_payouts"] is None)
+_adm_econ = c.get("/metrics/overview?scope=real", headers=admin).json()["economics"]
+ok("L1: an admin sees the real money volumes (not restricted)",
+   not _adm_econ.get("restricted") and _adm_econ["gmv"] is not None)
+
+
 # ============ FINANCIAL-INTEGRITY HEARTBEAT (#286/#287) ============
 # The SQL invariant agrees with ledger_is_balanced on the healthy ledger this suite built,
 # AND detects a deliberately-injected imbalance. Runs LAST — it corrupts the ledger on
@@ -941,7 +1121,7 @@ ok("payout_backlog: non-negative unbatched count + oldest age",
    _pb["unbatched"] >= 0 and _pb["oldest_age_seconds"] >= 0)
 # Inject a single unbalanced leg into an existing tx -> that tx no longer balances.
 _anytx = _fs.query(dbmod.LedgerTx).first()
-_fs.add(dbmod.LedgerEntry(tx_id=_anytx.id, account=dbmod.PLATFORM_REVENUE,
+_fs.add(dbmod.LedgerEntry(tx_id=_anytx.id, account=dbmod.PLATFORM_REVENUE_MINOR,
                           direction=dbmod.CREDIT, amount=1, entry_type="imbalance_probe"))
 _fs.commit()
 _bad = dbmod.financial_integrity(_fs)

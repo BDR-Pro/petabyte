@@ -14,48 +14,59 @@ Legend: ✅ addressed in this branch · ⚠️ documented, not yet done.
 - ✅ Broken `/gpu/{id}` links; misleading "fully built" investor copy corrected.
 
 ## Must fix before pilots
-- ⚠️ **Payout worker scheduler.** `tools/payout_worker.py` exists but no systemd
-  timer/cron installs it, so queued withdrawals never send. Ship
-  `lumaris-payout.service` + `.timer` and install in `deploy.sh`. Payouts run in
-  sandbox (`PAYOUT_STUB=true`) by default today.
-- ⚠️ **Deploy safety.** `deploy-server.yml` auto-deploys prod on every push to
-  `main` with no test gate, concurrency guard, or post-deploy health check; the SSH
-  key is written before `chmod` and uses `StrictHostKeyChecking=no`. Gate on tests,
-  add `concurrency:` and a `/healthz` assertion, harden key handling.
-- ⚠️ **TLS by default.** Fresh deploys serve plaintext HTTP until a human runs
-  certbot; JWTs travel in cleartext in that window. Run certbot inside `deploy.sh`
-  when a domain is supplied and ship a 443 template.
-- ⚠️ **Alembic baseline.** Migrations are stale (3 `add_column`, zero `create_table`);
-  `alembic upgrade head` from a clean DB fails. Schema truth is `create_all` +
-  `_ensure_columns` (a CI job proves it builds from empty). Autogenerate a squashed
-  baseline, `alembic stamp` prod, and make CI diff `upgrade head` against `create_all`.
-- ⚠️ **`/login` app-level rate limit.** Brute-force protection on `/login` is
-  nginx-only; add it to the app failure-budget limiter as defence in depth.
+- ✅ **Payout worker scheduler.** Shipped `deploy/lumaris-payout.service` (oneshot,
+  hardened like the reaper) + `deploy/lumaris-payout.timer` (every 5 min,
+  `Persistent=true`). `deploy.sh` installs and `enable --now`s the timer on fresh boxes,
+  and `update.sh` syncs the units + arms the timer on already-provisioned hosts, so queued
+  withdrawals now send. Safe by default: `PAYOUT_STUB=true` simulates until a real provider
+  is configured.
+- ✅ **Deploy safety.** `deploy-server.yml` now gates prod on the FULL test suite —
+  `deploy` `needs: [tests, configuration-preflight]`, where `tests` reuses `tests.yml`
+  via `workflow_call` (the money/security/config/schema/Postgres jobs are hard blockers;
+  the flake-prone P1 browser-E2E job is `continue-on-error`, independently covered by
+  `browser-e2e.yml`). Concurrency guard (`concurrency: deploy-server`), pinned host key
+  (`StrictHostKeyChecking=yes` + `known_hosts`), post-deploy `/healthz` gate, and env
+  rollback-on-failure were already in place.
+- ✅ **TLS by default.** `deploy.sh` now issues a Let's Encrypt cert automatically the
+  moment the domain resolves to the box (HTTP-01 needs that): it sets the real
+  `server_name`, runs `certbot --nginx … --redirect`, and arms `certbot.timer` for
+  renewal. If DNS isn't pointed here yet it skips without failing the deploy and prints the
+  one manual command — so a fresh box is HTTPS the moment DNS is ready, never silently
+  plaintext once it is.
+- ✅ **Alembic baseline.** A squashed baseline now builds the schema from a clean DB, and
+  a CI `migration` job runs `alembic upgrade head` (and downgrade) on real Postgres.
+- ✅ **`/login` app-level rate limit.** `login()` enforces an app-level
+  per-(IP, username) failure budget (`LOGIN_MAX_FAILS`/`LOGIN_WINDOW_S`, Redis-backed
+  with in-proc fallback → 429) in addition to the nginx zone.
 
 ## Must fix before handling real money
 - ⚠️ **KYC/AML/sanctions.** `screen()` now fails closed in live mode, but no real
   provider (Chainalysis/TRM) or KYC (Persona/Sumsub) is integrated. Legal + compliance
   review of the payout and any idle-mining revenue flow is required.
-- ⚠️ **Live payment provider review.** Stripe-in and provider payouts are written as
-  real adapters but unexercised; swap the generic webhook check for
-  `stripe.Webhook.construct_event` and security-review each provider relationship
-  (`docs/stub.md` #4, #5).
+- ⚠️ **Live payment provider review.** The real Stripe Connect webhook already verifies
+  via `stripe.Webhook.construct_event` (`stripe_gateway.construct_event`); what remains
+  is live-mode exercise and a security review of each provider relationship
+  (`docs/stub.md` #4, #5). The legacy internal-wallet webhook still uses the generic HMAC.
 - ⚠️ **Secret handling in deploy.** `deploy.sh` passes env via `env $(… | xargs)`,
   exposing secrets in the process table; switch to `EnvironmentFile`/`set -a`.
 - ⚠️ **Rotate historically committed secrets** before any real deploy (`SECURITY.md`).
 
 ## Must fix before executing untrusted customer workloads (at scale)
-- ⚠️ **Signed agent updates.** The auto-update channel is not cryptographically
-  signed. It is now opt-in, the unit is hardened, and `update.sh` has a pinned-key
-  verify hook — but the release-signing pipeline (Ed25519 for the tarball,
-  Authenticode for the `.exe`) must be built before fleet-wide auto-update is enabled.
-- ⚠️ **Sandbox-escape verification.** Container isolation flags are coded (strongest
-  on the notebook path); escape resistance must be tested on a real Docker+GPU host
-  (`docs/RLtest.md` §17). Template/render/transcode paths need cap-drop/read-only
-  parity with the notebook path.
-- ⚠️ **Desktop agent parity.** `desktop-app/` is a drifted fork of `lumaris_agent/`;
-  the shipped Windows copy lost isolation flags and binds containers to all
-  interfaces. Extract a shared core package so isolation logic lives in one place.
+- ✅ **Signed agent updates.** The update channel is Ed25519-signed and fail-closed:
+  `update.sh` verifies each bundle against a pinned key (no unsigned fallback), and the
+  desktop `updater.py` verifies a signed manifest + SHA-256 with anti-replay. Producer
+  side is `scripts/sign_release.py` + `release-desktop.yml`/`release-keygen.yml`
+  (manifest-signature model rather than raw Authenticode). Auto-update stays opt-in.
+- ⚠️ **Sandbox-escape verification.** Every buyer container gets cap-drop parity via the
+  shared `_isolation_flags` (cap-drop ALL, no-new-privileges, PID/mem/CPU caps, gVisor
+  when installed); read-only rootfs + forced UID are opt-in
+  (`AGENT_STRICT_ROOTFS`/`AGENT_CONTAINER_USER`, the notebook path hard-codes read-only).
+  Remaining: make strict read-only the default, and test escape resistance on a real
+  Docker+GPU host (`docs/RLtest.md` §26).
+- ⚠️ **Desktop agent parity.** The shipped `desktop-app/` copy now applies the isolation
+  flags (`--cap-drop ALL`, no-new-privileges, opt-in read-only) and binds containers to
+  `127.0.0.1` only. Remaining: extract a shared core package so the isolation logic lives
+  in one place instead of a mirrored fork of `lumaris_agent/`.
 - ⚠️ **Micro-VM isolation.** Firecracker/QEMU + GPU passthrough is roadmap; the
   placeholder backends now `raise NotImplementedError` (they previously returned fake
   "running" endpoints).

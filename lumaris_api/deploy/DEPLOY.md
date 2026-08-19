@@ -14,18 +14,21 @@ bash deploy/deploy.sh
 ```
 That installs Python, Postgres, nginx; creates the `lumaris` service user and DB;
 generates secrets into `/etc/lumaris/lumaris.env` (chmod 600); creates tables;
-and starts two systemd services behind nginx on port 80.
+starts three systemd units behind nginx; and issues a TLS cert automatically when
+the domain's DNS already points at the box (see HTTPS below).
 
 ## What runs
-| Service | Role |
+| Unit | Role |
 |---|---|
 | `lumaris-api` | gunicorn + uvicorn workers (`WEB_CONCURRENCY`), bound to 127.0.0.1:8000 |
 | `lumaris-reaper` | standalone heartbeat reaper (so it runs once, not per worker) |
-| `nginx` | reverse proxy :80 -> :8000 |
+| `lumaris-payout.timer` | fires `tools/payout_worker.py` every 5 min to drain queued seller withdrawals (safe/`PAYOUT_STUB=true` by default) |
+| `nginx` | reverse proxy → :8000 (HTTPS once certbot runs) |
 | `postgresql` | database |
 
 > The in-process reaper is disabled via `REAPER_DISABLED=true`; the dedicated
-> `lumaris-reaper` service owns reaping. Don't enable both.
+> `lumaris-reaper` service owns reaping. Don't enable both. The payout timer is
+> installed and enabled on every deploy — without it, queued withdrawals never send.
 
 ## Verify
 ```bash
@@ -35,27 +38,39 @@ curl -s http://localhost/readyz      # {"status":"ready"}  (DB reachable)
 journalctl -u lumaris-api -f         # live logs
 ```
 
-## HTTPS
+## HTTPS (automatic)
+TLS is issued at deploy time. Set the domain, point its A record at the box, and
+re-run `deploy.sh`:
 ```bash
-# point an A record (e.g. yourdomain.com) at the droplet, then:
-sed -i 's/server_name _;/server_name yourdomain.com;/' /etc/nginx/sites-available/lumaris
-systemctl reload nginx
-certbot --nginx -d yourdomain.com
+export DEPLOY_DOMAIN=yourdomain.com          # or set BASE_DOMAIN in lumaris.env
+export CERTBOT_EMAIL=you@yourdomain.com       # optional expiry-notice account
+bash deploy/deploy.sh
+```
+Once the domain resolves to this host, `deploy.sh` runs
+`certbot --nginx -d <domain> --redirect` and arms `certbot.timer` for renewal. If
+DNS wasn't ready, it stays on HTTP and prints the one-liner to run later:
+```bash
+sudo certbot --nginx -d yourdomain.com --redirect -m you@yourdomain.com
 ```
 
 ## Updating after a code change
 ```bash
 scp -r lumaris_bundle root@DROPLET_IP:/root/lumaris
-ssh root@DROPLET_IP 'cd /root/lumaris && bash deploy/deploy.sh && systemctl restart lumaris-api lumaris-reaper'
+ssh root@DROPLET_IP 'cd /root/lumaris && bash deploy/update.sh'
 ```
-Re-running `deploy.sh` is safe: it preserves existing secrets and the DB.
+`update.sh` rsyncs the app, syncs the systemd units (api, reaper, payout timer),
+and runs `alembic upgrade head` automatically when revisions are present.
+Re-running `deploy.sh` is also safe: it preserves existing secrets and the DB.
 
 ## Schema migrations (Postgres)
-First deploy creates tables via `init_db()`. For later schema changes use Alembic:
+The schema applies automatically: first deploy creates tables via `init_db()`, and
+`update.sh` runs `alembic upgrade head` on redeploys. There is a squashed baseline
+(`alembic/versions/0001_baseline_schema.py`) proven up/down on Postgres in CI. Adopt
+Alembic on a bootstrap-built DB with a one-time stamp — do **not** autogenerate on a
+server (author migrations in a dev checkout; see `docs/MIGRATIONS.md`):
 ```bash
 cd /opt/lumaris
-sudo -u lumaris .venv/bin/alembic revision --autogenerate -m "change"
-sudo -u lumaris .venv/bin/alembic upgrade head
+sudo -u lumaris .venv/bin/alembic stamp head
 ```
 
 ## WireGuard (when you wire up real VPN)

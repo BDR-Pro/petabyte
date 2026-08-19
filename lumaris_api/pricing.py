@@ -175,6 +175,23 @@ def estimate(snapshot: dict, estimated_seconds: int) -> dict:
     }
 
 
+def authorized_seconds(snapshot: dict, authorization_amount: int) -> int:
+    """The MAX seconds the buyer's authorization can pay for at the snapshot price — i.e. the
+    job's RUNTIME BUDGET. This ties allowed runtime to the money held, so a buyer can't size a
+    tiny authorization (e.g. estimated_seconds=1) and then consume hours of the seller's GPU:
+    both the charge (settle clamps to this) and the runtime (the agent kills at max_runtime_s)
+    are bounded by what was authorized. Capped at the snapshot's max_duration_s; floored at 1s.
+    Falls back to max_duration_s when the price is unknown (never a smaller-than-intended cap)."""
+    pph = int(snapshot.get("price_per_hour_minor") or 0)
+    maxd = int(snapshot.get("max_duration_s") or 0)
+    if pph <= 0:
+        return maxd or 1
+    secs = (int(authorization_amount) * 3600) // pph
+    if maxd:
+        secs = min(secs, maxd)
+    return max(1, secs)
+
+
 def settle(snapshot: dict, actual_seconds: int, authorization_amount: int) -> dict:
     """Compute the FINAL, capped amounts from the immutable snapshot and the trusted
     metered duration. Returns integer minor units:
@@ -186,7 +203,10 @@ def settle(snapshot: dict, actual_seconds: int, authorization_amount: int) -> di
       seller_net_amount      compute - platform fee  (what the Transfer sends)
     Invariant: capture_amount == platform_fee_amount + seller_net_amount.
     """
-    secs = max(0, min(int(actual_seconds), int(snapshot["max_duration_s"])))
+    # Clamp metered time to BOTH the platform max AND the buyer's authorized runtime budget, so
+    # the settled charge can never reflect more compute than the authorization covers (audit H1).
+    secs = max(0, min(int(actual_seconds), int(snapshot["max_duration_s"]),
+                      authorized_seconds(snapshot, authorization_amount)))
     compute = _compute_minor(snapshot["price_per_hour_minor"], secs)
     if secs > 0:
         compute = max(compute, int(snapshot["min_charge_minor"]))
@@ -232,7 +252,7 @@ def estimate_processing_fee_minor(amount_minor: int, currency: str = "usd") -> i
     # Clamp misconfiguration: bps in [0, 10000] (0–100%), fixed non-negative. Then cap the whole
     # estimate at the captured amount — a processing fee can never exceed the charge, and letting
     # it (e.g. STRIPE_FEE_BPS=20000) would post a fee credit larger than the payment and corrupt
-    # the EXTERNAL_PAYMENTS clearing balance.
+    # the external:payments:minor clearing balance (STD-E: the Stripe path's minor-unit account).
     bps = min(10000, max(0, _env_int("STRIPE_FEE_BPS", 290)))
     fixed = max(0, _env_int("STRIPE_FEE_FIXED_MINOR", 30))
     return min(amt, (amt * bps) // 10000 + fixed)

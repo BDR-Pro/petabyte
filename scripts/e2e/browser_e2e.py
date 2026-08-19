@@ -144,15 +144,27 @@ def _launch(p):
         return p.chromium.launch(executable_path=exe, args=["--no-sandbox"])
 
 
+def _browser_login(page, username):
+    """Sign the BROWSER in through the real POST /login, so the server issues its own
+    HttpOnly pb_session cookie + SIGNED pb_csrf cookie. enforce_csrf verifies the HMAC on
+    the CSRF token, so a fabricated cookie value 403s every write — the only faithful way
+    to authenticate the page is the same login the app uses. context.request shares the
+    page's cookie jar, so the Set-Cookie pair lands in the browser like a form login."""
+    page.context.clear_cookies()
+    r = page.context.request.post(B + "/login", form={"username": username, "password": PW})
+    if r.status != 200:
+        raise RuntimeError(f"browser /login failed for {username}: HTTP {r.status}")
+
+
 def _run_browser(c, buyer_t, seller_t, pub):
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         browser = _launch(p)
         try:
             page = browser.new_page()
-            # Authenticate the browser exactly like the app does: JWT in localStorage.
-            page.goto(B + "/")
-            page.evaluate("t => localStorage.setItem('pb_token', t)", buyer_t)
+            # Authenticate exactly like the app does: a real /login sets the HttpOnly
+            # pb_session cookie + the SIGNED pb_csrf cookie that enforce_csrf validates.
+            _browser_login(page, "buyer1")
 
             page.goto(B + "/buy/" + pub)
             page.wait_for_selector("#buy_pay", timeout=20000)
@@ -184,9 +196,9 @@ def _run_browser(c, buyer_t, seller_t, pub):
             ok("buyer was charged a real, non-zero amount",
                (pv.get("captured_amount") or 0) > 0)
 
-            # Seller side of the journey: earnings/payout state, in the browser.
-            page.goto(B + "/")
-            page.evaluate("t => localStorage.setItem('pb_token', t)", seller_t)
+            # Seller side of the journey: earnings/payout state, in the browser. Swap to the
+            # seller with a real login (cookie auth, not localStorage).
+            _browser_login(page, "seller1")
             page.goto(B + "/seller/payouts")
             page.wait_for_selector("#earn_rows", timeout=20000)
             page.wait_for_function(

@@ -101,7 +101,11 @@ def main():
         # ---- help / argparse ----------------------------------------------
         code, so, se = run("--help")
         ok("--help exits 0", code == 0, str(code))
-        ok("--help lists the commands", all(w in so for w in ("register", "specs", "run", "wallet")))
+        ok("--help lists the commands",
+           all(w in so for w in ("register", "specs", "run", "launch", "wallet")))
+        code, so, se = run("launch", "--help")
+        ok("launch --help documents the one-click template command (petabyte launch <template>)",
+           code == 0 and "template" in so and "--hours" in so)
 
         code, so, se = run("deposit", "notanumber")
         ok("invalid argument exits 2 (argparse)", code == 2, str(code))

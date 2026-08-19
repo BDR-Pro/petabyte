@@ -28,6 +28,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 
 import db as dbmod
@@ -197,6 +198,178 @@ def verify_backup(db, backup_id: int) -> dict:
     return {"ok": bool(actual == row.sha256 and decompresses), "backup_id": backup_id,
             "expected_sha256": row.sha256, "actual_sha256": actual,
             "size_bytes": len(blob), "decompresses": decompresses}
+
+
+def _rpo_seconds() -> int:
+    """Recovery Point Objective: the maximum acceptable age of the newest successful backup.
+    Default 7200s (2h) — 2× the documented hourly backup cadence. Alert/monitoring should fire
+    when the last-backup age exceeds this."""
+    try:
+        return max(1, int(os.getenv("BACKUP_RPO_SECONDS", "7200")))
+    except (TypeError, ValueError):
+        return 7200
+
+
+def backup_freshness(db, *, rpo_seconds: int = None) -> dict:
+    """Is the newest successful backup within the RPO? Returns {fresh, age_seconds, rpo_seconds,
+    reason}. `fresh=False` (with reason) means monitoring/CI should alert — either no backup has
+    ever succeeded, or the newest is older than the RPO."""
+    rpo = rpo_seconds if rpo_seconds is not None else _rpo_seconds()
+    st = backup_status(db)
+    age = st.get("last_backup_age_seconds")
+    if age is None:
+        return {"fresh": False, "age_seconds": None, "rpo_seconds": rpo,
+                "reason": "no successful backup yet"}
+    fresh = age <= rpo
+    return {"fresh": bool(fresh), "age_seconds": age, "rpo_seconds": rpo,
+            "reason": ("ok" if fresh else f"last successful backup is {int(age)}s old, exceeds RPO {rpo}s")}
+
+
+# ── restore + disaster-recovery drill ──────────────────────────────────────────────────────
+# A backup you have never restored is not a backup. These turn the documented manual restore into
+# a *programmatic, tested* one, and a DRILL that proves recovery end to end: dump -> store ->
+# restore into a FRESH scratch DB -> verify the money ledger still balances and row counts match.
+
+def _fetch_backup_sql(db, backup_id: int = None) -> tuple[str, "dbmod.DatabaseBackup"]:
+    """Download the target (or newest successful) backup, verify its SHA-256, and return
+    (decompressed_sql_text, row). Refuses to restore an object whose hash doesn't match the
+    recorded integrity hash."""
+    B = dbmod.DatabaseBackup
+    q = db.query(B).filter(B.status == "ok", B.s3_key.isnot(None))
+    row = (q.filter(B.id == backup_id).first() if backup_id is not None
+           else q.order_by(B.id.desc()).first())
+    if not row:
+        raise RuntimeError("no successful backup available to restore")
+    blob = utils.s3_get_bytes(row.s3_key)
+    if hashlib.sha256(blob).hexdigest() != row.sha256:
+        raise RuntimeError(f"backup #{row.id} FAILED integrity check (sha256 mismatch) — refusing to restore")
+    return gzip.decompress(blob).decode("utf-8", "replace"), row
+
+
+def _restore_sqlite(target_path: str, sql_text: str) -> None:
+    import sqlite3
+    if os.path.exists(target_path):
+        os.remove(target_path)          # always restore into a FRESH file
+    con = sqlite3.connect(target_path)
+    try:
+        con.executescript(sql_text)
+        con.commit()
+    finally:
+        con.close()
+
+
+def _restore_postgres(target_url, sql_text: str) -> None:
+    """Replay a plain-SQL pg_dump into an EXISTING (empty) target database via psql."""
+    psql = shutil.which("psql")
+    if not psql:
+        raise RuntimeError("psql not found on PATH — install postgresql-client to run a restore/drill")
+    uri = _pg_conn_uri(target_url)
+    timeout = int(os.getenv("BACKUP_DUMP_TIMEOUT_S", "1800"))
+    proc = subprocess.run([psql, "-v", "ON_ERROR_STOP=1", "--dbname=" + uri],
+                          input=sql_text.encode("utf-8"), capture_output=True, timeout=timeout)
+    if proc.returncode != 0:
+        err = (proc.stderr or b"").decode("utf-8", "replace")[-800:]
+        raise RuntimeError(f"psql restore failed (exit {proc.returncode}): {err}")
+
+
+def _prepare_pg_scratch():
+    """(Re)create a scratch database next to the source and return its SQLAlchemy URL string.
+    Honors RESTORE_DRILL_TARGET_URL if set (CI provides a dedicated scratch DB)."""
+    override = os.getenv("RESTORE_DRILL_TARGET_URL")
+    if override:
+        return override
+    src = dbmod.engine.url
+    scratch = (src.database or "petabyte") + "_restore_drill"
+    # URL.set() clones the URL object with the REAL password. Never round-trip through
+    # str(url)/make_url(str(url)): str() masks the password as '***', which psql then
+    # sends literally and auth fails on any password-protected server (as in CI).
+    admin = src.set(database="postgres")
+    psql = shutil.which("psql")
+    if not psql:
+        raise RuntimeError("psql not found on PATH — install postgresql-client or set RESTORE_DRILL_TARGET_URL")
+    admin_uri = _pg_conn_uri(admin)
+    for stmt in (f'DROP DATABASE IF EXISTS "{scratch}"', f'CREATE DATABASE "{scratch}"'):
+        p = subprocess.run([psql, "-v", "ON_ERROR_STOP=1", "--dbname=" + admin_uri, "-c", stmt],
+                           capture_output=True, timeout=60)
+        if p.returncode != 0:
+            raise RuntimeError(f"scratch DB setup failed: {(p.stderr or b'').decode('utf-8','replace')[:300]}")
+    return src.set(database=scratch).render_as_string(hide_password=False)
+
+
+def _restored_integrity(target_url_str: str) -> dict:
+    """Open the RESTORED database and prove it's usable: the money ledger still balances and the
+    key tables carry rows. Uses a throwaway engine bound to the scratch DB (never the live one)."""
+    import sqlalchemy as sa
+    from sqlalchemy.orm import sessionmaker
+    eng = sa.create_engine(target_url_str)
+    Session = sessionmaker(bind=eng, expire_on_commit=False)
+    s = Session()
+    try:
+        balanced, broken = dbmod.ledger_is_balanced(s)
+        counts = {
+            "users": s.query(dbmod.User).count(),
+            "ledger_entries": s.query(dbmod.LedgerEntry).count(),
+        }
+        return {"ledger_balanced": bool(balanced), "broken": list(broken or []), "row_counts": counts}
+    finally:
+        s.close()
+        eng.dispose()
+
+
+def run_restore_drill(db, *, keep: bool = False, target_url: str = None) -> dict:
+    """Disaster-recovery DRILL: take a fresh backup, restore it into a FRESH scratch database, and
+    prove the restore is usable — the money ledger balances and row counts match the source. This
+    is the tested half of DR (a backup that has never been restored is not recovery). Returns a
+    report; `ok=False` means the restore is broken and must be investigated before you'd trust it.
+
+    Non-destructive: never touches the live database — it only restores into a throwaway scratch
+    DB (temp SQLite file, or a `<db>_restore_drill` Postgres DB / RESTORE_DRILL_TARGET_URL)."""
+    # Read the comparison values BEFORE the dump: a commit landing between the dump and a
+    # LATER count read would make a perfectly good restore look broken (row-count mismatch).
+    # The reverse window (a commit between this read and the dump) still exists — the drill
+    # runs from CI/maintenance where the DB is quiesced — but this ordering never flags a
+    # GOOD backup taken after new rows arrived.
+    src_counts = {"users": db.query(dbmod.User).count(),
+                  "ledger_entries": db.query(dbmod.LedgerEntry).count()}
+    src_balanced, _ = dbmod.ledger_is_balanced(db)
+    summary = create_backup(db)                          # full chain: prove the STORED object restores
+    sql_text, row = _fetch_backup_sql(db, summary["backup_id"])
+    engine_name = row.engine
+
+    cleanup_path = None
+    if engine_name == "sqlite":
+        if target_url is None:
+            fd, path = tempfile.mkstemp(prefix="pb_restore_drill_", suffix=".db")
+            os.close(fd)
+            target_url = f"sqlite:///{path}"
+            cleanup_path = path
+        else:
+            cleanup_path = target_url.replace("sqlite:///", "")
+        _restore_sqlite(cleanup_path, sql_text)
+    elif engine_name == "postgresql":
+        target_url = target_url or _prepare_pg_scratch()
+        from sqlalchemy.engine import make_url
+        _restore_postgres(make_url(target_url), sql_text)
+    else:
+        raise RuntimeError(f"restore drill unsupported for engine: {engine_name}")
+
+    integ = _restored_integrity(target_url)
+    ok = bool(integ["ledger_balanced"]
+              and integ["row_counts"]["users"] == src_counts["users"]
+              and integ["row_counts"]["ledger_entries"] == src_counts["ledger_entries"])
+    report = {
+        "ok": ok, "engine": engine_name, "backup_id": row.id,
+        "source_ledger_balanced": bool(src_balanced),
+        "restored_ledger_balanced": integ["ledger_balanced"],
+        "source_counts": src_counts, "restored_counts": integ["row_counts"],
+        "restored_broken_tx": integ["broken"],
+    }
+    if cleanup_path and not keep and engine_name == "sqlite":
+        try:
+            os.remove(cleanup_path)
+        except OSError:
+            pass
+    return report
 
 
 def backup_status(db) -> dict:

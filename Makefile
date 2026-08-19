@@ -3,7 +3,7 @@
 
 API := lumaris_api
 
-.PHONY: help investor-demo demo-reset demo-seed demo-test populate-demo stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage email-test email-integration stripe-integration local-e2e browser-e2e test-browser-e2e cluster-demo test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real ui-test browser-ui
+.PHONY: help investor-demo demo-reset demo-seed demo-test populate-demo stripe-demo stripe-test reconcile audit-ledger payout-test payout-coverage priority-coverage email-test email-integration stripe-integration local-e2e browser-e2e test-browser-e2e cluster-demo test test-postgres install verify verify-series-a diligence-bundle smoke smoke-load smoke-gpu smoke-e2e-gpu e2e-preflight e2e-real ui-test browser-ui
 
 help:
 	@echo "Petabyte make targets:"
@@ -26,6 +26,7 @@ help:
 	@echo "  make audit-ledger    Ledger integrity + booking/payout cross-checks (read-only; fails on drift)"
 	@echo "  make payout-test     Run the provider-neutral global payout routing suite"
 	@echo "  make payout-coverage Print the honest seller-payout country coverage (fails <100)"
+	@echo "  make priority-coverage Per-capability report for the 20 priority GPU-supply markets"
 	@echo "  make test            Run smoke + adversarial + stripe + payout + gateway suites (SQLite)"
 	@echo "  make test-postgres   Run the full suite against SQLite AND PostgreSQL"
 	@echo "  make install         Install Python dependencies"
@@ -148,11 +149,18 @@ audit-ledger:
 # Provider-neutral payout routing/aggregation suite (offline, deterministic).
 payout-test:
 	cd $(API) && python3 payout_test.py
+	cd $(API) && python3 priority_country_test.py
 
 # Honest seller-payout country coverage. Exits non-zero while below the 100-country
 # target — coverage grows ONLY via real provider approvals + implemented rails.
 payout-coverage:
 	python3 scripts/verify_payout_country_coverage.py
+
+# Per-capability verification of the priority GPU-supply markets (the 20-country watch
+# list). A REPORT: prints each market's real rail/currency/status and exits 0 unless a
+# market resolves to a contradictory status. Coverage claims stay honest (0 active).
+priority-coverage:
+	python3 scripts/verify_payout_country_coverage.py --priority
 
 test:
 	cd $(API) && bash run_tests.sh

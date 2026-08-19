@@ -50,12 +50,23 @@ fi
 
 chown -R lumaris:lumaris "$APP"
 
-# refresh the systemd unit if it changed in this pull, then reload
-if ! cmp -s "$APP/deploy/lumaris-api.service" /etc/systemd/system/lumaris-api.service 2>/dev/null; then
-  echo "==> service unit changed — updating"
-  cp "$APP/deploy/lumaris-api.service" /etc/systemd/system/lumaris-api.service
-  systemctl daemon-reload
-fi
+# refresh systemd units if they changed in this pull, then reload. Covers the API plus the
+# payout worker service+timer, so an existing box that predates the payout timer picks it up
+# on its next deploy (previously only lumaris-api.service was synced, so queued withdrawals
+# never sent on already-provisioned hosts).
+_units_changed=0
+for _u in lumaris-api.service lumaris-payout.service lumaris-payout.timer; do
+  if [ -f "$APP/deploy/$_u" ] && ! cmp -s "$APP/deploy/$_u" "/etc/systemd/system/$_u" 2>/dev/null; then
+    echo "==> systemd unit changed — updating $_u"
+    cp "$APP/deploy/$_u" "/etc/systemd/system/$_u"
+    _units_changed=1
+  fi
+done
+[ "$_units_changed" = 1 ] && systemctl daemon-reload
+# Ensure the payout timer is armed (idempotent — no-op if already enabled/running).
+# No `|| true`: a deploy that leaves the payout worker disabled must FAIL loudly (set -e),
+# not exit green while queued withdrawals silently never run.
+systemctl enable --now lumaris-payout.timer >/dev/null 2>&1
 
 # NOTE: nginx conf is intentionally NOT auto-copied — certbot rewrites that file when
 # you enable HTTPS, so overwriting it would wipe the SSL block. If you change
