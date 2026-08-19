@@ -300,15 +300,17 @@ def run(pw, buyer_t, seller_t, pub, role_t):
         _attach_error_capture(page, errs)
         _auth(page, "roleswitch_web")
         page.goto(B + "/account", wait_until="domcontentloaded")
-        page.wait_for_selector("#roleswitch", state="visible", timeout=20000)
-        label = page.text_content("#roleswitch") or ""
-        ok("role-switch control is visible for a signed-in user",
-           page.locator("#roleswitch").is_visible())
-        ok("role-switch invites a buyer to sell (earnings framing)",
-           "seller" in label.lower() or "earn" in label.lower())
-        page.click("#roleswitch")
+        # The redesign replaced the #roleswitch control with the account page's
+        # "List your GPU · Become a seller" card that links straight to /install.
+        page.wait_for_selector('a.card[href="/install"]', state="visible", timeout=20000)
+        label = page.text_content('a.card[href="/install"]') or ""
+        ok("the become-a-seller entry is visible for a signed-in user",
+           page.locator('a.card[href="/install"]').first.is_visible())
+        ok("it invites a buyer to sell (seller/GPU framing)",
+           "seller" in label.lower() or "gpu" in label.lower())
+        page.locator('a.card[href="/install"]').first.click()
         page.wait_for_url("**/install", timeout=20000)
-        ok("switching to seller lands on the onboarding page", "/install" in page.url)
+        ok("becoming a seller lands on the onboarding page", "/install" in page.url)
         ok("role switch: no serious JS errors", not [m for k, m in errs if _serious(m)],
            "; ".join(m for k, m in errs if _serious(m))[:120])
         page.close()
