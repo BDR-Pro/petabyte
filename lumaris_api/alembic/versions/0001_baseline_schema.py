@@ -37,5 +37,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    db = _db()
-    db.Base.metadata.drop_all(bind=db.engine)
+    # Drop on ALEMBIC'S OWN connection, not db.engine's separate pool: a prior revision's DDL
+    # lock (released only at its transaction commit) must never deadlock these DROPs across
+    # connections.
+    from alembic import op
+    _db().Base.metadata.drop_all(bind=op.get_bind())

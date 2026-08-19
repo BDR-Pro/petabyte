@@ -23,6 +23,7 @@ Run:  python -m playwright install chromium   # once
 """
 import base64
 import os
+import re
 import sys
 import threading
 import time
@@ -270,17 +271,24 @@ def run(pw, buyer_t, seller_t, pub, role_t):
            "; ".join(m for k, m in errs if _serious(m))[:120])
         page.close()
 
-        # ---------- BUYER value prop: lead with cheap-vs-hyperscaler savings ----------
-        print("\n-- buyer: marketplace leads with savings vs AWS/GCP/Azure --")
+        # ---------- BUYER value prop: every GPU is priced against the public cloud ----------
+        # (The old dedicated #savingsbanner was replaced by the redesign: /marketplace now
+        # carries a per-row "vs cloud −N%" column + the #mnote explainer, and the "up to N%
+        # cheaper than the big cloud" proof strip lives on the landing page.)
+        print("\n-- buyer: marketplace shows the saving vs public cloud rates --")
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         errs = []
         _attach_error_capture(page, errs)
         page.goto(B + "/marketplace", wait_until="domcontentloaded")
-        page.wait_for_selector("#savingsbanner", state="visible", timeout=20000)
-        banner = page.text_content("#savingsbanner") or ""
-        ok("savings banner is visible on the marketplace", page.locator("#savingsbanner").is_visible())
-        ok("savings banner names a hyperscaler (AWS)", "AWS" in banner)
-        ok("savings banner shows a concrete percentage", "%" in banner)
+        # the seeded below-reference H100 must render a concrete −N% saving
+        page.wait_for_function(
+            "() => { var e=document.getElementById('mrows');"
+            " return e && /−\\d+%/.test(e.textContent); }", timeout=20000)
+        note = page.text_content("#mnote") or ""
+        rows = page.text_content("#mrows") or ""
+        ok("marketplace explains the vs-cloud comparison", "cloud" in note.lower())
+        ok("a listed GPU shows a concrete saving percentage (−N%)",
+           bool(re.search(r"−\d+%", rows)))
         ok("marketplace savings: no serious JS errors", not [m for k, m in errs if _serious(m)],
            "; ".join(m for k, m in errs if _serious(m))[:120])
         page.close()
