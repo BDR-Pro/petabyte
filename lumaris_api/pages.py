@@ -365,8 +365,10 @@ html[dir="rtl"] .arrow-fwd::after{content:"←"}
    cards, each row labelled by its header via data-l. */
 @media(max-width:480px){
   /* Phone ergonomics contract (enforced by browser_ui_test): text inputs at ≥16px so iOS
-     never zooms on focus, and every tappable control at the ~44px HIG tap-target minimum. */
-  input:not([type=checkbox]):not([type=radio]),select,textarea{font-size:16px}
+     never zooms on focus, and every tappable control at the ~44px HIG tap-target minimum.
+     min-width:0/max-width:100% lets a control with long intrinsic content (e.g. a select's
+     widest option) shrink inside its flex row instead of pushing the page sideways. */
+  input:not([type=checkbox]):not([type=radio]),select,textarea{font-size:16px;min-width:0;max-width:100%}
   button,.btn{min-height:44px}
 }
 @media(max-width:720px){
